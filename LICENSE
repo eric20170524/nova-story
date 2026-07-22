@@ -1,0 +1,93 @@
+LoreWeaver Personal Use License
+Version 1.0 - June 10, 2026
+
+Copyright (c) 2026 eric20170524.
+All rights reserved except as expressly granted in this license.
+
+1. Definitions
+
+"Software" means the LoreWeaver source code, documentation, assets, and
+other materials included in this repository, excluding third-party software.
+
+"Personal Use" means use by an individual natural person for that person's
+own private, educational, research, or evaluation purposes, without any direct
+or indirect commercial advantage, revenue generation, compensation, or use on
+behalf of any company, organization, client, employer, or other legal entity.
+
+"Commercial Use" means any use that is not Personal Use, including without
+limitation use in or for a business, company, organization, paid service,
+client project, consulting engagement, commercial product, software-as-a-
+service offering, hosted service, internal business workflow, revenue-
+generating activity, advertising-supported activity, resale, sublicensing, or
+distribution for commercial advantage.
+
+2. Personal Use Grant
+
+Subject to this license, the copyright holder grants you a limited,
+revocable, non-exclusive, non-transferable, non-sublicensable license to:
+
+- view and study the Software;
+- clone or download the Software;
+- install and run the Software for Personal Use; and
+- modify the Software locally for Personal Use.
+
+3. Restrictions
+
+You may not, without prior written authorization from the copyright holder:
+
+- use the Software for any Commercial Use;
+- use the Software on behalf of any company, organization, client, employer,
+  or other legal entity;
+- sell, rent, lease, sublicense, publish, host, or offer the Software, in
+  whole or in part, as a paid or commercial service;
+- incorporate the Software into a commercial product, service, platform, or
+  internal business system;
+- distribute modified or unmodified copies of the Software, except as
+  expressly permitted in writing by the copyright holder;
+- remove or alter copyright, license, or attribution notices; or
+- use the Software in a way that violates applicable law or the rights of
+  others.
+
+4. Commercial Licensing
+
+Commercial Use is not permitted under this license. To use the Software for
+Commercial Use, you must obtain separate prior written authorization from the
+copyright holder. No Commercial Use rights are granted unless and until such
+authorization is expressly provided in writing.
+
+5. Contributions
+
+By submitting a contribution to this repository, you grant the copyright
+holder a perpetual, worldwide, royalty-free license to use, reproduce, modify,
+publish, distribute, sublicense, and relicense your contribution as part of
+the Software. You represent that you have the right to submit the
+contribution under these terms.
+
+6. Third-Party Software
+
+Third-party dependencies, libraries, services, and tools used by or included
+with the Software are licensed under their own terms. This license does not
+change or replace those third-party license terms.
+
+7. Termination
+
+Any violation of this license automatically terminates the rights granted to
+you. Upon termination, you must stop using the Software and delete all copies
+in your possession or control.
+
+8. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS" AND WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WITHOUT LIMITATION ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, OR NON-INFRINGEMENT.
+
+9. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER SHALL NOT BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATED TO
+THE SOFTWARE OR THE USE OF THE SOFTWARE.
+
+10. Reservation of Rights
+
+All rights not expressly granted by this license are reserved by the
+copyright holder.
