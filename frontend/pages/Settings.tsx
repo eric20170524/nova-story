@@ -18,7 +18,7 @@ export const SettingsPage: React.FC = () => {
   const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [verifyingNebula, setVerifyingNebula] = useState(false);
+  const [verifyingLLM, setVerifyingLLM] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   useEffect(() => {
@@ -38,16 +38,17 @@ export const SettingsPage: React.FC = () => {
         selected_workflow_file: null
       };
 
-      const defaultNebula = {
-        enabled: false,
-        base_url: 'https://www.chuangyi.chat/v2',
-        system_token: ''
+      const defaultLLM = {
+        provider: 'gemini',
+        api_key: '',
+        base_url: '',
+        model: 'gemini-2.5-flash'
       };
 
       setSettings({
         ...settingsData,
         comfyui: { ...defaultComfyUI, ...(settingsData.comfyui || {}) },
-        nebula: { ...defaultNebula, ...(settingsData.nebula || {}) }
+        llm: { ...defaultLLM, ...(settingsData.llm || {}) }
       });
       setWorkflowFiles(filesData);
     } catch (error) {
@@ -87,27 +88,27 @@ export const SettingsPage: React.FC = () => {
     });
   };
 
-  const handleNebulaChange = (field: string, value: any) => {
+  const handleLLMChange = (field: string, value: any) => {
     setSettings({
       ...settings,
-      nebula: {
-        ...settings.nebula,
+      llm: {
+        ...settings.llm,
         [field]: value
       }
     });
   };
 
-  const handleVerifyNebula = async () => {
-    setVerifyingNebula(true);
+  const handleVerifyLLM = async () => {
+    setVerifyingLLM(true);
     setMessage(null);
     try {
-      await api.verifyNebulaConnection(settings.nebula);
-      setMessage({ type: 'success', text: "Nebula Connection Verified!" });
+      await api.verifyLLMConnection(settings.llm);
+      setMessage({ type: 'success', text: t('settings_page.llm_verify_success') });
     } catch (error) {
-      console.error("Nebula verification failed", error);
-      setMessage({ type: 'error', text: "Nebula Connection Failed" });
+      console.error("LLM verification failed", error);
+      setMessage({ type: 'error', text: t('settings_page.llm_verify_failed') });
     } finally {
-      setVerifyingNebula(false);
+      setVerifyingLLM(false);
     }
   };
 
@@ -307,78 +308,85 @@ export const SettingsPage: React.FC = () => {
 
             <div className="border-t border-slate-800" />
 
-            {/* Nebula Configuration */}
+            {/* Independent LLM Configuration */}
             <section>
               <div className="flex items-center gap-2 mb-6">
                 <Cloud className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-xl font-semibold text-white">{t('settings_page.nebula_title')}</h2>
+                <h2 className="text-xl font-semibold text-white">{t('settings_page.llm_title')}</h2>
               </div>
               
               <div className="space-y-6">
-                {/* Enable Toggle */}
-                <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg">
-                  <div>
-                    <h3 className="text-slate-200 font-medium">{t('settings_page.nebula_integration')}</h3>
-                    <p className="text-sm text-slate-500">{t('settings_page.nebula_desc')}</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only peer"
-                      checked={settings.nebula?.enabled || false}
-                      onChange={(e) => handleNebulaChange('enabled', e.target.checked)}
-                    />
-                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                {/* LLM Provider Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    {t('settings_page.llm_provider_label')}
                   </label>
+                  <select
+                    value={settings.llm?.provider || 'gemini'}
+                    onChange={(e) => handleLLMChange('provider', e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  >
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="custom">Custom / OpenAI Compatible (DeepSeek, etc.)</option>
+                    <option value="grok">xAI Grok</option>
+                  </select>
                 </div>
 
-                {settings.nebula?.enabled && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
-                    {/* Base URL */}
-                    <div>
-                      <label className="block text-sm font-medium text-slate-400 mb-2">
-                        Nebula API URL
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.nebula?.base_url || ''}
-                        onChange={(e) => handleNebulaChange('base_url', e.target.value)}
-                        placeholder="https://www.chuangyi.chat/v2"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                      />
-                    </div>
+                {/* API Key */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    {t('settings_page.llm_apikey_label')}
+                  </label>
+                  <input
+                    type="password"
+                    value={settings.llm?.api_key || ''}
+                    onChange={(e) => handleLLMChange('api_key', e.target.value)}
+                    placeholder="AIzaSy... / sk-..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  />
+                </div>
 
-                    {/* System Token */}
-                    <div>
-                      <label className="block text-sm font-medium text-slate-400 mb-2">
-                        System Token
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          type="password"
-                          value={settings.nebula?.system_token || ''}
-                          onChange={(e) => handleNebulaChange('system_token', e.target.value)}
-                          placeholder="sk-..."
-                          className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                        />
-                        <button
-                          onClick={handleVerifyNebula}
-                          disabled={verifyingNebula || !settings.nebula?.system_token}
-                          className={`px-4 py-2.5 rounded-lg font-medium text-white transition-all whitespace-nowrap ${
-                            verifyingNebula || !settings.nebula?.system_token
-                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                              : 'bg-indigo-600 hover:bg-indigo-500'
-                          }`}
-                        >
-                          {verifyingNebula ? 'Verifying...' : 'Verify'}
-                        </button>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-2">
-                        Your unique system token for authentication.
-                      </p>
-                    </div>
+                {/* Base URL */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    {t('settings_page.llm_baseurl_label')}
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.llm?.base_url || ''}
+                    onChange={(e) => handleLLMChange('base_url', e.target.value)}
+                    placeholder="https://api.openai.com/v1"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  />
+                </div>
+
+                {/* Model Name */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    {t('settings_page.llm_model_label')}
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={settings.llm?.model || ''}
+                      onChange={(e) => handleLLMChange('model', e.target.value)}
+                      placeholder="gemini-2.5-flash / gpt-4o / deepseek-chat"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    />
+                    <button
+                      onClick={handleVerifyLLM}
+                      disabled={verifyingLLM}
+                      className={`px-4 py-2.5 rounded-lg font-medium text-white transition-all whitespace-nowrap ${
+                        verifyingLLM
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                          : 'bg-indigo-600 hover:bg-indigo-500'
+                      }`}
+                    >
+                      {verifyingLLM ? 'Verifying...' : t('settings_page.llm_verify_btn')}
+                    </button>
                   </div>
-                )}
+                </div>
               </div>
             </section>
 

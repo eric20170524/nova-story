@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
 from app.core.settings_manager import SettingsManager
-from app.services.nebula import NebulaClient
+from app.services.ai.gemini_provider import GeminiProvider
+from app.services.ai.openai_provider import OpenAIProvider
+from app.services.ai.grok_provider import GrokProvider
+from app.core.config import settings as app_settings
 
 router = APIRouter()
 
@@ -19,29 +22,30 @@ def update_settings(settings: Dict[str, Any]):
     """
     return SettingsManager.save_settings(settings)
 
-@router.post("/verify-nebula")
-def verify_nebula_connection(config: Dict[str, Any]):
+@router.post("/verify-llm")
+def verify_llm_connection(config: Dict[str, Any]):
     """
-    Verifies Nebula connection and token using the provided settings.
-    Expects a partial or full settings dict containing 'nebula' key, or the nebula config dict directly.
+    Verifies LLM connection using the provided configuration.
+    Expects 'llm' config dict or direct config dict containing provider, api_key, base_url, model.
     """
-    # Handle if full settings passed or just nebula config
-    nebula_config = config.get("nebula", config)
-    
-    base_url = nebula_config.get("base_url")
-    token = nebula_config.get("system_token")
-    
-    if not token:
-        raise HTTPException(status_code=400, detail="No token provided for verification")
-    
+    llm_config = config.get("llm", config)
+    provider_type = (llm_config.get("provider") or "gemini").lower()
+    api_key = llm_config.get("api_key") or getattr(app_settings, "GEMINI_API_KEY", "")
+    base_url = llm_config.get("base_url")
+    model = llm_config.get("model") or "gemini-2.5-flash"
+
     try:
-        # Use provided base_url if available, else NebulaClient uses saved default
-        client = NebulaClient(base_url=base_url)
-        result = client.verify_token(token)
-        
-        if result:
-            return {"status": "success", "user": result}
+        if provider_type in ("openai", "custom"):
+            provider = OpenAIProvider(api_key=api_key or "", model=model or "gpt-4o", base_url=base_url)
+        elif provider_type == "grok":
+            provider = GrokProvider(api_key=api_key or "", model=model or "grok-beta")
         else:
-            raise HTTPException(status_code=401, detail="Verification failed: Invalid token or unreachable host")
+            provider = GeminiProvider(api_key=api_key, model=model or "gemini-2.5-flash")
+
+        res = provider.generate_text("Test connection. Reply 'OK'.")
+        if res and "[LLM Error]" not in res:
+            return {"status": "success", "message": "LLM connection verified successfully", "response": res[:100]}
+        else:
+            raise HTTPException(status_code=400, detail=f"LLM verification failed: {res}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Verification error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"LLM verification error: {str(e)}")

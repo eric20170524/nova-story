@@ -12,10 +12,11 @@ DEFAULT_SETTINGS = {
         "enabled": False,
         "selected_workflow_file": None
     },
-    "nebula": {
-        "enabled": False,
-        "base_url": "https://www.chuangyi.chat/v2",
-        "system_token": "" 
+    "llm": {
+        "provider": "gemini",
+        "api_key": "",
+        "base_url": "",
+        "model": "gemini-2.5-flash"
     }
 }
 
@@ -32,25 +33,29 @@ class SettingsManager:
         settings = DEFAULT_SETTINGS.copy()
         
         # Apply environment variable overrides (as defaults before file load)
-        # This allows Docker/Env vars to set initial state, but file settings (user saves) take precedence.
-        nebula_enabled_env = os.getenv("NEBULA_ENABLED")
-        if nebula_enabled_env is not None:
-            is_enabled = nebula_enabled_env.lower() in ('true', '1', 'yes', 'on')
-            if "nebula" not in settings:
-                settings["nebula"] = {}
-            settings["nebula"]["enabled"] = is_enabled
+        llm_provider_env = os.getenv("LLM_PROVIDER")
+        if llm_provider_env:
+            if "llm" not in settings:
+                settings["llm"] = {}
+            settings["llm"]["provider"] = llm_provider_env
+
+        llm_api_key_env = os.getenv("LLM_API_KEY")
+        if llm_api_key_env:
+            if "llm" not in settings:
+                settings["llm"] = {}
+            settings["llm"]["api_key"] = llm_api_key_env
             
-        nebula_base_url = os.getenv("NEBULA_BASE_URL")
-        if nebula_base_url:
-            if "nebula" not in settings:
-                settings["nebula"] = {}
-            settings["nebula"]["base_url"] = nebula_base_url
-            
-        nebula_token = os.getenv("NEBULA_SYSTEM_TOKEN")
-        if nebula_token:
-            if "nebula" not in settings:
-                settings["nebula"] = {}
-            settings["nebula"]["system_token"] = nebula_token
+        llm_base_url_env = os.getenv("LLM_BASE_URL")
+        if llm_base_url_env:
+            if "llm" not in settings:
+                settings["llm"] = {}
+            settings["llm"]["base_url"] = llm_base_url_env
+
+        llm_model_env = os.getenv("LLM_MODEL")
+        if llm_model_env:
+            if "llm" not in settings:
+                settings["llm"] = {}
+            settings["llm"]["model"] = llm_model_env
         
         if os.path.exists(file_path):
             try:

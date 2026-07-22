@@ -182,7 +182,7 @@ class ApiService {
 
   // Timeline & Director
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
-  generateTimeline = (chapterId: string) => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId } });
+  generateTimeline = (chapterId: string, mode: string = 'standard') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
   
   // Workflows
   getWorkflows = () => this.request<any[]>('/workflows/');
@@ -236,7 +236,7 @@ class ApiService {
   getSettings = () => this.request<any>('/settings/');
   updateSettings = (settings: any) => this.request<any>('/settings/', { method: 'POST', body: settings });
   
-  verifyNebulaConnection = (config: any) => this.request<any>('/settings/verify-nebula', { method: 'POST', body: config });
+  verifyLLMConnection = (config: any) => this.request<any>('/settings/verify-llm', { method: 'POST', body: config });
 }
 
 export const api = new ApiService();

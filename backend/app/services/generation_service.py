@@ -1,6 +1,5 @@
 from ..services.media_service import MediaService
 from ..services.ai.comfyui_service import ComfyUIService
-from ..services.nebula import NebulaClient
 from ..core.redis import get_redis_client
 from ..core.settings_manager import SettingsManager
 from ..db.session import SessionLocal
@@ -167,22 +166,6 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                             asset_url = f"/static/generated/{filename}"
                             final_status = "completed"
                             logger.info(f"[Task {task_id}] Image saved to {filepath}")
-                            
-                            # NEBULA UPLOAD INTEGRATION
-                            nebula_settings = settings.get("nebula", {})
-                            if nebula_settings.get("enabled"):
-                                try:
-                                    logger.info(f"[Task {task_id}] Uploading to Nebula...")
-                                    client = NebulaClient()
-                                    # Run sync upload in thread
-                                    remote_url = await asyncio.to_thread(client.upload_file, filepath, token=user_token)
-                                    if remote_url:
-                                        asset_url = remote_url
-                                        logger.info(f"[Task {task_id}] Uploaded to Nebula: {asset_url}")
-                                    else:
-                                        logger.warning(f"[Task {task_id}] Nebula upload returned no URL.")
-                                except Exception as e:
-                                    logger.error(f"[Task {task_id}] Nebula upload error: {e}")
 
                         except Exception as e:
                             logger.error(f"[Task {task_id}] Failed to write image file: {e}")

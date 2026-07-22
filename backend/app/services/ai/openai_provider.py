@@ -14,9 +14,11 @@ class OpenAIProvider(AIProvider):
     MAX_RETRIES = 3
     BASE_RETRY_DELAY = 2
 
-    def __init__(self, api_key: str, model: str = "gpt-4-turbo"):
+    def __init__(self, api_key: str, model: str = "gpt-4-turbo", base_url: Optional[str] = None):
         self.api_key = api_key
         self.model = model
+        base = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = base
         self.image_model = "dall-e-3"
 
     def _call_api(self, url: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -43,7 +45,7 @@ class OpenAIProvider(AIProvider):
         return None
 
     def generate_text(self, prompt: str, system_instruction: Optional[str] = None) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
+        url = f"{self.base_url}/chat/completions"
         messages = []
         if system_instruction:
             messages.append({"role": "system", "content": system_instruction})
@@ -94,7 +96,7 @@ class OpenAIProvider(AIProvider):
             }
         }
         
-        url = "https://api.openai.com/v1/chat/completions"
+        url = f"{self.base_url}/chat/completions"
         data = self._call_api(url, payload)
         
         if not data:
@@ -118,7 +120,7 @@ class OpenAIProvider(AIProvider):
         return await loop.run_in_executor(None, self._generate_image_sync, prompt, size)
 
     def _generate_image_sync(self, prompt: str, size: str = "1024x1024") -> Dict[str, Any]:
-        url = "https://api.openai.com/v1/images/generations"
+        url = f"{self.base_url}/images/generations"
         payload = {
             "model": self.image_model,
             "prompt": prompt,

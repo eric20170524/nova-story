@@ -8,8 +8,8 @@ from app.core.settings_manager import SettingsManager
 from app.core.log_utils import format_log_message
 from app.services.ai.base import AIProvider
 from app.services.ai.gemini_provider import GeminiProvider
-from app.services.ai.nebula_provider import NebulaProvider
-# from app.services.ai.openai_provider import OpenAIProvider 
+from app.services.ai.openai_provider import OpenAIProvider
+from app.services.ai.grok_provider import GrokProvider
 from app.schemas.llm import (
     ContentAnalysis, 
     TimelineResponse, 
@@ -29,22 +29,22 @@ class LLMService:
     @classmethod
     def _get_provider(cls, token: Optional[str] = None) -> AIProvider:
         """
-        Factory to get the appropriate AI Provider.
+        Factory to get the appropriate AI Provider based on system settings.
         """
-        # Check if Nebula is enabled
-        nebula_settings = SettingsManager.get("nebula", {})
-        if nebula_settings.get("enabled"):
-             # NebulaProvider handles its own auth via config/token
-             return NebulaProvider()
-        
-        # Default to GeminiProvider
-        # In a real scenario, we could switch based on SettingsManager.get("llm_provider")
-        api_key = settings.GEMINI_API_KEY
-        if not api_key:
-            logger.warning("GEMINI_API_KEY is not set.")
-        
-        model = SettingsManager.get("llm_model", "gemini-1.5-flash")
-        return GeminiProvider(api_key=api_key, model=model)
+        llm_config = SettingsManager.get("llm", {})
+        provider_type = (llm_config.get("provider") or SettingsManager.get("llm_provider", "gemini")).lower()
+        api_key = llm_config.get("api_key") or getattr(settings, "GEMINI_API_KEY", "")
+        base_url = llm_config.get("base_url")
+        model = llm_config.get("model") or SettingsManager.get("llm_model", "gemini-2.5-flash")
+
+        if provider_type in ("openai", "custom"):
+            return OpenAIProvider(api_key=api_key or "", model=model or "gpt-4o", base_url=base_url)
+        elif provider_type == "grok":
+            return GrokProvider(api_key=api_key or "", model=model or "grok-beta")
+        else:
+            if not api_key:
+                logger.warning("GEMINI_API_KEY is not set.")
+            return GeminiProvider(api_key=api_key, model=model or "gemini-2.5-flash")
 
     @classmethod
     def _generate_structured_with_retry(cls, prompt: str, response_model: Type[T], token: Optional[str] = None) -> Optional[T]:

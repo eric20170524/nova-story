@@ -1,7 +1,7 @@
 // nova-story/frontend/services/auth.ts
 export const AuthService = {
-    getToken: (): string | null => {
-        return localStorage.getItem('access_token');
+    getToken: (): string => {
+        return localStorage.getItem('access_token') || 'dev-mock-token';
     },
 
     setToken: (token: string) => {
@@ -13,22 +13,17 @@ export const AuthService = {
     },
 
     redirectToLogin: () => {
-        const loginUrl = (import.meta as any).env?.VITE_NEBULA_LOGIN_URL || 'https://www.chuangyi.chat/login';
-        const currentUrl = window.location.href;
-        // Redirect to Nebula Login with callback to current page
-        window.location.href = `${loginUrl}?redirect=${encodeURIComponent(currentUrl)}`;
+        // Standalone Mode: Set local mock token
+        AuthService.setToken('dev-mock-token');
     },
 
     isAuthenticated: (): boolean => {
-        const token = localStorage.getItem('access_token');
-        
-        // Allow Dev Mode mock token
-        if (token === 'dev-mock-token') {
-            return true;
+        let token = localStorage.getItem('access_token');
+        if (!token) {
+            token = 'dev-mock-token';
+            localStorage.setItem('access_token', token);
         }
-
-        // Simple check: exists and looks like a JWT (3 parts)
-        return !!token && token.split('.').length === 3;
+        return true;
     },
     
     handleCallback: () => {

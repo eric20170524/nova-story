@@ -7,9 +7,10 @@
         "default_workflow": "pony_xl_12gb.json",
         "selected_workflow_file": "pony_xl_12gb.json"
     },
-    "nebula": {
-        "enabled": false,
-        "base_url": "https://www.chuangyi.chat/v2",
-        "system_token": ""
+    "llm": {
+        "provider": "gemini",
+        "api_key": "",
+        "base_url": "",
+        "model": "gemini-2.5-flash"
     }
 }

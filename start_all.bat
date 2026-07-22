@@ -1,25 +1,24 @@
 @echo off
-chcp 65001 >nul
-title NovaStory ä¸€é”®å…¨å¥—æœåŠ¡å¯åŠ¨è„šæœ¬
+title NovaStory Ò»¼üÈ«Ì×·þÎñÆô¶¯½Å±¾
 echo ========================================================
-echo               NovaStory ä¸€é”®å…¨å¥—å¯åŠ¨è„šæœ¬
+echo               NovaStory Ò»¼üÈ«Ì×Æô¶¯½Å±¾
 echo ========================================================
 echo.
 
-echo [1/3] æ­£åœ¨æ‹‰èµ· ComfyUI ç”Ÿå›¾æœåŠ¡ (ç«¯å£ 8188)...
+echo [1/3] ÕýÔÚÀ­Æð ComfyUI ÉúÍ¼·þÎñ (¶Ë¿Ú 8188)...
 start "ComfyUI Server (8188)" cmd /k "chcp 65001 >nul && cd /d D:\ComfyUI && .\venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram"
 
-echo [2/3] æ­£åœ¨æ‹‰èµ· NovaStory åŽç«¯ FastAPI æœåŠ¡ (ç«¯å£ 8087)...
+echo [2/3] ÕýÔÚÀ­Æð NovaStory ºó¶Ë FastAPI ·þÎñ (¶Ë¿Ú 8087)...
 start "NovaStory Backend (8087)" cmd /k "chcp 65001 >nul && cd /d %~dp0backend && ..\.venv\Scripts\python.exe main.py"
 
-echo [3/3] æ­£åœ¨æ‹‰èµ· NovaStory å‰ç«¯ Vite ç•Œé¢ (ç«¯å£ 3000)...
+echo [3/3] ÕýÔÚÀ­Æð NovaStory Ç°¶Ë Vite ½çÃæ (¶Ë¿Ú 3000)...
 start "NovaStory Frontend (3000)" cmd /k "chcp 65001 >nul && cd /d %~dp0frontend && npm run dev"
 
 echo.
 echo ========================================================
-echo  æ‰€æœ‰æœåŠ¡å¯åŠ¨å‘½ä»¤å·²æ´¾å‘ï¼
-echo  - ComfyUI ç”Ÿå›¾å¼•æ“Ž: http://127.0.0.1:8188
-echo  - åŽç«¯ API æœåŠ¡:     http://127.0.0.1:8087/docs
-echo  - å‰ç«¯å¯¼æ¼”å°ç•Œé¢:   http://localhost:3000
+echo  ËùÓÐ·þÎñÆô¶¯ÃüÁîÒÑÅÉ·¢£¡
+echo  - ComfyUI ÉúÍ¼ÒýÇæ: http://127.0.0.1:8188
+echo  - ºó¶Ë API ·þÎñ:     http://127.0.0.1:8087/docs
+echo  - Ç°¶Ëµ¼ÑÝÌ¨½çÃæ:   http://localhost:3000
 echo ========================================================
 pause

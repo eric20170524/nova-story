@@ -6,7 +6,6 @@ from app.services.ai.base import AIProvider
 from app.services.ai.gemini_provider import GeminiProvider
 from app.services.ai.openai_provider import OpenAIProvider
 from app.services.ai.grok_provider import GrokProvider
-from app.services.ai.nebula_provider import NebulaProvider
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +21,6 @@ class MediaService:
             return OpenAIProvider(api_key=settings.OPENAI_API_KEY)
         elif name == "grok":
             return GrokProvider(api_key=settings.GROK_API_KEY)
-        elif name == "nebula":
-            return NebulaProvider()
         else:
             logger.warning(f"Unknown provider '{name}', defaulting to Gemini.")
             return GeminiProvider(api_key=settings.GEMINI_API_KEY)
