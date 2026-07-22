@@ -1,0 +1,15 @@
+{
+    "llm_model": "gemini-3-flash-preview",
+    "image_model": "gemini-2.5-flash-image",
+    "comfyui": {
+        "base_url": "http://127.0.0.1:8188",
+        "enabled": true,
+        "default_workflow": "pony_xl_12gb.json",
+        "selected_workflow_file": "pony_xl_12gb.json"
+    },
+    "nebula": {
+        "enabled": false,
+        "base_url": "https://www.chuangyi.chat/v2",
+        "system_token": ""
+    }
+}

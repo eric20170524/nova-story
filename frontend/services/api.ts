@@ -1,0 +1,242 @@
+import { 
+  API_BASE_URL, 
+  MOCK_PROJECTS, 
+  MOCK_CHARACTERS, 
+  MOCK_CHAPTERS, 
+  MOCK_WORKFLOWS, 
+  MOCK_TIMELINE 
+} from '../constants';
+
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
+interface FetchOptions {
+  method?: HttpMethod;
+  body?: any;
+  headers?: Record<string, string>;
+}
+
+class ApiService {
+  private async request<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
+    const { method = 'GET', body, headers = {} } = options;
+
+    // Retrieve token from storage
+    const token = localStorage.getItem('access_token');
+    
+    const reqHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...headers,
+    };
+
+    if (token) {
+        reqHeaders['Authorization'] = `Bearer ${token}`;
+    }
+
+    const config: RequestInit = {
+      method,
+      headers: reqHeaders,
+    };
+
+    if (body) {
+      config.body = JSON.stringify(body);
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+      
+      if (!response.ok) {
+        throw new Error(`API Error ${response.status}`);
+      }
+      
+      if (response.status === 204) {
+        return {} as T;
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.warn(`API Request failed for ${endpoint}. Using Mock Data Fallback.`);
+      // Fallback to Mock Data
+      return this.getMockResponse<T>(endpoint, method, body);
+    }
+  }
+
+  private getMockResponse<T>(endpoint: string, method: HttpMethod, body?: any): Promise<T> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // Projects
+        if (endpoint.startsWith('/projects/')) {
+           if (method === 'GET' && endpoint === '/projects/') return resolve(MOCK_PROJECTS as any);
+           if (method === 'GET' && endpoint !== '/projects/') return resolve(MOCK_PROJECTS[0] as any);
+           if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000), created_at: new Date().toISOString() } as any);
+           if (method === 'PUT') return resolve({ ...MOCK_PROJECTS[0], ...body } as any);
+           if (method === 'DELETE') return resolve({} as any);
+        }
+
+        // Characters
+        if (endpoint.includes('/characters/')) {
+          if (method === 'GET') return resolve(MOCK_CHARACTERS as any);
+          if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000) } as any);
+          if (method === 'PUT') return resolve({ ...body } as any);
+          if (method === 'DELETE') return resolve({} as any);
+        }
+        
+        // Chapters
+        if (endpoint.includes('/chapters/')) {
+          if (method === 'GET') return resolve(MOCK_CHAPTERS as any);
+          if (method === 'POST') return resolve({ ...body, id: 'mock-uuid-' + Date.now() } as any);
+          if (method === 'PATCH') return resolve({ ...body } as any);
+          if (method.includes('PUT') && endpoint.includes('move')) return resolve({ status: 'moved' } as any);
+        }
+
+        // Workflows
+        if (endpoint.startsWith('/workflows/')) {
+           return resolve(MOCK_WORKFLOWS as any);
+        }
+        
+        // Timeline
+        if (endpoint.includes('/timeline/generate')) {
+           return resolve(MOCK_TIMELINE as any);
+        }
+
+        // Assets
+        if (endpoint.includes('/assets/generate')) {
+           return resolve({ task_id: 'mock-task-999', status: 'processing' } as any);
+        }
+
+        // Agent
+        if (endpoint.includes('/agent/draft')) {
+           return resolve({ content: " (AI Generated Mock Content) Suddenly, the door burst open and..." } as any);
+        }
+        if (endpoint.includes('/agent/analyze')) {
+           return resolve({ new_entities: ["Kael", "Viper"], updates: ["A tense meeting occurred."] } as any);
+        }
+        
+        // Assistant
+        if (endpoint.includes('/assistant/chat')) {
+           return resolve({ 
+             thought: "Processing mock request...", 
+             response: "I'm a mock agent. Backend might be unreachable.",
+             action: null
+           } as any);
+        }
+
+        resolve({} as T);
+      }, 600); // Simulate network delay
+    });
+  }
+
+  // Projects
+  getProjects = () => this.request<any[]>('/projects/');
+  createProject = (data: any) => this.request<any>('/projects/', { method: 'POST', body: data });
+  getProject = (id: number) => this.request<any>(`/projects/${id}`);
+  updateProject = (id: number, data: any) => this.request<any>(`/projects/${id}`, { method: 'PUT', body: data });
+  deleteProject = (id: number) => this.request(`/projects/${id}`, { method: 'DELETE' });
+  importProject = (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    // Get Token for direct fetch
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    return fetch(`${API_BASE_URL}/projects/import`, {
+        method: 'POST',
+        headers: headers,
+        body: formData,
+    }).then(async (response) => {
+        if (!response.ok) {
+            throw new Error(`API Error ${response.status}`);
+        }
+        return await response.json();
+    });
+  };
+
+  // Characters
+  getCharacters = (projectId: number) => this.request<any[]>(`/characters/?project_id=${projectId}`);
+  createCharacter = (data: any) => this.request<any>('/characters/', { method: 'POST', body: data });
+  updateCharacter = (id: number, data: any) => this.request<any>(`/characters/${id}`, { method: 'PUT', body: data });
+  deleteCharacter = (id: number) => this.request(`/characters/${id}`, { method: 'DELETE' });
+  extractCharacters = (chapterId: string) => this.request<any[]>('/characters/extract', { method: 'POST', body: { chapter_id: chapterId } });
+
+  // Chapters
+  createChapter = (data: any) => this.request<any>('/chapters/', { method: 'POST', body: data });
+  updateChapter = (id: string, data: any) => this.request<any>(`/chapters/${id}`, { method: 'PATCH', body: data });
+  deleteChapter = (id: string) => this.request(`/chapters/${id}`, { method: 'DELETE' });
+  moveChapter = (id: string, newIndex: number) => this.request<any>(`/chapters/${id}/move`, { method: 'PUT', body: { new_index: newIndex } });
+  getChapters = (projectId: number) => this.request<any[]>(`/chapters/?project_id=${projectId}`);
+
+  // Agent / AI
+  draftText = (context: string, prompt: string) => this.request<{ content: string }>('/agent/draft', { 
+    method: 'POST', 
+    body: { 
+      context_text: context, 
+      instructions: prompt 
+    } 
+  });
+  analyzeText = (text: string) => this.request<any>('/agent/analyze', { method: 'POST', body: { content: text } });
+  generateStoryboardGrid = (storyText: string) => this.request<{ prompt: string }>('/agent/storyboard-grid', { method: 'POST', body: { story_text: storyText } });
+  
+  // Agentic OS
+  chatWithAgent = (message: string, context: any, history: any[]) => 
+    this.request<any>('/assistant/chat', { method: 'POST', body: { message, context, history } });
+
+  // Timeline & Director
+  getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
+  generateTimeline = (chapterId: string) => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId } });
+  
+  // Workflows
+  getWorkflows = () => this.request<any[]>('/workflows/');
+  getWorkflowFiles = () => this.request<string[]>('/workflows/files');
+  createWorkflow = (data: any) => this.request<any>('/workflows/', { method: 'POST', body: data });
+  updateWorkflow = (id: number, data: any) => this.request<any>(`/workflows/${id}`, { method: 'PUT', body: data });
+
+  generateAsset = async (workflowData: any, sceneId: number | string) => {
+    // Get Token for direct fetch
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${API_BASE_URL}/assets/generate`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        workflow: workflowData,
+        scene_id: Number(sceneId),
+        mode: workflowData.mode || 'standard' // Extract mode from workflowData if present
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to start generation');
+    return res.json();
+  };
+
+  generateComic = async (chapterId: string) => {
+    // Get Token for direct fetch
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${API_BASE_URL}/comics/${chapterId}/generate`, {
+        method: 'POST',
+        headers: headers,
+    });
+    if (!res.ok) throw new Error('Failed to generate comic');
+    return res.json();
+  };
+
+  renderVideo = async (timeline: any[], projectId: number): Promise<{ video_url: string }> => {
+    // Mock implementation for demo
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            resolve({ video_url: "https://www.w3schools.com/html/mov_bbb.mp4" });
+        }, 1500);
+    });
+  };
+
+  // Settings
+  getSettings = () => this.request<any>('/settings/');
+  updateSettings = (settings: any) => this.request<any>('/settings/', { method: 'POST', body: settings });
+  
+  verifyNebulaConnection = (config: any) => this.request<any>('/settings/verify-nebula', { method: 'POST', body: config });
+}
+
+export const api = new ApiService();

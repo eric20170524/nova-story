@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NovaStory</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              gray: {
+                750: '#2d3748',
+                850: '#1a202c',
+                950: '#0d1117',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <style>
+      body {
+        background-color: #0f172a; /* slate-950 */
+        color: #e2e8f0; /* slate-200 */
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1e293b; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #475569; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b; 
+      }
+
+      /* EasyMDE Dark Mode Overrides */
+      .EasyMDEContainer {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .EasyMDEContainer .editor-toolbar {
+        background-color: #1e293b; /* slate-800 */
+        border-color: #334155; /* slate-700 */
+        border-radius: 8px 8px 0 0;
+        opacity: 0.8;
+      }
+      .EasyMDEContainer .editor-toolbar i {
+        color: #94a3b8; /* slate-400 */
+      }
+      .EasyMDEContainer .editor-toolbar button:hover,
+      .EasyMDEContainer .editor-toolbar button.active {
+        background-color: #334155;
+        border-color: #475569;
+      }
+      .EasyMDEContainer .editor-toolbar button:hover i,
+      .EasyMDEContainer .editor-toolbar button.active i {
+        color: #e2e8f0;
+      }
+      .EasyMDEContainer .CodeMirror {
+        background-color: #0f172a; /* slate-950 */
+        border-color: #334155; /* slate-700 */
+        color: #e2e8f0; /* slate-200 */
+        border-radius: 0 0 8px 8px;
+        flex: 1;
+        font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+        font-size: 1.125rem; /* text-lg */
+        line-height: 1.75;
+      }
+      .EasyMDEContainer .CodeMirror-cursor {
+        border-left: 1px solid #6366f1; /* indigo-500 */
+      }
+      .EasyMDEContainer .editor-preview {
+        background-color: #0f172a;
+        color: #e2e8f0;
+        padding: 2rem;
+      }
+      .EasyMDEContainer .editor-statusbar {
+        display: none; /* Hide status bar */
+      }
+      /* Hide toolbar completely if preferred, or maintain style */
+      .editor-toolbar.fullscreen {
+        background-color: #1e293b;
+      }
+      .CodeMirror-selected {
+        background-color: #334155 !important;
+      }
+      .CodeMirror-line::selection, .CodeMirror-line > span::selection, .CodeMirror-line > span > span::selection {
+        background-color: #334155 !important;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.4",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react-router-dom": "https://esm.sh/react-router-dom@^7.13.0",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "path": "https://esm.sh/path@^0.12.7",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.4",
+    "url": "https://esm.sh/url@^0.11.4",
+    "easymde": "https://esm.sh/easymde@2.18.0",
+    "react-simplemde-editor": "https://esm.sh/react-simplemde-editor@5.2.0?deps=react@19.2.4,react-dom@19.2.4,easymde@2.18.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
