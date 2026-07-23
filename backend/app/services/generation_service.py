@@ -77,47 +77,50 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
             logger.info(f"[Task {task_id}] Using ComfyUI at {base_url}")
             
             service = ComfyUIService(base_url=base_url)
-            if not await service.check_status():
-                 result = {"status": "error", "message": "ComfyUI not reachable"}
-                 # Fail fast
+            is_running = await service.ensure_running()
+            if not is_running:
+                 result = {"status": "error", "message": "Failed to auto-start ComfyUI service"}
             else:
-                 # Workflow Template Mapping
-                 logger.info(f"[Task {task_id}] Processing workflow payload for ComfyUI.")
-                 
-                 # 1. Extract prompt details from frontend payload
-                 prompt = workflow_data.get("prompt", "") if isinstance(workflow_data, dict) else workflow_data
-                 negative_prompt = workflow_data.get("negative_prompt", "") if isinstance(workflow_data, dict) else ""
-                 
-                 # 2. Determine Template (Default to Pony XL for RTX 3060)
-                 # We can check a setting, but for now we hardcode the fallback to pony_xl_12gb
-                 template_name = comfy_settings.get("default_workflow", "pony_xl_12gb.json")
-                 template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "workflows", template_name)
-                 
-                 if not os.path.exists(template_path):
-                     logger.error(f"[Task {task_id}] Workflow template {template_path} not found. Sending raw payload.")
-                     final_workflow = workflow_data
-                 else:
-                     logger.info(f"[Task {task_id}] Loading workflow template: {template_name}")
-                     with open(template_path, 'r', encoding='utf-8') as f:
-                         final_workflow = json.load(f)
-                         
-                     # 3. Inject Prompts and Seed
-                     # Iterate through nodes to find CLIPTextEncode and KSampler
-                     for node_id, node in final_workflow.items():
-                         class_type = node.get("class_type")
-                         inputs = node.get("inputs", {})
-                         
-                         if class_type == "CLIPTextEncode":
-                             title = node.get("_meta", {}).get("title", "")
-                             if "Negative" in title:
-                                 inputs["text"] = negative_prompt
-                             else:
-                                 inputs["text"] = prompt
-                                 
-                         elif class_type == "KSampler":
-                             inputs["seed"] = random.randint(1, 1000000000000000)
+                 try:
+                     # Workflow Template Mapping
+                     logger.info(f"[Task {task_id}] Processing workflow payload for ComfyUI.")
+                     
+                     # 1. Extract prompt details from frontend payload
+                     prompt = workflow_data.get("prompt", "") if isinstance(workflow_data, dict) else workflow_data
+                     negative_prompt = workflow_data.get("negative_prompt", "") if isinstance(workflow_data, dict) else ""
+                     
+                     # 2. Determine Template (Default to Pony XL for RTX 3060)
+                     template_name = comfy_settings.get("default_workflow", "pony_xl_12gb.json")
+                     template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "workflows", template_name)
+                     
+                     if not os.path.exists(template_path):
+                         logger.error(f"[Task {task_id}] Workflow template {template_path} not found. Sending raw payload.")
+                         final_workflow = workflow_data
+                     else:
+                         logger.info(f"[Task {task_id}] Loading workflow template: {template_name}")
+                         with open(template_path, 'r', encoding='utf-8') as f:
+                             final_workflow = json.load(f)
                              
-                 result = await service.generate_image(final_workflow, progress_callback=progress_handler)
+                         # 3. Inject Prompts and Seed
+                         for node_id, node in final_workflow.items():
+                             class_type = node.get("class_type")
+                             inputs = node.get("inputs", {})
+                             
+                             if class_type == "CLIPTextEncode":
+                                 title = node.get("_meta", {}).get("title", "")
+                                 if "Negative" in title:
+                                     inputs["text"] = negative_prompt
+                                 else:
+                                     inputs["text"] = prompt
+                                     
+                             elif class_type == "KSampler":
+                                 inputs["seed"] = random.randint(1, 1000000000000000)
+                                 
+                     result = await service.generate_image(final_workflow, progress_callback=progress_handler)
+                 finally:
+                     # Auto stop ComfyUI service after generation to release GPU VRAM for Ollama
+                     # ComfyUI is now kept running for fast interactive generation
+                     pass
             
         else:
             logger.info(f"[Task {task_id}] Using LLM MediaService")

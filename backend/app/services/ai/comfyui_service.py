@@ -6,6 +6,9 @@ import aiohttp
 import logging
 from typing import Dict, Any, Callable, Optional
 
+import os
+import subprocess
+
 logger = logging.getLogger(__name__)
 
 class ComfyUIService:
@@ -17,11 +20,59 @@ class ComfyUIService:
     async def check_status(self) -> bool:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.base_url}/system_stats") as resp:
+                async with session.get(f"{self.base_url}/system_stats", timeout=aiohttp.ClientTimeout(total=2)) as resp:
                     return resp.status == 200
-        except Exception as e:
-            logger.error(f"ComfyUI health check failed: {e}")
+        except Exception:
             return False
+
+    async def ensure_running(self, timeout: int = 45) -> bool:
+        """
+        Ensures ComfyUI service is running. If not running, automatically launches it.
+        """
+        if await self.check_status():
+            logger.info("ComfyUI is already running.")
+            return True
+
+        logger.info("ComfyUI is not running. Auto-starting ComfyUI service...")
+        comfy_dir = r"D:\ComfyUI"
+        python_exe = os.path.join(comfy_dir, "venv", "Scripts", "python.exe")
+        main_py = os.path.join(comfy_dir, "main.py")
+
+        if not os.path.exists(python_exe) or not os.path.exists(main_py):
+            logger.error(f"ComfyUI executable or main.py not found at {comfy_dir}")
+            return False
+
+        try:
+            cmd = [python_exe, main_py, "--listen", "127.0.0.1", "--port", "8188", "--lowvram", "--disable-mmap"]
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            subprocess.Popen(cmd, cwd=comfy_dir, creationflags=creationflags)
+            
+            start_time = asyncio.get_running_loop().time()
+            while asyncio.get_running_loop().time() - start_time < timeout:
+                await asyncio.sleep(2)
+                if await self.check_status():
+                    logger.info("ComfyUI auto-started successfully and is ready.")
+                    return True
+            
+            logger.error(f"ComfyUI did not become ready within {timeout} seconds.")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to auto-start ComfyUI: {e}")
+            return False
+
+    @staticmethod
+    def stop_comfyui():
+        """
+        Stops ComfyUI and frees GPU VRAM.
+        """
+        logger.info("Auto-stopping ComfyUI service to free GPU VRAM...")
+        try:
+            if os.name == 'nt':
+                cmd = 'powershell -Command "Get-NetTCPConnection -LocalPort 8188 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like \'*ComfyUI*\' } | Stop-Process -Force -ErrorAction SilentlyContinue"'
+                subprocess.run(cmd, shell=True, capture_output=True)
+            logger.info("ComfyUI stopped.")
+        except Exception as e:
+            logger.error(f"Error stopping ComfyUI: {e}")
 
     async def generate_image(self, workflow: Dict[str, Any], progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """

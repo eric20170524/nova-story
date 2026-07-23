@@ -114,9 +114,33 @@ class LLMService:
         # We use TimelineResponse wrapper because the list must be in an object for Schema
         result = cls._generate_structured_with_retry(prompt, TimelineResponse, token)
         
-        if result:
+        if result and result.shots:
             return [shot.model_dump() for shot in result.shots]
-        return [{"error": "Timeline generation failed"}]
+            
+        # Fallback: Parse content into action scenes
+        logger.warning("LLM structured output failed for timeline, generating fallback scenes from chapter content.")
+        import re
+        sentences = [s.strip() for s in re.split(r'[。！？\n]+', content) if s.strip()]
+        if not sentences:
+            sentences = [content[:100]]
+            
+        fallback_shots = []
+        shot_types = ["Medium Shot", "Close-up", "Long Shot", "Medium Shot"]
+        movements = ["Static", "Pan", "Tracking", "Zoom In"]
+        angles = ["Eye-level", "Low Angle", "High Angle", "Eye-level"]
+        
+        for idx, sentence in enumerate(sentences[:10]):
+            fallback_shots.append({
+                "id": idx + 1,
+                "shot_type": shot_types[idx % len(shot_types)],
+                "camera_movement": movements[idx % len(movements)],
+                "camera_angle": angles[idx % len(angles)],
+                "visual_prompt": f"Cinematic shot: {sentence}, anime masterpiece, highly detailed",
+                "audio_prompt": "Cinematic BGM",
+                "dialogue": sentence if "：" in sentence or ":" in sentence or "“" in sentence else None,
+                "duration": 3.0
+            })
+        return fallback_shots
 
     @classmethod
     def extract_character_profiles(cls, content: str, token: Optional[str] = None) -> List[Dict[str, Any]]:

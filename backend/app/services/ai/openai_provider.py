@@ -1,6 +1,7 @@
 import requests
 import logging
 import time
+import json
 from typing import Dict, Any, Optional, Type, TypeVar
 from pydantic import BaseModel
 from app.core.log_utils import format_log_message
@@ -32,7 +33,7 @@ class OpenAIProvider(AIProvider):
         
         while retries < self.MAX_RETRIES:
             try:
-                response = requests.post(url, json=payload, headers=headers, timeout=60)
+                response = requests.post(url, json=payload, headers=headers, timeout=300)
                 response.raise_for_status()
                 data = response.json()
                 logger.debug(format_log_message("OpenAI Response Data", data, max_length=1000))
@@ -80,24 +81,37 @@ class OpenAIProvider(AIProvider):
         }
         
         messages = []
-        if system_instruction:
-            messages.append({"role": "system", "content": system_instruction})
-        messages.append({"role": "user", "content": prompt})
+        is_local = "127.0.0.1" in self.base_url or "localhost" in self.base_url or "11434" in self.base_url
+        
+        sys_prompt = system_instruction or ("You are a JSON generator. Respond only with valid JSON." if is_local else None)
+        if sys_prompt:
+            messages.append({"role": "system", "content": sys_prompt})
+        
+        user_content = prompt
+        if is_local:
+            user_content += "\n\nIMPORTANT: Return ONLY a valid JSON object or JSON list containing the result data."
+        messages.append({"role": "user", "content": user_content})
 
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": json_schema
+        if is_local:
+            payload = {
+                "model": self.model,
+                "messages": messages
             }
-        }
+        else:
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                }
+            }
         
         url = f"{self.base_url}/chat/completions"
         data = self._call_api(url, payload)
         
-        # Fallback if json_schema is rejected by local OpenAI API proxy (e.g. Ollama)
-        if not data:
+        # Fallback if first attempt is rejected
+        if not data and not is_local:
             payload["response_format"] = {"type": "json_object"}
             data = self._call_api(url, payload)
             
@@ -105,19 +119,70 @@ class OpenAIProvider(AIProvider):
              raise ValueError("No response from OpenAI / Ollama API")
 
         try:
-            content = data["choices"][0]["message"]["content"]
+            msg = data["choices"][0]["message"]
+            content = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thinking") or ""
+            
             if not content:
                 raise ValueError("Empty content from OpenAI / Ollama API")
             
-            # Clean markdown codeblocks ```json ... ``` if local LLM returns markdown wrapped text
             cleaned_content = content.strip()
-            if cleaned_content.startswith("```"):
-                lines = cleaned_content.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                cleaned_content = "\n".join(lines).strip()
+            import re
+            codeblock_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_content, re.IGNORECASE)
+            if codeblock_match:
+                cleaned_content = codeblock_match.group(1).strip()
+
+            if not (cleaned_content.startswith("{") or cleaned_content.startswith("[")):
+                start_obj = cleaned_content.find("{")
+                start_arr = cleaned_content.find("[")
+                if start_obj != -1 or start_arr != -1:
+                    valid_starts = [i for i in [start_obj, start_arr] if i != -1]
+                    start_idx = min(valid_starts)
+                    end_obj = cleaned_content.rfind("}")
+                    end_arr = cleaned_content.rfind("]")
+                    end_idx = max(end_obj, end_arr)
+                    if end_idx > start_idx:
+                        cleaned_content = cleaned_content[start_idx:end_idx+1]
+
+            parsed_data = None
+            try:
+                import json_repair
+                parsed_data = json_repair.repair_json(cleaned_content, return_objects=True)
+            except Exception:
+                try:
+                    parsed_data = json.loads(cleaned_content)
+                except Exception:
+                    pass
+
+            if parsed_data is not None:
+                model_fields = getattr(response_model, 'model_fields', {})
+                field_names = list(model_fields.keys())
+                
+                if isinstance(parsed_data, list):
+                    normalized_items = []
+                    for item in parsed_data:
+                        if isinstance(item, dict):
+                            normalized_items.append(item)
+                        elif isinstance(item, str) and item.strip():
+                            normalized_items.append({"visual_prompt": item.strip()})
+                    if normalized_items:
+                        parsed_data = normalized_items
+
+                    if len(field_names) == 1:
+                        parsed_data = {field_names[0]: parsed_data}
+                    elif "shots" in field_names:
+                        parsed_data = {"shots": parsed_data}
+                    elif "profiles" in field_names:
+                        parsed_data = {"profiles": parsed_data}
+
+                elif isinstance(parsed_data, dict):
+                    for fn in field_names:
+                        if fn not in parsed_data:
+                            for k, v in list(parsed_data.items()):
+                                if isinstance(v, list) and k != fn:
+                                    parsed_data[fn] = v
+                                    break
+
+                return response_model.model_validate(parsed_data)
 
             return response_model.model_validate_json(cleaned_content)
         except (KeyError, IndexError, Exception) as e:

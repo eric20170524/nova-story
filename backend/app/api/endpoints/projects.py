@@ -29,44 +29,51 @@ async def import_project(
 ):
     try:
         content_bytes = await file.read()
-        content = content_bytes.decode("utf-8")
+        try:
+            content = content_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            content = content_bytes.decode("gbk", errors="ignore")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not read file: {str(e)}")
 
-    lines = content.splitlines()
-    if not lines:
+    if not content.strip():
         raise HTTPException(status_code=400, detail="File is empty")
 
-    # 1. Parse Title and Description
-    # First line is usually title
-    title = lines[0].strip().replace("Title:", "").replace("标题：", "").strip()
-    
-    # Description: Everything until the first chapter or separator
-    description_lines = []
-    
-    # Find start of first chapter
-    # Regex to match "第X章" or "Chapter X" with optional punctuation
-    chapter_pattern = re.compile(r'^\s*(?:第[ \t]*[0-9零一二三四五六七八九十百千]+[ \t]*章|Chapter[ \t]*\d+)[ \t]*[：: ]*', re.IGNORECASE | re.MULTILINE)
-    
-    first_chapter_index = -1
-    for i in range(1, len(lines)):
-        if chapter_pattern.match(lines[i]):
-            first_chapter_index = i
-            break
-        
-    if first_chapter_index != -1:
-        description_lines = lines[1:first_chapter_index]
-    else:
-        # No chapters found?
-        description_lines = lines[1:]
+    filename = file.filename or ""
 
-    # ...
+    # 1. Regex to match chapter / episode headers
+    chapter_pattern = re.compile(
+        r'^\s*(?:#{1,6}\s*)?(?:(?:第[ \t]*[0-9零一二三四五六七八九十百千]+[ \t]*[章集幕])|(?:Chapter|Episode|EP)[ \t]*\d+)[ \t]*[：: \t]*',
+        re.IGNORECASE | re.MULTILINE
+    )
+    
+    matches = list(chapter_pattern.finditer(content))
+    first_match_start = matches[0].start() if matches else len(content)
+    header_text = content[:first_match_start]
+
+    # Extract Title
+    title = ""
+    header_lines = [l.strip() for l in header_text.splitlines()]
+    non_decor_lines = [l for l in header_lines if l and not re.match(r'^[=\-*#~_]+$', l)]
+    
+    if non_decor_lines:
+        first_line = non_decor_lines[0]
+        m_book = re.search(r'《([^》]+)》', first_line)
+        if m_book:
+            title = m_book.group(1).strip()
+        else:
+            title = first_line.lstrip('#=*- ').strip()
+            
+    if not title:
+        title = os.path.splitext(filename)[0] if filename else "Imported Project (导入项目)"
+
+    # Extract Description
+    description_lines = [l for l in header_lines if l and not re.match(r'^[=\-*#~_]+$', l)]
+    if description_lines and title in description_lines[0]:
+        description_lines = description_lines[1:]
     description = "\n".join(description_lines).strip()
-    
-    print(f"DEBUG: Parsed Title: {title}")
-    print(f"DEBUG: Parsed Description Length: {len(description)}")
-    
-    # Create Project
+
+    # Create Project DB instance
     db_project = Project(
         title=title,
         description=description,
@@ -77,52 +84,59 @@ async def import_project(
     db.commit()
     db.refresh(db_project)
 
-    # 2. Parse Chapters
-    # Split content by chapter headers
-    # We use regex split to keep delimiters? No, finditer is better to get positions.
+    # Extract Characters from Header if character list exists
+    from ...models.character import Character
+    extracted_chars = []
+    for line in header_lines:
+        if line.startswith('·') or line.startswith('-') or line.startswith('*'):
+            clean_line = line.lstrip('·-* ').strip()
+            if '：' in clean_line or ':' in clean_line:
+                parts = re.split(r'[：:]', clean_line, 1)
+                c_name = parts[0].strip()
+                c_desc = parts[1].strip()
+                c_role = "Supporting"
+                if any(k in c_desc or k in c_name for k in ["男主", "女主", "主角", "Protagonist"]):
+                    c_role = "Protagonist"
+                elif any(k in c_desc or k in c_name for k in ["反派", "敌", "督军", "监军", "伪神", "Antagonist"]):
+                    c_role = "Antagonist"
+                
+                if c_name and not any(c.name == c_name for c in extracted_chars):
+                    db_char = Character(
+                        project_id=db_project.id,
+                        name=c_name,
+                        role=c_role,
+                        description=c_desc
+                    )
+                    db.add(db_char)
+                    extracted_chars.append(db_char)
     
-    matches = list(chapter_pattern.finditer(content))
-    print(f"DEBUG: Found {len(matches)} chapter matches.")
-    
+    if extracted_chars:
+        db.commit()
+        print(f"DEBUG: Parsed and saved {len(extracted_chars)} characters.")
+
+    # Extract Chapters / Episodes
     valid_chapters_count = 0
-    
     for i, match in enumerate(matches):
-        chapter_start = match.start()
-        # End is start of next match or end of file
-        chapter_end = matches[i+1].start() if i + 1 < len(matches) else len(content)
+        start = match.start()
+        end = matches[i+1].start() if i + 1 < len(matches) else len(content)
+        full_chapter_text = content[start:end].strip()
         
-        full_chapter_text = content[chapter_start:chapter_end]
-        
-        # Extract title line
-        lines_in_chapter = full_chapter_text.strip().splitlines()
-        chapter_title_line = lines_in_chapter[0]
-        
-        # Extract pure title (remove "Chapter X: ")
-        # match.group() is the "Chapter X: " part (or close to it)
-        # Re-match the line to split prefix and title
-        m = chapter_pattern.match(chapter_title_line)
-        if m:
-            prefix_len = m.end()
-            chapter_title_text = chapter_title_line[prefix_len:].strip()
-        else:
-            chapter_title_text = chapter_title_line # Should not happen given logic
-            
-        chapter_content = "\n".join(lines_in_chapter[1:]).strip()
-        
-        print(f"DEBUG: Processing Chapter {i+1}: {chapter_title_text}")
-        print(f"DEBUG: Content Length: {len(chapter_content)}")
-        
-        # Filter: Skip if content contains marker or is empty
+        chunk_lines = [l for l in full_chapter_text.splitlines() if not re.match(r'^[=\-*#~_]+$', l.strip())]
+        if not chunk_lines:
+            continue
+
+        chapter_title_line = chunk_lines[0].lstrip('#=*- ').strip()
+        chapter_content = "\n".join(chunk_lines[1:]).strip() if len(chunk_lines) > 1 else ""
+
         if "(章节内容尚未生成)" in chapter_content or not chapter_content:
-            print(f"DEBUG: Skipping Chapter {i+1} (Incomplete or Empty)")
+            print(f"DEBUG: Skipping Chapter {i+1} (Empty)")
             continue
             
-        # Create Chapter
         db_chapter = Chapter(
             id=str(uuid.uuid4()),
             project_id=db_project.id,
             index=valid_chapters_count + 1,
-            title=chapter_title_text,
+            title=chapter_title_line,
             content=chapter_content,
             status="draft"
         )
@@ -130,7 +144,7 @@ async def import_project(
         valid_chapters_count += 1
         
     db.commit()
-    print(f"DEBUG: Successfully imported {valid_chapters_count} chapters.")
+    print(f"DEBUG: Successfully imported project '{db_project.title}' with {valid_chapters_count} chapters.")
     return db_project
 
 @router.post("/", response_model=schemas.Project)

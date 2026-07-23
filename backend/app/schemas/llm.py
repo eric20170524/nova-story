@@ -6,14 +6,14 @@ class ContentAnalysis(BaseModel):
     updates: List[str] = Field(description="List of key plot updates or events")
 
 class TimelineShot(BaseModel):
-    id: int = Field(description="Sequential number of the shot")
-    shot_type: str = Field(description="Type of shot (e.g., Extreme Long Shot, Close-up)")
-    camera_movement: str = Field(description="Camera movement (e.g., Pan, Tilt, Zoom In)")
-    camera_angle: str = Field(description="Camera angle (e.g., Eye-level, Low Angle)")
-    visual_prompt: str = Field(description="Detailed description for image generation (English)")
-    audio_prompt: str = Field(description="Description of background music and sound effects (English)")
+    id: Optional[int] = Field(1, description="Sequential number of the shot")
+    shot_type: Optional[str] = Field("Medium Shot", description="Type of shot")
+    camera_movement: Optional[str] = Field("Static", description="Camera movement")
+    camera_angle: Optional[str] = Field("Eye-level", description="Camera angle")
+    visual_prompt: Optional[str] = Field("", description="Detailed description for image generation (English)")
+    audio_prompt: Optional[str] = Field("", description="Description of background music and sound effects (English)")
     dialogue: Optional[str] = Field(None, description="Dialogue line (Speaker: Line)")
-    duration: float = Field(description="Estimated duration in seconds")
+    duration: Optional[float] = Field(3.0, description="Estimated duration in seconds")
 
 class TimelineResponse(BaseModel):
     shots: List[TimelineShot] = Field(description="List of storyboard shots")

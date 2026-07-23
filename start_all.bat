@@ -7,7 +7,8 @@ echo ========================================================
 echo.
 
 echo [0/3] 正在检查并清理已占用的旧进程 (端口 8188, 8087, 3000)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r ":8188[ ] :8087[ ] :3000[ ]"') do (
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 8188,8087,3000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id `$_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr /C:":8188 " /C:":8087 " /C:":3000 " ^| findstr LISTENING') do (
     taskkill /F /PID %%a >nul 2>&1
 )
 timeout /t 1 /nobreak >nul

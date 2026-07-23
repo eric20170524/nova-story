@@ -1,11 +1,15 @@
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_DB_FILE = os.path.join(BACKEND_DIR, "sql_app.db").replace("\\", "/")
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "NovaStory"
     
-    # Database
-    DATABASE_URL: str = "sqlite:///./sql_app.db"
+    # Database (Defaults to absolute path of sql_app.db in backend directory)
+    DATABASE_URL: str = f"sqlite:///{DEFAULT_DB_FILE}"
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
