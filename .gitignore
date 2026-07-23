@@ -20,4 +20,5 @@
 .env.*.local
 *.vscode/
 /backend/app/static/comics/
-
+**/__pycache__/
+*.pyc

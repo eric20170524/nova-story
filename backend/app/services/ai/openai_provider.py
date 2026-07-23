@@ -68,17 +68,14 @@ class OpenAIProvider(AIProvider):
 
     def generate_structured(self, prompt: str, response_model: Type[T], system_instruction: Optional[str] = None) -> T:
         """
-        Generates structured output using OpenAI's Structured Outputs (json_schema).
+        Generates structured output using OpenAI's Structured Outputs (json_schema),
+        with fallback for local OpenAI-compatible providers like Ollama.
         """
-        # Prepare schema for OpenAI Structured Outputs
-        # Note: strict=True requires the schema to be fully compliant (e.g. no additionalProperties)
-        # Pydantic's model_json_schema() is usually close enough, but for complex types it might need adjustment.
-        # We'll try strict=True first.
         schema = response_model.model_json_schema()
         
         json_schema = {
             "name": response_model.__name__,
-            "strict": True,
+            "strict": False,
             "schema": schema
         }
         
@@ -99,17 +96,33 @@ class OpenAIProvider(AIProvider):
         url = f"{self.base_url}/chat/completions"
         data = self._call_api(url, payload)
         
+        # Fallback if json_schema is rejected by local OpenAI API proxy (e.g. Ollama)
         if not data:
-             raise ValueError("No response from OpenAI API")
+            payload["response_format"] = {"type": "json_object"}
+            data = self._call_api(url, payload)
+            
+        if not data:
+             raise ValueError("No response from OpenAI / Ollama API")
 
         try:
             content = data["choices"][0]["message"]["content"]
             if not content:
-                raise ValueError("Empty content from OpenAI API")
-            return response_model.model_validate_json(content)
-        except (KeyError, IndexError) as e:
-            logger.error(f"Failed to parse OpenAI response: {e}")
-            raise ValueError(f"Failed to parse OpenAI response: {e}")
+                raise ValueError("Empty content from OpenAI / Ollama API")
+            
+            # Clean markdown codeblocks ```json ... ``` if local LLM returns markdown wrapped text
+            cleaned_content = content.strip()
+            if cleaned_content.startswith("```"):
+                lines = cleaned_content.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                cleaned_content = "\n".join(lines).strip()
+
+            return response_model.model_validate_json(cleaned_content)
+        except (KeyError, IndexError, Exception) as e:
+            logger.error(f"Failed to parse OpenAI / Ollama response: {e}")
+            raise ValueError(f"Failed to parse response: {e}")
 
     async def generate_image(self, prompt: str, size: str = "1024x1024", token: Optional[str] = None) -> Dict[str, Any]:
         """

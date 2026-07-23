@@ -1,0 +1,58 @@
+import os
+
+start_all_content = """@echo off
+chcp 936 >nul
+title NovaStory 一键全套服务启动脚本
+echo ========================================================
+echo               NovaStory 一键全套启动脚本
+echo ========================================================
+echo.
+
+echo [0/3] 正在检查并清理已占用的旧进程 (端口 8188, 8087, 3000)...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r ":8188[ ] :8087[ ] :3000[ ]"') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+timeout /t 1 /nobreak >nul
+
+echo [1/3] 正在拉起 ComfyUI 生图服务 (端口 8188)...
+start "ComfyUI Server (8188)" cmd /k "chcp 65001 >nul && cd /d D:\\ComfyUI && .\\venv\\Scripts\\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram"
+
+echo [2/3] 正在拉起 NovaStory 后端 FastAPI 服务 (端口 8087)...
+start "NovaStory Backend (8087)" cmd /k "chcp 65001 >nul && cd /d %~dp0backend && .\\.venv\\Scripts\\python.exe main.py"
+
+echo [3/3] 正在拉起 NovaStory 前端 Vite 界面 (端口 3000)...
+start "NovaStory Frontend (3000)" cmd /k "chcp 65001 >nul && cd /d %~dp0frontend && npm run dev"
+
+echo.
+echo ========================================================
+echo  所有服务启动命令已派发！
+echo  - ComfyUI 生图引擎: http://127.0.0.1:8188
+echo  - 后端 API 服务:     http://127.0.0.1:8087/docs
+echo  - 前端导演台界面:   http://localhost:3000
+echo ========================================================
+pause
+"""
+
+stop_all_content = """@echo off
+chcp 936 >nul
+title NovaStory 一键停止脚本
+echo ========================================================
+echo               NovaStory 一键停止脚本
+echo ========================================================
+echo.
+echo 正在停止占用端口 8188, 8087, 3000 的服务进程...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r ":8188[ ] :8087[ ] :3000[ ]"') do (
+    taskkill /F /PID %%a >nul 2>&1
+)
+echo.
+echo 所有 NovaStory 相关服务进程已清理完毕！
+pause
+"""
+
+with open("d:/workspace/nova-story/start_all.bat", "w", encoding="gbk", errors="replace") as f:
+    f.write(start_all_content.replace("\r\n", "\n").replace("\n", "\r\n"))
+
+with open("d:/workspace/nova-story/stop_all.bat", "w", encoding="gbk", errors="replace") as f:
+    f.write(stop_all_content.replace("\r\n", "\n").replace("\n", "\r\n"))
+
+print("Successfully written start_all.bat and stop_all.bat in GBK encoding!")

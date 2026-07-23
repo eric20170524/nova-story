@@ -84,24 +84,24 @@ export const Dashboard: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-950 p-6 md:p-12">
+    <div className="flex-1 overflow-y-auto bg-slate-950 p-4 sm:p-8 lg:p-12">
       <div className="max-w-7xl mx-auto">
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 sm:mb-10 gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">{t('dashboard.title')}</h1>
-            <p className="text-slate-400">{t('dashboard.subtitle')}</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">{t('dashboard.title')}</h1>
+            <p className="text-slate-400 text-sm sm:text-base">{t('dashboard.subtitle')}</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 w-full sm:w-auto">
             <button
                 onClick={() => setShowImportModal(true)}
-                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-5 py-2.5 rounded-lg transition-all shadow-lg font-medium"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 sm:px-5 py-2.5 rounded-lg transition-all shadow-lg font-medium text-sm sm:text-base"
             >
                 <Upload size={18} />
                 {t('dashboard.import_btn')}
             </button>
             <button
                 onClick={() => setShowCreateModal(true)}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg transition-all shadow-lg shadow-indigo-600/20 font-medium"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 sm:px-5 py-2.5 rounded-lg transition-all shadow-lg shadow-indigo-600/20 font-medium text-sm sm:text-base"
             >
                 <Plus size={18} />
                 {t('dashboard.create_btn')}
@@ -110,12 +110,12 @@ export const Dashboard: React.FC = () => {
         </header>
 
         {/* Search Bar */}
-        <div className="relative mb-8 max-w-md">
+        <div className="relative mb-8 w-full max-w-md">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500" size={18} />
           <input
             type="text"
             placeholder={t('dashboard.search_placeholder')}
-            className="w-full bg-slate-900 border border-slate-800 text-slate-200 pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-600"
+            className="w-full bg-slate-900 border border-slate-800 text-slate-200 pl-10 pr-4 py-2 text-sm sm:text-base rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-600"
           />
         </div>
 
@@ -177,9 +177,9 @@ export const Dashboard: React.FC = () => {
 
       {/* Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-2xl font-bold text-white mb-6">{t('dashboard.modal_title')}</h2>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-xl sm:text-2xl font-bold text-white mb-6">{t('dashboard.modal_title')}</h2>
             <form onSubmit={handleCreateProject} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">{t('dashboard.field_title')}</label>
@@ -187,7 +187,7 @@ export const Dashboard: React.FC = () => {
                   autoFocus
                   type="text"
                   required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm sm:text-base"
                   value={newProject.title}
                   onChange={(e) => setNewProject({ ...newProject, title: e.target.value })}
                 />
@@ -195,7 +195,7 @@ export const Dashboard: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">{t('dashboard.field_desc')}</label>
                 <textarea
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none h-24 resize-none"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none h-24 resize-none text-sm sm:text-base"
                   value={newProject.description}
                   onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
                 />
@@ -204,13 +204,13 @@ export const Dashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-slate-300 hover:text-white"
+                  className="px-4 py-2 text-slate-300 hover:text-white text-sm"
                 >
                   {t('dashboard.cancel')}
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium"
+                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium text-sm"
                 >
                   {t('dashboard.create')}
                 </button>
@@ -222,9 +222,9 @@ export const Dashboard: React.FC = () => {
 
       {/* Import Modal */}
       {showImportModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-2xl font-bold text-white mb-6">{t('dashboard.import_modal_title')}</h2>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-xl sm:text-2xl font-bold text-white mb-6">{t('dashboard.import_modal_title')}</h2>
             <form onSubmit={handleImportProject} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">{t('dashboard.field_path')}</label>
@@ -233,7 +233,7 @@ export const Dashboard: React.FC = () => {
                       type="file"
                       accept=".txt"
                       required
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 text-sm"
                       onChange={(e) => {
                           if (e.target.files && e.target.files.length > 0) {
                               setImportFile(e.target.files[0]);
@@ -246,13 +246,13 @@ export const Dashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowImportModal(false)}
-                  className="px-4 py-2 text-slate-300 hover:text-white"
+                  className="px-4 py-2 text-slate-300 hover:text-white text-sm"
                 >
                   {t('dashboard.cancel')}
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium"
+                  className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium text-sm"
                 >
                   {t('dashboard.import')}
                 </button>

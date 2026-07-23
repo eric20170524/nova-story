@@ -81,7 +81,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     {timeline.map((scene, idx) => {
                     const isExpanded = expandedCards.has(scene.id);
                     return (
-                    <div key={scene.id} className="w-80 flex-shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl hover:shadow-2xl transition-all group animate-in fade-in zoom-in-95 duration-300">
+                    <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl hover:shadow-2xl transition-all group animate-in fade-in zoom-in-95 duration-300">
                         {/* Header */}
                         <div className="p-3 bg-slate-850 border-b border-slate-800 flex justify-between items-center">
                             <span className="font-mono text-xs text-indigo-400 font-bold">{t('director.scene')} {idx + 1}</span>

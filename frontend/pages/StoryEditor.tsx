@@ -325,18 +325,18 @@ export const StoryEditor: React.FC = () => {
 
       {/* Editor Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925">
+        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-3 sm:px-4 lg:px-6 bg-slate-925 gap-2">
           <input
             type="text"
-            className="bg-transparent border-none text-white font-medium focus:ring-0 w-1/2"
+            className="bg-transparent border-none text-white font-medium focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate"
             value={selectedChapter?.title || ''}
             onChange={(e) => selectedChapter && setSelectedChapter({...selectedChapter, title: e.target.value})}
             placeholder={t('story.chapter_title_placeholder')}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
             <button 
               onClick={() => navigate(`/project/${projectId}/director`)}
-              className="hidden md:flex items-center gap-1 px-3 py-1.5 text-slate-400 hover:text-indigo-400 text-sm transition-colors mr-2"
+              className="hidden md:flex items-center gap-1 px-3 py-1.5 text-slate-400 hover:text-indigo-400 text-sm transition-colors mr-1"
               title="Go to Director Mode"
             >
                <Clapperboard size={16} />
@@ -345,7 +345,7 @@ export const StoryEditor: React.FC = () => {
 
             <button 
               onClick={handleSave}
-              className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-sm transition-colors"
+              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs sm:text-sm transition-colors"
             >
               <Save size={14} /> 
               <span className="hidden sm:inline">{t('story.save')}</span>
@@ -353,9 +353,9 @@ export const StoryEditor: React.FC = () => {
             
             <button 
               onClick={() => setShowRightPanel(!showRightPanel)}
-              className="lg:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg"
+              className="lg:hidden p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg"
             >
-               <PanelRight size={20} />
+               <PanelRight size={18} />
             </button>
           </div>
         </div>
@@ -376,14 +376,14 @@ export const StoryEditor: React.FC = () => {
           )}
           
           {/* AI Floating Toolbar */}
-          <div className="absolute bottom-6 right-6 lg:bottom-8 lg:right-8 flex flex-col gap-3 transition-opacity opacity-50 hover:opacity-100 z-10">
+          <div className="absolute bottom-4 right-4 lg:bottom-8 lg:right-8 flex flex-col gap-3 transition-opacity opacity-70 hover:opacity-100 z-10">
              <button
               onClick={handleAIDraft}
               disabled={aiLoading}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white p-3 rounded-full shadow-lg shadow-indigo-600/30 transition-transform hover:scale-105 disabled:opacity-50 flex items-center justify-center gap-2"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 sm:p-3 rounded-full shadow-lg shadow-indigo-600/30 transition-transform hover:scale-105 disabled:opacity-50 flex items-center justify-center gap-2"
               title={t('story.ai_continue')}
             >
-              {aiLoading ? <RefreshCw className="animate-spin" size={20} /> : <Wand2 size={20} />}
+              {aiLoading ? <RefreshCw className="animate-spin" size={18} /> : <Wand2 size={18} />}
             </button>
           </div>
         </div>

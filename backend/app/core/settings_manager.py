@@ -5,7 +5,7 @@ from typing import Dict, Any
 SETTINGS_FILE = "system_settings.json"
 
 DEFAULT_SETTINGS = {
-    "llm_model": "gemini-3-flash-preview",
+    "llm_model": "gemini-2.5-flash",
     "image_model": "gemini-2.5-flash-image",
     "comfyui": {
         "base_url": "http://127.0.0.1:8188",

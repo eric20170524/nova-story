@@ -84,18 +84,18 @@ export const WorkflowSettings: React.FC = () => {
     <div className="space-y-6">
       <div className="grid gap-4">
         {workflows.map(wf => (
-          <div key={wf.id} className="bg-slate-900 p-6 rounded-xl border border-slate-800 flex justify-between items-center hover:border-indigo-500/50 transition-colors">
+          <div key={wf.id} className="bg-slate-900 p-4 sm:p-6 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 hover:border-indigo-500/50 transition-colors">
              <div className="flex items-center gap-4 flex-1">
-                <div className={`p-3 rounded-lg ${wf.is_active ? 'bg-indigo-900/20 text-indigo-400' : 'bg-slate-800 text-slate-500'}`}>
+                <div className={`p-3 rounded-lg flex-shrink-0 ${wf.is_active ? 'bg-indigo-900/20 text-indigo-400' : 'bg-slate-800 text-slate-500'}`}>
                    <WorkflowIcon />
                 </div>
-                <div>
-                  <h3 className="font-bold text-white">{wf.name}</h3>
-                  <p className="text-sm text-slate-400">{wf.description}</p>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-white text-base sm:text-lg truncate">{wf.name}</h3>
+                  <p className="text-xs sm:text-sm text-slate-400 line-clamp-2">{wf.description}</p>
                 </div>
              </div>
              
-             <div className="flex items-center gap-4">
+             <div className="flex items-center gap-4 self-end sm:self-auto">
                 {/* Active Toggle */}
                 <button 
                   onClick={() => handleToggleActive(wf)}

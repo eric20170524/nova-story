@@ -45,9 +45,22 @@ export const Layout: React.FC = () => {
           </button>
         </div>
 
-        {/* Spacer / Main Nav (Empty now as requested) */}
-        <nav className="flex-1 py-6 flex flex-col items-center gap-4">
-           {/* Can add quick icons here later if needed */}
+        {/* Spacer / Main Nav */}
+        <nav className="flex-1 py-4 flex flex-col items-center gap-3">
+          <button
+             onClick={() => handleNavigation('/')}
+             className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${location.pathname === '/' ? 'bg-slate-800 text-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+             title={t('app.dashboard')}
+          >
+             <Home size={20} />
+          </button>
+          <button
+             onClick={() => handleNavigation('/settings')}
+             className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${location.pathname === '/settings' ? 'bg-slate-800 text-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+             title={t('app.settings')}
+          >
+             <Settings size={20} />
+          </button>
         </nav>
 
         {/* Bottom Menu Trigger */}
@@ -55,13 +68,13 @@ export const Layout: React.FC = () => {
           
           {/* Popup Menu */}
           {isMenuOpen && (
-            <div className="absolute left-full bottom-0 ml-3 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-left-2 duration-200">
+            <div className="absolute left-0 sm:left-full bottom-full sm:bottom-0 mb-2 sm:mb-0 sm:ml-3 w-56 sm:w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in duration-200">
                {/* User Info Header */}
                <div className="p-4 border-b border-slate-800 bg-slate-850">
                   <div className="font-medium text-white flex items-center gap-2">
                      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs">U</div>
-                     <div>
-                        <div className="text-sm">{t('app.director_role')}</div>
+                     <div className="min-w-0 flex-1">
+                        <div className="text-sm truncate">{t('app.director_role')}</div>
                         <div className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">{t('app.plan')}</div>
                      </div>
                   </div>

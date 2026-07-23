@@ -75,7 +75,28 @@ export const SettingsPage: React.FC = () => {
   };
 
   const handleModelChange = (model: string) => {
-    setSettings({ ...settings, llm_model: model });
+    if (model === 'qwen3.5:9b') {
+      setSettings({
+        ...settings,
+        llm_model: model,
+        llm: {
+          ...settings.llm,
+          provider: 'ollama',
+          base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
+          model: 'qwen3.5:9b',
+          api_key: settings.llm?.api_key || 'ollama'
+        }
+      });
+    } else {
+      setSettings({
+        ...settings,
+        llm_model: model,
+        llm: {
+          ...settings.llm,
+          model: model
+        }
+      });
+    }
   };
 
   const handleComfyUIChange = (field: string, value: any) => {
@@ -117,17 +138,18 @@ export const SettingsPage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 lg:p-12">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white mb-2">{t('app.settings')}</h1>
-        <p className="text-slate-400">{t('settings_page.subtitle')}</p>
-      </div>
+    <div className="flex-1 overflow-y-auto w-full bg-slate-950 p-4 sm:p-6 lg:p-10">
+      <div className="max-w-4xl mx-auto">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">{t('app.settings')}</h1>
+          <p className="text-slate-400 text-sm sm:text-base">{t('settings_page.subtitle')}</p>
+        </div>
 
         {/* Tabs */}
-        <div className="flex gap-4 mb-8 border-b border-slate-800">
+        <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 border-b border-slate-800 overflow-x-auto pb-1 custom-scrollbar">
            <button
              onClick={() => setActiveTab('general')}
-             className={`pb-3 px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 ${
+             className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
                activeTab === 'general' 
                  ? 'border-indigo-500 text-indigo-400' 
                  : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -138,7 +160,7 @@ export const SettingsPage: React.FC = () => {
            </button>
            <button
              onClick={() => setActiveTab('workflow')}
-             className={`pb-3 px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 ${
+             className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
                activeTab === 'workflow' 
                  ? 'border-indigo-500 text-indigo-400' 
                  : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -151,22 +173,22 @@ export const SettingsPage: React.FC = () => {
 
         {activeTab === 'workflow' ? (
           <div className="animate-in fade-in slide-in-from-left-4 duration-300 space-y-8">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-sm space-y-10">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 sm:space-y-10">
               {/* ComfyUI Configuration */}
               <section>
                 <div className="flex items-center gap-2 mb-6">
                   <Server className="w-5 h-5 text-indigo-400" />
-                  <h2 className="text-xl font-semibold text-white">{t('settings_page.comfyui_config')}</h2>
+                  <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.comfyui_config')}</h2>
                 </div>
                 
                 <div className="space-y-6">
                   {/* Enable Toggle */}
-                  <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg gap-4">
                     <div>
-                      <h3 className="text-slate-200 font-medium">{t('settings_page.comfyui_enable_title')}</h3>
-                      <p className="text-sm text-slate-500">{t('settings_page.comfyui_enable_desc')}</p>
+                      <h3 className="text-slate-200 font-medium text-sm sm:text-base">{t('settings_page.comfyui_enable_title')}</h3>
+                      <p className="text-xs sm:text-sm text-slate-500">{t('settings_page.comfyui_enable_desc')}</p>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
+                    <label className="relative inline-flex items-center cursor-pointer self-start sm:self-auto">
                       <input 
                         type="checkbox" 
                         className="sr-only peer"
@@ -187,7 +209,7 @@ export const SettingsPage: React.FC = () => {
                       value={settings.comfyui?.base_url || ''}
                       onChange={(e) => handleComfyUIChange('base_url', e.target.value)}
                       placeholder="http://127.0.0.1:8188"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                     />
                   </div>
 
@@ -200,7 +222,7 @@ export const SettingsPage: React.FC = () => {
                       <select
                         value={settings.comfyui?.selected_workflow_file || ''}
                         onChange={(e) => handleComfyUIChange('selected_workflow_file', e.target.value || null)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent appearance-none transition-all"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 pr-10 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent appearance-none transition-all"
                       >
                         <option value="">{t('settings_page.comfyui_workflow_placeholder')}</option>
                         {workflowFiles.map((file) => (
@@ -218,7 +240,7 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </section>
 
-              <div className="mt-10 pt-6 border-t border-slate-800 flex items-center justify-between">
+              <div className="mt-8 sm:mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
                 <div>
                   {message && (
                     <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
@@ -230,7 +252,7 @@ export const SettingsPage: React.FC = () => {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
+                  className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
                     saving 
                       ? 'bg-indigo-600/50 cursor-not-allowed' 
                       : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
@@ -245,10 +267,10 @@ export const SettingsPage: React.FC = () => {
             <WorkflowSettings />
           </div>
         ) : (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-sm space-y-10 animate-in fade-in slide-in-from-left-4 duration-300">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 sm:space-y-10 animate-in fade-in slide-in-from-left-4 duration-300">
             {/* Model Configuration */}
             <section>
-              <h2 className="text-xl font-semibold text-white mb-6">{t('settings_page.model_config')}</h2>
+              <h2 className="text-lg sm:text-xl font-semibold text-white mb-6">{t('settings_page.model_config')}</h2>
               
               <div className="space-y-6">
                 <div>
@@ -264,55 +286,92 @@ export const SettingsPage: React.FC = () => {
                       onSelect={() => handleModelChange('gemini-2.5-flash')}
                     />
                     <ModelOption 
-                      id="gemini-3-flash-preview"
-                      name="Gemini 3.0 Flash (Preview)"
-                      description={t('settings_page.model_desc_flash30')}
-                      selected={settings.llm_model === 'gemini-3-flash-preview'}
-                      onSelect={() => handleModelChange('gemini-3-flash-preview')}
+                      id="gemini-2.5-pro"
+                      name="Gemini 2.5 Pro"
+                      description={t('settings_page.model_desc_pro25')}
+                      selected={settings.llm_model === 'gemini-2.5-pro'}
+                      onSelect={() => handleModelChange('gemini-2.5-pro')}
                     />
                     <ModelOption 
-                      id="gemini-3-pro-preview"
-                      name="Gemini 3.0 Pro (Preview)"
-                      description={t('settings_page.model_desc_pro30')}
-                    selected={settings.llm_model === 'gemini-3-pro-preview'}
-                    onSelect={() => handleModelChange('gemini-3-pro-preview')}
-                  />
-                </div>
-              </div>
+                      id="qwen3.5:9b"
+                      name="Ollama Qwen 3.5 9B (Local / 本机)"
+                      description={t('settings_page.model_desc_qwen35')}
+                      selected={settings.llm_model === 'qwen3.5:9b' || settings.llm?.provider === 'ollama'}
+                      onSelect={() => handleModelChange('qwen3.5:9b')}
+                    />
+                  </div>
 
-              {/* Image Model Selection */}
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-3">
-                  {t('settings_page.image_model_select')}
-                </label>
-                <p className="text-xs text-slate-500 mb-3">{t('settings_page.image_model_desc')}</p>
-                <div className="space-y-3">
-                  <ModelOption 
-                    id="gemini-2.5-flash-image"
-                    name="Gemini 2.5 Flash Image"
-                    description={t('settings_page.model_desc_flash_image')}
-                    selected={settings.image_model === 'gemini-2.5-flash-image'}
-                    onSelect={() => setSettings({ ...settings, image_model: 'gemini-2.5-flash-image' })}
-                  />
-                  <ModelOption 
-                    id="gemini-3-pro-image-preview"
-                    name="Gemini 3.0 Pro Image (Preview)"
-                    description={t('settings_page.model_desc_pro_image')}
-                    selected={settings.image_model === 'gemini-3-pro-image-preview'}
-                    onSelect={() => setSettings({ ...settings, image_model: 'gemini-3-pro-image-preview' })}
-                  />
+                  {/* Custom / Manual Model Input */}
+                  <div className="mt-4 pt-4 border-t border-slate-800">
+                    <label className="block text-xs font-medium text-slate-400 mb-2">
+                      {t('settings_page.custom_model_input_label')}
+                    </label>
+                    <input 
+                      type="text"
+                      value={settings.llm_model || ''}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      placeholder={t('settings_page.custom_model_input_placeholder')}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Image Model Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-3">
+                    {t('settings_page.image_model_select')}
+                  </label>
+                  <p className="text-xs text-slate-500 mb-3">{t('settings_page.image_model_desc')}</p>
+                  <div className="space-y-3">
+                    <ModelOption 
+                      id="gemini-2.5-flash-image"
+                      name="Gemini 2.5 Flash Image"
+                      description={t('settings_page.model_desc_flash_image')}
+                      selected={settings.image_model === 'gemini-2.5-flash-image'}
+                      onSelect={() => setSettings({ ...settings, image_model: 'gemini-2.5-flash-image' })}
+                    />
+                  </div>
+                  {/* Custom Image Model Input */}
+                  <div className="mt-3">
+                    <input 
+                      type="text"
+                      value={settings.image_model || ''}
+                      onChange={(e) => setSettings({ ...settings, image_model: e.target.value })}
+                      placeholder={t('settings_page.custom_image_model_placeholder')}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
             </section>
 
             <div className="border-t border-slate-800" />
 
             {/* Independent LLM Configuration */}
             <section>
-              <div className="flex items-center gap-2 mb-6">
-                <Cloud className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-xl font-semibold text-white">{t('settings_page.llm_title')}</h2>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-2">
+                  <Cloud className="w-5 h-5 text-indigo-400" />
+                  <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.llm_title')}</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettings({
+                      ...settings,
+                      llm: {
+                        provider: 'ollama',
+                        base_url: 'http://127.0.0.1:11434/v1',
+                        model: 'qwen3.5:9b',
+                        api_key: 'ollama'
+                      }
+                    });
+                  }}
+                  className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 self-start sm:self-auto font-medium"
+                  title="Click to auto fill Ollama local qwen3.5:9b settings"
+                >
+                  <span>⚡ {t('settings_page.ollama_preset_btn')}</span>
+                </button>
               </div>
               
               <div className="space-y-6">
@@ -323,10 +382,27 @@ export const SettingsPage: React.FC = () => {
                   </label>
                   <select
                     value={settings.llm?.provider || 'gemini'}
-                    onChange={(e) => handleLLMChange('provider', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === 'ollama') {
+                        setSettings({
+                          ...settings,
+                          llm: {
+                            ...settings.llm,
+                            provider: 'ollama',
+                            base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
+                            model: settings.llm?.model || 'qwen3.5:9b',
+                            api_key: settings.llm?.api_key || 'ollama'
+                          }
+                        });
+                      } else {
+                        handleLLMChange('provider', val);
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                   >
                     <option value="gemini">Google Gemini</option>
+                    <option value="ollama">Ollama (Local / 本机 - qwen3.5:9b)</option>
                     <option value="openai">OpenAI</option>
                     <option value="custom">Custom / OpenAI Compatible (DeepSeek, etc.)</option>
                     <option value="grok">xAI Grok</option>
@@ -343,7 +419,7 @@ export const SettingsPage: React.FC = () => {
                     value={settings.llm?.api_key || ''}
                     onChange={(e) => handleLLMChange('api_key', e.target.value)}
                     placeholder="AIzaSy... / sk-..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                   />
                 </div>
 
@@ -357,7 +433,7 @@ export const SettingsPage: React.FC = () => {
                     value={settings.llm?.base_url || ''}
                     onChange={(e) => handleLLMChange('base_url', e.target.value)}
                     placeholder="https://api.openai.com/v1"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                   />
                 </div>
 
@@ -366,18 +442,18 @@ export const SettingsPage: React.FC = () => {
                   <label className="block text-sm font-medium text-slate-400 mb-2">
                     {t('settings_page.llm_model_label')}
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
                       value={settings.llm?.model || ''}
                       onChange={(e) => handleLLMChange('model', e.target.value)}
                       placeholder="gemini-2.5-flash / gpt-4o / deepseek-chat"
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                     />
                     <button
                       onClick={handleVerifyLLM}
                       disabled={verifyingLLM}
-                      className={`px-4 py-2.5 rounded-lg font-medium text-white transition-all whitespace-nowrap ${
+                      className={`w-full sm:w-auto px-4 py-2.5 rounded-lg font-medium text-white transition-all whitespace-nowrap ${
                         verifyingLLM
                           ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
                           : 'bg-indigo-600 hover:bg-indigo-500'
@@ -390,7 +466,7 @@ export const SettingsPage: React.FC = () => {
               </div>
             </section>
 
-            <div className="mt-10 pt-6 border-t border-slate-800 flex items-center justify-between">
+            <div className="mt-8 sm:mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
               <div>
                 {message && (
                   <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
@@ -402,7 +478,7 @@ export const SettingsPage: React.FC = () => {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
+                className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
                   saving 
                     ? 'bg-indigo-600/50 cursor-not-allowed' 
                     : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
@@ -414,6 +490,7 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
         )}
+      </div>
     </div>
   );
 };

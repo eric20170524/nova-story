@@ -35,8 +35,10 @@ def verify_llm_connection(config: Dict[str, Any]):
     model = llm_config.get("model") or "gemini-2.5-flash"
 
     try:
-        if provider_type in ("openai", "custom"):
-            provider = OpenAIProvider(api_key=api_key or "", model=model or "gpt-4o", base_url=base_url)
+        if provider_type in ("openai", "custom", "ollama"):
+            effective_base_url = base_url or ("http://127.0.0.1:11434/v1" if provider_type == "ollama" else None)
+            effective_model = model or ("qwen3.5:9b" if provider_type == "ollama" else "gpt-4o")
+            provider = OpenAIProvider(api_key=api_key or "ollama", model=effective_model, base_url=effective_base_url)
         elif provider_type == "grok":
             provider = GrokProvider(api_key=api_key or "", model=model or "grok-beta")
         else:

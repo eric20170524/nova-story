@@ -1,16 +1,16 @@
 {
-    "llm_model": "gemini-3-flash-preview",
+    "llm_model": "gemini-2.5-flash",
     "image_model": "gemini-2.5-flash-image",
     "comfyui": {
         "base_url": "http://127.0.0.1:8188",
         "enabled": true,
-        "default_workflow": "pony_xl_12gb.json",
-        "selected_workflow_file": "pony_xl_12gb.json"
+        "selected_workflow_file": "pony_xl_12gb.json",
+        "default_workflow": "pony_xl_12gb.json"
     },
     "llm": {
-        "provider": "gemini",
-        "api_key": "",
-        "base_url": "",
-        "model": "gemini-2.5-flash"
+        "provider": "ollama",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen3.5:9b",
+        "api_key": "ollama"
     }
 }
