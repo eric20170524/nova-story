@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { Chapter, Scene, Workflow, StreamMessage } from '../types';
+import { Chapter, Scene, Workflow, StreamMessage, AssetMode } from '../types';
 import { API_BASE_URL, VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -9,6 +9,7 @@ import { ComicViewer } from '../components/ComicViewer';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
+import { AlertTriangle, Film } from 'lucide-react';
 
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
@@ -24,7 +25,14 @@ export const DirectorMode: React.FC = () => {
     return localStorage.getItem('director_selectedStyle') || VISUAL_STYLES[0].value;
   });
   const [styleStrength, setStyleStrength] = useState<number>(1.0); // 0.1 to 2.0
-  const [assetMode, setAssetMode] = useState<'standard' | 'cinematic_grid'>('standard');
+  
+  // Decoupled Asset Mode
+  const [assetMode, setAssetMode] = useState<AssetMode>(() => {
+    return (localStorage.getItem('director_assetMode') as AssetMode) || 'single_image';
+  });
+
+  // Re-storyboard Confirmation Modal
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [renderingVideo, setRenderingVideo] = useState(false);
@@ -47,6 +55,10 @@ export const DirectorMode: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('director_selectedStyle', selectedStyle);
   }, [selectedStyle]);
+
+  useEffect(() => {
+    localStorage.setItem('director_assetMode', assetMode);
+  }, [assetMode]);
 
   useEffect(() => {
     if (projectId && selectedChapterId) {
@@ -84,39 +96,53 @@ export const DirectorMode: React.FC = () => {
     }
   }, [projectId]);
 
+  const loadTimeline = (chapterId: string) => {
+    if (!chapterId) return;
+    setLoading(true);
+    api.getTimeline(chapterId)
+      .then(data => {
+        if (data && data.timeline) {
+          const scenes = data.timeline.map((s: Scene) => ({ 
+            ...s, 
+            asset_status: s.asset_status || 'idle' 
+          }));
+          setTimeline(scenes);
+        } else {
+          setTimeline([]);
+        }
+      })
+      .catch(() => setTimeline([]))
+      .finally(() => setLoading(false));
+  };
+
   // Load timeline when chapter is selected
   useEffect(() => {
     if (selectedChapterId) {
-      setLoading(true);
-      api.getTimeline(selectedChapterId)
-        .then(data => {
-          if (data && data.timeline) {
-            // Ensure UI state properties exist
-            const scenes = data.timeline.map((s: Scene) => ({ 
-              ...s, 
-              asset_status: s.asset_status || 'idle' 
-            }));
-            setTimeline(scenes);
-          } else {
-            setTimeline([]);
-          }
-        })
-        .catch(() => setTimeline([]))
-        .finally(() => setLoading(false));
+      loadTimeline(selectedChapterId);
     }
   }, [selectedChapterId]);
 
-  const generateTimeline = async (mode: 'standard' | 'cinematic_grid' = 'standard') => {
+  const triggerGenerateTimeline = () => {
     if (!selectedChapterId) return;
+    if (timeline.length > 0) {
+      setShowConfirmModal(true);
+    } else {
+      executeGenerateTimeline();
+    }
+  };
+
+  const executeGenerateTimeline = async () => {
+    if (!selectedChapterId) return;
+    setShowConfirmModal(false);
     setLoading(true);
     try {
-      const res = await api.generateTimeline(selectedChapterId, mode);
-      // Ensure each scene has local state properties for UI
+      const res = await api.generateTimeline(selectedChapterId, 'narrative');
       const scenes = res.timeline.map((s: Scene) => ({ ...s, asset_status: s.asset_status || 'idle' }));
       setTimeline(scenes);
       showToast(t('director.timeline_generated') || "Timeline generated", 'success');
-    } catch (e) {
-      showToast(t('director.error_timeline'), 'error');
+    } catch (e: any) {
+      const errMsg = e.message || t('director.error_timeline');
+      showToast(errMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -124,23 +150,25 @@ export const DirectorMode: React.FC = () => {
 
   const handleUpdateScene = (id: number | string, field: keyof Scene, value: any) => {
     setTimeline(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+    
+    // Save edit persistence to backend
+    if (typeof id === 'number') {
+      api.updateScene(id, { [field]: value }).catch(err => {
+        console.error("Failed to persist scene update:", err);
+      });
+    }
   };
 
   const generateAsset = async (sceneId: number | string) => {
-    // Find the current scene
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
 
-    // Find style prompt
     const styleObj = VISUAL_STYLES.find(s => s.value === selectedStyle);
     const stylePromptRaw = styleObj ? styleObj.prompt : '';
     const globalNegative = styleObj && styleObj.negative_prompt ? styleObj.negative_prompt : '';
     
-    // Construct final prompt with "Camera -> Content -> Character -> Style" logic
     let finalPrompt = "";
 
-    // 0. Camera Constraints (Hard Constraint at the beginning)
-    // Join defined camera params
     const cameraDetails = [
       scene.shot_type, 
       scene.camera_movement, 
@@ -151,10 +179,8 @@ export const DirectorMode: React.FC = () => {
         finalPrompt += `(${cameraDetails}), `;
     }
 
-    // 1. Scene Content (User editable)
     finalPrompt += scene.visual_prompt || "";
 
-    // 2. Inject Character Visual Tags (if character name is in prompt)
     if (projectCharacters.length > 0 && scene.visual_prompt) {
         const lowerPrompt = scene.visual_prompt.toLowerCase();
         projectCharacters.forEach(char => {
@@ -187,7 +213,6 @@ export const DirectorMode: React.FC = () => {
         });
     }
 
-    // 3. Append Style with Weighting
     if (stylePromptRaw) {
         if (styleStrength !== 1.0) {
             finalPrompt += `, (${stylePromptRaw}:${styleStrength})`;
@@ -196,35 +221,28 @@ export const DirectorMode: React.FC = () => {
         }
     }
 
-    // 4. Combine Negative Prompts (Scene Specific + Global Style)
     let finalNegative = globalNegative;
     if (scene.negative_prompt) {
         finalNegative = finalNegative ? `${finalNegative}, ${scene.negative_prompt}` : scene.negative_prompt;
     }
 
-    const fullPromptWithNegative = finalNegative ? `${finalPrompt} --no ${finalNegative}` : finalPrompt;
-
-    console.log(`[DirectorMode] Generated Prompt: ${finalPrompt}`);
-
-    // Optimistic Update
     setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'generating' } : s));
 
     try {
+      const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
       const payload = { 
-          prompt: fullPromptWithNegative, // Fallback for simple APIs
-          negative_prompt: finalNegative,  // Explicit field for sophisticated APIs
+          prompt: finalPrompt,
+          negative_prompt: finalNegative,
           style_preset: selectedStyle,
-          mode: assetMode // Add mode to payload
+          mode: backendAssetMode
       };
       
       const response = await api.generateAsset(payload, sceneId);
       const taskId = response.task_id;
 
-      // Update state with taskId
       setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, task_id: taskId } : s));
 
-      // Return promise for batch handling
-      return new Promise<void>((resolve, reject) => {
+      return new Promise<void>((resolve) => {
           if (taskId === 'mock-task-999') {
             setTimeout(() => {
               setTimeline(prev => prev.map(s => 
@@ -252,7 +270,7 @@ export const DirectorMode: React.FC = () => {
                 setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
                 evtSource.close();
                 activeEvtSourceRef.current = null;
-                resolve(); // Resolve even on failure to continue batch
+                resolve();
               }
             };
 
@@ -265,27 +283,22 @@ export const DirectorMode: React.FC = () => {
           }
       });
 
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
-      showToast("Generation failed for scene " + sceneId, 'error');
+      showToast(e.message || ("Generation failed for scene " + sceneId), 'error');
     }
   };
 
   const handleBatchGenerate = async () => {
       if (isBatchGenerating || timeline.length === 0) return;
-      
-      if (!confirm(`Generate assets for ${timeline.length} scenes? This may take a while.`)) return;
 
       stopBatchRef.current = false;
       setIsBatchGenerating(true);
-      showToast("Batch generation started", 'info');
+      showToast("Sequential batch generation started", 'info');
       
       for (const scene of timeline) {
           if (stopBatchRef.current) break;
-
-          if (scene.asset_status === 'generating') continue;
-          if (scene.asset_status === 'completed') continue; 
 
           await generateAsset(scene.id);
 
@@ -373,12 +386,12 @@ export const DirectorMode: React.FC = () => {
         timeline={timeline}
         loading={loading}
         selectedChapterId={selectedChapterId}
-        onGenerateTimeline={generateTimeline}
-        assetMode={assetMode}
+        onGenerateTimeline={triggerGenerateTimeline}
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
         onGenerateAsset={generateAsset}
         onUpdateScene={handleUpdateScene}
+        onRefreshTimeline={() => loadTimeline(selectedChapterId)}
       />
       
       <DirectorRightPanel
@@ -402,7 +415,7 @@ export const DirectorMode: React.FC = () => {
         timeline={timeline}
         projectId={projectId}
         selectedChapterId={selectedChapterId}
-        onRefreshTimeline={generateTimeline}
+        onRefreshTimeline={triggerGenerateTimeline}
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
         onStopBatchGenerate={handleStopBatchGenerate}
@@ -414,6 +427,36 @@ export const DirectorMode: React.FC = () => {
             pdfUrl={comicPdf} 
             onClose={() => setShowComicViewer(false)} 
         />
+      )}
+
+      {/* Re-storyboard Overwrite Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md p-6 shadow-2xl space-y-4">
+                <div className="flex items-center gap-3 text-amber-400">
+                    <AlertTriangle size={24} />
+                    <h3 className="text-lg font-bold text-white">{t('director.confirm_title')}</h3>
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed">
+                    {t('director.confirm_desc')}
+                </p>
+                <div className="flex justify-end gap-3 pt-2">
+                    <button 
+                        onClick={() => setShowConfirmModal(false)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors"
+                    >
+                        {t('director.confirm_no')}
+                    </button>
+                    <button 
+                        onClick={() => executeGenerateTimeline()}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                    >
+                        <Film size={16} />
+                        {t('director.confirm_yes')}
+                    </button>
+                </div>
+            </div>
+        </div>
       )}
 
     </div>

@@ -4,73 +4,62 @@
 
 NovaStory 是一个基于 AI 的辅助创作工具，旨在帮助创作者从文本故事生成可视化的分镜脚本和视频素材。系统采用前后端分离架构，前端使用 React (Vite)，后端使用 FastAPI (Python)。
 
-## 2. 核心功能 (Core Features)
+## 2. 核心架构与功能模块 (Core Architecture & Flow)
 
-### 2.1 故事编辑器 (Story Editor)
-- **功能**: 提供沉浸式的文本创作环境。
-- **AI 辅助**: 集成 AI 助手，支持续写、润色、分析等功能。
-- **数据流**: 用户的输入实时保存，并可随时触发 AI 分析。
+目标工作流：
+```text
+章节文本
+  → 自动分镜 (Auto-Storyboard)：按叙事动作生成正式时间线场景
+  → 单场景九镜头覆盖 (9-Shot Coverage)：扩展单场景的 9 个候选镜头
+  → 预览与生图 (Asset Mode)：单图或 3×3 分镜联系表
+  → 候选镜头应用或提升为正式镜头
+```
 
-### 2.2 导演模式 (Director Mode)
-导演模式是核心的视频生产环节，支持从文本到视频的完整工作流。
+### 2.1 自动分镜 (Chapter-level Auto-Storyboard)
+- **定位**: 将整章文本按叙事动作单元拆解为正式的时间线场景列表（`Scene`）。
+- **API**: `POST /api/timeline/generate` (`mode="narrative"`)
+- **说明**: 废弃章节级 `nine_shot_coverage` 模式。如向该接口传入旧模式将返回 HTTP 400 错误与迁移指引。
 
-#### 自动分镜 (Auto-Storyboard) - 两步流程
-为了提高分镜的专业性和一致性，我们采用了两步走的自动分镜策略：
+### 2.2 单场景九镜头覆盖 (Single-Scene 9-Shot Candidate Coverage)
+- **定位**: 针对已拆解的**单个场景卡片**生成该动作节点下 9 个不同景别/角度的候选镜头（1-ELS, 2-LS, 3-MLS, 4-MS, 5-MCU, 6-CU, 7-ECU, 8-Low Angle, 9-High Angle）。
+- **数据结构**:
+  - `CoverageGroup`: 包含 `id`, `source_scene_id`, `version`, `status`
+  - `CoverageShot`: 包含 `id`, `coverage_group_id`, `slot`, `shot_size`, `camera_angle`, `camera_movement`, `visual_prompt`, `promoted_scene_id`
+- **存储机制**: 存储于独立的覆盖组数据表中，默认不加入正式时间线，避免污染主镜头轴。
+- **候选操作**:
+  - **应用至本场景 (`POST /api/scenes/coverage/{shot_id}/apply`)**: 将该候选镜头的景别、角度、运镜和画面描述更新至源场景。
+  - **提升为正式镜头 (`POST /api/scenes/coverage/{shot_id}/promote`)**: 将该候选镜头插入为主时间线的正式场景卡片。
 
-1.  **Step 1: 场景拆解 (Scene Breakdown)**
-    *   **输入**: 章节文本 (Chapter Text)。
-    *   **处理**: LLM 分析文本，将其拆解为一系列叙事性的视觉场景 (Visual Scenes)。
-    *   **输出**: 包含场景描述、对白、时长估算的场景列表。
-    *   **API**: `POST /timeline/generate` (mode="standard")
+### 2.3 场景图片输出模式 (`assetMode`)
+- **单镜头图片 (`single_image`)**: 为场景卡片生成 1 张单独的普通素材图片。
+- **3×3 分镜联系表 (`contact_sheet_3x3`)**: 为场景卡片生成 1 张 3×3 九宫格合成图。
+- **API**: `POST /api/assets/generate` (`mode="standard"` 或 `mode="cinematic_grid"`)
 
-2.  **Step 2: 电影感分镜生成 (Cinematic Grid Assets)**
-    *   **输入**: 单个场景的描述。
-    *   **处理**:
-        1.  **Meta-Prompting**: 使用 "Cinematic Grid (Version 3)" 提示词模板，将简单的场景描述转化为包含 9 个镜头 (ELS, LS, MLS, MS, MCU, CU, ECU, Low, High) 的详细分镜提示词。
-        2.  **Image Generation**: 调用绘图模型 (如 ComfyUI 或 DALL-E) 生成 3x3 的分镜网格图。
-    *   **输出**: 一张包含 9 个不同景别/角度的拼图，供创作者选择最佳构图。
-    *   **API**: `POST /assets/generate` (mode="cinematic_grid")
+### 2.4 九宫格提示词工具 (Grid Prompt Tool)
+- **定位**: 位于故事编辑器的辅助工具。仅生成可复制的 3×3 电影感提示词，不创建分镜，不触发生图。
 
-## 3. 后端架构 (Backend Architecture)
+---
 
-### 3.1 技术栈
-- **框架**: FastAPI
-- **数据库**: SQLite (开发环境) / PostgreSQL (生产环境)
-- **任务队列**: `BackgroundTasks` (用于异步生成任务)
-- **LLM 服务**: 集成 OpenAI/Gemini 等模型。
+## 3. 数据安全与持久化 (Data Safety & Persistence)
 
-### 3.2 关键模块
-- **`app/services/prompts.py`**: 管理所有 LLM 提示词。
-    - `generate_cinematic_grid_timeline_prompt`: 核心的 9 镜头分镜提示词生成逻辑。
-- **`app/services/llm.py`**: LLM 调用封装层。
-    - `generate_timeline(mode="cinematic_grid")`: 支持不同模式的分镜生成。
-- **`app/api/endpoints/timeline.py`**: 分镜相关接口。
-- **`app/api/endpoints/assets.py`**: 素材生成接口，支持异步任务和 SSE 进度推送。
+1. **重新分镜事务安全**:
+   - 当章节已有分镜时，重新分镜前显示弹窗提示覆盖风险。
+   - 后端使用数据库事务 (`with db.begin()`)，只有 LLM 成功生成并校验后才原子替换旧分镜。失败时自动回滚，旧数据完全保留。
+2. **分镜卡片编辑持久化**:
+   - 接口: `PUT /api/timeline/scene/{scene_id}`
+   - 字段: 支持保存 `shot_type`, `camera_movement`, `camera_angle`, `visual_prompt`, `audio_prompt`, `dialogue`, `duration`, `negative_prompt`。
 
-## 4. 前端架构 (Frontend Architecture)
+---
 
-### 4.1 技术栈
-- **框架**: React 18 + Vite
-- **UI 库**: Tailwind CSS + Lucide React
-- **状态管理**: React Context + Hooks
+## 4. API 端点清单 (API Endpoints Summary)
 
-### 4.2 关键组件
-- **`DirectorTimeline.tsx`**: 
-    - 展示分镜列表。
-    - 集成 "生成场景" (Generate Scenes) 按钮，触发标准分镜生成 (Standard Breakdown)。
-- **`DirectorRightPanel.tsx`**:
-    - 提供全局设置，包括 "Asset Generation Mode" (Standard / Cinematic Grid) 切换。
-    - 控制生成参数 (Style, Strength)。
-
-## 5. 数据流 (Data Flow)
-
-1.  **用户** 在导演模式选择章节。
-2.  **前端** 调用 `generateTimeline` 接口。
-3.  **后端** LLM 解析文本，返回场景列表。
-4.  **用户** 点击 "Generate Asset" (或批量生成)。
-5.  **前端** 根据 `assetMode` 调用 `generateAsset` 接口。
-6.  **后端**:
-    - 若 `mode="cinematic_grid"`: 先调用 LLM 生成 9 镜头提示词，再调用绘图服务。
-    - 若 `mode="standard"`: 直接使用场景描述调用绘图服务。
-7.  **后端** 通过 SSE 推送生成进度和结果 URL。
-8.  **前端** 更新 UI 显示生成的图片。
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/timeline/generate` | POST | 章节级自动分镜（叙事动作拆解） |
+| `/api/timeline/{chapter_id}` | GET | 获取章节时间线 |
+| `/api/timeline/scene/{scene_id}` | PUT | 更新持久化场景卡片 |
+| `/api/scenes/{scene_id}/coverage` | POST | 生成单场景 9 候选镜头覆盖组 |
+| `/api/scenes/{scene_id}/coverage` | GET | 获取单场景覆盖组及候选镜头 |
+| `/api/scenes/coverage/{shot_id}/apply` | POST | 将候选镜头属性应用至源场景 |
+| `/api/scenes/coverage/{shot_id}/promote` | POST | 将候选镜头提升为正式时间线场景 |
+| `/api/assets/generate` | POST | 提交图片素材生成任务 |

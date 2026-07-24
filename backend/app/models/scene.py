@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float
+from sqlalchemy.orm import relationship
 from ..db.base import Base
 
 class Scene(Base):
@@ -15,8 +16,11 @@ class Scene(Base):
     shot_type = Column(String(50), nullable=True)
     camera_movement = Column(String(50), nullable=True)
     camera_angle = Column(String(50), nullable=True)
+    negative_prompt = Column(Text, nullable=True)
 
     # Asset Generation Status
     asset_status = Column(String(50), default="idle") # idle, generating, completed, failed
     task_id = Column(String(255), nullable=True) # To track async generation task
     asset_url = Column(String(500), nullable=True) # URL/Path to generated image/video
+
+    coverage_groups = relationship("CoverageGroup", back_populates="source_scene", cascade="all, delete-orphan")

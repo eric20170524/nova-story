@@ -14,6 +14,7 @@ class TimelineShot(BaseModel):
     audio_prompt: Optional[str] = Field("", description="Description of background music and sound effects (English)")
     dialogue: Optional[str] = Field(None, description="Dialogue line (Speaker: Line)")
     duration: Optional[float] = Field(3.0, description="Estimated duration in seconds")
+    negative_prompt: Optional[str] = Field(None, description="Negative prompt elements to exclude")
 
 class TimelineResponse(BaseModel):
     shots: List[TimelineShot] = Field(description="List of storyboard shots")

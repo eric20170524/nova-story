@@ -1,6 +1,6 @@
 import React from 'react';
 import { Loader2, Video, BookOpen, Settings, X, Sliders, Bot, Zap, PlayCircle, Square } from 'lucide-react';
-import { Scene } from '../../types';
+import { Scene, AssetMode } from '../../types';
 import { VISUAL_STYLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { AgentAssistant } from '../AgentAssistant';
@@ -14,8 +14,8 @@ interface DirectorRightPanelProps {
   setSelectedStyle: (style: string) => void;
   styleStrength?: number;
   setStyleStrength?: (val: number) => void;
-  assetMode: 'standard' | 'cinematic_grid';
-  setAssetMode: (mode: 'standard' | 'cinematic_grid') => void;
+  assetMode: AssetMode;
+  setAssetMode: (mode: AssetMode) => void;
   renderingVideo: boolean;
   onRenderVideo: () => void;
   generatingComic: boolean;
@@ -116,21 +116,24 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                    
                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
                      <div>
-                       <label className="block text-xs font-medium text-slate-400 mb-2">Asset Generation Mode</label>
+                       <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.asset_mode_label')}</label>
                        <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
                            <button
-                               onClick={() => setAssetMode('standard')}
-                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'standard' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                               onClick={() => setAssetMode('single_image')}
+                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'single_image' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                            >
-                               Standard
+                               {t('director.asset_mode_single')}
                            </button>
                            <button
-                               onClick={() => setAssetMode('cinematic_grid')}
-                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'cinematic_grid' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                               onClick={() => setAssetMode('contact_sheet_3x3')}
+                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'contact_sheet_3x3' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                            >
-                               Cinematic Grid
+                               {t('director.asset_mode_contact_sheet')}
                            </button>
                        </div>
+                       <p className="text-[11px] text-slate-400 mt-1.5">
+                         {assetMode === 'contact_sheet_3x3' ? t('director.contact_sheet_desc') : '每张分镜卡片生成 1 张单独的普通素材图片。'}
+                       </p>
                      </div>
 
                      <div>

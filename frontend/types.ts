@@ -42,9 +42,35 @@ export interface Scene {
   task_id?: string; // ComfyUI task ID
 }
 
+export type StoryboardMode = 'narrative' | 'nine_shot_coverage';
+export type AssetMode = 'single_image' | 'contact_sheet_3x3';
+
 export interface TimelineResponse {
   chapter_id: string;
+  storyboard_mode?: StoryboardMode;
   timeline: Scene[];
+}
+
+export interface CoverageShot {
+  id: number;
+  coverage_group_id: number;
+  slot: number;
+  shot_size?: string;
+  camera_angle?: string;
+  camera_movement?: string;
+  narrative_purpose?: string;
+  visual_prompt?: string;
+  asset_status?: 'idle' | 'generating' | 'completed' | 'failed';
+  asset_url?: string;
+  promoted_scene_id?: number;
+}
+
+export interface CoverageGroup {
+  id: number;
+  source_scene_id: number;
+  version: number;
+  status: string;
+  shots: CoverageShot[];
 }
 
 // Workflows

@@ -44,7 +44,14 @@ class ApiService {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
       
       if (!response.ok) {
-        throw new Error(`API Error ${response.status}`);
+        let errDetail = `API Error ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson.detail) {
+            errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+          }
+        } catch (_) {}
+        throw new Error(errDetail);
       }
       
       if (response.status === 204) {
@@ -53,9 +60,12 @@ class ApiService {
 
       return await response.json();
     } catch (error) {
-      console.warn(`API Request failed for ${endpoint}. Using Mock Data Fallback.`);
-      // Fallback to Mock Data
-      return this.getMockResponse<T>(endpoint, method, body);
+      const isMockMode = (import.meta as any).env?.VITE_USE_MOCK === 'true';
+      if (isMockMode) {
+        console.warn(`API Request failed for ${endpoint}. Using Mock Data Fallback.`);
+        return this.getMockResponse<T>(endpoint, method, body);
+      }
+      throw error;
     }
   }
 
@@ -182,7 +192,14 @@ class ApiService {
 
   // Timeline & Director
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
-  generateTimeline = (chapterId: string, mode: string = 'standard') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
+  generateTimeline = (chapterId: string, mode: string = 'narrative') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
+  updateScene = (sceneId: number | string, data: any) => this.request<any>(`/timeline/scene/${sceneId}`, { method: 'PUT', body: data });
+  
+  // Single-Scene 9-Shot Coverage
+  generateSceneCoverage = (sceneId: number | string) => this.request<any>(`/scenes/${sceneId}/coverage`, { method: 'POST' });
+  getSceneCoverage = (sceneId: number | string) => this.request<any[]>(`/scenes/${sceneId}/coverage`);
+  applyCoverageShot = (shotId: number) => this.request<any>(`/scenes/coverage/${shotId}/apply`, { method: 'POST' });
+  promoteCoverageShot = (shotId: number, position: 'before' | 'after' | 'replace' = 'after') => this.request<any>(`/scenes/coverage/${shotId}/promote`, { method: 'POST', body: { position } });
   
   // Workflows
   getWorkflows = () => this.request<any[]>('/workflows/');

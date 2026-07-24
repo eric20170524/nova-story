@@ -159,8 +159,8 @@ export const VISUAL_STYLES = [
   { 
     value: 'ancient_fantasy', 
     label: 'Gu Feng Fantasy (古风幻想)', 
-    prompt: 'oriental fantasy art style, ink wash texture, ethereal atmosphere, soft volumetric lighting, elegant silk textures, golden hour, atmospheric fog, intricate patterns',
-    negative_prompt: 'modern architecture, concrete, cars, neon lights, sci-fi, western clothing, mechanical parts, low quality'
+    prompt: 'ancient Chinese xianxia fantasy illustration, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk and armor textures, atmospheric depth, intricate traditional patterns',
+    negative_prompt: 'modern city, concrete buildings, cars, contemporary clothing, firearms, neon urban signage, low quality, blurry, bad anatomy, malformed hands, duplicate characters'
   },
   { 
     value: 'chibi', 

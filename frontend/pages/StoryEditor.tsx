@@ -542,7 +542,10 @@ export const StoryEditor: React.FC = () => {
                         <X size={24} />
                     </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-6 bg-slate-950/50">
+                <div className="flex-1 overflow-y-auto p-6 bg-slate-950/50 space-y-4">
+                    <div className="bg-purple-950/40 border border-purple-800/60 rounded-lg p-3 text-xs text-purple-300 font-medium">
+                        {t('story.grid_tool_notice')}
+                    </div>
                     <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed selection:bg-purple-500/30">
                         {gridPrompt}
                     </div>

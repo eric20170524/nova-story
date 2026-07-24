@@ -13,7 +13,7 @@ import random
 
 logger = logging.getLogger(__name__)
 
-from ..services.llm import LLMService
+from ..services.prompts import Prompts
 
 async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: int, user_token: str = None, mode: str = "standard"):
     """
@@ -44,7 +44,7 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
         
         # 0. Pre-process Prompt for Cinematic Grid Mode
         if mode == "cinematic_grid":
-            logger.info(f"[Task {task_id}] Cinematic Grid Mode: Generating Meta-Prompt via LLM...")
+            logger.info(f"[Task {task_id}] Cinematic Grid Mode: Building prompt locally (no LLM/Ollama)...")
             
             # Extract the raw scene description
             raw_prompt = ""
@@ -56,14 +56,9 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
             if not raw_prompt:
                 raise ValueError("No prompt found for Cinematic Grid generation")
 
-            # Call LLM to generate the 3x3 Grid Prompt
-            # We use the existing generate_storyboard_grid method which uses the Version 3 prompt
-            grid_prompt = LLMService.generate_storyboard_grid(raw_prompt, token=user_token)
+            grid_prompt = Prompts.build_cinematic_grid_image_prompt(raw_prompt)
             
-            if not grid_prompt or "[LLM Error]" in grid_prompt:
-                raise ValueError(f"Failed to generate grid prompt: {grid_prompt}")
-            
-            logger.info(f"[Task {task_id}] Generated Grid Prompt (Length: {len(grid_prompt)})")
+            logger.info(f"[Task {task_id}] Built-in Grid Prompt ready (Length: {len(grid_prompt)})")
             
             # Update workflow_data with the new prompt
             if isinstance(workflow_data, dict):
@@ -92,6 +87,7 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                      # 2. Determine Template (Default to Pony XL for RTX 3060)
                      template_name = comfy_settings.get("default_workflow", "pony_xl_12gb.json")
                      template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "workflows", template_name)
+                     preserve_template_conditioning = "pony" in template_name.lower()
                      
                      if not os.path.exists(template_path):
                          logger.error(f"[Task {task_id}] Workflow template {template_path} not found. Sending raw payload.")
@@ -108,10 +104,19 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                              
                              if class_type == "CLIPTextEncode":
                                  title = node.get("_meta", {}).get("title", "")
+                                 template_text = str(inputs.get("text", "") or "").strip()
                                  if "Negative" in title:
-                                     inputs["text"] = negative_prompt
+                                     inputs["text"] = (
+                                         f"{template_text}, {negative_prompt}"
+                                         if preserve_template_conditioning and template_text and negative_prompt
+                                         else negative_prompt or template_text
+                                     )
                                  else:
-                                     inputs["text"] = prompt
+                                     inputs["text"] = (
+                                         f"{template_text}, {prompt}"
+                                         if preserve_template_conditioning and template_text and prompt
+                                         else prompt or template_text
+                                     )
                                      
                              elif class_type == "KSampler":
                                  inputs["seed"] = random.randint(1, 1000000000000000)
@@ -228,13 +233,14 @@ def update_scene_db(scene_id, status, url, task_id):
     """Synchronous DB update to be run in a thread."""
     db = SessionLocal()
     try:
-        scene = db.query(Scene).filter(Scene.id == scene_id).first()
+        scene = db.query(Scene).filter(Scene.id == int(scene_id)).first()
         if scene:
             scene.asset_status = status
             if url:
                 scene.asset_url = url
             scene.task_id = task_id
             db.commit()
+            logger.info(f"Updated Scene {scene_id} in DB: status={status}, url={url}")
     except Exception as e:
         logger.error(f"DB Error: {e}")
     finally:

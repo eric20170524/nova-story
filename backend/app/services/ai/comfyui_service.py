@@ -133,7 +133,23 @@ class ComfyUIService:
             
             while True:
                 try:
-                    out = await ws.recv()
+                    try:
+                        out = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        # Check history if prompt_id is completed in ComfyUI
+                        if prompt_id:
+                            try:
+                                async with aiohttp.ClientSession() as check_session:
+                                    async with check_session.get(f"{self.base_url}/history/{prompt_id}") as h_resp:
+                                        if h_resp.status == 200:
+                                            h_data = await h_resp.json()
+                                            if prompt_id in h_data:
+                                                logger.info(f"Prompt {prompt_id} confirmed completed in ComfyUI history.")
+                                                break
+                            except Exception:
+                                pass
+                        continue
+
                     if isinstance(out, str):
                         message = json.loads(out)
                         msg_type = message.get("type")
@@ -158,10 +174,9 @@ class ComfyUIService:
                             else:
                                 # Execution finished (node is null)
                                 logger.info("ComfyUI Execution Finished (Logic)")
-                                # Wait for 'executed' messages to gather outputs? 
-                                # Actually, we just break when we know it's done? 
-                                # 'executing' with node=None means one prompt finished.
-                                if data.get("prompt_id") == prompt_id:
+                                p_id = data.get("prompt_id")
+                                if not p_id or p_id == prompt_id:
+                                    await asyncio.sleep(0.5)
                                     break
 
                         elif msg_type == "execution_cached":

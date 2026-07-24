@@ -59,6 +59,9 @@ async def get_task_status(task_id: str):
     # Alternatively, we could query Redis if we stored state there.
     return {"task_id": task_id, "status": "UNKNOWN", "detail": "Use SSE stream for real-time status"}
 
+from ...db.session import SessionLocal
+from ...models.scene import Scene
+
 @router.get("/stream/{task_id}")
 async def stream_progress(task_id: str):
     """
@@ -76,6 +79,25 @@ async def stream_progress(task_id: str):
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
             logger.debug(f"SSE Connected: {task_id}")
             
+            def check_db_status():
+                db = SessionLocal()
+                try:
+                    return db.query(Scene).filter(Scene.task_id == task_id).first()
+                finally:
+                    db.close()
+
+            # 1. Immediate DB check in case task finished before SSE connected
+            scene = await asyncio.to_thread(check_db_status)
+            if scene and scene.asset_status == 'completed' and scene.asset_url:
+                logger.info(f"SSE Initial DB Check: Task {task_id} already completed ({scene.asset_url})")
+                yield f"data: {json.dumps({'type': 'complete', 'status': 'completed', 'image_url': scene.asset_url})}\n\n"
+                return
+            elif scene and scene.asset_status == 'failed':
+                logger.info(f"SSE Initial DB Check: Task {task_id} already failed")
+                yield f"data: {json.dumps({'type': 'complete', 'status': 'failed', 'error': 'Generation failed'})}\n\n"
+                return
+
+            tick_counter = 0
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
@@ -83,11 +105,27 @@ async def stream_progress(task_id: str):
                     yield f"data: {message['data']}\n\n"
                     
                     # Check if done
-                    data_dict = json.loads(message['data'])
-                    if data_dict.get('type') == 'complete':
-                         logger.info(f"SSE Completed: {task_id}")
-                         break
+                    try:
+                        data_dict = json.loads(message['data'])
+                        if data_dict.get('type') == 'complete' or data_dict.get('status') in ('completed', 'failed'):
+                             logger.info(f"SSE Completed: {task_id}")
+                             break
+                    except Exception:
+                        pass
                 
+                # Every ~2 seconds (4 ticks * 0.5s), poll DB as safety fallback
+                tick_counter += 1
+                if tick_counter % 4 == 0:
+                    scene = await asyncio.to_thread(check_db_status)
+                    if scene and scene.asset_status == 'completed' and scene.asset_url:
+                        logger.info(f"SSE DB Fallback: Task {task_id} completed ({scene.asset_url})")
+                        yield f"data: {json.dumps({'type': 'complete', 'status': 'completed', 'image_url': scene.asset_url})}\n\n"
+                        break
+                    elif scene and scene.asset_status == 'failed':
+                        logger.info(f"SSE DB Fallback: Task {task_id} failed")
+                        yield f"data: {json.dumps({'type': 'complete', 'status': 'failed', 'error': 'Generation failed'})}\n\n"
+                        break
+
                 await asyncio.sleep(0.5) # Avoid tight loop
         except asyncio.CancelledError:
             # Client disconnected
