@@ -10,7 +10,7 @@
     "llm": {
         "provider": "ollama",
         "base_url": "http://127.0.0.1:11434/v1",
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5-coder:7b",
         "api_key": "ollama"
     }
 }

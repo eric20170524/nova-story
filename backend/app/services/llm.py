@@ -39,7 +39,7 @@ class LLMService:
 
         if provider_type in ("openai", "custom", "ollama"):
             effective_base_url = base_url or ("http://127.0.0.1:11434/v1" if provider_type == "ollama" else None)
-            effective_model = model or ("qwen3.5:9b" if provider_type == "ollama" else "gpt-4o")
+            effective_model = model or ("qwen2.5-coder:7b" if provider_type == "ollama" else "gpt-4o")
             return OpenAIProvider(api_key=api_key or "ollama", model=effective_model, base_url=effective_base_url)
         elif provider_type == "grok":
             return GrokProvider(api_key=api_key or "", model=model or "grok-beta")

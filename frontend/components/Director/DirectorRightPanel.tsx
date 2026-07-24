@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, Video, BookOpen, Settings, X, Sliders, Bot, Zap, PlayCircle } from 'lucide-react';
+import { Loader2, Video, BookOpen, Settings, X, Sliders, Bot, Zap, PlayCircle, Square } from 'lucide-react';
 import { Scene } from '../../types';
 import { VISUAL_STYLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
@@ -29,6 +29,7 @@ interface DirectorRightPanelProps {
   onRefreshTimeline: () => void;
   isBatchGenerating?: boolean;
   onBatchGenerate?: () => void;
+  onStopBatchGenerate?: () => void;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
@@ -54,7 +55,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   selectedChapterId,
   onRefreshTimeline,
   isBatchGenerating,
-  onBatchGenerate
+  onBatchGenerate,
+  onStopBatchGenerate
 }) => {
   const { t } = useLanguage();
 
@@ -171,15 +173,25 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
 
                    {/* Action Buttons */}
                    <div className="space-y-2">
-                        {onBatchGenerate && (
+                        {isBatchGenerating ? (
                             <button
-                                onClick={onBatchGenerate}
-                                disabled={isBatchGenerating || timeline.length === 0}
-                                className="w-full bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50 transition-colors"
+                                onClick={onStopBatchGenerate}
+                                className="w-full bg-red-600 hover:bg-red-500 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-colors shadow-lg shadow-red-900/30 animate-pulse"
                             >
-                                {isBatchGenerating ? <Loader2 className="animate-spin" size={18} /> : <PlayCircle size={18} />}
-                                Generate All Assets
+                                <Square size={18} className="fill-current" />
+                                {t('director.stop_batch') || 'Stop Batch Generation'}
                             </button>
+                        ) : (
+                            onBatchGenerate && (
+                                <button
+                                    onClick={onBatchGenerate}
+                                    disabled={timeline.length === 0}
+                                    className="w-full bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50 transition-colors"
+                                >
+                                    <PlayCircle size={18} />
+                                    {t('director.generate_all') || 'Generate All Assets'}
+                                </button>
+                            )
                         )}
 
                         <button

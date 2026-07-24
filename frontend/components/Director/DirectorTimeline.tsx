@@ -10,6 +10,7 @@ interface DirectorTimelineProps {
   loading: boolean;
   selectedChapterId: string;
   onGenerateTimeline: (mode: 'standard' | 'cinematic_grid') => void;
+  assetMode?: 'standard' | 'cinematic_grid';
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
   onGenerateAsset: (sceneId: number | string) => void;
@@ -21,6 +22,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   loading,
   selectedChapterId,
   onGenerateTimeline,
+  assetMode = 'standard',
   showRightPanel,
   setShowRightPanel,
   onGenerateAsset,
@@ -44,14 +46,48 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
          <h2 className="text-white font-medium truncate mr-4">{t('director.storyboard')}</h2>
          
          <div className="flex items-center gap-3">
-           <button 
-              onClick={() => onGenerateTimeline('standard')}
-              disabled={loading || !selectedChapterId}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 lg:px-4 py-1.5 rounded flex items-center gap-2 text-sm font-medium disabled:opacity-50 whitespace-nowrap"
-            >
-              {loading ? <Loader2 className="animate-spin" size={16} /> : <Film size={16} />}
-              <span className="hidden sm:inline">{t('director.generate_scenes')}</span>
-            </button>
+           <div className="relative flex items-center">
+             <button 
+                onClick={() => onGenerateTimeline(assetMode)}
+                disabled={loading || !selectedChapterId}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 lg:px-4 py-1.5 rounded-l flex items-center gap-2 text-sm font-medium disabled:opacity-50 whitespace-nowrap"
+              >
+                {loading ? <Loader2 className="animate-spin" size={16} /> : <Film size={16} />}
+                <span className="hidden sm:inline">{t('director.generate_scenes')} {assetMode === 'cinematic_grid' ? '(Grid)' : ''}</span>
+              </button>
+              <button
+                onClick={() => setShowGenerateMenu(!showGenerateMenu)}
+                disabled={loading || !selectedChapterId}
+                className="bg-indigo-700 hover:bg-indigo-600 text-white px-1.5 py-1.5 rounded-r border-l border-indigo-500 flex items-center disabled:opacity-50"
+              >
+                <ChevronDown size={14} />
+              </button>
+
+              {showGenerateMenu && (
+                <div className="absolute right-0 top-full mt-1 w-52 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-1">
+                  <button
+                    onClick={() => {
+                      onGenerateTimeline('standard');
+                      setShowGenerateMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-xs text-slate-200 hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Film size={14} className="text-indigo-400" />
+                    Standard Storyboard
+                  </button>
+                  <button
+                    onClick={() => {
+                      onGenerateTimeline('cinematic_grid');
+                      setShowGenerateMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-xs text-slate-200 hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Grid size={14} className="text-purple-400" />
+                    Cinematic Grid (9 Shots)
+                  </button>
+                </div>
+              )}
+           </div>
             
             {/* Mobile Settings Toggle */}
             <button 

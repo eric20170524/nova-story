@@ -40,6 +40,8 @@ export const DirectorMode: React.FC = () => {
 
   // Batch Generation State
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+  const stopBatchRef = React.useRef<boolean>(false);
+  const activeEvtSourceRef = React.useRef<EventSource | null>(null);
 
   // Persist settings
   useEffect(() => {
@@ -232,6 +234,7 @@ export const DirectorMode: React.FC = () => {
             }, 3000);
           } else {
             const evtSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
+            activeEvtSourceRef.current = evtSource;
             
             evtSource.onmessage = (event) => {
               const data: StreamMessage = JSON.parse(event.data);
@@ -241,16 +244,21 @@ export const DirectorMode: React.FC = () => {
                   s.id === sceneId ? { ...s, asset_status: 'completed', asset_url: data.image_url } : s
                 ));
                 evtSource.close();
+                activeEvtSourceRef.current = null;
                 resolve();
               } else if (data.status === 'failed') {
+                const errorDetail = (data as any).error || ("Generation failed for scene " + sceneId);
+                showToast(errorDetail, 'error');
                 setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
                 evtSource.close();
+                activeEvtSourceRef.current = null;
                 resolve(); // Resolve even on failure to continue batch
               }
             };
 
             evtSource.onerror = () => {
               evtSource.close();
+              activeEvtSourceRef.current = null;
               setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
               resolve(); 
             };
@@ -269,27 +277,47 @@ export const DirectorMode: React.FC = () => {
       
       if (!confirm(`Generate assets for ${timeline.length} scenes? This may take a while.`)) return;
 
+      stopBatchRef.current = false;
       setIsBatchGenerating(true);
       showToast("Batch generation started", 'info');
       
-      // Sequential generation to avoid overwhelming the backend/GPU
-      // or Parallel with limit. Let's do sequential for simplicity and reliability.
       for (const scene of timeline) {
-          // Skip if already generating (though shouldn't happen in sequential)
+          if (stopBatchRef.current) break;
+
           if (scene.asset_status === 'generating') continue;
-          
-          // Optional: Skip completed ones? 
-          // For now, let's regenerate everything if clicked, or maybe just non-completed.
-          // Let's regenerate only if status is idle or failed.
           if (scene.asset_status === 'completed') continue; 
 
           await generateAsset(scene.id);
-          // Small delay between requests
+
+          if (stopBatchRef.current) break;
+
           await new Promise(r => setTimeout(r, 500));
       }
       
+      const wasStopped = stopBatchRef.current;
       setIsBatchGenerating(false);
-      showToast("Batch generation complete", 'success');
+      stopBatchRef.current = false;
+
+      if (wasStopped) {
+          showToast(t('director.batch_stopped') || "Batch generation stopped", 'warning');
+      } else {
+          showToast("Batch generation complete", 'success');
+      }
+  };
+
+  const handleStopBatchGenerate = async () => {
+      stopBatchRef.current = true;
+      if (activeEvtSourceRef.current) {
+          activeEvtSourceRef.current.close();
+          activeEvtSourceRef.current = null;
+      }
+      try {
+          await api.cancelAssetGeneration();
+      } catch (e) {
+          console.error("Failed to cancel asset generation on backend:", e);
+      }
+      setIsBatchGenerating(false);
+      showToast(t('director.batch_stopped') || "Batch generation stopped", 'warning');
   };
 
   const handleGenerateComic = async () => {
@@ -346,6 +374,7 @@ export const DirectorMode: React.FC = () => {
         loading={loading}
         selectedChapterId={selectedChapterId}
         onGenerateTimeline={generateTimeline}
+        assetMode={assetMode}
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
         onGenerateAsset={generateAsset}
@@ -376,6 +405,7 @@ export const DirectorMode: React.FC = () => {
         onRefreshTimeline={generateTimeline}
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
+        onStopBatchGenerate={handleStopBatchGenerate}
       />
 
       {showComicViewer && (

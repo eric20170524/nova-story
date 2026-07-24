@@ -209,6 +209,8 @@ class ApiService {
     return res.json();
   };
 
+  cancelAssetGeneration = () => this.request<any>('/assets/cancel', { method: 'POST' });
+
   generateComic = async (chapterId: string) => {
     // Get Token for direct fetch
     const token = localStorage.getItem('access_token');

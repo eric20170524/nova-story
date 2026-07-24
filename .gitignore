@@ -22,3 +22,4 @@
 /backend/app/static/comics/
 **/__pycache__/
 *.pyc
+backend/static/generated

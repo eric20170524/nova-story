@@ -43,7 +43,7 @@ class ComfyUIService:
             return False
 
         try:
-            cmd = [python_exe, main_py, "--listen", "127.0.0.1", "--port", "8188", "--lowvram", "--disable-mmap"]
+            cmd = [python_exe, main_py, "--listen", "127.0.0.1", "--port", "8188", "--disable-mmap"]
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             subprocess.Popen(cmd, cwd=comfy_dir, creationflags=creationflags)
             
@@ -58,6 +58,22 @@ class ComfyUIService:
             return False
         except Exception as e:
             logger.error(f"Failed to auto-start ComfyUI: {e}")
+            return False
+
+    async def cancel_execution(self) -> bool:
+        """
+        Interrupts current execution and clears prompt queue in ComfyUI.
+        """
+        logger.info("Interrupting current ComfyUI execution and clearing queue...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.base_url}/interrupt") as resp1:
+                    logger.info(f"ComfyUI /interrupt response: {resp1.status}")
+                async with session.post(f"{self.base_url}/queue", json={"clear": True}) as resp2:
+                    logger.info(f"ComfyUI /queue clear response: {resp2.status}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel ComfyUI execution: {e}")
             return False
 
     @staticmethod
@@ -181,16 +197,50 @@ class ComfyUIService:
                              if progress_callback and value and max_val:
                                  await progress_callback("progress", {"current": value, "total": max_val})
 
+                        elif msg_type == "execution_error":
+                             data_prompt_id = data.get("prompt_id")
+                             if not data_prompt_id or data_prompt_id == prompt_id:
+                                 node_id = data.get("node_id", "")
+                                 node_type = data.get("node_type", "")
+                                 exception_msg = data.get("exception_message") or "Unknown ComfyUI node error"
+                                 err_msg = f"ComfyUI Error in [{node_type} (node {node_id})]: {exception_msg}"
+                                 logger.error(err_msg)
+                                 return {"status": "error", "message": err_msg}
+
+                        elif msg_type == "execution_interrupted":
+                             if data.get("prompt_id") == prompt_id or not data.get("prompt_id"):
+                                 logger.info("ComfyUI Execution Interrupted by user request.")
+                                 return {"status": "error", "message": "Generation interrupted by user."}
+
                 except websockets.exceptions.ConnectionClosed:
                     logger.warning("WebSocket closed unexpectedly")
                     break
             
+            if not generated_images and prompt_id:
+                logger.info(f"WebSocket finished without images. Querying ComfyUI history for prompt_id: {prompt_id}...")
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"{self.base_url}/history/{prompt_id}") as resp:
+                            if resp.status == 200:
+                                history_data = await resp.json()
+                                prompt_output = history_data.get(prompt_id, {}).get("outputs", {})
+                                for node_id, node_out in prompt_output.items():
+                                    if "images" in node_out:
+                                        for img_info in node_out["images"]:
+                                            fn = img_info.get("filename")
+                                            sf = img_info.get("subfolder", "")
+                                            it = img_info.get("type", "output")
+                                            img_data = await self._download_image(fn, sf, it)
+                                            if img_data:
+                                                generated_images.append({
+                                                    "filename": fn,
+                                                    "data": img_data
+                                                })
+                except Exception as ex:
+                    logger.error(f"Failed to fetch images from history fallback: {ex}")
+
             if not generated_images:
-                # If we broke loop but found no images (maybe it was just a processing workflow?)
-                # Or maybe we missed the 'executed' event?
-                # Let's check history? For now assume failure if no images.
                 logger.warning("Workflow finished but no images captured.")
-                # Try to look at history if needed, but for now return error or empty.
                 return {"status": "completed", "images": []} 
             
             return {"status": "completed", "images": generated_images}

@@ -8,6 +8,8 @@ import asyncio
 import uuid
 
 from ...services.generation_service import generate_assets_service
+from ...services.ai.comfyui_service import ComfyUIService
+from ...core.settings_manager import SettingsManager
 from ...core.redis import get_redis_client
 from ..deps import get_current_active_user, security as auth_security
 
@@ -96,3 +98,22 @@ async def stream_progress(task_id: str):
             await redis.close()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@router.post("/cancel")
+async def cancel_asset_generation():
+    """
+    Cancels/interrupts any running or queued generation tasks in ComfyUI.
+    """
+    logger.info("Cancel asset generation endpoint triggered.")
+    try:
+        settings = SettingsManager.load_settings()
+        comfy_settings = settings.get("comfyui", {})
+        base_url = comfy_settings.get("base_url", "http://127.0.0.1:8188")
+        
+        comfy_service = ComfyUIService(base_url=base_url)
+        cancelled = await comfy_service.cancel_execution()
+        return {"status": "success" if cancelled else "failed", "message": "Interrupted active tasks."}
+    except Exception as e:
+        logger.error(f"Error cancelling asset generation: {e}")
+        return {"status": "error", "message": str(e)}
+
