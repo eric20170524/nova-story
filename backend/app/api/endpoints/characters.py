@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 
@@ -127,7 +127,13 @@ def extract_characters(
 
 def _serialize_character(db_char: Character) -> dict:
     tags = db_char.visual_tags or {}
-    assets = tags.get("assets", {})
+    assets = tags.get("assets", {}) if isinstance(tags.get("assets"), dict) else {}
+    
+    avatar_url = assets.get("avatar_url") or tags.get("avatar_url") or tags.get("avatar")
+    turnaround_url = assets.get("turnaround_url") or tags.get("turnaround_url") or tags.get("turnaround")
+    face_url = assets.get("face_url") or tags.get("face_url") or tags.get("face")
+    model_type = assets.get("model_type") or tags.get("model_type") or "pony"
+
     return {
         "id": db_char.id,
         "project_id": db_char.project_id,
@@ -135,10 +141,10 @@ def _serialize_character(db_char: Character) -> dict:
         "role": db_char.role,
         "description": db_char.description,
         "visual_tags": tags,
-        "avatar_url": assets.get("avatar_url"),
-        "turnaround_url": assets.get("turnaround_url"),
-        "face_url": assets.get("face_url"),
-        "model_type": assets.get("model_type", "pony")
+        "avatar_url": avatar_url,
+        "turnaround_url": turnaround_url,
+        "face_url": face_url,
+        "model_type": model_type
     }
 
 def _apply_asset_fields(character_dict: dict, current_tags: dict) -> dict:
@@ -220,6 +226,8 @@ def update_character(
     if "visual_tags" in update_data or any(k in update_data for k in ["avatar_url", "turnaround_url", "face_url", "model_type"]):
         current_tags = update_data.get("visual_tags") or db_character.visual_tags or {}
         db_character.visual_tags = _apply_asset_fields(update_data, current_tags)
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(db_character, "visual_tags")
 
     for key in ["name", "role", "description"]:
         if key in update_data and update_data[key] is not None:
@@ -381,10 +389,74 @@ def train_character_lora(
     assets["lora_path"] = lora_filename
     assets["lora_ready"] = True
     tags["assets"] = assets
+    return _serialize_character(db_character)
+
+@router.post("/upload-image")
+async def upload_character_image(
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    import os
+    import uuid
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    static_dir = os.path.join(base_dir, "static", "generated")
+    os.makedirs(static_dir, exist_ok=True)
+    
+    ext = os.path.splitext(file.filename)[1] or ".png"
+    filename = f"upload_{uuid.uuid4().hex[:10]}{ext}"
+    filepath = os.path.join(static_dir, filename)
+    
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+        
+    return {"url": f"/static/generated/{filename}"}
+
+@router.post("/{character_id}/upload-asset", response_model=schemas.Character)
+async def upload_character_asset(
+    character_id: int,
+    asset_type: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    import os
+    import uuid
+    db_character = db.query(Character).filter(Character.id == character_id).first()
+    if not db_character:
+        raise HTTPException(status_code=404, detail="Character not found")
+        
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    static_dir = os.path.join(base_dir, "static", "generated")
+    os.makedirs(static_dir, exist_ok=True)
+    
+    ext = os.path.splitext(file.filename)[1] or ".png"
+    filename = f"upload_{asset_type}_{character_id}_{uuid.uuid4().hex[:8]}{ext}"
+    filepath = os.path.join(static_dir, filename)
+    
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+        
+    asset_url = f"/static/generated/{filename}"
+    tags = dict(db_character.visual_tags or {})
+    assets = dict(tags.get("assets", {})) if isinstance(tags.get("assets"), dict) else {}
+    
+    if asset_type == "avatar":
+        assets["avatar_url"] = asset_url
+    elif asset_type == "turnaround":
+        assets["turnaround_url"] = asset_url
+    elif asset_type == "face":
+        assets["face_url"] = asset_url
+        
+    tags["assets"] = assets
     db_character.visual_tags = tags
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(db_character, "visual_tags")
     db.commit()
     db.refresh(db_character)
     
     return _serialize_character(db_character)
+
 
 

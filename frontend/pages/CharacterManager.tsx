@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, X, User, Edit2, Trash2, Sparkles, Image as ImageIcon, CheckCircle, RefreshCw, Wand2 } from 'lucide-react';
+import { Plus, X, User, Edit2, Trash2, Sparkles, Image as ImageIcon, CheckCircle, RefreshCw, Wand2, Upload } from 'lucide-react';
 import { api } from '../services/api';
 import { Character } from '../types';
 import { API_BASE_URL, CHARACTER_ROLES } from '../constants';
@@ -111,13 +111,13 @@ export const CharacterManager: React.FC = () => {
   };
 
   // Open Turnaround Sheet Generator
-  const openSheetModal = async (char: Character) => {
+  const openSheetModal = async (char: Character, overrideGenType?: 'turnaround' | 'portrait') => {
     setSheetModalChar(char);
     const mType = char.model_type || 'pony';
     setModelType(mType);
 
     // Flow sequence: Default to 'portrait' if no image exists yet, otherwise 'turnaround'
-    const initialGenType = (!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround';
+    const initialGenType = overrideGenType || ((!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround');
     setGenType(initialGenType);
     setGeneratedImageUrl(null);
 
@@ -203,9 +203,9 @@ export const CharacterManager: React.FC = () => {
         updatePayload.avatar_url = generatedImageUrl;
       }
 
-      await api.updateCharacter(sheetModalChar.id, updatePayload);
+      const updatedChar = await api.updateCharacter(sheetModalChar.id, updatePayload);
       showToast("Asset saved to character profile!", 'success');
-      loadCharacters();
+      setCharacters(prev => prev.map(c => c.id === sheetModalChar.id ? updatedChar : c));
       setSheetModalChar(null);
     } catch (e) {
       showToast("Failed to save asset", 'error');
@@ -214,9 +214,9 @@ export const CharacterManager: React.FC = () => {
 
   const handleCropFace = async (charId: number) => {
     try {
-      await api.cropCharacterFace(charId);
+      const updated = await api.cropCharacterFace(charId);
       showToast(t('characters.crop_face') + " Success!", 'success');
-      loadCharacters();
+      setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
     } catch (e) {
       showToast("Failed to crop face ref", 'error');
     }
@@ -224,11 +224,36 @@ export const CharacterManager: React.FC = () => {
 
   const handleTrainLora = async (charId: number) => {
     try {
-      await api.trainCharacterLora(charId);
+      const updated = await api.trainCharacterLora(charId);
       showToast("Character LoRA Initialized & Ready!", 'success');
-      loadCharacters();
+      setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
     } catch (e) {
       showToast("Failed to initialize LoRA", 'error');
+    }
+  };
+
+  const handleDirectUploadAsset = async (e: React.ChangeEvent<HTMLInputElement>, assetType: 'avatar' | 'turnaround', charId?: number) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      if (charId) {
+        const updatedChar = await api.uploadCharacterAsset(charId, assetType, file);
+        showToast("Local asset uploaded successfully!", 'success');
+        setCharacters(prev => prev.map(c => c.id === charId ? updatedChar : c));
+        if (editingChar.id === charId) {
+          setEditingChar(updatedChar);
+        }
+      } else {
+        const res = await api.uploadCharacterImage(file);
+        if (assetType === 'avatar') {
+          setEditingChar(prev => ({ ...prev, avatar_url: res.url }));
+        } else {
+          setEditingChar(prev => ({ ...prev, turnaround_url: res.url }));
+        }
+        showToast("Image uploaded!", 'success');
+      }
+    } catch (err) {
+      showToast("Failed to upload image", 'error');
     }
   };
 
@@ -300,17 +325,137 @@ export const CharacterManager: React.FC = () => {
               
               <p className="text-slate-400 text-sm mb-4 line-clamp-3 h-14">{char.description}</p>
 
-              {/* Character Sheet / Preview Images */}
-              {char.turnaround_url && (
-                <div className="mb-4 rounded-lg overflow-hidden border border-slate-800 relative group bg-black/40">
-                  <img src={formatImageUrl(char.turnaround_url)} alt="Turnaround Sheet" className="w-full h-32 object-cover" />
-                  <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center gap-2">
-                    <span className="text-xs text-indigo-300 font-medium flex items-center gap-1">
-                      <ImageIcon size={14} /> {t('characters.turnaround_sheet')}
-                    </span>
+              {/* Character Visual Assets Dual Preview (正面立绘 + 角色三视图) */}
+              <div className="mb-4">
+                <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                  <span>视觉形象资产 (Concept & Turnaround)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Front Portrait Box */}
+                  <div 
+                    className={`rounded-lg overflow-hidden relative group h-32 flex flex-col items-center justify-center transition-all ${
+                      char.avatar_url 
+                        ? 'bg-slate-950/80 border border-slate-800 hover:border-emerald-500/50' 
+                        : 'bg-slate-950/40 border border-dashed border-slate-800 hover:border-emerald-500/40 hover:bg-emerald-950/20'
+                    }`}
+                  >
+                    {char.avatar_url ? (
+                      <>
+                        <img
+                          src={formatImageUrl(char.avatar_url)}
+                          alt="Front Portrait"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-emerald-300 font-semibold px-1.5 py-0.5 rounded border border-emerald-500/30">
+                          正面立绘
+                        </div>
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
+                          <button
+                            type="button"
+                            onClick={() => openSheetModal(char, 'portrait')}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                          >
+                            AI 重新生成
+                          </button>
+                          <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
+                            <Upload size={10} /> 上传本地图
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleDirectUploadAsset(e, 'avatar', char.id)}
+                            />
+                          </label>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-slate-500 text-[10px] flex flex-col items-center gap-1.5 p-2 text-center">
+                        <User size={18} className="opacity-60" />
+                        <div className="flex flex-col gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openSheetModal(char, 'portrait')}
+                            className="text-emerald-400 hover:underline font-medium"
+                          >
+                            + AI 生成立绘
+                          </button>
+                          <label className="cursor-pointer text-slate-400 hover:text-white underline flex items-center justify-center gap-0.5">
+                            <Upload size={10} /> 上传本地图
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleDirectUploadAsset(e, 'avatar', char.id)}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Turnaround Sheet Box */}
+                  <div 
+                    className={`rounded-lg overflow-hidden relative group h-32 flex flex-col items-center justify-center transition-all ${
+                      char.turnaround_url 
+                        ? 'bg-slate-950/80 border border-slate-800 hover:border-indigo-500/50' 
+                        : 'bg-slate-950/40 border border-dashed border-slate-800 hover:border-indigo-500/40 hover:bg-indigo-950/20'
+                    }`}
+                  >
+                    {char.turnaround_url ? (
+                      <>
+                        <img
+                          src={formatImageUrl(char.turnaround_url)}
+                          alt="Turnaround Sheet"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-indigo-300 font-semibold px-1.5 py-0.5 rounded border border-indigo-500/30">
+                          角色三视图
+                        </div>
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
+                          <button
+                            type="button"
+                            onClick={() => openSheetModal(char, 'turnaround')}
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                          >
+                            AI 重新生成
+                          </button>
+                          <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
+                            <Upload size={10} /> 上传本地图
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleDirectUploadAsset(e, 'turnaround', char.id)}
+                            />
+                          </label>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-slate-500 text-[10px] flex flex-col items-center gap-1.5 p-2 text-center">
+                        <ImageIcon size={18} className="opacity-60" />
+                        <div className="flex flex-col gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openSheetModal(char, 'turnaround')}
+                            className="text-indigo-400 hover:underline font-medium"
+                          >
+                            + AI 生成三视图
+                          </button>
+                          <label className="cursor-pointer text-slate-400 hover:text-white underline flex items-center justify-center gap-0.5">
+                            <Upload size={10} /> 上传本地图
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleDirectUploadAsset(e, 'turnaround', char.id)}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
+              </div>
               
               <div className="border-t border-slate-800 pt-3">
                 <h4 className="text-xs font-semibold text-slate-500 mb-2">{t('characters.visual_tags')}</h4>
@@ -400,6 +545,65 @@ export const CharacterManager: React.FC = () => {
                     value={editingChar.description || ''}
                     onChange={e => setEditingChar({...editingChar, description: e.target.value})}
                  />
+              </div>
+
+              {/* Local Visual Assets Upload */}
+              <div className="bg-slate-950 rounded-lg p-4 border border-slate-800 space-y-4">
+                <label className="block text-sm font-semibold text-indigo-400">
+                  {t('characters.upload_hint') || "本地形象图设置 (正面立绘 + 角色三视图)"}
+                </label>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Front Portrait Upload */}
+                  <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center space-y-2">
+                    <span className="text-xs text-emerald-400 font-semibold">{t('characters.upload_portrait')}</span>
+                    {editingChar.avatar_url ? (
+                      <div className="w-full h-24 rounded overflow-hidden relative border border-emerald-500/40">
+                        <img src={formatImageUrl(editingChar.avatar_url)} alt="Portrait" className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
+                        <User size={20} className="mb-1 opacity-50" />
+                        <span>未选择本地立绘</span>
+                      </div>
+                    )}
+                    <label className="cursor-pointer bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/50 px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition-all">
+                      <Upload size={14} />
+                      <span>选择本地立绘图片</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handleDirectUploadAsset(e, 'avatar', editingChar.id)}
+                      />
+                    </label>
+                  </div>
+
+                  {/* Turnaround Sheet Upload */}
+                  <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center space-y-2">
+                    <span className="text-xs text-indigo-400 font-semibold">{t('characters.upload_turnaround')}</span>
+                    {editingChar.turnaround_url ? (
+                      <div className="w-full h-24 rounded overflow-hidden relative border border-indigo-500/40">
+                        <img src={formatImageUrl(editingChar.turnaround_url)} alt="Turnaround" className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
+                        <ImageIcon size={20} className="mb-1 opacity-50" />
+                        <span>未选择本地三视图</span>
+                      </div>
+                    )}
+                    <label className="cursor-pointer bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/50 px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition-all">
+                      <Upload size={14} />
+                      <span>选择本地三视图图片</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handleDirectUploadAsset(e, 'turnaround', editingChar.id)}
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
 
               {/* Visual Tags Editor */}

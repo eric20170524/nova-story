@@ -175,6 +175,41 @@ class ApiService {
   cropCharacterFace = (characterId: number) => this.request<any>(`/characters/${characterId}/crop-face`, { method: 'POST' });
   trainCharacterLora = (characterId: number) => this.request<any>(`/characters/${characterId}/train-lora`, { method: 'POST' });
 
+  uploadCharacterAsset = async (characterId: number, assetType: 'avatar' | 'turnaround' | 'face', file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('asset_type', assetType);
+
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE_URL}/characters/${characterId}/upload-asset`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
+    return await response.json();
+  };
+
+  uploadCharacterImage = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE_URL}/characters/upload-image`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
+    return await response.json();
+  };
+
   // Chapters
   createChapter = (data: any) => this.request<any>('/chapters/', { method: 'POST', body: data });
   updateChapter = (id: string, data: any) => this.request<any>(`/chapters/${id}`, { method: 'PATCH', body: data });

@@ -112,6 +112,9 @@ export const translations = {
       train_lora: "Train Character LoRA",
       lora_ready: "LoRA Ready",
       pose_label: "OpenPose Posture",
+      upload_portrait: "Upload Local Portrait",
+      upload_turnaround: "Upload Local Turnaround",
+      upload_hint: "Click or drag to upload local image",
     },
     director: {
       style: "Style:",
@@ -371,6 +374,9 @@ export const translations = {
       train_lora: "训练专属 LoRA",
       lora_ready: "LoRA 已就绪",
       pose_label: "动作姿态预设",
+      upload_portrait: "上传本地正面立绘",
+      upload_turnaround: "上传本地角色三视图",
+      upload_hint: "点击或拖拽上传本地图片",
     },
     director: {
       style: "风格:",
