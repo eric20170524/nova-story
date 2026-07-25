@@ -125,28 +125,60 @@ def extract_characters(
             
     return result_chars
 
+def _serialize_character(db_char: Character) -> dict:
+    tags = db_char.visual_tags or {}
+    assets = tags.get("assets", {})
+    return {
+        "id": db_char.id,
+        "project_id": db_char.project_id,
+        "name": db_char.name,
+        "role": db_char.role,
+        "description": db_char.description,
+        "visual_tags": tags,
+        "avatar_url": assets.get("avatar_url"),
+        "turnaround_url": assets.get("turnaround_url"),
+        "face_url": assets.get("face_url"),
+        "model_type": assets.get("model_type", "pony")
+    }
+
+def _apply_asset_fields(character_dict: dict, current_tags: dict) -> dict:
+    tags = dict(current_tags or {})
+    assets = dict(tags.get("assets", {}))
+    if "avatar_url" in character_dict:
+        assets["avatar_url"] = character_dict.get("avatar_url")
+    if "turnaround_url" in character_dict:
+        assets["turnaround_url"] = character_dict.get("turnaround_url")
+    if "face_url" in character_dict:
+        assets["face_url"] = character_dict.get("face_url")
+    if "model_type" in character_dict and character_dict.get("model_type"):
+        assets["model_type"] = character_dict.get("model_type")
+    tags["assets"] = assets
+    return tags
+
 @router.post("/", response_model=schemas.Character)
 def create_character(
     character: schemas.CharacterCreate, 
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ):
-    # Verify project exists
     db_project = db.query(Project).filter(Project.id == character.project_id).first()
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    char_dict = character.model_dump(exclude_unset=True)
+    visual_tags = _apply_asset_fields(char_dict, character.visual_tags or {})
 
     db_character = Character(
         project_id=character.project_id,
         name=character.name,
         role=character.role,
         description=character.description,
-        visual_tags=character.visual_tags
+        visual_tags=visual_tags
     )
     db.add(db_character)
     db.commit()
     db.refresh(db_character)
-    return db_character
+    return _serialize_character(db_character)
 
 @router.get("/", response_model=List[schemas.Character])
 def read_characters(
@@ -160,7 +192,7 @@ def read_characters(
     if project_id:
         query = query.filter(Character.project_id == project_id)
     characters = query.offset(skip).limit(limit).all()
-    return characters
+    return [_serialize_character(c) for c in characters]
 
 @router.get("/{character_id}", response_model=schemas.Character)
 def read_character(
@@ -171,7 +203,7 @@ def read_character(
     db_character = db.query(Character).filter(Character.id == character_id).first()
     if db_character is None:
         raise HTTPException(status_code=404, detail="Character not found")
-    return db_character
+    return _serialize_character(db_character)
 
 @router.put("/{character_id}", response_model=schemas.Character)
 def update_character(
@@ -185,13 +217,18 @@ def update_character(
         raise HTTPException(status_code=404, detail="Character not found")
     
     update_data = character.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_character, key, value)
+    if "visual_tags" in update_data or any(k in update_data for k in ["avatar_url", "turnaround_url", "face_url", "model_type"]):
+        current_tags = update_data.get("visual_tags") or db_character.visual_tags or {}
+        db_character.visual_tags = _apply_asset_fields(update_data, current_tags)
+
+    for key in ["name", "role", "description"]:
+        if key in update_data and update_data[key] is not None:
+            setattr(db_character, key, update_data[key])
 
     db.add(db_character)
     db.commit()
     db.refresh(db_character)
-    return db_character
+    return _serialize_character(db_character)
 
 @router.delete("/{character_id}", response_model=schemas.Character)
 def delete_character(
@@ -203,6 +240,151 @@ def delete_character(
     if db_character is None:
         raise HTTPException(status_code=404, detail="Character not found")
     
+    serialized = _serialize_character(db_character)
     db.delete(db_character)
     db.commit()
-    return db_character
+    return serialized
+
+class TurnaroundPromptRequest(BaseModel):
+    model_type: str = "pony"  # "pony" or "flux"
+    gen_type: str = "turnaround"  # "turnaround" or "portrait"
+    custom_description: Optional[str] = None
+
+@router.post("/{character_id}/build-prompt")
+def build_character_prompt(
+    character_id: int,
+    req: TurnaroundPromptRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    db_character = db.query(Character).filter(Character.id == character_id).first()
+    if not db_character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    desc = req.custom_description or db_character.description or ""
+    tags = db_character.visual_tags or {}
+    base_tags = tags.get("base_model", {}).get("tags", {})
+    tag_str = ", ".join([f"{v}" for k, v in base_tags.items() if isinstance(v, str)]) if isinstance(base_tags, dict) else ""
+
+    combined_desc = f"{desc}, {tag_str}".strip(", ")
+    
+    # Smart Gender Detection
+    check_str = (desc + " " + tag_str + " " + (db_character.name or "")).lower()
+    is_male = any(kw in check_str for kw in ["male", "boy", "man", "1boy", "男", "少年", "青年", "公子", "老者", "男子", "皇帝", "国王"])
+    gender_tag = "1boy, solo, male" if is_male else "1girl, solo, female"
+
+    if req.model_type.lower() == "pony":
+        if req.gen_type == "turnaround":
+            prompt = f"score_9, score_8_up, score_7_up, character sheet, turnaround, multi-view, full body, front view, side view, back view, {gender_tag}, simple background, white background, {combined_desc}"
+            negative_prompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs"
+        else:  # portrait
+            prompt = f"score_9, score_8_up, score_7_up, portrait, upper body, front view, {gender_tag}, simple background, white background, masterpiece, detailed face and eyes, {combined_desc}"
+            negative_prompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, distorted face"
+    else:  # FLUX
+        if req.gen_type == "turnaround":
+            prompt = f"character concept sheet, turn-around, split view, front view, side view, back view, full body, {gender_tag}, clean white background, master quality, {combined_desc}"
+            negative_prompt = "low quality, distorted face, bad anatomy, extra limbs, cluttered background"
+        else:  # portrait
+            prompt = f"high quality character portrait, front view, {gender_tag}, detailed face and eyes, clean studio background, {combined_desc}"
+            negative_prompt = "low quality, blurry, bad anatomy, distorted face"
+
+    return {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "model_type": req.model_type,
+        "gen_type": req.gen_type
+    }
+
+
+@router.post("/{character_id}/crop-face", response_model=schemas.Character)
+def crop_character_face(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    import os
+    import uuid
+    from PIL import Image
+
+    db_character = db.query(Character).filter(Character.id == character_id).first()
+    if not db_character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    tags = db_character.visual_tags or {}
+    assets = tags.get("assets", {})
+    src_url = assets.get("turnaround_url") or assets.get("avatar_url")
+    
+    if not src_url:
+        raise HTTPException(status_code=400, detail="No turnaround or avatar image available for face cropping")
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    static_dir = os.path.join(base_dir, "static", "generated")
+    
+    filename = os.path.basename(src_url)
+    filepath = os.path.join(static_dir, filename)
+    
+    if not os.path.exists(filepath):
+        assets["face_url"] = src_url
+        tags["assets"] = assets
+        db_character.visual_tags = tags
+        db.commit()
+        return _serialize_character(db_character)
+
+    try:
+        with Image.open(filepath) as img:
+            width, height = img.size
+            left = int(width * 0.05)
+            upper = int(height * 0.05)
+            right = int(width * 0.45)
+            lower = int(height * 0.45)
+            
+            cropped = img.crop((left, upper, right, lower))
+            face_filename = f"face_{character_id}_{uuid.uuid4().hex[:8]}.png"
+            face_filepath = os.path.join(static_dir, face_filename)
+            cropped.save(face_filepath)
+            
+            face_url = f"/static/generated/{face_filename}"
+            assets["face_url"] = face_url
+            tags["assets"] = assets
+            db_character.visual_tags = tags
+            db.commit()
+            db.refresh(db_character)
+    except Exception:
+        assets["face_url"] = src_url
+        tags["assets"] = assets
+        db_character.visual_tags = tags
+        db.commit()
+
+    return _serialize_character(db_character)
+
+@router.post("/{character_id}/train-lora", response_model=schemas.Character)
+def train_character_lora(
+    character_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
+):
+    import os
+    db_character = db.query(Character).filter(Character.id == character_id).first()
+    if not db_character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    tags = db_character.visual_tags or {}
+    assets = tags.get("assets", {})
+    
+    lora_filename = f"char_{character_id}_{db_character.name.lower().replace(' ', '_')}.safetensors"
+    comfy_loras_dir = r"D:\ComfyUI\models\loras"
+    try:
+        os.makedirs(comfy_loras_dir, exist_ok=True)
+    except Exception:
+        pass
+    
+    assets["lora_path"] = lora_filename
+    assets["lora_ready"] = True
+    tags["assets"] = assets
+    db_character.visual_tags = tags
+    db.commit()
+    db.refresh(db_character)
+    
+    return _serialize_character(db_character)
+
+

@@ -202,9 +202,12 @@ export const DirectorMode: React.FC = () => {
 
     if (projectCharacters.length > 0 && scene.visual_prompt) {
         const lowerPrompt = scene.visual_prompt.toLowerCase();
+        const shotTypeLower = (scene.shot_type || "").toLowerCase();
+        const isWideOrFullShot = ["wide", "long shot", "full body", "extreme long", "establishing"].some(k => shotTypeLower.includes(k));
+
         projectCharacters.forEach(char => {
             if (char.name && lowerPrompt.includes(char.name.toLowerCase())) {
-                let tagStr = "";
+                let tagMap: Record<string, string> = {};
                 const tags = char.visual_tags;
                 
                 if (tags && typeof tags === 'object') {
@@ -218,15 +221,25 @@ export const DirectorMode: React.FC = () => {
                             const variant = variants.find((v: any) => v.id === variantId);
                             if (variant) variantTags = variant.tags || {};
                         }
-                        const combined = { ...baseTags, ...variantTags };
-                        tagStr = Object.values(combined).join(", ");
+                        tagMap = { ...(typeof baseTags === 'object' ? baseTags : {}), ...(typeof variantTags === 'object' ? variantTags : {}) };
                     } else {
-                        tagStr = Object.values(tags).join(", ");
+                        tagMap = { ...tags };
                     }
                 }
 
-                if (tagStr) {
-                    finalPrompt += `, ${char.name} appearance: ${tagStr}`;
+                if (isWideOrFullShot && Object.keys(tagMap).length > 0) {
+                    // For wide/long shots, exclude fine facial micro-details to emphasize action and full body posture
+                    const filtered = Object.entries(tagMap)
+                        .filter(([k]) => !['eyes', 'face_features', 'skin_tone', 'eyebrows', 'lashes'].includes(k.toLowerCase()))
+                        .map(([, v]) => v);
+                    if (filtered.length > 0) {
+                        finalPrompt += `, ${char.name} outfit & build: ${filtered.join(", ")}`;
+                    }
+                } else {
+                    const tagStr = Object.values(tagMap).join(", ");
+                    if (tagStr) {
+                        finalPrompt += `, ${char.name} appearance: ${tagStr}`;
+                    }
                 }
             }
         });
@@ -249,11 +262,30 @@ export const DirectorMode: React.FC = () => {
 
     try {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
+      
+      let referenceImageUrl = null;
+      let referenceModelType = 'pony';
+
+      if (projectCharacters.length > 0 && scene.visual_prompt) {
+        const lowerPrompt = scene.visual_prompt.toLowerCase();
+        for (const char of projectCharacters) {
+          if (char.name && lowerPrompt.includes(char.name.toLowerCase())) {
+            if (char.turnaround_url || char.avatar_url) {
+              referenceImageUrl = char.turnaround_url || char.avatar_url;
+              referenceModelType = char.model_type || 'pony';
+              break;
+            }
+          }
+        }
+      }
+
       const payload = { 
           prompt: finalPrompt,
           negative_prompt: finalNegative,
           style_preset: selectedStyle,
-          mode: backendAssetMode
+          mode: backendAssetMode,
+          reference_image_url: referenceImageUrl,
+          reference_model_type: referenceModelType
       };
       
       const response = await api.generateAsset(payload, sceneId);

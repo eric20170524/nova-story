@@ -6,6 +6,10 @@ class CharacterBase(BaseModel):
     role: Optional[str] = None
     description: Optional[str] = None
     visual_tags: Optional[Dict[str, Any]] = None
+    avatar_url: Optional[str] = None
+    turnaround_url: Optional[str] = None
+    face_url: Optional[str] = None
+    model_type: Optional[str] = "pony"  # "pony" or "flux"
 
 class CharacterCreate(CharacterBase):
     project_id: int
@@ -20,3 +24,4 @@ class Character(CharacterBase):
 
     class Config:
         from_attributes = True
+

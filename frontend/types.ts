@@ -15,6 +15,10 @@ export interface Character {
   role: string; // 'protagonist' | 'antagonist' | 'supporting'
   description: string;
   visual_tags: Record<string, any>; // Key-value pairs for ComfyUI or complex object
+  avatar_url?: string;
+  turnaround_url?: string;
+  face_url?: string;
+  model_type?: 'pony' | 'flux';
 }
 
 // Chapters (Structure)

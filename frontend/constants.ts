@@ -192,7 +192,7 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
   {
     value: 'anime',
     label: 'Anime (动漫/漫画)',
-    prompt: '2D anime style, flat shading, cel shaded, vibrant colors, clean lines, highly detailed, makoto shinkai aesthetic, score_9, source_anime',
+    prompt: '2D anime style, East Asian anime features, flat shading, cel shaded, vibrant colors, clean lines, highly detailed, makoto shinkai aesthetic, score_9, source_anime',
     negative_prompt: '3d, photorealistic, realistic, textured skin, messy lines, sketch, monochrome',
     recommended_model: 'pony_xl',
     tier: 'standard',
@@ -200,47 +200,47 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
   {
     value: 'ancient_fantasy',
     label: 'Gu Feng Fantasy (古风幻想)',
-    prompt: 'ancient Chinese xianxia fantasy illustration, guofeng national style beauty, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk textures, atmospheric depth, intricate traditional patterns, semi-realistic digital rendering',
-    negative_prompt: 'modern city, concrete buildings, cars, contemporary clothing, firearms, neon urban signage, low quality, blurry, bad anatomy, malformed hands, duplicate characters',
+    prompt: 'ancient Chinese xianxia fantasy illustration, East Asian facial features, guofeng national style beauty, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk textures, atmospheric depth, intricate traditional patterns, semi-realistic digital rendering',
+    negative_prompt: 'western face, caucasian, modern city, concrete buildings, cars, contemporary clothing, firearms, neon urban signage, low quality, blurry, bad anatomy, malformed hands, duplicate characters',
     recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
     value: 'xianxia_immortal',
     label: 'Xianxia Immortal (仙侠清冷)',
-    prompt: 'xianxia immortal aesthetic, cool ethereal fairy elegance, restrained color palette with jade and mist tones, soft volumetric godrays, translucent sheer fabric lighting, refined facial features, long flowing hair, quiet mysterious mood, polished semi-realistic digital illustration',
-    negative_prompt: 'neon cyberpunk, modern streetwear, pure chibi, crude sketch, flat cel only, photoreal camera noise, low quality, blurry, bad anatomy',
+    prompt: 'xianxia immortal aesthetic, East Asian facial structure, cool ethereal fairy elegance, restrained color palette with jade and mist tones, soft volumetric godrays, translucent sheer fabric lighting, refined facial features, long flowing hair, quiet mysterious mood, polished semi-realistic digital illustration',
+    negative_prompt: 'western face, caucasian, neon cyberpunk, modern streetwear, pure chibi, crude sketch, flat cel only, photoreal camera noise, low quality, blurry, bad anatomy',
     recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
     value: 'guoman_painterly',
     label: 'Guoman Painterly (国漫厚涂)',
-    prompt: 'chinese manhua thick painterly style, rich oil-like digital brushwork, strong rim light and atmospheric haze, detailed costume folds, high contrast dramatic lighting, national comic illustration finish, elegant character-focused composition',
-    negative_prompt: 'western comic halftone, pure lineart only, chibi proportions, photoreal DSLR look, low quality, blurry, messy anatomy',
+    prompt: 'chinese manhua thick painterly style, East Asian features, rich oil-like digital brushwork, strong rim light and atmospheric haze, detailed costume folds, high contrast dramatic lighting, national comic illustration finish, elegant character-focused composition',
+    negative_prompt: 'western face, caucasian, western comic halftone, pure lineart only, chibi proportions, photoreal DSLR look, low quality, blurry, messy anatomy',
     recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
     value: 'ethereal_glow',
     label: 'Ethereal Glow (光晕仙气)',
-    prompt: 'ethereal bloom and soft glow illustration, luminous skin highlights, delicate light particles, dreamy backlighting, gentle color bloom, fairy-like radiance, smooth digital polish, romantic atmospheric haze, high clarity beauty portrait finish',
-    negative_prompt: 'harsh gritty texture, pure ink monochrome, dark brutalist industrial, muddy colors, low quality, blurry, overexposed white void',
+    prompt: 'ethereal bloom and soft glow illustration, East Asian refined beauty portrait, luminous skin highlights, delicate light particles, dreamy backlighting, gentle color bloom, fairy-like radiance, smooth digital polish, romantic atmospheric haze, high clarity beauty portrait finish',
+    negative_prompt: 'western face, caucasian, harsh gritty texture, pure ink monochrome, dark brutalist industrial, muddy colors, low quality, blurry, overexposed white void',
     recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
     value: 'aesthetic_romance',
     label: 'Aesthetic Romance (唯美氛围)',
-    prompt: 'aesthetic romantic illustration, soft cinematic color grading, poetic atmosphere, elegant portrait composition, gentle depth of field, refined fabric and hair detail, warm-cool contrast mood lighting, polished digital beauty art',
-    negative_prompt: 'gritty documentary, crude meme style, flat clipart, noisy compression, low quality, blurry, bad anatomy',
+    prompt: 'aesthetic romantic illustration, East Asian features, soft cinematic color grading, poetic atmosphere, elegant portrait composition, gentle depth of field, refined fabric and hair detail, warm-cool contrast mood lighting, polished digital beauty art',
+    negative_prompt: 'western face, caucasian, gritty documentary, crude meme style, flat clipart, noisy compression, low quality, blurry, bad anatomy',
     recommended_model: 'both',
     tier: 'standard',
   },
   {
     value: 'game_illustration',
     label: 'Game Illustration (游戏立绘)',
-    prompt: 'premium game character illustration, splash-art quality, sharp costume silhouette, vivid material contrast, dynamic yet readable pose, polished anime-semireal hybrid shading, detailed accessories, cinematic character spotlight, commercial key visual finish',
+    prompt: 'premium game character illustration, East Asian character design, splash-art quality, sharp costume silhouette, vivid material contrast, dynamic yet readable pose, polished anime-semireal hybrid shading, detailed accessories, cinematic character spotlight, commercial key visual finish',
     negative_prompt: 'rough sketch, unfinished lineart, pure photoreal photo, muddy silhouette, low quality, blurry, bad anatomy',
     recommended_model: 'pony_xl',
     tier: 'standard',
@@ -256,8 +256,8 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
   {
     value: 'semi_realistic',
     label: 'Semi-Realistic (半写实)',
-    prompt: 'semi-realistic digital painting, smooth painterly style, soft blending, cinematic lighting, subsurface scattering, detailed eyes, riot games splash art style',
-    negative_prompt: 'anime, cel shaded, flat colors, cartoon, low resolution, blurry, pixelated',
+    prompt: 'semi-realistic digital painting, East Asian facial structure, smooth painterly style, soft blending, cinematic lighting, subsurface scattering, detailed eyes, riot games splash art style',
+    negative_prompt: 'western face, caucasian, anime, cel shaded, flat colors, cartoon, low resolution, blurry, pixelated',
     recommended_model: 'both',
     tier: 'standard',
   },
@@ -312,8 +312,8 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
   {
     value: 'cinematic_photo',
     label: 'Cinematic Photo (电影写实)',
-    prompt: 'cinematic photorealistic still, natural skin texture, realistic lens bokeh, physically based lighting, film color grade, shallow depth of field, detailed environment interaction, shot on 50mm lens look',
-    negative_prompt: 'anime, cel shaded, cartoon, chibi, flat illustration, oversaturated comic colors, low quality, blurry',
+    prompt: 'cinematic photorealistic still, East Asian features, natural skin texture, realistic lens bokeh, physically based lighting, film color grade, shallow depth of field, detailed environment interaction, shot on 50mm lens look',
+    negative_prompt: 'western face, caucasian, anime, cel shaded, cartoon, chibi, flat illustration, oversaturated comic colors, low quality, blurry',
     recommended_model: 'flux_dev_gguf',
     tier: 'standard',
   },
@@ -377,3 +377,20 @@ export function formatVisualStyleLabel(
   const advancedTag = style.tier === 'advanced' ? ' · ★' : '';
   return `${name} · ${model}${advancedTag}`;
 }
+
+export interface OpenPosePreset {
+  id: string;
+  name: string;
+  name_zh: string;
+  prompt_snippet: string;
+}
+
+export const OPENPOSE_PRESETS: OpenPosePreset[] = [
+  { id: 'standing_neutral', name: 'Standing Full-Body', name_zh: '标准站姿全景', prompt_snippet: 'standing, full body pose, front view, neutral posture' },
+  { id: 'running_action', name: 'Action Running', name_zh: '奔跑追逐动作', prompt_snippet: 'dynamic running pose, mid-stride, action shot, motion blur background' },
+  { id: 'sword_slash', name: 'Sword Slash / Fighting', name_zh: '挥刀/战斗招式', prompt_snippet: 'dynamic sword slashing pose, combat stance, intense action, heroic posture' },
+  { id: 'sitting_dialogue', name: 'Sitting Conversation', name_zh: '坐姿对话', prompt_snippet: 'sitting on chair, casual posture, medium shot, relaxed dialogue pose' },
+  { id: 'looking_back', name: 'Over the Shoulder Glance', name_zh: '回眸/侧颜特写', prompt_snippet: 'looking back over shoulder, close-up portrait, dramatic gaze, depth of field' },
+  { id: 'flying_dynamic', name: 'Floating / Dynamic Leap', name_zh: '跃空/飞天姿态', prompt_snippet: 'floating in mid-air, dynamic leaping pose, windblown hair and clothes' }
+];
+

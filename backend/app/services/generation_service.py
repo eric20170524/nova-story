@@ -88,7 +88,20 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                      template_name = comfy_settings.get("default_workflow", "pony_xl_12gb.json")
                      template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "workflows", template_name)
                      preserve_template_conditioning = "pony" in template_name.lower()
-                     
+                     is_flux = "flux" in template_name.lower()
+
+                     # Option 1: FLUX East Asian Prompt Booster
+                     if is_flux:
+                         prompt_lower = (prompt or "").lower()
+                         asian_keywords = ["east asian", "chinese", "japanese", "asian", "guofeng", "xianxia"]
+                         if not any(kw in prompt_lower for kw in asian_keywords):
+                             prompt = f"{prompt}, East Asian facial features, soft facial contour, East Asian beauty" if prompt else "East Asian facial features, soft facial contour, East Asian beauty"
+                             logger.info(f"[Task {task_id}] Injected East Asian feature booster to FLUX prompt.")
+                         
+                         neg_lower = (negative_prompt or "").lower()
+                         if "western face" not in neg_lower and "caucasian" not in neg_lower:
+                             negative_prompt = f"{negative_prompt}, western face, caucasian" if negative_prompt else "western face, caucasian"
+
                      if not os.path.exists(template_path):
                          logger.error(f"[Task {task_id}] Workflow template {template_path} not found. Sending raw payload.")
                          final_workflow = workflow_data
@@ -96,7 +109,50 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                          logger.info(f"[Task {task_id}] Loading workflow template: {template_name}")
                          with open(template_path, 'r', encoding='utf-8') as f:
                              final_workflow = json.load(f)
-                             
+
+                         # Option 2: Dynamic LoRA Wiring for FLUX Workflows
+                         if is_flux:
+                             # Check if a LoRA model is installed in ComfyUI models/loras/
+                             comfy_loras_dir = r"D:\ComfyUI\models\loras"
+                             custom_lora = comfy_settings.get("flux_lora")
+                             detected_lora = None
+
+                             if custom_lora and os.path.exists(os.path.join(comfy_loras_dir, custom_lora)):
+                                 detected_lora = custom_lora
+                             elif os.path.exists(comfy_loras_dir):
+                                 try:
+                                     lora_files = [f for f in os.listdir(comfy_loras_dir) if f.endswith(('.safetensors', '.ckpt'))]
+                                     # Priority match for asian/guofeng/flux loras
+                                     match = next((f for f in lora_files if any(k in f.lower() for k in ["asian", "guofeng", "east_asian", "flux_asian"])), None)
+                                     if match:
+                                         detected_lora = match
+                                     elif lora_files:
+                                         detected_lora = lora_files[0]
+                                 except Exception as ex:
+                                     logger.warning(f"Error checking LoRA directory: {ex}")
+
+                             if detected_lora:
+                                 logger.info(f"[Task {task_id}] Dynamically attaching FLUX LoRA: {detected_lora}")
+                                 lora_node_id = "7"
+                                 final_workflow[lora_node_id] = {
+                                     "inputs": {
+                                         "lora_name": detected_lora,
+                                         "strength_model": float(comfy_settings.get("flux_lora_strength", 0.8)),
+                                         "strength_clip": float(comfy_settings.get("flux_lora_strength", 0.8)),
+                                         "model": ["1", 0],
+                                         "clip": ["2", 0]
+                                     },
+                                     "class_type": "LoraLoader",
+                                     "_meta": { "title": "Load LoRA (East Asian / Guofeng)" }
+                                 }
+
+                                 # Rewire KSampler to use LoRA model and CLIPTextEncode to use LoRA clip
+                                 for nid, n in final_workflow.items():
+                                     if n.get("class_type") == "KSampler":
+                                         n["inputs"]["model"] = [lora_node_id, 0]
+                                     elif n.get("class_type") == "CLIPTextEncode":
+                                         n["inputs"]["clip"] = [lora_node_id, 1]
+
                          # 3. Inject Prompts and Seed
                          for node_id, node in final_workflow.items():
                              class_type = node.get("class_type")

@@ -25,5 +25,5 @@
 backend/static/generated
 *.txt
 frontend/local/
-scripts
+**/scripts
 *.bak

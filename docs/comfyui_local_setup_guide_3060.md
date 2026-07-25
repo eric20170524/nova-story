@@ -23,7 +23,9 @@
 2. 前往 HuggingFace 下载 `flux1-dev-Q5_K_S.gguf`。将其放入 `models/unet/`。
 3. 下载 `t5xxl_fp16.safetensors` 和 `clip_l.safetensors`，放入 `models/clip/`。
 4. 下载 Flux VAE (`ae.safetensors`)，放入 `models/vae/`。
-5. （可选）在系统的 `system_settings.json` 中配置 `default_workflow` 为 `flux_dev_gguf_12gb.json` 即可启用 Flux 流程。
+5. **(强烈推荐) FLUX 东方人像/国风 LoRA**：
+   为了防止 FLUX 默认底层偏置生成欧美面孔，建议前往 Civitai 下载专为 FLUX.1-dev 训练的东亚人像或国风 LoRA（例如 `flux_asian_beauty.safetensors` 或 `flux_guofeng.safetensors`），放入 ComfyUI 的 `models/loras/` 目录下。NovaStory 后端会自动识别并以 0.8 权重挂载加载，使生图兼具 FLUX 写实光影与东方美型面孔。
+6. （可选）在系统的 `system_settings.json` 中配置 `default_workflow` 为 `flux_dev_gguf_12gb.json` 即可启用 Flux 流程。
 
 ## 3. 在 NovaStory 中对接
 
@@ -40,8 +42,11 @@
 
 ## FAQ
 
+- **Q: 为什么切换 FLUX 之后生成的人物偏西方面孔？**
+  A: FLUX 原生开源底模偏向欧美人种训练集。NovaStory 已经在系统提示词层内置了 **East Asian Prompt Booster (方案一)**。如果您希望达到极致的东亚五官效果，推荐在 `models/loras/` 下放入一个 FLUX 亚洲人像 LoRA **(方案二)**，后端将自动挂载生效。
+
 - **Q: 为什么生成的内容不是我想要的内容？**
   A: 后端会自动帮您进行 Prompt 和 Negative Prompt 的替换。确保您选对了角色或输入了更精确的场景描述。
 
 - **Q: 遇到报错 “Workflow template ... not found” 怎么办？**
-  A: 检查后端项目的 `backend/app/static/workflows/` 下是否存在 `pony_xl_12gb.json`，确保路径未发生改变。
+  A: 检查后端项目的 `backend/app/static/workflows/` 下是否存在 `pony_xl_12gb.json` 或 `flux_dev_gguf_12gb.json`，确保路径未发生改变。

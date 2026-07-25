@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Loader2, Film, PanelRight, ImageIcon, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Music, Grid, X, Check, ArrowRight } from 'lucide-react';
 import { Scene, CoverageGroup, CoverageShot } from '../../types';
-import { API_BASE_URL, SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES } from '../../constants';
+import { API_BASE_URL, SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
@@ -229,6 +229,32 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 title="Camera Angle"
                                 >
                                 {CAMERA_ANGLES.map(opt => <option key={opt.value} value={opt.value}>{opt.value || 'Angle...'}</option>)}
+                                </select>
+                            </div>
+
+                            {/* OpenPose Posture Selector */}
+                            <div>
+                                <select 
+                                className="w-full bg-slate-950/80 border border-purple-800/40 rounded text-[10px] text-purple-300 font-medium py-1 px-2 focus:outline-none hover:border-purple-600/60"
+                                onChange={(e) => {
+                                    const presetId = e.target.value;
+                                    if (!presetId) return;
+                                    const preset = OPENPOSE_PRESETS.find(p => p.id === presetId);
+                                    if (preset) {
+                                    const currentPrompt = scene.visual_prompt || '';
+                                    const newPrompt = currentPrompt ? `${currentPrompt}, ${preset.prompt_snippet}` : preset.prompt_snippet;
+                                    onUpdateScene(scene.id, 'visual_prompt', newPrompt);
+                                    }
+                                }}
+                                defaultValue=""
+                                title={t('characters.pose_label') || "OpenPose Posture Preset"}
+                                >
+                                <option value="">🎭 {t('characters.pose_label') || "OpenPose Posture Preset"}...</option>
+                                {OPENPOSE_PRESETS.map(pose => (
+                                    <option key={pose.id} value={pose.id}>
+                                    {pose.name_zh} ({pose.name})
+                                    </option>
+                                ))}
                                 </select>
                             </div>
 

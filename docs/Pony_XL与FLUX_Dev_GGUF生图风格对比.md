@@ -133,11 +133,20 @@ GGUF 主要是一种量化格式，并不代表一种新的画风。常见的 FL
 - **半写实美女 / 游戏角色**：优质 Pony 衍生通常更省资源，风格更稳
 - **动漫 + 复杂构图**：可考虑 FLUX + 动漫 LoRA
 
+## FLUX.1-dev 人像东亚化（东方/亚洲面孔）优化策略
+
+针对使用 `flux_dev_gguf_12gb.json` 时人物容易偏欧美白人面孔的问题，NovaStory 已在系统层面同时内置了**方案一与方案二**：
+
+1. **方案一（提示词层东亚特征显式强化 - 默认生效）**
+   - 前端 `VISUAL_STYLES` 与后端生成引擎会在使用 FLUX 时，自动注入 `East Asian facial features, soft facial contour, East Asian beauty` 等面部特征修饰词，并在负向提示词中剔除 `western face, caucasian`。
+2. **方案二（ComfyUI 工作流 LoRA 动态挂载 - 可选进阶）**
+   - 在 ComfyUI 的 `models/loras/` 目录下放入一个专为 FLUX 训练的东亚人像或国风 LoRA（如 Civitai 上的 Asian Girl/Guofeng LoRA），NovaStory 后端服务将自动动态识别并插拔 `LoraLoader` 节点（权重 0.8），无需手动改写 JSON 文件，彻底解决面孔问题。
+
 ## 选择建议
 
 - 动漫角色、同人立绘、兽人和强姿势控制：优先选择 **Pony XL**
 - 真人、商品、建筑、复杂场景和长提示词：优先选择 **FLUX.1-dev GGUF**
-- 动漫风格但需要复杂构图：考虑 **FLUX + 动漫 LoRA**
+- 东方/国风写实美型人像：**FLUX.1-dev GGUF + 东亚 Prompt Booster / 亚洲人像 LoRA**
 - 半写实美女或游戏角色：优质的 Pony 衍生模型通常更省资源，也更容易调出明确风格
 
 ## 参考资料

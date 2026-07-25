@@ -8,9 +8,9 @@
         "default_workflow": "pony_xl_12gb.json"
     },
     "llm": {
-        "provider": "ollama",
-        "base_url": "http://127.0.0.1:11434/v1",
-        "model": "qwen2.5-coder:7b",
-        "api_key": "ollama"
+        "provider": "gemini",
+        "api_key": "AIzaSyABXUPKAfAmvnz763QN5F2RUJCue_MyGvY",
+        "base_url": "",
+        "model": "gemini-2.5-flash"
     }
 }
