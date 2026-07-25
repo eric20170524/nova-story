@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Loader2, Video, BookOpen, Settings, X, Sliders, Bot, Zap, PlayCircle, Square } from 'lucide-react';
 import { Scene, AssetMode } from '../../types';
-import { VISUAL_STYLES } from '../../constants';
+import { formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { AgentAssistant } from '../AgentAssistant';
 
@@ -59,6 +59,17 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   onStopBatchGenerate
 }) => {
   const { t } = useLanguage();
+  const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
+
+  useEffect(() => {
+    const refresh = () => setVisualStyles(getVisualStyles());
+    window.addEventListener('novastory-advanced-styles-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('novastory-advanced-styles-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
 
   return (
     <>
@@ -143,7 +154,11 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                           value={selectedStyle}
                           onChange={(e) => setSelectedStyle(e.target.value)}
                         >
-                          {VISUAL_STYLES.map(s => <option key={s.value} value={s.value}>{t(`director.styles.${s.value}`) || s.label}</option>)}
+                          {visualStyles.map(s => (
+                            <option key={s.value} value={s.value}>
+                              {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
+                            </option>
+                          ))}
                         </select>
                      </div>
 

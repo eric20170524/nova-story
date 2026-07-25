@@ -1,8 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../LanguageContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
+import {
+  ADVANCED_VISUAL_STYLES,
+  isAdvancedStylesEnabled,
+  setAdvancedStylesEnabled,
+} from '../constants';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
@@ -20,6 +25,39 @@ export const SettingsPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [verifyingLLM, setVerifyingLLM] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [advancedEnabled, setAdvancedEnabled] = useState(() => isAdvancedStylesEnabled());
+  const secretClicksRef = useRef({ count: 0, lastAt: 0 });
+
+  /** Hidden area: 5 consecutive clicks (within 1.5s gaps) toggles advanced styles */
+  const handleSecretAreaClick = () => {
+    const now = Date.now();
+    if (now - secretClicksRef.current.lastAt > 1500) {
+      secretClicksRef.current.count = 0;
+    }
+    secretClicksRef.current.count += 1;
+    secretClicksRef.current.lastAt = now;
+
+    if (secretClicksRef.current.count >= 5) {
+      secretClicksRef.current.count = 0;
+      const next = !isAdvancedStylesEnabled();
+      setAdvancedStylesEnabled(next);
+      setAdvancedEnabled(next);
+      if (next && ADVANCED_VISUAL_STYLES.length === 0) {
+        setMessage({
+          type: 'error',
+          text: t('settings_page.advanced_styles_missing'),
+        });
+      } else {
+        setMessage({
+          type: 'success',
+          text: next
+            ? t('settings_page.advanced_styles_on')
+            : t('settings_page.advanced_styles_off'),
+        });
+      }
+      setTimeout(() => setMessage(null), 4000);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -488,6 +526,44 @@ export const SettingsPage: React.FC = () => {
                 {saving ? t('settings_page.saving') : t('settings_page.save')}
               </button>
             </div>
+
+            {/* Once unlocked, allow easy toggle off without re-discovering the secret */}
+            {advancedEnabled && (
+              <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3">
+                <div>
+                  <p className="text-sm text-slate-300">{t('settings_page.advanced_styles_title')}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{t('settings_page.advanced_styles_desc')}</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={advancedEnabled}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setAdvancedStylesEnabled(next);
+                      setAdvancedEnabled(next);
+                      setMessage({
+                        type: 'success',
+                        text: next
+                          ? t('settings_page.advanced_styles_on')
+                          : t('settings_page.advanced_styles_off'),
+                      });
+                      setTimeout(() => setMessage(null), 3000);
+                    }}
+                  />
+                  <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+              </div>
+            )}
+
+            {/* Hidden unlock: click this empty strip 5 times (no label by design) */}
+            <div
+              role="presentation"
+              onClick={handleSecretAreaClick}
+              className="mt-6 h-8 w-full select-none"
+              aria-hidden="true"
+            />
           </div>
         )}
       </div>

@@ -148,66 +148,232 @@ export const MOCK_TIMELINE = {
   ]
 };
 
+/**
+ * Recommended local image model for each visual style.
+ * - pony_xl: Pony Diffusion V6 XL — anime/illustration/character (workflow: pony_xl_12gb.json)
+ * - flux_dev_gguf: FLUX.1-dev GGUF — photoreal / complex scenes (workflow: flux_dev_gguf_12gb.json)
+ * - both: either works; prefer the first-listed strength in prompt design
+ *
+ * Style references: docs/风格参考/1/pixiv-favor.txt
+ * Model guidance: docs/Pony_XL与FLUX_Dev_GGUF生图风格对比.md
+ *
+ * Adult-leaning styles live in frontend/local/advanced_visual_styles.ts (gitignored).
+ * Unlock via Settings: click the hidden footer area 5 times.
+ */
+export type RecommendedImageModel = 'pony_xl' | 'flux_dev_gguf' | 'both';
+export type VisualStyleTier = 'standard' | 'advanced';
+
+export interface VisualStyleDef {
+  value: string;
+  label: string;
+  prompt: string;
+  negative_prompt: string;
+  recommended_model: RecommendedImageModel;
+  /** standard = always listed; advanced = adult-leaning, hidden until unlocked */
+  tier?: VisualStyleTier;
+}
+
+export const IMAGE_MODEL_LABELS: Record<RecommendedImageModel, string> = {
+  pony_xl: 'Pony XL',
+  flux_dev_gguf: 'FLUX.1-dev GGUF',
+  both: 'Pony XL / FLUX.1-dev GGUF',
+};
+
+export const IMAGE_MODEL_WORKFLOWS: Record<Exclude<RecommendedImageModel, 'both'>, string> = {
+  pony_xl: 'pony_xl_12gb.json',
+  flux_dev_gguf: 'flux_dev_gguf_12gb.json',
+};
+
+/** localStorage key for advanced (adult-leaning) style visibility */
+export const ADVANCED_STYLES_STORAGE_KEY = 'novastory_advanced_styles';
+
 // Optimized Styles: Decoupled from specific objects where possible, focused on art technique and lighting
-export const VISUAL_STYLES = [
-  { 
-    value: 'anime', 
-    label: 'Anime (动漫/漫画)', 
-    prompt: '2D anime style, flat shading, cel shaded, vibrant colors, clean lines, highly detailed, makoto shinkai aesthetic',
-    negative_prompt: '3d, photorealistic, realistic, textured skin, messy lines, sketch, monochrome'
+export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
+  {
+    value: 'anime',
+    label: 'Anime (动漫/漫画)',
+    prompt: '2D anime style, flat shading, cel shaded, vibrant colors, clean lines, highly detailed, makoto shinkai aesthetic, score_9, source_anime',
+    negative_prompt: '3d, photorealistic, realistic, textured skin, messy lines, sketch, monochrome',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
   },
-  { 
-    value: 'ancient_fantasy', 
-    label: 'Gu Feng Fantasy (古风幻想)', 
-    prompt: 'ancient Chinese xianxia fantasy illustration, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk and armor textures, atmospheric depth, intricate traditional patterns',
-    negative_prompt: 'modern city, concrete buildings, cars, contemporary clothing, firearms, neon urban signage, low quality, blurry, bad anatomy, malformed hands, duplicate characters'
+  {
+    value: 'ancient_fantasy',
+    label: 'Gu Feng Fantasy (古风幻想)',
+    prompt: 'ancient Chinese xianxia fantasy illustration, guofeng national style beauty, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk textures, atmospheric depth, intricate traditional patterns, semi-realistic digital rendering',
+    negative_prompt: 'modern city, concrete buildings, cars, contemporary clothing, firearms, neon urban signage, low quality, blurry, bad anatomy, malformed hands, duplicate characters',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
   },
-  { 
-    value: 'chibi', 
-    label: 'Cute/Chibi (可爱/Q版)', 
+  {
+    value: 'xianxia_immortal',
+    label: 'Xianxia Immortal (仙侠清冷)',
+    prompt: 'xianxia immortal aesthetic, cool ethereal fairy elegance, restrained color palette with jade and mist tones, soft volumetric godrays, translucent sheer fabric lighting, refined facial features, long flowing hair, quiet mysterious mood, polished semi-realistic digital illustration',
+    negative_prompt: 'neon cyberpunk, modern streetwear, pure chibi, crude sketch, flat cel only, photoreal camera noise, low quality, blurry, bad anatomy',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
+    value: 'guoman_painterly',
+    label: 'Guoman Painterly (国漫厚涂)',
+    prompt: 'chinese manhua thick painterly style, rich oil-like digital brushwork, strong rim light and atmospheric haze, detailed costume folds, high contrast dramatic lighting, national comic illustration finish, elegant character-focused composition',
+    negative_prompt: 'western comic halftone, pure lineart only, chibi proportions, photoreal DSLR look, low quality, blurry, messy anatomy',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
+    value: 'ethereal_glow',
+    label: 'Ethereal Glow (光晕仙气)',
+    prompt: 'ethereal bloom and soft glow illustration, luminous skin highlights, delicate light particles, dreamy backlighting, gentle color bloom, fairy-like radiance, smooth digital polish, romantic atmospheric haze, high clarity beauty portrait finish',
+    negative_prompt: 'harsh gritty texture, pure ink monochrome, dark brutalist industrial, muddy colors, low quality, blurry, overexposed white void',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
+    value: 'aesthetic_romance',
+    label: 'Aesthetic Romance (唯美氛围)',
+    prompt: 'aesthetic romantic illustration, soft cinematic color grading, poetic atmosphere, elegant portrait composition, gentle depth of field, refined fabric and hair detail, warm-cool contrast mood lighting, polished digital beauty art',
+    negative_prompt: 'gritty documentary, crude meme style, flat clipart, noisy compression, low quality, blurry, bad anatomy',
+    recommended_model: 'both',
+    tier: 'standard',
+  },
+  {
+    value: 'game_illustration',
+    label: 'Game Illustration (游戏立绘)',
+    prompt: 'premium game character illustration, splash-art quality, sharp costume silhouette, vivid material contrast, dynamic yet readable pose, polished anime-semireal hybrid shading, detailed accessories, cinematic character spotlight, commercial key visual finish',
+    negative_prompt: 'rough sketch, unfinished lineart, pure photoreal photo, muddy silhouette, low quality, blurry, bad anatomy',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
+    value: 'chibi',
+    label: 'Cute/Chibi (可爱/Q版)',
     prompt: 'chibi style, super deformed, big head small body, kawaii, soft pastel colors, simple shapes, soft lighting, 3d render style optional',
-    negative_prompt: 'realistic proportions, gritty, scary, dark, complex textures, sharp edges, adult features'
+    negative_prompt: 'realistic proportions, gritty, scary, dark, complex textures, sharp edges, adult features',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
   },
-  { 
-    value: 'semi_realistic', 
-    label: 'Semi-Realistic (半写实)', 
+  {
+    value: 'semi_realistic',
+    label: 'Semi-Realistic (半写实)',
     prompt: 'semi-realistic digital painting, smooth painterly style, soft blending, cinematic lighting, subsurface scattering, detailed eyes, riot games splash art style',
-    negative_prompt: 'anime, cel shaded, flat colors, cartoon, low resolution, blurry, pixelated'
+    negative_prompt: 'anime, cel shaded, flat colors, cartoon, low resolution, blurry, pixelated',
+    recommended_model: 'both',
+    tier: 'standard',
   },
-  { 
-    value: 'cyberpunk', 
-    label: 'Cyberpunk (赛博朋克)', 
+  {
+    value: 'cyberpunk',
+    label: 'Cyberpunk (赛博朋克)',
     prompt: 'neon noir aesthetics, high contrast, chromatic aberration, bioluminescent lighting, wet surface reflections, futuristic texture, cinematic teal and orange',
-    negative_prompt: 'daytime, natural light, rustic, wooden textures, nature, sunshine, vintage, beige colors'
+    negative_prompt: 'daytime, natural light, rustic, wooden textures, nature, sunshine, vintage, beige colors',
+    recommended_model: 'both',
+    tier: 'standard',
   },
-  { 
-    value: 'ink_wash', 
-    label: 'Ink Wash (水墨/传统墨绘)', 
+  {
+    value: 'ink_wash',
+    label: 'Ink Wash (水墨/传统墨绘)',
     prompt: 'traditional ink wash painting, sumi-e style, black and white with subtle color accents, visible brushstrokes, rice paper texture, negative space composition',
-    negative_prompt: 'digital art, 3d, photorealistic, vibrant colors, sharp edges, modern, glossy'
+    negative_prompt: 'digital art, 3d, photorealistic, vibrant colors, sharp edges, modern, glossy',
+    recommended_model: 'flux_dev_gguf',
+    tier: 'standard',
   },
-  { 
-    value: 'surreal', 
-    label: 'Surreal/Dreamlike (超现实/梦幻)', 
+  {
+    value: 'surreal',
+    label: 'Surreal/Dreamlike (超现实/梦幻)',
     prompt: 'dreamlike atmosphere, soft focus, ethereal glow, impossible geometry, pastel color grading, fantasy concept art, magical realism',
-    negative_prompt: 'realistic, mundane, ordinary, sharp focus, gritty, documentary style'
+    negative_prompt: 'realistic, mundane, ordinary, sharp focus, gritty, documentary style',
+    recommended_model: 'flux_dev_gguf',
+    tier: 'standard',
   },
-  { 
-    value: 'ai_generated', 
-    label: 'AI Generated (AI生成风格)', 
+  {
+    value: 'ai_generated',
+    label: 'AI Generated (AI生成风格)',
     prompt: 'highly polished, intricate details, perfect composition, trending on artstation, unreal engine 5 render, volumetric lighting, 8k',
-    negative_prompt: 'low quality, artifacts, blurry, jpeg artifacts, bad composition'
+    negative_prompt: 'low quality, artifacts, blurry, jpeg artifacts, bad composition',
+    recommended_model: 'flux_dev_gguf',
+    tier: 'standard',
   },
-  { 
-    value: 'sketch', 
-    label: 'Hand-Drawn (手绘/草图)', 
+  {
+    value: 'sketch',
+    label: 'Hand-Drawn (手绘/草图)',
     prompt: 'rough pencil sketch, graphite texture, cross-hatching shading, paper grain, monochrome, artistic, loose lines',
-    negative_prompt: 'color, photorealistic, 3d, digital painting, smooth, polished, gradient'
+    negative_prompt: 'color, photorealistic, 3d, digital painting, smooth, polished, gradient',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
   },
-  { 
-    value: 'mecha', 
-    label: 'Mecha (机甲/机器人)', 
+  {
+    value: 'mecha',
+    label: 'Mecha (机甲/机器人)',
     prompt: 'hard surface modeling, metallic textures, scifi paneling, industrial design, dramatic rim lighting, lens flare, cold color palette',
-    negative_prompt: 'organic, soft textures, skin, nature, fantasy, magic, rustic'
-  }
+    negative_prompt: 'organic, soft textures, skin, nature, fantasy, magic, rustic',
+    recommended_model: 'both',
+    tier: 'standard',
+  },
+  {
+    value: 'cinematic_photo',
+    label: 'Cinematic Photo (电影写实)',
+    prompt: 'cinematic photorealistic still, natural skin texture, realistic lens bokeh, physically based lighting, film color grade, shallow depth of field, detailed environment interaction, shot on 50mm lens look',
+    negative_prompt: 'anime, cel shaded, cartoon, chibi, flat illustration, oversaturated comic colors, low quality, blurry',
+    recommended_model: 'flux_dev_gguf',
+    tier: 'standard',
+  },
 ];
+
+/**
+ * Optional local advanced styles (gitignored file).
+ * Copy from advanced_visual_styles.example.ts if missing.
+ */
+const advancedStyleModules = import.meta.glob<{ ADVANCED_VISUAL_STYLES?: VisualStyleDef[] }>(
+  './local/advanced_visual_styles.ts',
+  { eager: true }
+);
+
+export const ADVANCED_VISUAL_STYLES: VisualStyleDef[] = Object.values(advancedStyleModules)
+  .flatMap((mod) => mod?.ADVANCED_VISUAL_STYLES ?? [])
+  .map((s) => ({ ...s, tier: 'advanced' as const }));
+
+/** Standard styles only (always safe to list). Prefer getVisualStyles() in UI. */
+export const VISUAL_STYLES = STANDARD_VISUAL_STYLES;
+
+export function isAdvancedStylesEnabled(): boolean {
+  try {
+    return localStorage.getItem(ADVANCED_STYLES_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setAdvancedStylesEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(ADVANCED_STYLES_STORAGE_KEY, enabled ? '1' : '0');
+    window.dispatchEvent(new CustomEvent('novastory-advanced-styles-changed', { detail: { enabled } }));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Visible styles for dropdowns: standard always; advanced only when unlocked */
+export function getVisualStyles(includeAdvanced: boolean = isAdvancedStylesEnabled()): VisualStyleDef[] {
+  if (includeAdvanced && ADVANCED_VISUAL_STYLES.length > 0) {
+    return [...STANDARD_VISUAL_STYLES, ...ADVANCED_VISUAL_STYLES];
+  }
+  return STANDARD_VISUAL_STYLES;
+}
+
+export function findVisualStyle(value: string): VisualStyleDef | undefined {
+  return (
+    getVisualStyles(true).find((s) => s.value === value) ??
+    STANDARD_VISUAL_STYLES.find((s) => s.value === value)
+  );
+}
+
+/** Format style option label with recommended local model tag */
+export function formatVisualStyleLabel(
+  style: Pick<VisualStyleDef, 'label' | 'recommended_model' | 'tier'>,
+  translatedLabel?: string
+): string {
+  const name = translatedLabel || style.label;
+  const model = IMAGE_MODEL_LABELS[style.recommended_model];
+  const advancedTag = style.tier === 'advanced' ? ' · ★' : '';
+  return `${name} · ${model}${advancedTag}`;
+}

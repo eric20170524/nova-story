@@ -16,6 +16,13 @@
 | 场景构图 | 单人或双人角色图较强，复杂环境一般 | 复杂空间、物体关系、镜头语言更好 |
 | 速度与资源 | 通常更快、更容易运行 | 通常更慢，内存与显存压力更大 |
 
+本地 ComfyUI 工作流对应：
+
+| 模型 | Workflow 文件 |
+| --- | --- |
+| Pony XL | `pony_xl_12gb.json` |
+| FLUX.1-dev GGUF | `flux_dev_gguf_12gb.json` |
+
 ## Pony XL 擅长的题材与风格
 
 Pony XL 通常指 Pony Diffusion V6 XL 或其衍生模型，主要强项包括：
@@ -78,6 +85,54 @@ GGUF 主要是一种量化格式，并不代表一种新的画风。常见的 FL
 
 模型文件大小并不等于实际峰值显存占用。文本编码器、VAE、运行缓存、出图分辨率和批次大小也会占用内存或显存，因此 12GB 显卡运行时仍可能需要使用分层加载或内存卸载。
 
+## NovaStory 内置画风与模型推荐
+
+基于 `docs/风格参考/1/pixiv-favor.txt` 画师收藏（太极八荒、好就是大、星海一条鱼、五岳、XXAO、Kurumi Tokisaki、wind 等）提炼的视觉技法，与前端 `VISUAL_STYLES` 对齐。提示词侧重**光影 / 笔触 / 材质 / 氛围**，尽量与具体物体解耦。
+
+### 标准风格（默认展示）
+
+| value | 名称 | 推荐模型 | 画风要点 | 参考倾向 |
+| --- | --- | --- | --- | --- |
+| `anime` | 日系动漫 | **Pony XL** | 赛璐璐、干净线稿、鲜艳配色 | 通用日系插画 |
+| `ancient_fantasy` | 古风幻想 | **Pony XL** | 国风仙侠、半写实渲染、体积光 | 太极八荒：国漫 / 古风美人 |
+| `xianxia_immortal` | 仙侠清冷 | **Pony XL** | 清冷玉色、薄纱透光、仙气氛围 | 好就是大：清冷仙子 / 修仙 |
+| `guoman_painterly` | 国漫厚涂 | **Pony XL** | 厚涂笔触、强轮廓光、国漫完成度 | 太极八荒类国漫厚涂 |
+| `ethereal_glow` | 光晕仙气 | **Pony XL** | bloom、逆光颗粒、柔光肖像 | 星海一条鱼：pixivGlow 仙气 |
+| `aesthetic_romance` | 唯美氛围 | **Pony XL / FLUX** | 诗意色调、浅景深、精致肖像 | 五岳：唯美 / 国风氛围 |
+| `game_illustration` | 游戏立绘 | **Pony XL** | 商业 splash art、清晰剪影、材质对比 | 原神 / 崩铁类角色立绘 |
+| `chibi` | 可爱/Q版 | **Pony XL** | 大头小身、柔和色块 | 萌系 Q 版 |
+| `semi_realistic` | 半写实 | **Pony XL / FLUX** | 厚涂融合、SSS、电影光 | 通用半写实 |
+| `cyberpunk` | 赛博朋克 | **Pony XL / FLUX** | 霓虹、湿反射、高对比 | 未来都市氛围 |
+| `ink_wash` | 水墨/墨绘 | **FLUX.1-dev GGUF** | 笔触、留白、宣纸质感 | 传统水墨意境 |
+| `surreal` | 超现实/梦幻 | **FLUX.1-dev GGUF** | 不可能几何、柔焦、象征构图 | 梦幻概念图 |
+| `ai_generated` | AI 抛光感 | **FLUX.1-dev GGUF** | 极致细节、体积光、完美构图 | 通用 AI 商业感 |
+| `sketch` | 手绘/草图 | **Pony XL** | 铅笔线、剖面线、纸纹 | 速写 / 概念线稿 |
+| `mecha` | 机甲 | **Pony XL / FLUX** | 硬表面、金属、轮廓光 | 机甲概念 |
+| `cinematic_photo` | 电影写实 | **FLUX.1-dev GGUF** | 真实皮肤、镜头景深、胶片调色 | 电影剧照 / 实拍感 |
+
+### 高级风格（偏成人，默认隐藏）
+
+偏成人向风格归类为 **advanced**，默认不在导演模式 / 项目设置中展示。需在**系统设置**隐藏区域连续点击 5 次开启。定义存放在本地文件：
+
+- 本地文件（不入 git）：`frontend/local/advanced_visual_styles.ts`
+- 模板（可提交）：`frontend/local/advanced_visual_styles.example.ts`
+
+| value | 名称 | 推荐模型 | 画风要点 | 参考倾向 |
+| --- | --- | --- | --- | --- |
+| `elegant_mature` | 御姐半写实 | **Pony XL** | 成熟比例、精致半写实面容、电影主光 | XXAO / 好就是大：御姐 / 熟女气质肖像 |
+| `sensual_gufeng` | 魅惑古风 | **Pony XL** | 国风薄纱光影、暧昧轮廓光、华丽服饰质感 | 太极八荒 / 好就是大：古风魅惑 |
+| `alluring_portrait` | 魅惑肖像 | **Pony XL** | 近景肖像、皮肤高光、柔焦背景、高级时装感 | 收藏向角色美型 / 魅惑构图 |
+
+> 高级风格仍遵循「技法解耦」原则：描述渲染与光影，不把具体 NSFW 物体写进默认 style prompt。
+
+### 模型选择速查
+
+- **优先 Pony XL**：日系动漫、古风/仙侠角色、国漫厚涂、游戏立绘、Q 版、角色姿势与服装属性强的镜头
+- **优先 FLUX.1-dev GGUF**：电影写实、复杂场景空间、产品/建筑、长自然语言描述、水墨意境与超现实构图
+- **两者皆可**：唯美氛围、半写实、赛博朋克、机甲（角色偏 Pony，场景偏 FLUX）
+- **半写实美女 / 游戏角色**：优质 Pony 衍生通常更省资源，风格更稳
+- **动漫 + 复杂构图**：可考虑 FLUX + 动漫 LoRA
+
 ## 选择建议
 
 - 动漫角色、同人立绘、兽人和强姿势控制：优先选择 **Pony XL**
@@ -90,3 +145,5 @@ GGUF 主要是一种量化格式，并不代表一种新的画风。常见的 FL
 - [FLUX.1-dev 官方模型卡](https://huggingface.co/black-forest-labs/FLUX.1-dev)
 - [FLUX.1-dev GGUF 模型卡](https://huggingface.co/city96/FLUX.1-dev-gguf)
 - [Pony Diffusion V6 XL 文件与提示词示例](https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL/blob/main/ponyDiffusionV6XL_v6StartWithThisOne.safetensors)
+- 风格参考：`docs/风格参考/1/pixiv-favor.txt`、`docs/风格参考/1/古风幻想.txt`
+- 前端常量：`frontend/constants.ts`、`frontend/local/advanced_visual_styles.ts`（本地）

@@ -23,3 +23,7 @@
 **/__pycache__/
 *.pyc
 backend/static/generated
+*.txt
+frontend/local/
+scripts
+*.bak

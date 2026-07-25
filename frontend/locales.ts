@@ -147,6 +147,14 @@ export const translations = {
       styles: {
         anime: "Anime",
         ancient_fantasy: "Gu Feng Fantasy",
+        xianxia_immortal: "Xianxia Immortal",
+        guoman_painterly: "Guoman Painterly",
+        ethereal_glow: "Ethereal Glow",
+        aesthetic_romance: "Aesthetic Romance",
+        elegant_mature: "Elegant Mature",
+        sensual_gufeng: "Sensual Gu Feng",
+        alluring_portrait: "Alluring Portrait",
+        game_illustration: "Game Illustration",
         chibi: "Cute/Chibi",
         semi_realistic: "Semi-Realistic",
         cyberpunk: "Cyberpunk",
@@ -155,6 +163,7 @@ export const translations = {
         ai_generated: "AI Generated",
         sketch: "Hand-Drawn",
         mecha: "Mecha",
+        cinematic_photo: "Cinematic Photo",
       }
     },
     workflow: {
@@ -208,6 +217,11 @@ export const translations = {
       llm_verify_success: "LLM Connection Verified Successfully!",
       llm_verify_failed: "LLM Connection Failed",
       ollama_preset_btn: "Quick Preset: Local Ollama (qwen3.5:9b)",
+      advanced_styles_title: "Advanced visual styles",
+      advanced_styles_desc: "Adult-leaning style presets (local file only). Toggle off to hide them from style lists.",
+      advanced_styles_on: "Advanced styles enabled.",
+      advanced_styles_off: "Advanced styles disabled.",
+      advanced_styles_missing: "Advanced styles enabled, but local file is missing. Copy frontend/local/advanced_visual_styles.example.ts → advanced_visual_styles.ts",
     },
     roles: {
       protagonist: "Protagonist",
@@ -375,6 +389,14 @@ export const translations = {
       styles: {
         anime: "日系动漫 (Anime)",
         ancient_fantasy: "古风幻想 (Gu Feng Fantasy)",
+        xianxia_immortal: "仙侠清冷 (Xianxia Immortal)",
+        guoman_painterly: "国漫厚涂 (Guoman Painterly)",
+        ethereal_glow: "光晕仙气 (Ethereal Glow)",
+        aesthetic_romance: "唯美氛围 (Aesthetic Romance)",
+        elegant_mature: "御姐半写实 (Elegant Mature)",
+        sensual_gufeng: "魅惑古风 (Sensual Gu Feng)",
+        alluring_portrait: "魅惑肖像 (Alluring Portrait)",
+        game_illustration: "游戏立绘 (Game Illustration)",
         chibi: "可爱/Q版 (Cute/Chibi)",
         semi_realistic: "半写实 (Semi-Realistic)",
         cyberpunk: "赛博朋克 (Cyberpunk)",
@@ -383,6 +405,7 @@ export const translations = {
         ai_generated: "AI生成风格 (AI Generated)",
         sketch: "手绘/草图 (Hand-Drawn)",
         mecha: "机甲/机器人 (Mecha)",
+        cinematic_photo: "电影写实 (Cinematic Photo)",
       }
     },
     workflow: {
@@ -433,6 +456,12 @@ export const translations = {
       llm_baseurl_label: "Base URL（可选，用于自定义/OpenAI 兼容接口）",
       llm_model_label: "模型名称",
       llm_verify_btn: "测试连通性",
+      advanced_styles_title: "高级视觉风格",
+      advanced_styles_desc: "偏成人向风格预设（仅本地文件）。关闭后从风格列表中隐藏。",
+      advanced_styles_on: "已开启高级风格。",
+      advanced_styles_off: "已关闭高级风格。",
+      advanced_styles_missing: "已开启高级风格，但本地文件缺失。请将 frontend/local/advanced_visual_styles.example.ts 复制为 advanced_visual_styles.ts",
+
       llm_verify_success: "LLM 服务连通性测试成功！",
       llm_verify_failed: "LLM 服务连通性测试失败",
       ollama_preset_btn: "一键对接本机 Ollama (qwen3.5:9b)",

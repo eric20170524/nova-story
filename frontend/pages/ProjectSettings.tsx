@@ -5,7 +5,12 @@ import { api } from '../services/api';
 import { Project } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
-import { VISUAL_STYLES } from '../constants';
+import {
+  formatVisualStyleLabel,
+  getVisualStyles,
+  STANDARD_VISUAL_STYLES,
+  type VisualStyleDef,
+} from '../constants';
 
 export const ProjectSettings: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -16,15 +21,30 @@ export const ProjectSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
   
   // Form State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [defaultStyle, setDefaultStyle] = useState(VISUAL_STYLES[0].value);
+  const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
 
   useEffect(() => {
     if (id) loadProject();
   }, [id]);
+
+  useEffect(() => {
+    const refresh = () => {
+      const styles = getVisualStyles();
+      setVisualStyles(styles);
+      setDefaultStyle((prev) => (styles.some((s) => s.value === prev) ? prev : STANDARD_VISUAL_STYLES[0].value));
+    };
+    window.addEventListener('novastory-advanced-styles-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('novastory-advanced-styles-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
 
   const loadProject = async () => {
     try {
@@ -154,8 +174,10 @@ export const ProjectSettings: React.FC = () => {
                         value={defaultStyle}
                         onChange={(e) => setDefaultStyle(e.target.value)}
                     >
-                        {VISUAL_STYLES.map(s => (
-                            <option key={s.value} value={s.value}>{t(`director.styles.${s.value}`) || s.label}</option>
+                        {visualStyles.map(s => (
+                            <option key={s.value} value={s.value}>
+                                {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
+                            </option>
                         ))}
                     </select>
                 </div>

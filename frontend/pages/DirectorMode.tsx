@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { Chapter, Scene, Workflow, StreamMessage, AssetMode } from '../types';
-import { API_BASE_URL, VISUAL_STYLES } from '../constants';
+import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { ComicViewer } from '../components/ComicViewer';
@@ -22,7 +22,10 @@ export const DirectorMode: React.FC = () => {
   
   // Style Settings
   const [selectedStyle, setSelectedStyle] = useState<string>(() => {
-    return localStorage.getItem('director_selectedStyle') || VISUAL_STYLES[0].value;
+    const saved = localStorage.getItem('director_selectedStyle');
+    const styles = getVisualStyles();
+    if (saved && styles.some((s) => s.value === saved)) return saved;
+    return STANDARD_VISUAL_STYLES[0].value;
   });
   const [styleStrength, setStyleStrength] = useState<number>(1.0); // 0.1 to 2.0
   
@@ -54,6 +57,22 @@ export const DirectorMode: React.FC = () => {
   // Persist settings
   useEffect(() => {
     localStorage.setItem('director_selectedStyle', selectedStyle);
+  }, [selectedStyle]);
+
+  // Drop advanced style selection if advanced styles are disabled
+  useEffect(() => {
+    const refresh = () => {
+      const styles = getVisualStyles();
+      if (!styles.some((s) => s.value === selectedStyle)) {
+        setSelectedStyle(STANDARD_VISUAL_STYLES[0].value);
+      }
+    };
+    window.addEventListener('novastory-advanced-styles-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('novastory-advanced-styles-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
   }, [selectedStyle]);
 
   useEffect(() => {
@@ -163,7 +182,7 @@ export const DirectorMode: React.FC = () => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
 
-    const styleObj = VISUAL_STYLES.find(s => s.value === selectedStyle);
+    const styleObj = findVisualStyle(selectedStyle);
     const stylePromptRaw = styleObj ? styleObj.prompt : '';
     const globalNegative = styleObj && styleObj.negative_prompt ? styleObj.negative_prompt : '';
     
