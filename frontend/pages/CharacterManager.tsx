@@ -34,6 +34,8 @@ export const CharacterManager: React.FC = () => {
   const [negativePrompt, setNegativePrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
+  const [useRefPortrait, setUseRefPortrait] = useState<boolean>(true);
+  const [refImageUrl, setRefImageUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (projectId) loadCharacters();
@@ -116,25 +118,49 @@ export const CharacterManager: React.FC = () => {
     const mType = char.model_type || 'pony';
     setModelType(mType);
 
+    const availableRef = char.avatar_url || char.turnaround_url || null;
+    const initialUseRef = !!availableRef;
+    setUseRefPortrait(initialUseRef);
+    setRefImageUrl(availableRef);
+
     // Flow sequence: Default to 'portrait' if no image exists yet, otherwise 'turnaround'
     const initialGenType = overrideGenType || ((!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround');
     setGenType(initialGenType);
     setGeneratedImageUrl(null);
 
     try {
-      const res = await api.buildCharacterPrompt(char.id, mType, initialGenType, char.description);
+      const res = await api.buildCharacterPrompt(
+        char.id, 
+        mType, 
+        initialGenType, 
+        char.description,
+        initialUseRef,
+        availableRef || undefined
+      );
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
-      setPrompt(`score_9, score_8_up, character sheet, turnaround, multi-view, full body, ${char.description || ''}`);
+      setPrompt(`score_9, score_8_up, character turnaround sheet, multi-view layout, full body, front view, side view, back view, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
     }
   };
 
-  const handleRebuildPrompt = async (selectedModel: 'pony' | 'flux', selectedGen: 'turnaround' | 'portrait') => {
+  const handleRebuildPrompt = async (
+    selectedModel: 'pony' | 'flux', 
+    selectedGen: 'turnaround' | 'portrait',
+    withRef: boolean = useRefPortrait,
+    refUrl: string | null = refImageUrl
+  ) => {
     if (!sheetModalChar) return;
     try {
-      const res = await api.buildCharacterPrompt(sheetModalChar.id, selectedModel, selectedGen, sheetModalChar.description);
+      const res = await api.buildCharacterPrompt(
+        sheetModalChar.id, 
+        selectedModel, 
+        selectedGen, 
+        sheetModalChar.description,
+        withRef,
+        refUrl || undefined
+      );
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
@@ -149,12 +175,18 @@ export const CharacterManager: React.FC = () => {
 
     try {
       // Trigger generation via asset API
-      const payload = {
+      const payload: any = {
         prompt: prompt,
         negative_prompt: negativePrompt,
         model_type: modelType,
-        mode: 'standard'
+        mode: 'standard',
+        gen_type: genType
       };
+
+      if (useRefPortrait && refImageUrl) {
+        payload.ref_image_url = refImageUrl;
+      }
+
       const res = await api.generateAsset(payload, 999990 + sheetModalChar.id);
       const taskId = res.task_id;
 
@@ -712,6 +744,113 @@ export const CharacterManager: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Reference Portrait Card Section */}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <User size={16} className="text-emerald-400" />
+                    <span className="text-xs uppercase font-semibold tracking-wider text-slate-300">
+                      {t('characters.ref_portrait_section')}
+                    </span>
+                  </div>
+                  {refImageUrl && (
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={useRefPortrait}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setUseRefPortrait(checked);
+                          handleRebuildPrompt(modelType, genType, checked, refImageUrl);
+                        }}
+                        className="w-4 h-4 rounded text-emerald-600 bg-slate-900 border-slate-700 focus:ring-emerald-500"
+                      />
+                      <span className="text-xs text-slate-300 font-medium">{t('characters.use_ref_portrait')}</span>
+                    </label>
+                  )}
+                </div>
+
+                {refImageUrl ? (
+                  <div className="flex items-center gap-4 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                    <img
+                      src={formatImageUrl(refImageUrl)}
+                      alt="Reference Portrait"
+                      className="w-16 h-16 rounded-lg object-cover border border-emerald-500/50 shadow"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-emerald-400 mb-0.5">
+                        {useRefPortrait ? t('characters.ref_portrait_active') : "未勾选参考图（仅凭提示词生成）"}
+                      </p>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {sheetModalChar.name} - 正面立绘基准特征（可全角度比对正面、侧面、背面）
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded-lg text-xs text-amber-300 flex items-center justify-between">
+                    <span>{t('characters.no_ref_portrait')}</span>
+                    <label className="cursor-pointer bg-amber-900/40 hover:bg-amber-800/60 text-amber-200 px-2.5 py-1 rounded text-[11px] font-medium border border-amber-700/50 flex items-center gap-1 transition-all">
+                      <Upload size={12} /> 上传立绘
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file && sheetModalChar) {
+                            try {
+                              const updated = await api.uploadCharacterAsset(sheetModalChar.id, 'avatar', file);
+                              setRefImageUrl(updated.avatar_url);
+                              setUseRefPortrait(true);
+                              setCharacters(prev => prev.map(c => c.id === sheetModalChar.id ? updated : c));
+                              showToast("参考立绘上传成功！", 'success');
+                              handleRebuildPrompt(modelType, genType, true, updated.avatar_url);
+                            } catch(err) {
+                              showToast("上传立绘失败", 'error');
+                            }
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Turnaround Layout Tags */}
+              {genType === 'turnaround' && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-semibold text-slate-400 mr-1">{t('characters.quick_tags_label')}:</span>
+                  <button
+                    type="button"
+                    onClick={() => setPrompt(p => p ? `${p}, front view, side view, back view` : 'front view, side view, back view')}
+                    className="px-2 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/50 rounded text-[11px] font-mono transition-all"
+                  >
+                    +正面/侧面/背面全角度
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrompt(p => p ? `${p}, full body model sheet, 3 views turnaround sheet` : 'full body model sheet, 3 views turnaround sheet')}
+                    className="px-2 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/50 rounded text-[11px] font-mono transition-all"
+                  >
+                    +等高排版角色三视图
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrompt(p => p ? `${p}, solid white background, clean simple background` : 'solid white background, clean simple background')}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-[11px] font-mono transition-all"
+                  >
+                    +纯白 Studio 背景
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrompt(p => p ? `${p}, consistent character design across all views` : 'consistent character design across all views')}
+                    className="px-2 py-1 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/50 rounded text-[11px] font-mono transition-all"
+                  >
+                    +保持服饰发型一致
+                  </button>
+                </div>
+              )}
 
               {/* Prompt Box */}
               <div>

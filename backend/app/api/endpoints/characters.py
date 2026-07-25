@@ -257,6 +257,8 @@ class TurnaroundPromptRequest(BaseModel):
     model_type: str = "pony"  # "pony" or "flux"
     gen_type: str = "turnaround"  # "turnaround" or "portrait"
     custom_description: Optional[str] = None
+    use_ref_portrait: Optional[bool] = True
+    ref_image_url: Optional[str] = None
 
 @router.post("/{character_id}/build-prompt")
 def build_character_prompt(
@@ -276,22 +278,32 @@ def build_character_prompt(
 
     combined_desc = f"{desc}, {tag_str}".strip(", ")
     
+    # Check reference image
+    assets = tags.get("assets", {}) if isinstance(tags.get("assets"), dict) else {}
+    ref_url = req.ref_image_url or assets.get("avatar_url") or tags.get("avatar_url") or db_character.avatar_url
+    
     # Smart Gender Detection
     check_str = (desc + " " + tag_str + " " + (db_character.name or "")).lower()
     is_male = any(kw in check_str for kw in ["male", "boy", "man", "1boy", "男", "少年", "青年", "公子", "老者", "男子", "皇帝", "国王"])
     gender_tag = "1boy, solo, male" if is_male else "1girl, solo, female"
 
+    ref_hint_pony = ""
+    ref_hint_flux = ""
+    if req.use_ref_portrait and ref_url:
+        ref_hint_pony = ", (matching reference character design:1.2), consistent facial features, same outfit and hair across all views"
+        ref_hint_flux = ", (consistent character appearance matching reference portrait:1.2), same costume and facial features across all 3 angles"
+
     if req.model_type.lower() == "pony":
         if req.gen_type == "turnaround":
-            prompt = f"score_9, score_8_up, score_7_up, character sheet, turnaround, multi-view, full body, front view, side view, back view, {gender_tag}, simple background, white background, {combined_desc}"
-            negative_prompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs"
+            prompt = f"score_9, score_8_up, score_7_up, character turnaround sheet, full body model sheet, multi-view layout, front view, side view, back view, 3 views, aligned character turnaround, consistent character design, {gender_tag}, simple background, solid white background, {combined_desc}{ref_hint_pony}"
+            negative_prompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face"
         else:  # portrait
             prompt = f"score_9, score_8_up, score_7_up, portrait, upper body, front view, {gender_tag}, simple background, white background, masterpiece, detailed face and eyes, {combined_desc}"
             negative_prompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, distorted face"
     else:  # FLUX
         if req.gen_type == "turnaround":
-            prompt = f"character concept sheet, turn-around, split view, front view, side view, back view, full body, {gender_tag}, clean white background, master quality, {combined_desc}"
-            negative_prompt = "low quality, distorted face, bad anatomy, extra limbs, cluttered background"
+            prompt = f"full body character turnaround sheet, split view layout, front view, side view, back view, complete 3-view character model sheet, character reference sheet, consistent character design from all angles, clean studio white background, masterpiece quality, {gender_tag}, {combined_desc}{ref_hint_flux}"
+            negative_prompt = "low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume"
         else:  # portrait
             prompt = f"high quality character portrait, front view, {gender_tag}, detailed face and eyes, clean studio background, {combined_desc}"
             negative_prompt = "low quality, blurry, bad anatomy, distorted face"
@@ -300,7 +312,8 @@ def build_character_prompt(
         "prompt": prompt,
         "negative_prompt": negative_prompt,
         "model_type": req.model_type,
-        "gen_type": req.gen_type
+        "gen_type": req.gen_type,
+        "ref_image_url": ref_url if req.use_ref_portrait else None
     }
 
 

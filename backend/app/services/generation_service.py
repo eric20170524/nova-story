@@ -80,9 +80,25 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                      # Workflow Template Mapping
                      logger.info(f"[Task {task_id}] Processing workflow payload for ComfyUI.")
                      
-                     # 1. Extract prompt details from frontend payload
+                     # 1. Extract prompt & reference image details from frontend payload
                      prompt = workflow_data.get("prompt", "") if isinstance(workflow_data, dict) else workflow_data
                      negative_prompt = workflow_data.get("negative_prompt", "") if isinstance(workflow_data, dict) else ""
+                     ref_image_url = workflow_data.get("ref_image_url") or workflow_data.get("init_image_url") if isinstance(workflow_data, dict) else None
+
+                     if ref_image_url:
+                         logger.info(f"[Task {task_id}] Using reference image: {ref_image_url}")
+                         # Copy reference image to ComfyUI input folder if local file
+                         filename = os.path.basename(ref_image_url)
+                         src_path = os.path.join(static_dir, filename)
+                         comfy_input_dir = r"D:\ComfyUI\input"
+                         if os.path.exists(src_path):
+                             try:
+                                 os.makedirs(comfy_input_dir, exist_ok=True)
+                                 import shutil
+                                 shutil.copy2(src_path, os.path.join(comfy_input_dir, filename))
+                                 logger.info(f"[Task {task_id}] Copied ref image to ComfyUI input: {filename}")
+                             except Exception as ex:
+                                 logger.warning(f"[Task {task_id}] Could not copy ref image to ComfyUI input: {ex}")
                      
                      # 2. Determine Template (Default to Pony XL for RTX 3060)
                      template_name = comfy_settings.get("default_workflow", "pony_xl_12gb.json")
@@ -153,11 +169,16 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                                      elif n.get("class_type") == "CLIPTextEncode":
                                          n["inputs"]["clip"] = [lora_node_id, 1]
 
-                         # 3. Inject Prompts and Seed
+                         # 3. Inject Prompts, Reference Image, and Seed
                          for node_id, node in final_workflow.items():
                              class_type = node.get("class_type")
                              inputs = node.get("inputs", {})
                              
+                             if class_type == "LoadImage" and ref_image_url:
+                                 ref_filename = os.path.basename(ref_image_url)
+                                 inputs["image"] = ref_filename
+                                 logger.info(f"[Task {task_id}] Configured LoadImage node {node_id} with reference image {ref_filename}")
+
                              if class_type == "CLIPTextEncode":
                                  title = node.get("_meta", {}).get("title", "")
                                  template_text = str(inputs.get("text", "") or "").strip()

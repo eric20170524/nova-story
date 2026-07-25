@@ -167,10 +167,26 @@ class ApiService {
   updateCharacter = (id: number, data: any) => this.request<any>(`/characters/${id}`, { method: 'PUT', body: data });
   deleteCharacter = (id: number) => this.request(`/characters/${id}`, { method: 'DELETE' });
   extractCharacters = (chapterId: string) => this.request<any[]>('/characters/extract', { method: 'POST', body: { chapter_id: chapterId } });
-  buildCharacterPrompt = (characterId: number, modelType: string, genType: string, customDesc?: string) => 
-    this.request<{ prompt: string; negative_prompt: string; model_type: string; gen_type: string }>(
+  buildCharacterPrompt = (
+    characterId: number, 
+    modelType: string, 
+    genType: string, 
+    customDesc?: string,
+    useRefPortrait?: boolean,
+    refImageUrl?: string
+  ) => 
+    this.request<{ prompt: string; negative_prompt: string; model_type: string; gen_type: string; ref_image_url?: string }>(
       `/characters/${characterId}/build-prompt`, 
-      { method: 'POST', body: { model_type: modelType, gen_type: genType, custom_description: customDesc } }
+      { 
+        method: 'POST', 
+        body: { 
+          model_type: modelType, 
+          gen_type: genType, 
+          custom_description: customDesc,
+          use_ref_portrait: useRefPortrait ?? true,
+          ref_image_url: refImageUrl
+        } 
+      }
     );
   cropCharacterFace = (characterId: number) => this.request<any>(`/characters/${characterId}/crop-face`, { method: 'POST' });
   trainCharacterLora = (characterId: number) => this.request<any>(`/characters/${characterId}/train-lora`, { method: 'POST' });
