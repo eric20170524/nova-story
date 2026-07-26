@@ -385,6 +385,7 @@ def train_character_lora(
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ):
     import os
+    from app.core.settings_manager import SettingsManager
     db_character = db.query(Character).filter(Character.id == character_id).first()
     if not db_character:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -393,7 +394,10 @@ def train_character_lora(
     assets = tags.get("assets", {})
     
     lora_filename = f"char_{character_id}_{db_character.name.lower().replace(' ', '_')}.safetensors"
-    comfy_loras_dir = r"D:\ComfyUI\models\loras"
+    comfy_settings = SettingsManager.get("comfyui", {})
+    install_path = comfy_settings.get("install_path", r"D:\ComfyUI")
+    comfy_loras_dir = os.path.join(install_path, "models", "loras")
+    
     try:
         os.makedirs(comfy_loras_dir, exist_ok=True)
     except Exception:

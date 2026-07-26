@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 from ..services.prompts import Prompts
 
-async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: int, user_token: str = None, mode: str = "standard"):
+async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: int, user_token: str = None, mode: str = "standard", generation_params: dict = None):
     """
     Async service to handle Asset generation via ComfyUI or LLM Providers.
     Replaces the old Celery task.
@@ -195,8 +195,17 @@ async def generate_assets_service(task_id: str, workflow_data: dict, scene_id: i
                                          else prompt or template_text
                                      )
                                      
-                             elif class_type == "KSampler":
+                             elif class_type in ("KSampler", "KSamplerAdvanced"):
                                  inputs["seed"] = random.randint(1, 1000000000000000)
+                                 if generation_params:
+                                     if "cfg" in generation_params and "cfg" in inputs:
+                                         inputs["cfg"] = float(generation_params["cfg"])
+                                     if "steps" in generation_params and "steps" in inputs:
+                                         inputs["steps"] = int(generation_params["steps"])
+                                     if "sampler_name" in generation_params and "sampler_name" in inputs:
+                                         inputs["sampler_name"] = str(generation_params["sampler_name"])
+                                     if "scheduler" in generation_params and "scheduler" in inputs:
+                                         inputs["scheduler"] = str(generation_params["scheduler"])
                                  
                      result = await service.generate_image(final_workflow, progress_callback=progress_handler)
                  finally:

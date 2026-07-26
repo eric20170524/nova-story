@@ -265,7 +265,17 @@ class ApiService {
   createWorkflow = (data: any) => this.request<any>('/workflows/', { method: 'POST', body: data });
   updateWorkflow = (id: number, data: any) => this.request<any>(`/workflows/${id}`, { method: 'PUT', body: data });
 
-  generateAsset = async (workflowData: any, sceneId: number | string) => {
+    generateAsset = async (workflowData: any, sceneId: number | string) => {
+    // Inject generation_params into the outer payload if they exist in workflowData
+    const payload: any = {
+        workflow: workflowData,
+        scene_id: sceneId,
+        mode: workflowData.mode || 'standard'
+    };
+    if (workflowData.generation_params) {
+        payload.generation_params = workflowData.generation_params;
+    }
+
     // Get Token for direct fetch
     const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };

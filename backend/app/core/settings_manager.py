@@ -10,7 +10,8 @@ DEFAULT_SETTINGS = {
     "comfyui": {
         "base_url": "http://127.0.0.1:8188",
         "enabled": False,
-        "selected_workflow_file": None
+        "selected_workflow_file": None,
+        "install_path": "D:\\ComfyUI"
     },
     "llm": {
         "provider": "gemini",

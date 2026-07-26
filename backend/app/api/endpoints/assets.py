@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import json
 import asyncio
 import uuid
@@ -23,6 +23,7 @@ class GenerateRequest(BaseModel):
     workflow: Dict[str, Any]
     scene_id: int
     mode: str = "standard"  # "standard" or "cinematic_grid"
+    generation_params: Optional[Dict[str, Any]] = None
 
 @router.post("/generate")
 async def generate_asset(
@@ -44,7 +45,7 @@ async def generate_asset(
     token = auth.credentials if auth else None
     
     # Schedule the task
-    background_tasks.add_task(generate_assets_service, task_id, req.workflow, req.scene_id, token, req.mode)
+    background_tasks.add_task(generate_assets_service, task_id, req.workflow, req.scene_id, token, req.mode, req.generation_params)
     
     logger.info(f"Task scheduled: {task_id}")
     return {"task_id": task_id, "status": "processing"}

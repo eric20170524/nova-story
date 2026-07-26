@@ -98,3 +98,20 @@ export interface StreamMessage {
   image_url?: string;
   error?: string;
 }
+
+export interface GenerationParams {
+  cfg?: number;
+  steps?: number;
+  sampler_name?: string;
+  scheduler?: string;
+}
+
+export interface GeneratePayload {
+  prompt: string;
+  negative_prompt?: string;
+  style_preset?: string;
+  mode?: string;
+  ref_image_url?: string | null;
+  reference_model_type?: string;
+  generation_params?: GenerationParams;
+}

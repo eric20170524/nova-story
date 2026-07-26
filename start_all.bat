@@ -14,7 +14,16 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr /C:":8188 " /C:":8087 " /C:":
 timeout /t 1 /nobreak >nul
 
 echo [1/3] 正在拉起 ComfyUI 生图服务 (端口 8188)...
-start "ComfyUI Server (8188)" cmd /k "chcp 65001 >nul && cd /d D:\ComfyUI && .\venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram"
+REM Parse from backend\system_settings.json or use fallback
+set "COMFYUI_DIR=D:\ComfyUI"
+if exist "%~dp0backend\system_settings.json" (
+    for /f "tokens=4 delims=:, " %%a in ('findstr /I "install_path" "%~dp0backend\system_settings.json"') do (
+        set "COMFYUI_DIR=%%~a"
+    )
+)
+set COMFYUI_DIR=%COMFYUI_DIR:"=%
+if not exist "%COMFYUI_DIR%" set "COMFYUI_DIR=D:\ComfyUI"
+start "ComfyUI Server (8188)" cmd /k "chcp 65001 >nul && cd /d "%COMFYUI_DIR%" && .\venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram"
 
 echo [2/3] 正在拉起 NovaStory 后端 FastAPI 服务 (端口 8087)...
 start "NovaStory Backend (8087)" cmd /k "chcp 65001 >nul && cd /d %~dp0backend && .\.venv\Scripts\python.exe main.py"

@@ -5,7 +5,8 @@
         "base_url": "http://127.0.0.1:8188",
         "enabled": true,
         "selected_workflow_file": "pony_xl_12gb.json",
-        "default_workflow": "pony_xl_12gb.json"
+        "default_workflow": "pony_xl_12gb.json",
+        "install_path": "D:\\ComfyUI"
     },
     "llm": {
         "provider": "gemini",

@@ -9,7 +9,7 @@ import { ComicViewer } from '../components/ComicViewer';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
-import { AlertTriangle, Film } from 'lucide-react';
+import { AlertTriangle, Film, Settings } from 'lucide-react';
 
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
@@ -21,6 +21,14 @@ export const DirectorMode: React.FC = () => {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   
   // Style Settings
+
+  // Advanced Generation Params State
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false);
+  const [genSteps, setGenSteps] = useState(25);
+  const [genCfg, setGenCfg] = useState(7.0);
+  const [genSampler, setGenSampler] = useState('euler_ancestral');
+  const [genScheduler, setGenScheduler] = useState('normal');
+
   const [selectedStyle, setSelectedStyle] = useState<string>(() => {
     const saved = localStorage.getItem('director_selectedStyle');
     const styles = getVisualStyles();
@@ -284,8 +292,14 @@ export const DirectorMode: React.FC = () => {
           negative_prompt: finalNegative,
           style_preset: selectedStyle,
           mode: backendAssetMode,
-          reference_image_url: referenceImageUrl,
-          reference_model_type: referenceModelType
+          ref_image_url: referenceImageUrl,
+          reference_model_type: referenceModelType,
+          generation_params: showAdvancedParams ? {
+             steps: genSteps,
+             cfg: genCfg,
+             sampler_name: genSampler,
+             scheduler: genScheduler
+          } : undefined
       };
       
       const response = await api.generateAsset(payload, sceneId);

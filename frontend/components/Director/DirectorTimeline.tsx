@@ -158,14 +158,17 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 {scene.duration}s
                               </span>
                             </div>
-                            <button
-                              onClick={() => handleOpenCoverage(scene)}
-                              className="text-xs bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/60 text-purple-300 px-2 py-1 rounded flex items-center gap-1 transition-all"
-                              title="单场景九镜头候选覆盖扩展"
-                            >
-                              <Grid size={13} />
-                              <span>{t('director.coverage_btn')}</span>
-                            </button>
+                            
+                            <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleOpenCoverage(scene)}
+                                  className="text-xs bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/60 text-purple-300 px-2 py-1 rounded flex items-center gap-1 transition-all"
+                                  title="单场景九镜头候选覆盖扩展"
+                                >
+                                  <Grid size={13} />
+                                  <span>{t('director.coverage_btn', '9-Shot')}</span>
+                                </button>
+                            </div>
                         </div>
 
                         {/* Image Area */}
