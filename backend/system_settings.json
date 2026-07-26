@@ -9,7 +9,7 @@
     },
     "llm": {
         "provider": "gemini",
-        "api_key": "AIzaSyABXUPKAfAmvnz763QN5F2RUJCue_MyGvY",
+        "api_key": "",
         "base_url": "",
         "model": "gemini-2.5-flash"
     }

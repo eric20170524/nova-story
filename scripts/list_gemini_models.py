@@ -9,9 +9,9 @@ sys.path.append(os.getcwd())
 from app.core.config import settings
 
 def list_models():
-    api_key = "AIzaSyBs4E1nTOAuK_VhQ3IQpE5weugXd5tgQjM"
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
     if not api_key:
-        print("No GEMINI_API_KEY found in settings.")
+        print("No GEMINI_API_KEY or LLM_API_KEY environment variable set.")
         return
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
