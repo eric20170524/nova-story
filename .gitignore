@@ -27,3 +27,4 @@ backend/static/generated
 frontend/local/
 **/scripts
 *.bak
+backend/system_settings.json
