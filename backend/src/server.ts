@@ -13,6 +13,8 @@ app.register(cors, {
 import { projectRoutes } from './routes/projects';
 import { settingsRoutes } from './routes/settings';
 import { workflowRoutes } from './routes/workflows';
+import { characterRoutes } from './routes/characters';
+import { comicRoutes } from './routes/comics';
 
 app.get('/', async (request, reply) => {
   return { message: 'NovaStory Fastify+SQLite Backend Operational' };
@@ -27,6 +29,8 @@ app.get('/api/test-db', async (request, reply) => {
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(settingsRoutes, { prefix: '/api/settings' });
 app.register(workflowRoutes, { prefix: '/api/workflows' });
+app.register(characterRoutes, { prefix: '/api/characters' });
+app.register(comicRoutes, { prefix: '/api/comics' });
 
 const start = async () => {
   try {
