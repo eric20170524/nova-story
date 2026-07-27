@@ -4,10 +4,12 @@ import path from 'path';
 
 let dbInstance: Database;
 
+import { settings } from '../core/config';
+
 export const initDb = async () => {
   if (dbInstance) return dbInstance;
   dbInstance = await open({
-    filename: path.join(__dirname, '../../sql_app.db'), // match fastAPI's default path or use a new one
+    filename: settings.DATABASE_URL.replace('sqlite:///', ''),
     driver: sqlite3.Database
   });
 
