@@ -15,6 +15,12 @@ const DEFAULT_SETTINGS = {
         selected_workflow_file: null,
         install_path: 'D:\\ComfyUI'
     },
+    advanced: {
+        nsfw_enabled: false,
+        pony_nsfw_lora: "Pony_Detail_Tweaker.safetensors",
+        flux_nsfw_lora: "aidmaNSFWunlock.safetensors",
+        nsfw_lora_strength: 0.8
+    },
     llm: {
         provider: 'gemini',
         api_key: '',
