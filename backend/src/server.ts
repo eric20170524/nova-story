@@ -17,6 +17,13 @@ import { characterRoutes } from './routes/characters';
 import { comicRoutes } from './routes/comics';
 import { timelineRoutes } from './routes/timeline';
 import { assetRoutes } from './routes/assets';
+import multipart from '@fastify/multipart';
+
+app.register(multipart, {
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB
+  }
+});
 
 app.get('/', async (request, reply) => {
   return { message: 'NovaStory Fastify+SQLite Backend Operational' };

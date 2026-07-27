@@ -1,6 +1,9 @@
 import { FastifyPluginAsync } from 'fastify';
 import { db } from '../db/database';
 import { z } from 'zod';
+import PDFDocument from 'pdfkit';
+import fs from 'fs';
+import path from 'path';
 
 export const comicRoutes: FastifyPluginAsync = async (app) => {
   app.post('/:chapter_id/generate', async (request, reply) => {
@@ -22,12 +25,54 @@ export const comicRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ detail: 'No scenes have generated images' });
     }
 
-    // In Phase 3, we mock the ComicService PDF Generation logic.
-    // Full implementation requires mapping Python's ComicService to a Node library like PDFKit or puppeteer.
-    const generatedPages = validScenes.map(scene => ({
-      scene_id: scene.id,
-      url: `/static/generated/mock_comic_${scene.id}.png`
-    }));
+    const staticDir = path.join(__dirname, '../../app/static/generated');
+    if (!fs.existsSync(staticDir)) {
+      fs.mkdirSync(staticDir, { recursive: true });
+    }
+
+    const generatedPages: any[] = [];
+
+    // We will create the PDF and append images into it
+    const pdfFilename = `comic_${chapter_id}.pdf`;
+    const pdfFilepath = path.join(staticDir, pdfFilename);
+    const doc = new PDFDocument({ autoFirstPage: false });
+    const stream = fs.createWriteStream(pdfFilepath);
+    doc.pipe(stream);
+
+    for (const scene of validScenes) {
+        if (!scene.asset_url) continue;
+        const imgFilename = path.basename(scene.asset_url);
+        const imgFilepath = path.join(staticDir, imgFilename);
+
+        if (fs.existsSync(imgFilepath)) {
+            // Very simple comic page mapping: 1 image per page with text below it
+            doc.addPage();
+            try {
+                doc.image(imgFilepath, {
+                    fit: [500, 600],
+                    align: 'center',
+                    valign: 'center'
+                });
+                doc.moveDown(2);
+                doc.fontSize(14).text(scene.dialogue || scene.visual_prompt || "", {
+                    align: 'center'
+                });
+
+                generatedPages.push({
+                    scene_id: scene.id,
+                    url: scene.asset_url
+                });
+            } catch(e) {
+                // Ignore bad image format errors
+            }
+        }
+    }
+
+    doc.end();
+
+    await new Promise(resolve => {
+        stream.on('finish', resolve);
+    });
 
     return {
       status: "completed",
@@ -35,7 +80,7 @@ export const comicRoutes: FastifyPluginAsync = async (app) => {
       total_scenes: scenes.length,
       generated_count: generatedPages.length,
       pages: generatedPages,
-      pdf_url: `/static/generated/mock_comic_${chapter_id}.pdf`
+      pdf_url: `/static/generated/${pdfFilename}`
     };
   });
 };

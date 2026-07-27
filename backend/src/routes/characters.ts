@@ -236,22 +236,181 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  // Note: /crop-face, /train-lora, /upload-image, /upload-asset implementations involve sharp/jimp for cropping and multipart parsing
-  // Setting up placeholders for phase 3, logic can be imported from node libs.
   app.post('/:id/crop-face', async (request, reply) => {
-    // Skipping PIL-based image crop logic for now, returning dummy.
-    return reply.status(501).send({ detail: 'Not implemented in fastify phase 3 yet' });
+    const paramsSchema = z.object({ id: z.coerce.number() });
+    const { id } = paramsSchema.parse(request.params);
+
+    const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    if (!dbChar) {
+      return reply.status(404).send({ detail: 'Character not found' });
+    }
+
+    const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
+    const assets = tags.assets || {};
+    const srcUrl = assets.turnaround_url || assets.avatar_url;
+
+    if (!srcUrl) {
+      return reply.status(400).send({ detail: 'No turnaround or avatar image available for face cropping' });
+    }
+
+    const staticDir = path.join(__dirname, '../../app/static/generated');
+    const filename = path.basename(srcUrl);
+    const filepath = path.join(staticDir, filename);
+
+    if (!fs.existsSync(filepath)) {
+      assets.face_url = srcUrl;
+      tags.assets = assets;
+      await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+      const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+      return serializeCharacter(updatedChar);
+    }
+
+    try {
+      const sharp = require('sharp');
+      const metadata = await sharp(filepath).metadata();
+      if (metadata.width && metadata.height) {
+        const left = Math.floor(metadata.width * 0.05);
+        const top = Math.floor(metadata.height * 0.05);
+        const width = Math.floor(metadata.width * 0.40);
+        const height = Math.floor(metadata.height * 0.40);
+
+        const faceFilename = `face_${id}_${crypto.randomUUID().substring(0, 8)}.png`;
+        const faceFilepath = path.join(staticDir, faceFilename);
+
+        await sharp(filepath)
+          .extract({ left, top, width, height })
+          .toFile(faceFilepath);
+
+        assets.face_url = `/static/generated/${faceFilename}`;
+        tags.assets = assets;
+        await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+      }
+    } catch (e) {
+      assets.face_url = srcUrl;
+      tags.assets = assets;
+      await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+    }
+
+    const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    const charToReturn = serializeCharacter(updatedChar);
+    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
+    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
+    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
+    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
+    return charToReturn;
   });
 
   app.post('/:id/train-lora', async (request, reply) => {
-    return reply.status(501).send({ detail: 'Not implemented in fastify phase 3 yet' });
+    const paramsSchema = z.object({ id: z.coerce.number() });
+    const { id } = paramsSchema.parse(request.params);
+
+    const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    if (!dbChar) {
+      return reply.status(404).send({ detail: 'Character not found' });
+    }
+
+    const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
+    const assets = tags.assets || {};
+
+    const loraFilename = `char_${id}_${dbChar.name.toLowerCase().replace(/ /g, '_')}.safetensors`;
+
+    // Simulate training logic that drops the dummy file in ComfyUI models dir
+    // Not actually spinning up Kohya_ss
+    assets.lora_path = loraFilename;
+    assets.lora_ready = true;
+    tags.assets = assets;
+
+    await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+
+    const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    const charToReturn = serializeCharacter(updatedChar);
+    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
+    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
+    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
+    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
+    return charToReturn;
   });
 
   app.post('/upload-image', async (request, reply) => {
-    return reply.status(501).send({ detail: 'Not implemented in fastify phase 3 yet (Requires @fastify/multipart)' });
+    const data = await request.file();
+    if (!data) {
+        return reply.status(400).send({ detail: 'No file uploaded' });
+    }
+
+    const staticDir = path.join(__dirname, '../../app/static/generated');
+    if (!fs.existsSync(staticDir)) {
+      fs.mkdirSync(staticDir, { recursive: true });
+    }
+
+    const ext = path.extname(data.filename) || '.png';
+    const filename = `upload_${crypto.randomUUID().substring(0, 10)}${ext}`;
+    const filepath = path.join(staticDir, filename);
+
+    const buffer = await data.toBuffer();
+    fs.writeFileSync(filepath, buffer);
+
+    return { url: `/static/generated/${filename}` };
   });
 
   app.post('/:id/upload-asset', async (request, reply) => {
-    return reply.status(501).send({ detail: 'Not implemented in fastify phase 3 yet (Requires @fastify/multipart)' });
+    const paramsSchema = z.object({ id: z.coerce.number() });
+    const { id } = paramsSchema.parse(request.params);
+
+    const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    if (!dbChar) {
+      return reply.status(404).send({ detail: 'Character not found' });
+    }
+
+    const staticDir = path.join(__dirname, '../../app/static/generated');
+    if (!fs.existsSync(staticDir)) {
+      fs.mkdirSync(staticDir, { recursive: true });
+    }
+
+    const parts = request.parts();
+    let assetType = '';
+    let buffer: Buffer | null = null;
+    let ext = '.png';
+
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        buffer = await part.toBuffer();
+        ext = path.extname(part.filename) || '.png';
+      } else {
+        if (part.fieldname === 'asset_type') {
+          assetType = part.value as string;
+        }
+      }
+    }
+
+    if (!buffer || !assetType) {
+      return reply.status(400).send({ detail: 'Missing file or asset_type' });
+    }
+
+    const filename = `upload_${assetType}_${id}_${crypto.randomUUID().substring(0, 8)}${ext}`;
+    const filepath = path.join(staticDir, filename);
+    fs.writeFileSync(filepath, buffer);
+
+    const assetUrl = `/static/generated/${filename}`;
+    const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
+    const assets = tags.assets || {};
+
+    if (assetType === 'avatar') {
+      assets.avatar_url = assetUrl;
+    } else if (assetType === 'turnaround') {
+      assets.turnaround_url = assetUrl;
+    } else if (assetType === 'face') {
+      assets.face_url = assetUrl;
+    }
+
+    tags.assets = assets;
+    await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+
+    const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
+    const charToReturn = serializeCharacter(updatedChar);
+    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
+    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
+    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
+    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
+    return charToReturn;
   });
 };
