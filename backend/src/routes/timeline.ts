@@ -109,16 +109,8 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
 
     // Delete existing and insert new within a try/catch
     try {
+      await db.run('BEGIN TRANSACTION');
       await db.run('DELETE FROM scene WHERE chapter_id = ?', chapter.id);
-
-      const insertStmt = await (await db.run('BEGIN TRANSACTION')).exec(`
-         INSERT INTO scene (
-            chapter_id, \`index\`, visual_prompt, audio_prompt, dialogue, duration, shot_type, camera_movement, camera_angle, negative_prompt, asset_status
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `); // Placeholder statement conceptual
-      // We will loop manually for simplicity rather than prepared statement for now
-
-      await db.run('COMMIT'); // Commit earlier begin if any
 
       const newScenes = [];
       for (let i = 0; i < timelineData.length; i++) {
@@ -143,6 +135,8 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
          newScenes.push(newScene);
       }
 
+      await db.run('COMMIT');
+
       return {
         chapter_id: chapter.id,
         storyboard_mode: 'narrative',
@@ -150,6 +144,7 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       };
 
     } catch (error: any) {
+      await db.run('ROLLBACK');
       return reply.status(500).send({ detail: `Failed to save generated scenes to database: ${error.message}` });
     }
   });
