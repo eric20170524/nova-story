@@ -1,5 +1,10 @@
+<<<<<<< HEAD:pages/Settings.tsx
 import React, { useEffect, useRef, useState } from 'react';
 import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders } from 'lucide-react';
+=======
+import React, { useEffect, useState } from 'react';
+import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders, Shield } from 'lucide-react';
+>>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
 import { api } from '../services/api';
 import { useLanguage } from '../LanguageContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
@@ -11,13 +16,29 @@ import {
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
-  const [activeTab, setActiveTab] = useState<'general' | 'workflow'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'workflow' | 'advanced'>('general');
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
+    return localStorage.getItem('settings_advanced_unlocked') === 'true';
+  });
+  const [titleClicks, setTitleClicks] = useState(0);
+
   const [settings, setSettings] = useState<any>({ 
     llm_model: 'gemini-3-flash-preview',
     comfyui: {
       base_url: 'http://127.0.0.1:8188',
       enabled: false,
+<<<<<<< HEAD:pages/Settings.tsx
       selected_workflow_file: null
+=======
+      selected_workflow_file: null,
+      default_workflow: null
+    },
+    advanced: {
+      nsfw_enabled: false,
+      pony_nsfw_lora: '',
+      flux_nsfw_lora: '',
+      nsfw_lora_strength: 0.8
+>>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
     }
   });
   const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
@@ -63,6 +84,18 @@ export const SettingsPage: React.FC = () => {
     loadData();
   }, []);
 
+  const handleTitleClick = () => {
+    const nextCount = titleClicks + 1;
+    setTitleClicks(nextCount);
+    if (nextCount >= 5) {
+      localStorage.setItem('settings_advanced_unlocked', 'true');
+      setIsUnlocked(true);
+      setActiveTab('advanced');
+      setMessage({ type: 'success', text: t('settings_page.unlocked_toast') });
+      setTitleClicks(0);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [settingsData, filesData] = await Promise.all([
@@ -83,10 +116,32 @@ export const SettingsPage: React.FC = () => {
         model: 'gemini-2.5-flash'
       };
 
+<<<<<<< HEAD:pages/Settings.tsx
       setSettings({
         ...settingsData,
         comfyui: { ...defaultComfyUI, ...(settingsData.comfyui || {}) },
         llm: { ...defaultLLM, ...(settingsData.llm || {}) }
+=======
+      const defaultAdvanced = {
+        nsfw_enabled: false,
+        pony_nsfw_lora: '',
+        flux_nsfw_lora: '',
+        nsfw_lora_strength: 0.8
+      };
+
+      const comfyui = { ...defaultComfyUI, ...(settingsData.comfyui || {}) };
+      const selectedWorkflow = comfyui.selected_workflow_file || comfyui.default_workflow || null;
+
+      setSettings({
+        ...settingsData,
+        comfyui: {
+          ...comfyui,
+          selected_workflow_file: selectedWorkflow,
+          default_workflow: selectedWorkflow
+        },
+        llm: { ...defaultLLM, ...(settingsData.llm || {}) },
+        advanced: { ...defaultAdvanced, ...(settingsData.advanced || {}) }
+>>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
       });
       setWorkflowFiles(filesData);
     } catch (error) {
@@ -157,6 +212,16 @@ export const SettingsPage: React.FC = () => {
     });
   };
 
+  const handleAdvancedChange = (field: string, value: any) => {
+    setSettings({
+      ...settings,
+      advanced: {
+        ...(settings.advanced || {}),
+        [field]: value
+      }
+    });
+  };
+
   const handleVerifyLLM = async () => {
     setVerifyingLLM(true);
     setMessage(null);
@@ -179,7 +244,18 @@ export const SettingsPage: React.FC = () => {
     <div className="flex-1 overflow-y-auto w-full bg-slate-950 p-4 sm:p-6 lg:p-10">
       <div className="max-w-4xl mx-auto">
         <div className="mb-6 sm:mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">{t('app.settings')}</h1>
+          <h1
+            onClick={handleTitleClick}
+            className="text-2xl sm:text-3xl font-bold text-white mb-2 cursor-pointer select-none flex items-center"
+            title="Click 5 times to unlock Advanced Settings"
+          >
+            {t('app.settings')}
+            {isUnlocked && (
+              <span className="text-xs bg-indigo-600/30 text-indigo-400 px-2.5 py-1 rounded-full ml-3 font-normal border border-indigo-500/30">
+                {t('settings_page.tabs.advanced')}
+              </span>
+            )}
+          </h1>
           <p className="text-slate-400 text-sm sm:text-base">{t('settings_page.subtitle')}</p>
         </div>
 
@@ -207,9 +283,138 @@ export const SettingsPage: React.FC = () => {
              <Sliders size={16} />
              {t('settings_page.tabs.workflow')}
            </button>
+           {isUnlocked && (
+             <button
+               onClick={() => setActiveTab('advanced')}
+               className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
+                 activeTab === 'advanced'
+                   ? 'border-indigo-500 text-indigo-400'
+                   : 'border-transparent text-slate-400 hover:text-slate-200'
+               }`}
+             >
+               <Shield size={16} />
+               {t('settings_page.tabs.advanced')}
+             </button>
+           )}
         </div>
 
-        {activeTab === 'workflow' ? (
+        {activeTab === 'advanced' ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 animate-in fade-in duration-300">
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <Shield className="w-5 h-5 text-indigo-400" />
+                <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.advanced_config_title')}</h2>
+              </div>
+
+              {/* Note about Pony XL and FLUX.1-dev GGUF NSFW status */}
+              <div className="p-4 bg-indigo-950/40 border border-indigo-800/50 rounded-lg mb-6">
+                <p className="text-xs sm:text-sm text-indigo-300 leading-relaxed">
+                  💡 {t('settings_page.nsfw_workflow_note')}
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                {/* Enable NSFW Toggle */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg gap-4">
+                  <div>
+                    <h3 className="text-slate-200 font-medium text-sm sm:text-base">{t('settings_page.nsfw_enable_title')}</h3>
+                    <p className="text-xs sm:text-sm text-slate-500">{t('settings_page.nsfw_enable_desc')}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer self-start sm:self-auto">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={settings.advanced?.nsfw_enabled || false}
+                      onChange={(e) => handleAdvancedChange('nsfw_enabled', e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {/* Pony XL NSFW LoRA */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-slate-400">
+                      {t('settings_page.pony_nsfw_lora_label')}
+                    </label>
+                    <span className="text-xs text-indigo-400">Recommended: Pony_Detail_Tweaker.safetensors</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={settings.advanced?.pony_nsfw_lora ?? ''}
+                    onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
+                    placeholder="Pony_Detail_Tweaker.safetensors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                  />
+                </div>
+
+                {/* FLUX.1-dev NSFW LoRA */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-slate-400">
+                      {t('settings_page.flux_nsfw_lora_label')}
+                    </label>
+                    <span className="text-xs text-indigo-400">Recommended: aidmaNSFWunlock.safetensors</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={settings.advanced?.flux_nsfw_lora ?? ''}
+                    onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
+                    placeholder="aidmaNSFWunlock.safetensors"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                  />
+                </div>
+
+                {/* LoRA Strength */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">
+                    {t('settings_page.nsfw_lora_strength_label')}: {settings.advanced?.nsfw_lora_strength ?? 0.8}
+                  </label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1.5"
+                    step="0.05"
+                    value={settings.advanced?.nsfw_lora_strength ?? 0.8}
+                    onChange={(e) => handleAdvancedChange('nsfw_lora_strength', parseFloat(e.target.value))}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* CLI Script Helper Card */}
+                <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-2">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">📦 Recommended LoRAs Auto-Downloader Script</h4>
+                  <p className="text-xs text-slate-400">Run this command in terminal to automatically fetch recommended LoRA files into your ComfyUI directory:</p>
+                  <pre className="bg-slate-900 border border-slate-800 p-2.5 rounded text-xs text-indigo-300 font-mono overflow-x-auto select-all">
+                    python scripts/download_recommended_loras.py -o "D:\ComfyUI\models\loras"
+                  </pre>
+                </div>
+              </div>
+            </section>
+
+            {/* Save button footer */}
+            <div className="pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+              <div>
+                {message && (
+                  <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                    {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+                    <span>{message.text}</span>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
+                  saving ? 'bg-indigo-600/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
+                }`}
+              >
+                <Save size={18} />
+                {saving ? t('settings_page.saving') : t('settings_page.save')}
+              </button>
+            </div>
+          </div>
+        ) : activeTab === 'workflow' ? (
           <div className="animate-in fade-in slide-in-from-left-4 duration-300 space-y-8">
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 sm:space-y-10">
               {/* ComfyUI Configuration */}

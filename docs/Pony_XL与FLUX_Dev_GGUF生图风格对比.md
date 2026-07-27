@@ -154,5 +154,61 @@ GGUF 主要是一种量化格式，并不代表一种新的画风。常见的 FL
 - [FLUX.1-dev 官方模型卡](https://huggingface.co/black-forest-labs/FLUX.1-dev)
 - [FLUX.1-dev GGUF 模型卡](https://huggingface.co/city96/FLUX.1-dev-gguf)
 - [Pony Diffusion V6 XL 文件与提示词示例](https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL/blob/main/ponyDiffusionV6XL_v6StartWithThisOne.safetensors)
+<<<<<<< HEAD
 - 风格参考：`docs/风格参考/1/pixiv-favor.txt`、`docs/风格参考/1/古风幻想.txt`
 - 前端常量：`frontend/constants.ts`、`frontend/local/advanced_visual_styles.ts`（本地）
+=======
+
+
+---
+
+**Pony XL 与 FLUX.1-dev GGUF 推荐专用 LoRA**（2026 年主流选择，基于 Civitai 下载量、社区反馈与实际兼容性）：
+
+### 一、Pony XL（Pony Diffusion V6 XL）推荐 LoRA
+Pony 生态最成熟，角色/画风/细节类 LoRA 极多。优先下载这些通用强力款（放入 `models/loras/`）：
+
+| 类型 | 推荐 LoRA | 建议权重 | 说明 |
+|------|-----------|----------|------|
+| **细节增强** | **Pony Detail Tweaker** | 0.6–1.0 | 最经典细节滑块，增加线条与阴影复杂度，几乎不破坏构图 |
+| **细节增强** | Detail Slider LoRA (PonyXL/SDXL) | 0.4–0.8 | 可控细节强度，适合叠加 |
+| **细节/写实** | Vixon's Pony Styles — Detailed | 0.6–0.8 | 强力提升真实感与细节，效果明显 |
+| **画风** | Incase Style [PonyXL] | 0.6–1.0（单独）或 0.4–0.6（叠加） | 最常用 Western/漫画风 NSFW 风格，几乎无触发词 |
+| **画风** | ExpressiveH (Hentai Style) | 0.4–0.6 | 经典 Hentai 风格参考，触发词 `Expressiveh` |
+| **画风** | CicaStyle [PonyXL] | 0.7–1.0 | 多风格通用（含光泽皮肤、服装细节），兼容性好 |
+| **质量提升** | Best of Pony | 0.7–1.0 | 基于高分图训练的“美化”LoRA，增加视觉冲击力 |
+| **通用细节** | Add More Details / Pony Add More Details | 0.3–0.5 | 轻量细节补充，适合堆叠底层 |
+
+**使用建议**：
+- 总权重尽量控制在 1.5 以内。
+- Pony 推荐 Clip Skip 2。
+- 正面提示词习惯加 `score_9, score_8_up, score_7_up` 等质量标签。
+
+### 二、FLUX.1-dev（含 GGUF）推荐 LoRA
+FLUX 的 LoRA 相对较少，但核心需求已很清晰。**GGUF 版本支持 LoRA**（通过 ComfyUI-GGUF 的 Unet Loader + 普通 LoRA Loader，实验性但社区已广泛使用）。
+
+| 类型 | 推荐 LoRA | 建议权重 | 说明 |
+|------|-----------|----------|------|
+| **NSFW 解锁（必下）** | **aidmaNSFWunlock** | 0.5–1.0（常用 0.7–0.8） | 目前下载量最高、最稳定的 FLUX NSFW 解锁 LoRA（约 19MB），触发词 `aidmaNSFWunlock` |
+| **写实风格** | XLabs Flux Realism | 0.6–1.0 | 经典写实向，提升皮肤与整体真实感 |
+| **风格/质量** | Best of Flux | 0.7–0.9 | 类似 Best of Pony，基于高分图训练的增强 LoRA |
+| **细节** | Detail Enhancer FLUX | 0.5–1.0 | 纹理与细节补充 |
+| **解剖/裸体** | Nude Style for FLUX V2 | 0.8–1.0 | 改善身体细节与 nudity 表现，常与 aidma 叠加 |
+| **解剖补充** | X Plus V2 或其他 Anatomy 类 | 0.5–0.8 | 进一步修正姿势与身体结构 |
+
+**使用建议**：
+- 基础组合：`aidmaNSFWunlock`（0.7–0.8）+ 一个风格/细节 LoRA。
+- 权重过高容易过拟合或产生伪影，建议从 0.6 开始测试。
+- GGUF 量化越低（如 Q4），LoRA 效果可能略弱，优先用 Q5_K_S / Q6_K / Q8_0。
+- 官方原版 FLUX.1-dev 对 NSFW 有较强限制，aidma 几乎是标配。
+
+### 下载与放置
+- 主要来源：**Civitai**（搜索对应名称即可）。
+- 文件放到本地 ComfyUI 的 `models/loras/` 目录。
+- 在高级设置或工作流中填写完整文件名（如 `aidmaNSFWunlock.safetensors`），并设置权重。
+
+**快速入门推荐组合**：
+- **Pony XL**：Pony Detail Tweaker + Incase Style / ExpressiveH
+- **FLUX GGUF**：aidmaNSFWunlock + XLabs Flux Realism 或 Best of Flux
+
+需要特定角色、姿势或更细分风格（如 furry、特定画师）的话，告诉我方向，我可以再精准推荐。
+>>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本)
