@@ -1,15 +1,15 @@
 @echo off
-chcp 936 >nul
-echo 正在拉起 ComfyUI 生图服务 (端口 8188)...
-REM Parse from backend\system_settings.json or use fallback
-set "COMFYUI_DIR=D:\ComfyUI"
-if exist "%~dp0backend\system_settings.json" (
-    for /f "tokens=4 delims=:, " %%a in ('findstr /I "install_path" "%~dp0backend\system_settings.json"') do (
-        set "COMFYUI_DIR=%%~a"
-    )
+setlocal
+chcp 65001 >nul
+title ComfyUI Launcher
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_all.ps1" -ComfyUIOnly
+set "EXIT_CODE=%ERRORLEVEL%"
+
+if not "%EXIT_CODE%"=="0" (
+    echo.
+    echo ComfyUI failed to start. See the error above.
+    pause
 )
-set COMFYUI_DIR=%COMFYUI_DIR:"=%
-if not exist "%COMFYUI_DIR%" set "COMFYUI_DIR=D:\ComfyUI"
-cd /d "%COMFYUI_DIR%"
-.\venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram
-pause
+
+exit /b %EXIT_CODE%

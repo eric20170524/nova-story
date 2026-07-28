@@ -1,10 +1,5 @@
-<<<<<<< HEAD:pages/Settings.tsx
 import React, { useEffect, useRef, useState } from 'react';
-import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders } from 'lucide-react';
-=======
-import React, { useEffect, useState } from 'react';
 import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders, Shield } from 'lucide-react';
->>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
 import { api } from '../services/api';
 import { useLanguage } from '../LanguageContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
@@ -27,9 +22,6 @@ export const SettingsPage: React.FC = () => {
     comfyui: {
       base_url: 'http://127.0.0.1:8188',
       enabled: false,
-<<<<<<< HEAD:pages/Settings.tsx
-      selected_workflow_file: null
-=======
       selected_workflow_file: null,
       default_workflow: null
     },
@@ -38,7 +30,6 @@ export const SettingsPage: React.FC = () => {
       pony_nsfw_lora: '',
       flux_nsfw_lora: '',
       nsfw_lora_strength: 0.8
->>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
     }
   });
   const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
@@ -116,12 +107,6 @@ export const SettingsPage: React.FC = () => {
         model: 'gemini-2.5-flash'
       };
 
-<<<<<<< HEAD:pages/Settings.tsx
-      setSettings({
-        ...settingsData,
-        comfyui: { ...defaultComfyUI, ...(settingsData.comfyui || {}) },
-        llm: { ...defaultLLM, ...(settingsData.llm || {}) }
-=======
       const defaultAdvanced = {
         nsfw_enabled: false,
         pony_nsfw_lora: '',
@@ -141,7 +126,6 @@ export const SettingsPage: React.FC = () => {
         },
         llm: { ...defaultLLM, ...(settingsData.llm || {}) },
         advanced: { ...defaultAdvanced, ...(settingsData.advanced || {}) }
->>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本):frontend/pages/Settings.tsx
       });
       setWorkflowFiles(filesData);
     } catch (error) {

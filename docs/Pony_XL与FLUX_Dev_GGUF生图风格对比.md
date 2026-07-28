@@ -154,10 +154,8 @@ GGUF 主要是一种量化格式，并不代表一种新的画风。常见的 FL
 - [FLUX.1-dev 官方模型卡](https://huggingface.co/black-forest-labs/FLUX.1-dev)
 - [FLUX.1-dev GGUF 模型卡](https://huggingface.co/city96/FLUX.1-dev-gguf)
 - [Pony Diffusion V6 XL 文件与提示词示例](https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL/blob/main/ponyDiffusionV6XL_v6StartWithThisOne.safetensors)
-<<<<<<< HEAD
 - 风格参考：`docs/风格参考/1/pixiv-favor.txt`、`docs/风格参考/1/古风幻想.txt`
 - 前端常量：`frontend/constants.ts`、`frontend/local/advanced_visual_styles.ts`（本地）
-=======
 
 
 ---
@@ -211,4 +209,3 @@ FLUX 的 LoRA 相对较少，但核心需求已很清晰。**GGUF 版本支持 L
 - **FLUX GGUF**：aidmaNSFWunlock + XLabs Flux Realism 或 Best of Flux
 
 需要特定角色、姿势或更细分风格（如 furry、特定画师）的话，告诉我方向，我可以再精准推荐。
->>>>>>> 2c0752b (feat: 修改系统设置5次点击解锁触发与添加NSFW LoRA控制与推荐下载脚本)
