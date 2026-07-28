@@ -9,6 +9,8 @@ import {
   setAdvancedStylesEnabled,
 } from '../constants';
 
+const LOCAL_OLLAMA_MODEL = 'novastory-qwen3:8b';
+
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState<'general' | 'workflow' | 'advanced'>('general');
@@ -152,7 +154,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   const handleModelChange = (model: string) => {
-    if (model === 'qwen3.5:9b') {
+    if (model === LOCAL_OLLAMA_MODEL) {
       setSettings({
         ...settings,
         llm_model: model,
@@ -160,8 +162,8 @@ export const SettingsPage: React.FC = () => {
           ...settings.llm,
           provider: 'ollama',
           base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
-          model: 'qwen3.5:9b',
-          api_key: settings.llm?.api_key || 'ollama'
+          model: LOCAL_OLLAMA_MODEL,
+          api_key: 'ollama'
         }
       });
     } else {
@@ -214,7 +216,11 @@ export const SettingsPage: React.FC = () => {
       setMessage({ type: 'success', text: t('settings_page.llm_verify_success') });
     } catch (error) {
       console.error("LLM verification failed", error);
-      setMessage({ type: 'error', text: t('settings_page.llm_verify_failed') });
+      const detail = error instanceof Error ? error.message : String(error);
+      setMessage({
+        type: 'error',
+        text: `${t('settings_page.llm_verify_failed')}: ${detail}`
+      });
     } finally {
       setVerifyingLLM(false);
     }
@@ -520,11 +526,11 @@ export const SettingsPage: React.FC = () => {
                       onSelect={() => handleModelChange('gemini-2.5-pro')}
                     />
                     <ModelOption 
-                      id="qwen3.5:9b"
-                      name="Ollama Qwen 3.5 9B (Local / 本机)"
-                      description={t('settings_page.model_desc_qwen35')}
-                      selected={settings.llm_model === 'qwen3.5:9b' || settings.llm?.provider === 'ollama'}
-                      onSelect={() => handleModelChange('qwen3.5:9b')}
+                      id={LOCAL_OLLAMA_MODEL}
+                      name="NovaStory Qwen3 8B Abliterated (Local / 本机)"
+                      description={t('settings_page.model_desc_local_qwen')}
+                      selected={settings.llm_model === LOCAL_OLLAMA_MODEL || settings.llm?.provider === 'ollama'}
+                      onSelect={() => handleModelChange(LOCAL_OLLAMA_MODEL)}
                     />
                   </div>
 
@@ -586,16 +592,17 @@ export const SettingsPage: React.FC = () => {
                   onClick={() => {
                     setSettings({
                       ...settings,
+                      llm_model: LOCAL_OLLAMA_MODEL,
                       llm: {
                         provider: 'ollama',
                         base_url: 'http://127.0.0.1:11434/v1',
-                        model: 'qwen3.5:9b',
+                        model: LOCAL_OLLAMA_MODEL,
                         api_key: 'ollama'
                       }
                     });
                   }}
                   className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 self-start sm:self-auto font-medium"
-                  title="Click to auto fill Ollama local qwen3.5:9b settings"
+                  title={`Click to auto fill Ollama local ${LOCAL_OLLAMA_MODEL} settings`}
                 >
                   <span>⚡ {t('settings_page.ollama_preset_btn')}</span>
                 </button>
@@ -614,12 +621,13 @@ export const SettingsPage: React.FC = () => {
                       if (val === 'ollama') {
                         setSettings({
                           ...settings,
+                          llm_model: LOCAL_OLLAMA_MODEL,
                           llm: {
                             ...settings.llm,
                             provider: 'ollama',
                             base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
-                            model: settings.llm?.model || 'qwen3.5:9b',
-                            api_key: settings.llm?.api_key || 'ollama'
+                            model: settings.llm?.model || LOCAL_OLLAMA_MODEL,
+                            api_key: 'ollama'
                           }
                         });
                       } else {
@@ -629,7 +637,7 @@ export const SettingsPage: React.FC = () => {
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                   >
                     <option value="gemini">Google Gemini</option>
-                    <option value="ollama">Ollama (Local / 本机 - qwen3.5:9b)</option>
+                    <option value="ollama">Ollama (Local / 本机 - NovaStory Qwen3 8B)</option>
                     <option value="openai">OpenAI</option>
                     <option value="custom">Custom / OpenAI Compatible (DeepSeek, etc.)</option>
                     <option value="grok">xAI Grok</option>

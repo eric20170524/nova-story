@@ -73,7 +73,7 @@ export class SettingsManager {
         const llmApiKeyEnv = process.env.LLM_API_KEY;
         if (llmApiKeyEnv) {
             settings.llm = settings.llm || {};
-            settings.llm.api_key = llmApiKeyEnv;
+            settings.llm.api_key = settings.llm.provider === 'ollama' ? 'ollama' : llmApiKeyEnv;
         }
 
         const llmBaseUrlEnv = process.env.LLM_BASE_URL;
@@ -100,20 +100,50 @@ export class SettingsManager {
         }
 
         let newSettingsCopy = JSON.parse(JSON.stringify(newSettings));
+        let envContent = fs.readFileSync(envPath, 'utf-8');
+        const originalEnvContent = envContent;
+        const upsertEnvValue = (content: string, key: string, value: string) => {
+            const pattern = new RegExp(`^${key}=.*$`, 'm');
+            if (pattern.test(content)) {
+                return content.replace(pattern, () => `${key}=${value}`);
+            }
+            const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+            return `${content}${separator}${key}=${value}\n`;
+        };
 
         // Extract secrets to .env
         if (newSettingsCopy.llm && newSettingsCopy.llm.api_key !== undefined) {
             const apiKey = newSettingsCopy.llm.api_key;
-            // Extremely basic dotenv update for MVP
-            let envContent = fs.readFileSync(envPath, 'utf-8');
-            if (envContent.includes('LLM_API_KEY=')) {
-                envContent = envContent.replace(/LLM_API_KEY=.*/, `LLM_API_KEY=${apiKey}`);
-            } else {
-                envContent += `\nLLM_API_KEY=${apiKey}\n`;
+            const isOllamaPlaceholder =
+                newSettingsCopy.llm.provider === 'ollama' && apiKey === 'ollama';
+
+            // Keep an existing cloud-provider secret when the local Ollama
+            // placeholder is saved from the settings UI.
+            if (!isOllamaPlaceholder) {
+                envContent = upsertEnvValue(envContent, 'LLM_API_KEY', String(apiKey));
             }
-            fs.writeFileSync(envPath, envContent);
 
             delete newSettingsCopy.llm.api_key;
+        }
+
+        // Keep environment overrides in sync with settings saved through the UI.
+        // Otherwise stale LLM_* values would silently override system_settings.json.
+        if (newSettingsCopy.llm) {
+            const envMappings = [
+                ['LLM_PROVIDER', newSettingsCopy.llm.provider],
+                ['LLM_BASE_URL', newSettingsCopy.llm.base_url],
+                ['LLM_MODEL', newSettingsCopy.llm.model]
+            ] as const;
+
+            for (const [key, value] of envMappings) {
+                if (value !== undefined) {
+                    envContent = upsertEnvValue(envContent, key, String(value));
+                }
+            }
+        }
+
+        if (envContent !== originalEnvContent) {
+            fs.writeFileSync(envPath, envContent);
         }
 
         for (const [key, value] of Object.entries(newSettingsCopy)) {

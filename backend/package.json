@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "tsx --test src/services/text_import.test.ts",
+    "test": "tsx --test src/services/text_import.test.ts src/services/ai/openai_provider.test.ts",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts"
   },

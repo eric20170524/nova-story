@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { logger } from '../core/logging';
 import { settings as appSettings } from '../core/config';
 import { SettingsManager } from '../core/settings_manager';
-import { AIProvider } from './ai/base';
+import type { AIProvider } from './ai/base';
 import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
 import { Prompts } from './prompts';
@@ -14,22 +14,45 @@ import {
     ContentAnalysisSchema
 } from '../schemas/llm';
 
+export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1';
+export const DEFAULT_OLLAMA_MODEL = 'novastory-qwen3:8b';
+
+export type LLMProviderConfig = {
+    provider?: string;
+    api_key?: string;
+    base_url?: string;
+    model?: string;
+};
+
 export class LLMService {
-    static getProvider(token?: string): AIProvider {
+    static getProvider(token?: string, configOverride?: LLMProviderConfig): AIProvider {
         const sysSettings = SettingsManager.loadSettings();
-        const llmConfig = sysSettings.llm || {};
+        const llmConfig = configOverride || sysSettings.llm || {};
         const providerType = (llmConfig.provider || 'gemini').toLowerCase();
-        const apiKey = llmConfig.api_key || appSettings.GEMINI_API_KEY;
         const baseUrl = llmConfig.base_url;
-        const model = llmConfig.model || 'gemini-2.5-flash';
 
         if (['openai', 'custom', 'ollama'].includes(providerType)) {
-            const effectiveBaseUrl = baseUrl || (providerType === 'ollama' ? 'http://127.0.0.1:11434/v1' : undefined);
-            const effectiveModel = model || (providerType === 'ollama' ? 'qwen2.5-coder:7b' : 'gpt-4o');
-            return new OpenAIProvider(apiKey || 'ollama', effectiveModel, effectiveBaseUrl);
-        } else {
-            return new GeminiProvider(apiKey, model);
+            const isOllama = providerType === 'ollama';
+            const effectiveBaseUrl = baseUrl || (isOllama ? DEFAULT_OLLAMA_BASE_URL : undefined);
+            const effectiveModel = llmConfig.model || (isOllama ? DEFAULT_OLLAMA_MODEL : 'gpt-4o');
+            const effectiveApiKey = isOllama
+                ? 'ollama'
+                : (llmConfig.api_key || appSettings.OPENAI_API_KEY);
+            return new OpenAIProvider(effectiveApiKey, effectiveModel, effectiveBaseUrl, { isOllama });
         }
+
+        if (providerType === 'grok') {
+            return new OpenAIProvider(
+                llmConfig.api_key || appSettings.GROK_API_KEY,
+                llmConfig.model || 'grok-3',
+                baseUrl || 'https://api.x.ai/v1'
+            );
+        }
+
+        return new GeminiProvider(
+            llmConfig.api_key || appSettings.GEMINI_API_KEY,
+            llmConfig.model || 'gemini-2.5-flash'
+        );
     }
 
     static async generateStructuredWithRetry<T>(prompt: string, schema: z.ZodSchema<T>, token?: string): Promise<T | null> {

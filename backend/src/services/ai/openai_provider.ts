@@ -1,21 +1,28 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { AIProvider } from './base';
+import type { AIProvider } from './base';
 import { logger } from '../../core/logging';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export class OpenAIProvider implements AIProvider {
     private openai: OpenAI;
     private model: string;
     private imageModel: string;
+    private isOllama: boolean;
 
-    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl?: string) {
+    constructor(
+        apiKey: string,
+        model: string = 'gpt-4o',
+        baseUrl?: string,
+        options: { isOllama?: boolean } = {}
+    ) {
         this.openai = new OpenAI({
             apiKey,
             baseURL: baseUrl,
+            timeout: options.isOllama ? 120_000 : 60_000,
         });
         this.model = model;
         this.imageModel = 'dall-e-3';
+        this.isOllama = options.isOllama === true;
     }
 
     async generateText(prompt: string, systemInstruction?: string): Promise<string> {
@@ -26,10 +33,18 @@ export class OpenAIProvider implements AIProvider {
             }
             messages.push({ role: 'user', content: prompt });
 
-            const response = await this.openai.chat.completions.create({
+            const request: any = {
                 model: this.model,
-                messages
-            });
+                messages,
+                temperature: 0.85,
+                top_p: 0.92
+            };
+
+            if (this.isOllama) {
+                request.reasoning_effort = 'none';
+            }
+
+            const response = await this.openai.chat.completions.create(request);
 
             return response.choices[0]?.message?.content || '';
         } catch (error) {
@@ -46,14 +61,29 @@ export class OpenAIProvider implements AIProvider {
             }
             messages.push({ role: 'user', content: prompt });
 
-            const jsonSchema = zodToJsonSchema(responseSchema, "ResponseSchema") as any;
-            const schemaRef = jsonSchema.definitions?.ResponseSchema || jsonSchema;
+            const schemaRef = z.toJSONSchema(responseSchema) as any;
 
-            const response = await this.openai.chat.completions.create({
+            const request: any = {
                 model: this.model,
                 messages,
-                response_format: { type: 'json_object' } // Using simple json_object for compatibility with local ollama/vllm endpoints often passed as OpenAI providers
-            });
+                temperature: 0.1,
+                response_format: this.isOllama
+                    ? {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'ResponseSchema',
+                            strict: true,
+                            schema: schemaRef
+                        }
+                    }
+                    : { type: 'json_object' }
+            };
+
+            if (this.isOllama) {
+                request.reasoning_effort = 'none';
+            }
+
+            const response = await this.openai.chat.completions.create(request);
 
             const content = response.choices[0]?.message?.content || '';
 
@@ -68,16 +98,14 @@ export class OpenAIProvider implements AIProvider {
 
             // Adjust common array wrapper mismatch from generic json generation
             let targetParsed = parsed;
-            const schemaFields = (responseSchema as any)?._def?.shape();
-            if (schemaFields) {
-               const fieldKeys = Object.keys(schemaFields);
-               if (fieldKeys.length === 1 && Array.isArray(parsed)) {
-                   targetParsed = { [fieldKeys[0]]: parsed };
-               } else if (Array.isArray(parsed) && fieldKeys.includes('shots')) {
-                   targetParsed = { shots: parsed };
-               } else if (Array.isArray(parsed) && fieldKeys.includes('profiles')) {
-                   targetParsed = { profiles: parsed };
-               }
+            const fieldKeys = Object.keys(schemaRef?.properties || {});
+            const onlyField = fieldKeys.length === 1 ? fieldKeys[0] : undefined;
+            if (onlyField && Array.isArray(parsed)) {
+                targetParsed = { [onlyField]: parsed };
+            } else if (Array.isArray(parsed) && fieldKeys.includes('shots')) {
+                targetParsed = { shots: parsed };
+            } else if (Array.isArray(parsed) && fieldKeys.includes('profiles')) {
+                targetParsed = { profiles: parsed };
             }
 
             return responseSchema.parse(targetParsed);

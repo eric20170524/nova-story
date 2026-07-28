@@ -5,6 +5,7 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { LLMService } from '../services/llm';
 
 // Dummy implementation of current_user auth
 const mockGetCurrentUser = (request: any) => ({
@@ -42,6 +43,104 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = await db.all(sql, ...params);
     return rows.map(serializeCharacter);
+  });
+
+  app.post('/extract', async (request, reply) => {
+    const bodySchema = z.object({
+      chapter_id: z.string().min(1)
+    });
+    const { chapter_id } = bodySchema.parse(request.body);
+
+    const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapter_id);
+    if (!chapter) {
+      return reply.status(404).send({ detail: 'Chapter not found' });
+    }
+    if (!chapter.content?.trim()) {
+      return reply.status(400).send({ detail: 'Chapter has no content' });
+    }
+
+    const profiles = await LLMService.extractCharacterProfiles(chapter.content);
+    if (!profiles.length) {
+      return reply.status(502).send({ detail: 'LLM returned no character profiles' });
+    }
+
+    await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const savedCharacters = [];
+
+      for (const profile of profiles) {
+        const existing = await db.get(
+          'SELECT * FROM character WHERE project_id = ? AND TRIM(name) = TRIM(?) COLLATE NOCASE LIMIT 1',
+          chapter.project_id,
+          profile.name
+        );
+
+        let existingTags: any = {};
+        if (existing?.visual_tags) {
+          try {
+            existingTags = typeof existing.visual_tags === 'string'
+              ? JSON.parse(existing.visual_tags)
+              : existing.visual_tags;
+          } catch {
+            existingTags = {};
+          }
+        }
+
+        const visualTags = profile.visual_tags || {};
+        const mergedTags = {
+          ...existingTags,
+          timeline_map: existingTags.timeline_map || {},
+          variants: existingTags.variants || [{
+            id: 'v1_default',
+            name: 'Default',
+            tags: {}
+          }],
+          base_model: {
+            ...(existingTags.base_model || {}),
+            tags: {
+              ...(existingTags.base_model?.tags || {}),
+              ...visualTags
+            }
+          },
+          assets: existingTags.assets || {},
+          model_type: existingTags.model_type || 'pony'
+        };
+
+        let characterId: number;
+        if (existing) {
+          await db.run(
+            `UPDATE character
+             SET role = ?, description = ?, visual_tags = ?
+             WHERE id = ?`,
+            profile.role,
+            profile.description,
+            JSON.stringify(mergedTags),
+            existing.id
+          );
+          characterId = existing.id;
+        } else {
+          const result = await db.run(
+            `INSERT INTO character (project_id, name, role, description, visual_tags)
+             VALUES (?, ?, ?, ?, ?)`,
+            chapter.project_id,
+            profile.name,
+            profile.role,
+            profile.description,
+            JSON.stringify(mergedTags)
+          );
+          characterId = Number(result.lastID);
+        }
+
+        const saved = await db.get('SELECT * FROM character WHERE id = ?', characterId);
+        savedCharacters.push(serializeCharacter(saved));
+      }
+
+      await db.exec('COMMIT');
+      return savedCharacters;
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      throw error;
+    }
   });
 
   app.get('/:id', async (request, reply) => {

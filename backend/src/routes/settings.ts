@@ -1,5 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { SettingsManager } from '../core/settings_manager';
+import { LLMService } from '../services/llm';
+import type { LLMProviderConfig } from '../services/llm';
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async (request, reply) => {
@@ -12,17 +14,32 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/verify-llm', async (request, reply) => {
-    // Basic implementation for now to satisfy endpoint contract
-    // Later we will integrate actual AI providers logic in Phase 4
     const config = request.body as any;
-    const llm_config = config.llm || config;
-    const providerType = (llm_config.provider || "gemini").toLowerCase();
+    const llmConfig = (config.llm || config) as LLMProviderConfig;
+    const providerType = (llmConfig.provider || 'gemini').toLowerCase();
 
-    // We mock success for Phase 2, full implementation comes in Phase 4
-    return {
-      status: "success",
-      message: "LLM connection verify mocked successfully for fastify migration phase 2.",
-      provider: providerType
-    };
+    try {
+      const provider = LLMService.getProvider(undefined, llmConfig);
+      const result = await provider.generateText(
+        'Reply with exactly NOVASTORY_OK and no other text.',
+        'This is a connection health check. Follow the user instruction exactly.'
+      );
+
+      if (!result.trim()) {
+        throw new Error('The provider returned an empty response.');
+      }
+
+      return {
+        status: 'success',
+        message: 'LLM connection and inference verified successfully.',
+        provider: providerType,
+        model: llmConfig.model
+      };
+    } catch (error: any) {
+      request.log.warn({ err: error, provider: providerType }, 'LLM connection verification failed');
+      return reply.status(502).send({
+        detail: `LLM verification failed: ${error?.message || String(error)}`
+      });
+    }
   });
 };

@@ -1,15 +1,14 @@
-import { GeminiProvider } from './gemini_provider';
-import { settings } from '../../core/config';
 import { db } from '../../db/database';
 import { AgentRequest, AgentResponse } from '../../schemas/agent';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
+import type { AIProvider } from './base';
 
 export class AgentService {
-    private llm: GeminiProvider;
+    private llm: AIProvider;
 
     constructor() {
-        this.llm = new GeminiProvider(settings.GEMINI_API_KEY);
+        this.llm = LLMService.getProvider();
     }
 
     async processRequest(request: AgentRequest): Promise<AgentResponse> {

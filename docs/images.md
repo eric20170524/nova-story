@@ -1,5 +1,11 @@
 # 本地语言模型
 
+> 本机已按本文首选方案落地：`Qwen3-8B Abliterated v2 / Q4_K_M`，通过 Ollama 的
+> OpenAI 兼容接口接入 NovaStory。针对 RTX 4060 Laptop 8GB + 16GB 内存，固定为
+> 8K 上下文、Flash Attention、q8 KV cache、单并发，并与 ComfyUI 采用显存互斥运行。
+> 安装路径、启动方式、验证和调参依据见
+> [本地语言模型部署说明](./local_language_model_deployment_cn.md)。
+
 **针对 8GB 显存、支持 NSFW（无审查）、主要用于小说创作、漫剧分镜和生图提示词的本地语言模型推荐如下**（基于 2026 年社区实测与评测，优先选 Q4_K_M 量化版本，约 4.5–6GB VRAM 占用，留余量给上下文）。
 
 ### 核心推荐（按优先级）
