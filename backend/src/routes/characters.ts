@@ -12,9 +12,17 @@ const mockGetCurrentUser = (request: any) => ({
 });
 
 const serializeCharacter = (row: any) => {
-  return {
+  const serialized = {
     ...row,
     visual_tags: typeof row.visual_tags === 'string' ? JSON.parse(row.visual_tags) : (row.visual_tags || {})
+  };
+  const assets = serialized.visual_tags?.assets || {};
+  return {
+    ...serialized,
+    avatar_url: assets.avatar_url || null,
+    turnaround_url: assets.turnaround_url || null,
+    face_url: assets.face_url || null,
+    model_type: serialized.visual_tags?.model_type || 'pony'
   };
 };
 
@@ -75,14 +83,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const newChar = await db.get('SELECT * FROM character WHERE id = ?', result.lastID);
 
-    // Simulate properties for the frontend that exist in the Pydantic model but not in DB directly
-    const charToReturn = serializeCharacter(newChar);
-    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
-    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
-    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
-    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
-
-    return charToReturn;
+    return serializeCharacter(newChar);
   });
 
   app.put('/:id', async (request, reply) => {
@@ -140,13 +141,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    const charToReturn = serializeCharacter(updatedChar);
-    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
-    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
-    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
-    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
-
-    return charToReturn;
+    return serializeCharacter(updatedChar);
   });
 
   app.delete('/:id', async (request, reply) => {
@@ -292,12 +287,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    const charToReturn = serializeCharacter(updatedChar);
-    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
-    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
-    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
-    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
-    return charToReturn;
+    return serializeCharacter(updatedChar);
   });
 
   app.post('/:id/train-lora', async (request, reply) => {
@@ -323,12 +313,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    const charToReturn = serializeCharacter(updatedChar);
-    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
-    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
-    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
-    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
-    return charToReturn;
+    return serializeCharacter(updatedChar);
   });
 
   app.post('/upload-image', async (request, reply) => {
@@ -406,11 +391,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    const charToReturn = serializeCharacter(updatedChar);
-    charToReturn.avatar_url = charToReturn.visual_tags?.assets?.avatar_url;
-    charToReturn.turnaround_url = charToReturn.visual_tags?.assets?.turnaround_url;
-    charToReturn.face_url = charToReturn.visual_tags?.assets?.face_url;
-    charToReturn.model_type = charToReturn.visual_tags?.model_type || 'pony';
-    return charToReturn;
+    return serializeCharacter(updatedChar);
   });
 };

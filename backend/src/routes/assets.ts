@@ -8,6 +8,7 @@ import { db } from '../db/database';
 import { ComfyUIService } from '../services/ai/comfyui_service';
 import { SettingsManager } from '../core/settings_manager';
 import Redis from 'ioredis';
+import { AssetTaskStore } from '../services/task_store';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -28,7 +29,8 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
   app.get('/status/:task_id', async (request, reply) => {
     const paramsSchema = z.object({ task_id: z.string() });
     const { task_id } = paramsSchema.parse(request.params);
-    return { task_id, status: "UNKNOWN", detail: "Use SSE stream for real-time status" };
+    const task = AssetTaskStore.get(task_id);
+    return task || { task_id, status: "UNKNOWN", detail: "Task was not found in this server process" };
   });
 
   app.get('/stream/:task_id', async (request, reply) => {
@@ -62,6 +64,19 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     reply.raw.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
     // Initial check just in case it already finished
+    const task = AssetTaskStore.get(task_id);
+    if (task?.status === 'completed' && task.image_url) {
+        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: task.image_url })}\n\n`);
+        if (redis) redis.disconnect();
+        reply.raw.end();
+        return;
+    } else if (task?.status === 'failed') {
+        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: task.error || 'Generation failed' })}\n\n`);
+        if (redis) redis.disconnect();
+        reply.raw.end();
+        return;
+    }
+
     const scene = await db.get('SELECT * FROM scene WHERE task_id = ?', task_id);
     if (scene && scene.asset_status === 'completed' && scene.asset_url) {
         reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: scene.asset_url })}\n\n`);
@@ -95,6 +110,19 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     } else {
         // Fallback polling if redis is unavailable (e.g. running locally without redis installed)
         const pollInterval = setInterval(async () => {
+            const taskState = AssetTaskStore.get(task_id);
+            if (taskState?.status === 'completed' && taskState.image_url) {
+                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: taskState.image_url })}\n\n`);
+                clearInterval(pollInterval);
+                reply.raw.end();
+                return;
+            } else if (taskState?.status === 'failed') {
+                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: taskState.error || 'Generation failed' })}\n\n`);
+                clearInterval(pollInterval);
+                reply.raw.end();
+                return;
+            }
+
             const checkScene = await db.get('SELECT * FROM scene WHERE task_id = ?', task_id);
             if (checkScene && checkScene.asset_status === 'completed' && checkScene.asset_url) {
                 reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: checkScene.asset_url })}\n\n`);

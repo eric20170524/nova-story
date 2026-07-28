@@ -16,7 +16,7 @@ export const AgentRequestSchema = z.object({
 
 export const ToolCallSchema = z.object({
   tool_name: z.string(),
-  arguments: z.record(z.any()),
+  arguments: z.record(z.string(), z.any()),
   reason: z.string()
 });
 

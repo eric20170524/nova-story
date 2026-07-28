@@ -7,10 +7,105 @@ import path from 'path';
 import fs from 'fs';
 import { logger } from '../core/logging';
 import { Prompts } from './prompts';
+import { AssetTaskStore } from './task_store';
+
+const isComfyWorkflow = (value: any) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.values(value).some((node: any) => node && typeof node === 'object' && typeof node.class_type === 'string');
+};
+
+const parseWorkflowContent = (content: unknown) => {
+    if (typeof content === 'string') return JSON.parse(content);
+    return JSON.parse(JSON.stringify(content));
+};
+
+const compileComfyWorkflow = async (
+    workflowData: any,
+    finalPrompt: string,
+    mode: string,
+    generationParams?: any
+) => {
+    let workflow: any;
+
+    if (isComfyWorkflow(workflowData)) {
+        workflow = parseWorkflowContent(workflowData);
+    } else {
+        const selectedWorkflowFile = SettingsManager.loadSettings().comfyui?.selected_workflow_file;
+        const selectedWorkflowName = selectedWorkflowFile
+            ? path.basename(String(selectedWorkflowFile), '.json')
+            : null;
+        const requestedModel = String(
+            workflowData?.model_type
+            || workflowData?.reference_model_type
+            || 'pony'
+        ).toLowerCase();
+        const preferredName = requestedModel.includes('flux')
+            ? 'flux_dev_gguf_12gb'
+            : 'pony_xl_12gb';
+        const fallbackName = 'pony_xl_12gb';
+
+        let row = selectedWorkflowName
+            ? await db.get('SELECT content FROM workflow WHERE name = ?', selectedWorkflowName)
+            : null;
+        if (!row) {
+            row = await db.get('SELECT content FROM workflow WHERE name = ?', preferredName);
+        }
+        if (!row && preferredName !== fallbackName) {
+            row = await db.get('SELECT content FROM workflow WHERE name = ?', fallbackName);
+        }
+        if (!row) {
+            throw new Error(`No ComfyUI workflow is configured for model '${requestedModel}'`);
+        }
+        workflow = parseWorkflowContent(row.content);
+    }
+
+    const negativePrompt = [
+        workflowData?.negative_prompt || '',
+        'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act',
+        'low quality, worst quality, bad anatomy, extra limbs, text, watermark'
+    ].filter(Boolean).join(', ');
+
+    const samplerNodes = Object.values(workflow).filter(
+        (node: any) => node?.class_type?.includes('KSampler')
+    ) as any[];
+
+    for (const sampler of samplerNodes) {
+        const positiveId = Array.isArray(sampler.inputs?.positive) ? String(sampler.inputs.positive[0]) : null;
+        const negativeId = Array.isArray(sampler.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
+
+        if (positiveId && workflow[positiveId]?.inputs) {
+            workflow[positiveId].inputs.text = finalPrompt;
+        }
+        if (negativeId && workflow[negativeId]?.inputs && negativeId !== positiveId) {
+            workflow[negativeId].inputs.text = negativePrompt;
+        }
+
+        sampler.inputs.seed = Math.floor(Math.random() * 1_000_000_000);
+        sampler.inputs.steps = Number(generationParams?.steps || 20);
+        sampler.inputs.cfg = Number(generationParams?.cfg || 7);
+        if (generationParams?.sampler_name) sampler.inputs.sampler_name = generationParams.sampler_name;
+        if (generationParams?.scheduler) sampler.inputs.scheduler = generationParams.scheduler;
+    }
+
+    const isTurnaround = workflowData?.gen_type === 'turnaround';
+    const width = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 1152 : 768);
+    const height = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 768 : 1024);
+
+    for (const node of Object.values(workflow) as any[]) {
+        if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
+            node.inputs.width = width;
+            node.inputs.height = height;
+            node.inputs.batch_size = 1;
+        }
+    }
+
+    return workflow;
+};
 
 export class GenerationService {
     static async generateAssets(taskId: string, workflowData: any, sceneId: number, userToken?: string, mode: string = "standard", generationParams?: any) {
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
+        AssetTaskStore.processing(taskId, sceneId);
 
         const staticDir = path.join(__dirname, '../../app/static/generated');
         if (!fs.existsSync(staticDir)) {
@@ -55,11 +150,12 @@ export class GenerationService {
                 const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
                 const comfyService = new ComfyUIService(baseUrl);
 
-                // We're skipping the Deep ComfyUI Workflow modification tree logic here for Node.js simplicity.
-                // A full port would require recursive searching through JSON graph.
-
-                // Dummy modification: just inject random seed if KSampler found
-                let finalWorkflow = JSON.parse(JSON.stringify(workflowData));
+                const finalWorkflow = await compileComfyWorkflow(
+                    workflowData,
+                    finalPrompt,
+                    mode,
+                    generationParams
+                );
 
                 // Advanced config check for NSFW LoRA injection
                 const advancedSettings = settings.advanced || {};
@@ -135,12 +231,14 @@ export class GenerationService {
             }
 
             if (finalStatus === "completed") {
+                AssetTaskStore.completed(taskId, sceneId, assetUrl!);
                 if (redis && redis.status === 'ready') {
                     try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "completed", image_url: assetUrl })); } catch(e) {}
                 }
             } else {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
+                AssetTaskStore.failed(taskId, sceneId, errMsg);
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                 if (redis && redis.status === 'ready') {
                     try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "failed", error: errMsg })); } catch(e) {}
@@ -149,6 +247,7 @@ export class GenerationService {
 
         } catch (error: any) {
             logger.error(`[Task ${taskId}] Unexpected error in async service: ${error.message}`);
+            AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                 if (redis && redis.status === 'ready') {

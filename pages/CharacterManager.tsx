@@ -191,7 +191,7 @@ export const CharacterManager: React.FC = () => {
       const taskId = res.task_id;
 
       // Subscribe to SSE or poll for completion
-      const eventSource = new EventSource(`${api['request'] ? '' : 'http://127.0.0.1:8000'}/api/assets/stream/${taskId}`);
+      const eventSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);

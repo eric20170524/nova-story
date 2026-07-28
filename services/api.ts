@@ -137,6 +137,10 @@ class ApiService {
   // Projects
   getProjects = () => this.request<any[]>('/projects/');
   createProject = (data: any) => this.request<any>('/projects/', { method: 'POST', body: data });
+  duplicateProject = (id: number, title?: string) => this.request<any>(`/projects/${id}/duplicate`, {
+    method: 'POST',
+    body: title ? { title } : {}
+  });
   getProject = (id: number) => this.request<any>(`/projects/${id}`);
   updateProject = (id: number, data: any) => this.request<any>(`/projects/${id}`, { method: 'PUT', body: data });
   deleteProject = (id: number) => this.request(`/projects/${id}`, { method: 'DELETE' });
@@ -155,7 +159,12 @@ class ApiService {
         body: formData,
     }).then(async (response) => {
         if (!response.ok) {
-            throw new Error(`API Error ${response.status}`);
+            let detail = `API Error ${response.status}`;
+            try {
+                const payload = await response.json();
+                if (typeof payload?.detail === 'string') detail = payload.detail;
+            } catch (_) {}
+            throw new Error(detail);
         }
         return await response.json();
     });
@@ -284,11 +293,7 @@ class ApiService {
     const res = await fetch(`${API_BASE_URL}/assets/generate`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify({
-        workflow: workflowData,
-        scene_id: Number(sceneId),
-        mode: workflowData.mode || 'standard' // Extract mode from workflowData if present
-      }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('Failed to start generation');
     return res.json();

@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
 import { db } from './db/database';
 
 const app = Fastify({
@@ -10,6 +12,11 @@ app.register(cors, {
   origin: '*'
 });
 
+app.register(fastifyStatic, {
+  root: path.join(__dirname, '../app/static'),
+  prefix: '/static/'
+});
+
 import { projectRoutes } from './routes/projects';
 import { settingsRoutes } from './routes/settings';
 import { workflowRoutes } from './routes/workflows';
@@ -17,6 +24,7 @@ import { characterRoutes } from './routes/characters';
 import { comicRoutes } from './routes/comics';
 import { timelineRoutes } from './routes/timeline';
 import { assetRoutes } from './routes/assets';
+import { chapterRoutes } from './routes/chapters';
 import multipart from '@fastify/multipart';
 
 app.register(multipart, {
@@ -36,6 +44,7 @@ app.get('/api/test-db', async (request, reply) => {
 
 // Register routes
 app.register(projectRoutes, { prefix: '/api/projects' });
+app.register(chapterRoutes, { prefix: '/api/chapters' });
 app.register(settingsRoutes, { prefix: '/api/settings' });
 app.register(workflowRoutes, { prefix: '/api/workflows' });
 app.register(characterRoutes, { prefix: '/api/characters' });

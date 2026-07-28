@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tsx --test src/services/text_import.test.ts",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts"
   },

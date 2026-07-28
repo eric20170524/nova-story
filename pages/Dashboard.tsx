@@ -64,7 +64,10 @@ export const Dashboard: React.FC = () => {
         setImportFile(null);
         showToast("Project imported successfully", 'success');
     } catch (error) {
-        showToast('Failed to import project. Please check the file format.', 'error');
+        const message = error instanceof Error
+          ? error.message
+          : 'Failed to import project. Please check the file format.';
+        showToast(message, 'error');
         console.error(error);
     }
   }

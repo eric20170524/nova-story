@@ -8,11 +8,16 @@ import path from 'path';
 export const workflowRoutes: FastifyPluginAsync = async (app) => {
   app.get('/files', async (request, reply) => {
     const staticWorkflowsDir = path.join(__dirname, '../../app/static/workflows');
-    if (!fs.existsSync(staticWorkflowsDir)) {
-      return [];
-    }
-    const files = fs.readdirSync(staticWorkflowsDir).filter(f => f.endsWith('.json'));
-    return files;
+    const diskFiles = fs.existsSync(staticWorkflowsDir)
+      ? fs.readdirSync(staticWorkflowsDir).filter(f => f.endsWith('.json'))
+      : [];
+    const rows = await db.all('SELECT name FROM workflow WHERE is_active = 1 ORDER BY name');
+    const databaseFiles = rows
+      .map((row: any) => String(row.name || '').trim())
+      .filter(Boolean)
+      .map((name: string) => name.endsWith('.json') ? name : `${name}.json`);
+
+    return Array.from(new Set([...diskFiles, ...databaseFiles])).sort();
   });
 
   app.get('/', async (request, reply) => {

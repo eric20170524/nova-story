@@ -63,6 +63,17 @@ List all projects.
 *   **Method**: `DELETE`
 *   **Response**: `{}`
 
+### 1.6 Import Project
+Import a UTF-8, GBK, or GB18030 `.txt` file as a project. Chinese chapter
+headings (including wrapped headings such as `《书名·第二章》`) and
+`Chapter`/`Episode` headings are split into editable chapters.
+
+*   **URL**: `/import`
+*   **Method**: `POST`
+*   **Content-Type**: `multipart/form-data`
+*   **Form field**: `file`
+*   **Response**: Created `Project` object.
+
 ---
 
 ## 2. Character API (Character Management)

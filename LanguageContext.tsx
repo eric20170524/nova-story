@@ -29,7 +29,7 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
 
     if (typeof value === 'string' && params) {
       return Object.entries(params).reduce((acc, [key, val]) => {
-        return acc.replace(new RegExp(`{${key}}`, 'g'), String(val));
+        return acc.split(`{${key}}`).join(String(val));
       }, value);
     }
 

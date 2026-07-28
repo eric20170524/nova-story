@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 
 // Load .env from backend root
@@ -7,10 +8,36 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const BACKEND_DIR = path.resolve(__dirname, '../../');
 const DEFAULT_DB_FILE = path.join(BACKEND_DIR, 'sql_app.db');
 
+const resolveDatabaseFile = (configuredUrl?: string) => {
+  if (!configuredUrl) {
+    return DEFAULT_DB_FILE;
+  }
+
+  const configuredPath = configuredUrl.startsWith('sqlite:///')
+    ? configuredUrl.slice('sqlite:///'.length)
+    : configuredUrl;
+
+  if (configuredPath === ':memory:') {
+    return configuredPath;
+  }
+
+  const absolutePath = path.isAbsolute(configuredPath)
+    ? path.normalize(configuredPath)
+    : path.resolve(BACKEND_DIR, configuredPath);
+
+  // A checked-out repository may have moved since .env was created. Prefer the
+  // repository-local database when the configured absolute file no longer exists.
+  if (!fs.existsSync(absolutePath) && fs.existsSync(DEFAULT_DB_FILE)) {
+    return DEFAULT_DB_FILE;
+  }
+
+  return absolutePath;
+};
+
 export const settings = {
   PROJECT_NAME: process.env.PROJECT_NAME || 'NovaStory',
 
-  DATABASE_URL: process.env.DATABASE_URL || DEFAULT_DB_FILE, // For knex/sqlite, we just need the file path
+  DATABASE_URL: resolveDatabaseFile(process.env.DATABASE_URL),
 
   REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379/0',
 
