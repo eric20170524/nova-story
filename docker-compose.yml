@@ -1,72 +1,41 @@
-version: '3.8'
-
 services:
-  # --- Infrastructure ---
-  mysql:
-    image: mysql:8.0
-    container_name: novastory-mysql
-    restart: always
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: novastory
-      MYSQL_USER: novauser
-      MYSQL_PASSWORD: novapassword
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
-      timeout: 20s
-      retries: 10
-
   redis:
-    image: redis:alpine
-    container_name: novastory-redis
-    restart: always
-    ports:
-      - "6379:6379"
-
-  # --- Application ---
-  backend:
-    build: ./backend
-    container_name: novastory-backend
-    restart: always
-    ports:
-      - "8000:8000"
+    image: redis:7-alpine
+    restart: unless-stopped
     volumes:
-      - ./backend:/app
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
     environment:
-      - DATABASE_URL=mysql+pymysql://novauser:novapassword@mysql/novastory
-      - REDIS_URL=redis://redis:6379/0
-      # AI Configuration
-      - AI_IMAGE_PROVIDER=${AI_IMAGE_PROVIDER:-gemini}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GROK_API_KEY=${GROK_API_KEY}
-      # Nebula Integration
-      - NEBULA_ENABLED=${NEBULA_ENABLED:-false}
-      - NEBULA_BASE_URL=${NEBULA_BASE_URL:-https://www.chuangyi.chat/v2}
-      - NEBULA_SYSTEM_TOKEN=${NEBULA_SYSTEM_TOKEN}
+      NODE_ENV: production
+      DATABASE_URL: /data/sql_app.db
+      NOVASTORY_DATA_DIR: /data
+      NOVASTORY_CONFIG_DIR: /data
+      NOVASTORY_STATIC_DIR: /data/static
+      REDIS_URL: redis://redis:6379/0
+      AI_IMAGE_PROVIDER: ${AI_IMAGE_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROK_API_KEY: ${GROK_API_KEY:-}
+    ports:
+      - "8087:8087"
+    volumes:
+      - backend_data:/data
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+      - redis
 
   frontend:
-    build: ./frontend
-    container_name: novastory-frontend
+    build:
+      context: .
+    restart: unless-stopped
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - "3000:80"
     depends_on:
       - backend
 
 volumes:
-  mysql_data:
+  backend_data:
+  redis_data:

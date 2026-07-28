@@ -1,11 +1,11 @@
 *.idea/
 node_modules/
+/frontend/package-lock.json
 /ai_story-main/
 /huobao-drama-master/
 /MoneyPrinterTurbo-main/
 /Pixelle-Video-main/
 /ShortGPT-stable/
-package-lock.json
 *.next/
 *.venv/
 *.db

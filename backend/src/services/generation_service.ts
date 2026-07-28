@@ -1,5 +1,5 @@
 import { ComfyUIService } from './ai/comfyui_service';
-import { LLMService } from './llm';
+import { MediaService } from './media_service';
 import { SettingsManager } from '../core/settings_manager';
 import { db } from '../db/database';
 import Redis from 'ioredis';
@@ -8,6 +8,7 @@ import fs from 'fs';
 import { logger } from '../core/logging';
 import { Prompts } from './prompts';
 import { AssetTaskStore } from './task_store';
+import { getGeneratedDirectory } from '../core/paths';
 
 const isComfyWorkflow = (value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -19,18 +20,124 @@ const parseWorkflowContent = (content: unknown) => {
     return JSON.parse(JSON.stringify(content));
 };
 
-const compileComfyWorkflow = async (
+const findNodeId = (workflow: any, predicate: (node: any) => boolean) =>
+    Object.keys(workflow).find((nodeId) => predicate(workflow[nodeId]));
+
+const nextNodeId = (workflow: any) => {
+    const numericIds = Object.keys(workflow)
+        .map((nodeId) => Number(nodeId))
+        .filter(Number.isFinite);
+    return String((numericIds.length > 0 ? Math.max(...numericIds) : 0) + 1);
+};
+
+const injectLora = (
+    workflow: any,
+    loraName: string,
+    strength: number,
+    modelType: 'pony' | 'flux'
+) => {
+    if (!loraName) return;
+    const alreadyPresent = Object.values(workflow).some(
+        (node: any) => node?.inputs?.lora_name === loraName
+    );
+    if (alreadyPresent) return;
+
+    const modelLoaderId = findNodeId(workflow, (node) =>
+        modelType === 'flux'
+            ? node?.class_type === 'UnetLoaderGGUF'
+            : node?.class_type === 'CheckpointLoaderSimple'
+    );
+    if (!modelLoaderId) return;
+
+    const samplerNode = Object.values(workflow).find(
+        (node: any) => node?.class_type?.includes('KSampler')
+    ) as any;
+    const textEncoderNode = Object.values(workflow).find(
+        (node: any) => node?.class_type === 'CLIPTextEncode'
+    ) as any;
+    const currentModel = Array.isArray(samplerNode?.inputs?.model)
+        ? samplerNode.inputs.model
+        : [modelLoaderId, 0];
+    const currentClip = Array.isArray(textEncoderNode?.inputs?.clip)
+        ? textEncoderNode.inputs.clip
+        : [modelLoaderId, 1];
+    const loraNodeId = nextNodeId(workflow);
+    if (modelType === 'flux') {
+        workflow[loraNodeId] = {
+            inputs: {
+                lora_name: loraName,
+                strength_model: strength,
+                model: currentModel
+            },
+            class_type: 'LoraLoaderModelOnly',
+            _meta: { title: 'NovaStory FLUX LoRA' }
+        };
+    } else {
+        workflow[loraNodeId] = {
+            inputs: {
+                lora_name: loraName,
+                strength_model: strength,
+                strength_clip: strength,
+                model: currentModel,
+                clip: currentClip
+            },
+            class_type: 'LoraLoader',
+            _meta: { title: 'NovaStory Pony LoRA' }
+        };
+    }
+
+    for (const node of Object.values(workflow) as any[]) {
+        if (node?.class_type?.includes('KSampler') && node.inputs) {
+            node.inputs.model = [loraNodeId, 0];
+        }
+        if (
+            modelType === 'pony'
+            && node?.class_type === 'CLIPTextEncode'
+            && node.inputs
+        ) {
+            node.inputs.clip = [loraNodeId, 1];
+        }
+    }
+};
+
+const findFluxStyleLora = (runtimeSettings: any) => {
+    const comfySettings = runtimeSettings.comfyui || {};
+    const installPath = comfySettings.install_path;
+    if (!installPath) return null;
+
+    const loraDirectory = path.join(String(installPath), 'models', 'loras');
+    if (!fs.existsSync(loraDirectory)) return null;
+
+    const configuredLora = comfySettings.flux_lora;
+    if (
+        configuredLora
+        && fs.existsSync(path.join(loraDirectory, path.basename(String(configuredLora))))
+    ) {
+        return path.basename(String(configuredLora));
+    }
+
+    const candidates = fs.readdirSync(loraDirectory)
+        .filter((filename) => /\.(safetensors|ckpt)$/i.test(filename))
+        .sort((left, right) => left.localeCompare(right));
+    return candidates.find((filename) =>
+        /(asian|guofeng|east[_-]?asian|flux[_-]?asian)/i.test(filename)
+    ) || candidates[0] || null;
+};
+
+export const compileComfyWorkflow = async (
     workflowData: any,
     finalPrompt: string,
     mode: string,
-    generationParams?: any
+    generationParams?: any,
+    runtimeSettings: any = SettingsManager.loadSettings()
 ) => {
     let workflow: any;
 
     if (isComfyWorkflow(workflowData)) {
         workflow = parseWorkflowContent(workflowData);
     } else {
-        const selectedWorkflowFile = SettingsManager.loadSettings().comfyui?.selected_workflow_file;
+        const selectedWorkflowFile = runtimeSettings.comfyui?.selected_workflow_file
+            || runtimeSettings.comfyui?.default_workflow;
         const selectedWorkflowName = selectedWorkflowFile
             ? path.basename(String(selectedWorkflowFile), '.json')
             : null;
@@ -59,11 +166,36 @@ const compileComfyWorkflow = async (
         workflow = parseWorkflowContent(row.content);
     }
 
-    const negativePrompt = [
+    const isFlux = Boolean(findNodeId(workflow, (node) =>
+        node?.class_type === 'UnetLoaderGGUF'
+        || (
+            node?.class_type === 'CheckpointLoaderSimple'
+            && /flux/i.test(node.inputs?.ckpt_name || '')
+        )
+    ));
+    const preserveTemplateConditioning = !isFlux && /pony/i.test(JSON.stringify(workflow));
+    let effectivePrompt = finalPrompt;
+    if (
+        isFlux
+        && !/(east asian|chinese|japanese|asian|guofeng|xianxia)/i.test(effectivePrompt)
+    ) {
+        effectivePrompt = `${effectivePrompt}, East Asian facial features, soft facial contour, East Asian beauty`;
+    }
+
+    const advancedSettings = runtimeSettings.advanced || {};
+    const negativeParts = [
         workflowData?.negative_prompt || '',
-        'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act',
         'low quality, worst quality, bad anatomy, extra limbs, text, watermark'
-    ].filter(Boolean).join(', ');
+    ];
+    if (isFlux && !/(western face|caucasian)/i.test(negativeParts.join(', '))) {
+        negativeParts.push('western face, caucasian');
+    }
+    if (!advancedSettings.nsfw_enabled) {
+        negativeParts.push(
+            'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act'
+        );
+    }
+    const negativePrompt = negativeParts.filter(Boolean).join(', ');
 
     const samplerNodes = Object.values(workflow).filter(
         (node: any) => node?.class_type?.includes('KSampler')
@@ -74,10 +206,16 @@ const compileComfyWorkflow = async (
         const negativeId = Array.isArray(sampler.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
 
         if (positiveId && workflow[positiveId]?.inputs) {
-            workflow[positiveId].inputs.text = finalPrompt;
+            const templateText = String(workflow[positiveId].inputs.text || '').trim();
+            workflow[positiveId].inputs.text = preserveTemplateConditioning && templateText
+                ? `${templateText}, ${effectivePrompt}`
+                : effectivePrompt;
         }
         if (negativeId && workflow[negativeId]?.inputs && negativeId !== positiveId) {
-            workflow[negativeId].inputs.text = negativePrompt;
+            const templateText = String(workflow[negativeId].inputs.text || '').trim();
+            workflow[negativeId].inputs.text = preserveTemplateConditioning && templateText
+                ? `${templateText}, ${negativePrompt}`
+                : negativePrompt;
         }
 
         sampler.inputs.seed = Math.floor(Math.random() * 1_000_000_000);
@@ -99,7 +237,57 @@ const compileComfyWorkflow = async (
         }
     }
 
+    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
+    if (referenceImageUrl) {
+        const referenceFilename = path.basename(String(referenceImageUrl));
+        for (const node of Object.values(workflow) as any[]) {
+            if (node?.class_type === 'LoadImage' && node.inputs) {
+                node.inputs.image = referenceFilename;
+            }
+        }
+    }
+
+    if (isFlux) {
+        const styleLora = findFluxStyleLora(runtimeSettings);
+        if (styleLora) {
+            injectLora(
+                workflow,
+                styleLora,
+                Number(runtimeSettings.comfyui?.flux_lora_strength || 0.8),
+                'flux'
+            );
+        }
+    }
+
+    if (advancedSettings.nsfw_enabled) {
+        injectLora(
+            workflow,
+            isFlux
+                ? advancedSettings.flux_nsfw_lora
+                : advancedSettings.pony_nsfw_lora,
+            Number(advancedSettings.nsfw_lora_strength || 0.8),
+            isFlux ? 'flux' : 'pony'
+        );
+    }
+
     return workflow;
+};
+
+const copyReferenceImageToComfy = (
+    workflowData: any,
+    staticDir: string,
+    comfyInstallPath?: string
+) => {
+    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
+    if (!referenceImageUrl || !comfyInstallPath) return;
+
+    const filename = path.basename(String(referenceImageUrl));
+    const sourcePath = path.join(staticDir, filename);
+    if (!fs.existsSync(sourcePath)) return;
+
+    const inputDirectory = path.join(comfyInstallPath, 'input');
+    fs.mkdirSync(inputDirectory, { recursive: true });
+    fs.copyFileSync(sourcePath, path.join(inputDirectory, filename));
 };
 
 export class GenerationService {
@@ -107,16 +295,19 @@ export class GenerationService {
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
         AssetTaskStore.processing(taskId, sceneId);
 
-        const staticDir = path.join(__dirname, '../../app/static/generated');
+        const staticDir = getGeneratedDirectory();
         if (!fs.existsSync(staticDir)) {
             fs.mkdirSync(staticDir, { recursive: true });
         }
 
         let redis: Redis | null = null;
-        try {
-            redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379/0', { maxRetriesPerRequest: 1, retryStrategy: () => null });
-        } catch(e) {
-            logger.error(`Redis connection failed in GenerationService: ${e}`);
+        const redisUrl = process.env.REDIS_URL;
+        if (redisUrl) {
+            try {
+                redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, retryStrategy: () => null });
+            } catch(e) {
+                logger.error(`Redis connection failed in GenerationService: ${e}`);
+            }
         }
 
         const progressHandler = async (msgType: string, data: any) => {
@@ -139,8 +330,7 @@ export class GenerationService {
 
             if (mode === "cinematic_grid") {
                 const rawPrompt = workflowData?.prompt || workflowData?.text || workflowData?.description || JSON.stringify(workflowData);
-                // Note: Simplified for porting; in production this builds the grid prompt logic.
-                finalPrompt = `Cinematic grid of 9 shots: ${rawPrompt}`;
+                finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
             } else {
                 finalPrompt = workflowData?.prompt || workflowData?.text || workflowData?.description || JSON.stringify(workflowData);
             }
@@ -149,56 +339,31 @@ export class GenerationService {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
                 const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
                 const comfyService = new ComfyUIService(baseUrl);
+                const isRunning = await comfyService.ensureRunning(
+                    comfySettings.install_path
+                );
+                if (!isRunning) {
+                    throw new Error('Failed to start or connect to ComfyUI');
+                }
+
+                copyReferenceImageToComfy(
+                    workflowData,
+                    staticDir,
+                    comfySettings.install_path
+                );
 
                 const finalWorkflow = await compileComfyWorkflow(
                     workflowData,
                     finalPrompt,
                     mode,
-                    generationParams
+                    generationParams,
+                    settings
                 );
-
-                // Advanced config check for NSFW LoRA injection
-                const advancedSettings = settings.advanced || {};
-                const nsfwEnabled = advancedSettings.nsfw_enabled;
-                const ponyLora = advancedSettings.pony_nsfw_lora || "Pony_Detail_Tweaker.safetensors";
-                const fluxLora = advancedSettings.flux_nsfw_lora || "aidmaNSFWunlock.safetensors";
-                const loraStrength = advancedSettings.nsfw_lora_strength || 0.8;
-
-                let isPony = false;
-                let isFlux = false;
-
-                // Detect model type roughly based on nodes
-                for (const nodeId of Object.keys(finalWorkflow)) {
-                    const node = finalWorkflow[nodeId];
-                    if (node?.class_type === 'CheckpointLoaderSimple' && node.inputs?.ckpt_name?.toLowerCase().includes('pony')) {
-                        isPony = true;
-                    }
-                    if (node?.class_type === 'UnetLoaderGGUF' || (node?.class_type === 'CheckpointLoaderSimple' && node.inputs?.ckpt_name?.toLowerCase().includes('flux'))) {
-                        isFlux = true;
-                    }
-                    if (node?.class_type?.includes('KSampler')) {
-                        finalWorkflow[nodeId].inputs.seed = Math.floor(Math.random() * 1000000000);
-                        if (generationParams?.cfg) finalWorkflow[nodeId].inputs.cfg = Number(generationParams.cfg);
-                        if (generationParams?.steps) finalWorkflow[nodeId].inputs.steps = Number(generationParams.steps);
-                    }
-                }
-
-                // If NSFW enabled and relevant model detected, we simulate injecting the LoRA node
-                // (In a full port, this would properly rewire the ComfyUI nodes, here we just attach it to metadata for compatibility check)
-                if (nsfwEnabled) {
-                    if (isPony && ponyLora) {
-                        logger.info(`[Task ${taskId}] Injecting Pony NSFW LoRA: ${ponyLora} at strength ${loraStrength}`);
-                        // (Mock node rewiring for Node.js simplified port)
-                    } else if (isFlux && fluxLora) {
-                        logger.info(`[Task ${taskId}] Injecting FLUX NSFW LoRA: ${fluxLora} at strength ${loraStrength}`);
-                        // (Mock node rewiring for Node.js simplified port)
-                    }
-                }
 
                 result = await comfyService.generateImage(finalWorkflow, progressHandler);
             } else {
-                logger.info(`[Task ${taskId}] Using LLM/Cloud Image Provider`);
-                const aiProvider = LLMService.getProvider(userToken);
+                logger.info(`[Task ${taskId}] Using configured cloud image provider`);
+                const aiProvider = MediaService.getProvider();
                 const apiRes = await aiProvider.generateImage(finalPrompt, "1024x1024", userToken);
                 result = {
                     status: apiRes.error ? "failed" : "completed",

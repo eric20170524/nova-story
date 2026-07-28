@@ -6,10 +6,17 @@ export interface ImportedChapter {
   content: string;
 }
 
+export interface ImportedCharacter {
+  name: string;
+  role: 'Protagonist' | 'Antagonist' | 'Supporting';
+  description: string;
+}
+
 export interface ParsedTextProject {
   title: string;
   description: string;
   chapters: ImportedChapter[];
+  characters: ImportedCharacter[];
 }
 
 interface ChapterHeading {
@@ -107,6 +114,35 @@ const titleFromPreamble = (lines: string[]) => {
   return { title, description };
 };
 
+const charactersFromPreamble = (lines: string[]): ImportedCharacter[] => {
+  const characters: ImportedCharacter[] = [];
+  const names = new Set<string>();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!/^[·*+-]\s*\S/.test(trimmed)) continue;
+
+    const content = trimmed.replace(/^[·*+-]\s*/, '');
+    const separatorIndex = content.search(/[：:]/);
+    if (separatorIndex <= 0) continue;
+
+    const name = content.slice(0, separatorIndex).trim();
+    const description = content.slice(separatorIndex + 1).trim();
+    if (!name || !description || names.has(name.toLowerCase())) continue;
+
+    const roleText = `${name} ${description}`.toLowerCase();
+    const role = /男主|女主|主角|protagonist/.test(roleText)
+      ? 'Protagonist'
+      : /反派|敌|督军|监军|伪神|antagonist/.test(roleText)
+        ? 'Antagonist'
+        : 'Supporting';
+    names.add(name.toLowerCase());
+    characters.push({ name, role, description });
+  }
+
+  return characters;
+};
+
 export const decodeTextFile = (data: Uint8Array) => {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(data).replace(/^\uFEFF/, '');
@@ -152,12 +188,14 @@ export const parseTextProject = (rawContent: string, filename = ''): ParsedTextP
       chapters: [{
         title: '正文',
         content: content || normalized
-      }]
+      }],
+      characters: []
     };
   }
 
   const firstHeadingIndex = headings[0]!.lineIndex;
   const preamble = titleFromPreamble(lines.slice(0, firstHeadingIndex));
+  const characters = charactersFromPreamble(lines.slice(0, firstHeadingIndex));
   const inferredProjectTitle = headings.find(({ heading }) => heading.projectTitle)?.heading.projectTitle;
   const chapters: ImportedChapter[] = [];
 
@@ -179,6 +217,7 @@ export const parseTextProject = (rawContent: string, filename = ''): ParsedTextP
   return {
     title: (preamble.title || inferredProjectTitle || fallbackTitle).slice(0, 255),
     description: preamble.description,
-    chapters
+    chapters,
+    characters
   };
 };

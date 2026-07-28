@@ -12,7 +12,150 @@ const mockGetCurrentUser = (request: any) => ({
   id: 'local_admin'
 });
 
+const parseStoredJson = (value: unknown) => {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+const tableExists = async (tableName: string) => {
+  const table = await db.get(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+    tableName
+  );
+  return Boolean(table);
+};
+
 export const projectRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/:id/export', async (request, reply) => {
+    const { id } = z.object({
+      id: z.coerce.number()
+    }).parse(request.params);
+    const user = mockGetCurrentUser(request);
+    const project = await db.get('SELECT * FROM project WHERE id = ?', id);
+
+    if (!project) {
+      return reply.status(404).send({ detail: 'Project not found' });
+    }
+
+    if (user.id !== 'local_admin' && project.user_id !== user.id) {
+      return reply.status(403).send({ detail: 'Not authorized to export this project' });
+    }
+
+    const availableTables = new Set(
+      (
+        await Promise.all(
+          ['character', 'scene', 'coverage_group', 'coverage_shot'].map(async (name) => ({
+            name,
+            exists: await tableExists(name)
+          }))
+        )
+      )
+        .filter(({ exists }) => exists)
+        .map(({ name }) => name)
+    );
+
+    const [chapters, rawCharacters, rawScenes, coverageGroups, coverageShots] = await Promise.all([
+      db.all(
+        'SELECT * FROM chapter WHERE project_id = ? ORDER BY "index" ASC, id ASC',
+        id
+      ),
+      availableTables.has('character')
+        ? db.all('SELECT * FROM character WHERE project_id = ? ORDER BY id ASC', id)
+        : Promise.resolve([]),
+      availableTables.has('scene')
+        ? db.all(
+            `SELECT scene.*
+             FROM scene
+             INNER JOIN chapter ON chapter.id = scene.chapter_id
+             WHERE chapter.project_id = ?
+             ORDER BY chapter."index" ASC, scene."index" ASC, scene.id ASC`,
+            id
+          )
+        : Promise.resolve([]),
+      availableTables.has('scene') && availableTables.has('coverage_group')
+        ? db.all(
+            `SELECT coverage_group.*
+             FROM coverage_group
+             INNER JOIN scene ON scene.id = coverage_group.source_scene_id
+             INNER JOIN chapter ON chapter.id = scene.chapter_id
+             WHERE chapter.project_id = ?
+             ORDER BY chapter."index" ASC, scene."index" ASC,
+                      coverage_group.version ASC, coverage_group.id ASC`,
+            id
+          )
+        : Promise.resolve([]),
+      availableTables.has('scene')
+        && availableTables.has('coverage_group')
+        && availableTables.has('coverage_shot')
+        ? db.all(
+            `SELECT coverage_shot.*
+             FROM coverage_shot
+             INNER JOIN coverage_group
+               ON coverage_group.id = coverage_shot.coverage_group_id
+             INNER JOIN scene ON scene.id = coverage_group.source_scene_id
+             INNER JOIN chapter ON chapter.id = scene.chapter_id
+             WHERE chapter.project_id = ?
+             ORDER BY chapter."index" ASC, scene."index" ASC,
+                      coverage_group.version ASC, coverage_shot.slot ASC,
+                      coverage_shot.id ASC`,
+            id
+          )
+        : Promise.resolve([])
+    ]);
+
+    const characters = rawCharacters.map((character: any) => ({
+      ...character,
+      visual_tags: parseStoredJson(character.visual_tags)
+    }));
+    const scenes = rawScenes.map((scene: any) => ({
+      ...scene,
+      shot_spec: parseStoredJson(scene.shot_spec)
+    }));
+
+    const exportData = {
+      format: 'novastory-project',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      project: {
+        ...project,
+        settings: parseStoredJson(project.settings)
+      },
+      screenplay: {
+        chapters
+      },
+      character_center: {
+        characters
+      },
+      director: {
+        scenes,
+        coverage_groups: coverageGroups,
+        coverage_shots: coverageShots
+      },
+      summary: {
+        chapters: chapters.length,
+        characters: characters.length,
+        scenes: scenes.length,
+        coverage_groups: coverageGroups.length,
+        coverage_shots: coverageShots.length
+      }
+    };
+
+    const safeTitle = String(project.title || `project-${id}`)
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+      .trim() || `project-${id}`;
+
+    return reply
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeTitle)}.novastory.json`)
+      .send(exportData);
+  });
+
   app.post('/:id/duplicate', async (request, reply) => {
     const { id } = z.object({
       id: z.coerce.number()
@@ -180,6 +323,19 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      for (const character of parsed.characters) {
+        await db.run(
+          `INSERT INTO character (
+             project_id, name, role, description, visual_tags
+           ) VALUES (?, ?, ?, ?, ?)`,
+          projectId,
+          character.name,
+          character.role,
+          character.description,
+          '{}'
+        );
+      }
+
       await db.exec('COMMIT');
       const project = await db.get('SELECT * FROM project WHERE id = ?', projectId);
       return reply.status(201).send(project);
@@ -312,7 +468,44 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ detail: 'Not authorized to delete this project' });
     }
 
-    await db.run('DELETE FROM project WHERE id = ?', id);
-    return project;
+    await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      await db.run(
+        `DELETE FROM coverage_shot
+         WHERE coverage_group_id IN (
+           SELECT coverage_group.id
+           FROM coverage_group
+           INNER JOIN scene ON scene.id = coverage_group.source_scene_id
+           INNER JOIN chapter ON chapter.id = scene.chapter_id
+           WHERE chapter.project_id = ?
+         )`,
+        id
+      );
+      await db.run(
+        `DELETE FROM coverage_group
+         WHERE source_scene_id IN (
+           SELECT scene.id
+           FROM scene
+           INNER JOIN chapter ON chapter.id = scene.chapter_id
+           WHERE chapter.project_id = ?
+         )`,
+        id
+      );
+      await db.run(
+        `DELETE FROM scene
+         WHERE chapter_id IN (
+           SELECT id FROM chapter WHERE project_id = ?
+         )`,
+        id
+      );
+      await db.run('DELETE FROM character WHERE project_id = ?', id);
+      await db.run('DELETE FROM chapter WHERE project_id = ?', id);
+      await db.run('DELETE FROM project WHERE id = ?', id);
+      await db.exec('COMMIT');
+      return project;
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      throw error;
+    }
   });
 };

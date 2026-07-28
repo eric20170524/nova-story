@@ -1,20 +1,22 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# NovaStory 前端
 
-# Run and deploy your AI Studio app
+前端位于仓库根目录，采用 React、Vite 和 TypeScript。
 
-This contains everything you need to run your app locally.
+## 开发
 
-View your app in AI Studio: https://ai.studio/apps/drive/1TIG3Tv6ZkP6nkuSiCFmf3BQA3DxvwsLy
+```bash
+npm install
+npm run dev
+```
 
-## Run Locally
+开发地址为 `http://localhost:3000/novastory/`，API 指向 `http://127.0.0.1:8087/api`。
 
-**Prerequisites:**  Node.js
+## 验证与构建
 
+```bash
+npm run check
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+该命令先执行 TypeScript 检查，再生成生产构建到 `dist/`。
+
+生产构建通过同域 `/novastory/api` 调用后端。仓库根目录的 Dockerfile 和 Nginx 配置已经处理前端路由、API 反向代理以及 `/static/` 素材代理。

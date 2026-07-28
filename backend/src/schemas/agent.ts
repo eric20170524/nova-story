@@ -11,7 +11,7 @@ export const AgentContextSchema = z.object({
 export const AgentRequestSchema = z.object({
   message: z.string(),
   context: AgentContextSchema,
-  history: z.array(z.record(z.string())).default([])
+  history: z.array(z.record(z.string(), z.string())).default([])
 });
 
 export const ToolCallSchema = z.object({

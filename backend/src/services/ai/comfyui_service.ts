@@ -1,5 +1,8 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'crypto';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { logger } from '../../core/logging';
 
 export class ComfyUIService {
@@ -23,6 +26,58 @@ export class ComfyUIService {
         } catch (error) {
             return false;
         }
+    }
+
+    async ensureRunning(installPath?: string, timeoutMs: number = 45_000): Promise<boolean> {
+        if (await this.checkStatus()) return true;
+        if (!installPath) return false;
+
+        const mainFile = path.join(installPath, 'main.py');
+        if (!fs.existsSync(mainFile)) {
+            logger.error(`ComfyUI main.py was not found at ${mainFile}`);
+            return false;
+        }
+
+        const parentDirectory = path.dirname(installPath);
+        const pythonCandidates = [
+            path.join(installPath, 'venv', 'Scripts', 'python.exe'),
+            path.join(installPath, '.venv', 'Scripts', 'python.exe'),
+            path.join(installPath, 'python_embeded', 'python.exe'),
+            path.join(parentDirectory, 'python_embeded', 'python.exe')
+        ];
+        const pythonExecutable = pythonCandidates.find((candidate) => fs.existsSync(candidate));
+        if (!pythonExecutable) {
+            logger.error(`No ComfyUI Python runtime was found under ${installPath}`);
+            return false;
+        }
+
+        const parsedUrl = new URL(this.baseUrl);
+        const process = spawn(
+            pythonExecutable,
+            [
+                mainFile,
+                '--listen',
+                parsedUrl.hostname || '127.0.0.1',
+                '--port',
+                parsedUrl.port || '8188',
+                '--lowvram'
+            ],
+            {
+                cwd: installPath,
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: true
+            }
+        );
+        process.unref();
+
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            if (await this.checkStatus()) return true;
+        }
+        logger.error(`ComfyUI did not become ready within ${timeoutMs}ms`);
+        return false;
     }
 
     async generateImage(workflow: any, progressCallback?: (type: string, data: any) => void): Promise<{ status: string; message?: string; images?: any[] }> {
@@ -58,7 +113,7 @@ export class ComfyUIService {
                 return { status: "error", message: `Queue failed: ${errText}` };
             }
 
-            const respData = await response.json();
+            const respData = await response.json() as Record<string, any>;
             promptId = respData.prompt_id;
             logger.info(`Workflow queued. Prompt ID: ${promptId}`);
 
@@ -80,7 +135,7 @@ export class ComfyUIService {
                         try {
                             const histRes = await fetch(`${this.baseUrl}/history/${promptId}`);
                             if (histRes.ok) {
-                                const historyData = await histRes.json();
+                                const historyData = await histRes.json() as Record<string, any>;
                                 const promptOutput = historyData[promptId]?.outputs || {};
                                 for (const nodeId of Object.keys(promptOutput)) {
                                     const nodeOut = promptOutput[nodeId];
@@ -166,7 +221,7 @@ export class ComfyUIService {
                     try {
                         const hRes = await fetch(`${this.baseUrl}/history/${promptId}`);
                         if (hRes.ok) {
-                            const hData = await hRes.json();
+                            const hData = await hRes.json() as Record<string, any>;
                             if (hData[promptId!]) {
                                 logger.info(`Prompt ${promptId} confirmed completed via polling.`);
                                 finish();

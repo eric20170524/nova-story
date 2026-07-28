@@ -1,12 +1,16 @@
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import {
+  BACKEND_DIRECTORY,
+  getConfigDirectory,
+  getDataDirectory
+} from './paths';
 
 // Load .env from backend root
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.join(getConfigDirectory(), '.env') });
 
-const BACKEND_DIR = path.resolve(__dirname, '../../');
-const DEFAULT_DB_FILE = path.join(BACKEND_DIR, 'sql_app.db');
+const DEFAULT_DB_FILE = path.join(getDataDirectory(), 'sql_app.db');
 
 const resolveDatabaseFile = (configuredUrl?: string) => {
   if (!configuredUrl) {
@@ -23,7 +27,7 @@ const resolveDatabaseFile = (configuredUrl?: string) => {
 
   const absolutePath = path.isAbsolute(configuredPath)
     ? path.normalize(configuredPath)
-    : path.resolve(BACKEND_DIR, configuredPath);
+    : path.resolve(BACKEND_DIRECTORY, configuredPath);
 
   // A checked-out repository may have moved since .env was created. Prefer the
   // repository-local database when the configured absolute file no longer exists.

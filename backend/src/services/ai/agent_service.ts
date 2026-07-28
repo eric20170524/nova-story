@@ -122,8 +122,8 @@ If no tool is needed, set "action" to null.
                 const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
                 if (!chapter || !chapter.content) return "Error: Chapter not found or empty.";
 
-                // Note: LLMService analysis is skipped here for brevity in Phase 4 porting, but we can easily call a prompt
-                return `Analysis Result for ${chapter.title}`;
+                const analysis = await LLMService.analyzeContent(chapter.content);
+                return `Analysis Result: ${JSON.stringify(analysis, null, 2)}`;
             }
 
             if (action.tool_name === "generate_timeline") {

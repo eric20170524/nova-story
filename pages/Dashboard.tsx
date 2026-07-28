@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Search, Folder, Clock, MoreVertical, Trash2, Upload } from 'lucide-react';
+import { Plus, Search, Folder, Clock, Trash2, Upload, Download, LoaderCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { Project } from '../types';
@@ -17,6 +17,7 @@ export const Dashboard: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [newProject, setNewProject] = useState({ title: '', description: '' });
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [exportingProjectId, setExportingProjectId] = useState<number | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -86,6 +87,38 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleExport = async (e: React.MouseEvent, project: Project) => {
+    e.stopPropagation();
+    if (exportingProjectId !== null) return;
+
+    setExportingProjectId(project.id);
+    try {
+      const exportedProject = await api.exportProject(project.id);
+      const blob = new Blob(
+        [JSON.stringify(exportedProject, null, 2)],
+        { type: 'application/json;charset=utf-8' }
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeTitle = project.title
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+        .trim() || `project-${project.id}`;
+
+      link.href = url;
+      link.download = `${safeTitle}.novastory.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast(t('dashboard.export_success'), 'success');
+    } catch (error) {
+      console.error('Export failed', error);
+      showToast(t('dashboard.export_failed'), 'error');
+    } finally {
+      setExportingProjectId(null);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto bg-slate-950 p-4 sm:p-8 lg:p-12">
       <div className="max-w-7xl mx-auto">
@@ -135,13 +168,28 @@ export const Dashboard: React.FC = () => {
                         onClick={() => navigate(`/project/${project.id}/story`)}
                         className="group bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-xl p-6 cursor-pointer transition-all hover:shadow-xl hover:shadow-indigo-500/5 relative animate-in fade-in zoom-in-95 duration-300"
                     >
-                        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
+                        <div className="absolute top-4 right-4 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={(e) => handleExport(e, project)}
+                            disabled={exportingProjectId !== null}
+                            title={t('dashboard.export_btn')}
+                            aria-label={t('dashboard.export_btn')}
+                            className="p-1.5 hover:bg-indigo-500/10 hover:text-indigo-400 text-slate-500 rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {exportingProjectId === project.id
+                              ? <LoaderCircle size={16} className="animate-spin" />
+                              : <Download size={16} />}
+                          </button>
+                          <button
+                            type="button"
                             onClick={(e) => handleDelete(e, project.id)}
+                            title={t('dashboard.delete_btn')}
+                            aria-label={t('dashboard.delete_btn')}
                             className="p-1.5 hover:bg-red-500/10 hover:text-red-500 text-slate-500 rounded-md transition-colors"
-                        >
+                          >
                             <Trash2 size={16} />
-                        </button>
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-3 mb-4">

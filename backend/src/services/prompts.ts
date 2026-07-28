@@ -1,4 +1,39 @@
 export class Prompts {
+    static buildCinematicGridImagePrompt(scenePrompt: string): string {
+        const normalizedPrompt = String(scenePrompt || '').replace(/\s+/g, ' ').trim();
+        const positivePrompt = normalizedPrompt.split(' --no ', 1)[0]?.trim() || '';
+        if (!positivePrompt) {
+            throw new Error('Scene prompt is required for cinematic grid generation');
+        }
+
+        return [
+            'masterpiece, professional cinematic storyboard sheet',
+            'exactly 3 rows and exactly 3 columns',
+            'exactly nine equal panels, clean dark panel dividers, no captions, no labels',
+            'no panel numbers, no typography, no extra panels',
+            `Shared scene for every panel: ${positivePrompt}`,
+            'Keep the same characters, facial features, hairstyle, clothing, injuries, props, weapons, environment, weather, time of day, lighting direction, and color palette consistent across all nine panels',
+            'Panel 1 top-left: extreme long establishing shot, full environment and spatial context',
+            'Panel 2 top-center: long shot, complete character silhouettes and body language',
+            'Panel 3 top-right: medium long shot, knees-up composition and character relationships',
+            'Panel 4 middle-left: medium shot, the central action clearly readable',
+            'Panel 5 center: medium close-up, strongest emotional beat and visual focus',
+            'Panel 6 middle-right: close-up, precise facial expression and story tension',
+            'Panel 7 bottom-left: extreme close-up of the most important eye, hand, weapon, or symbolic detail',
+            'Panel 8 bottom-center: dramatic low-angle view that preserves the same action and environment',
+            'Panel 9 bottom-right: high-angle overview showing geography, consequence, and atmosphere',
+            'Each panel depicts the same story beat from a different camera position; coherent anatomy, clear subjects, cinematic composition, detailed background, controlled depth of field'
+        ].join('. ') + '.';
+    }
+
+    static generateDraft(instructions: string, context: string = ''): string {
+        return `Context: ${context}\n\nInstructions: ${instructions}\n\nWrite a creative draft based on the above.`;
+    }
+
+    static analyzeContent(content: string): string {
+        return `Analyze the following text and extract new characters (entities) and key plot updates. Return JSON with keys 'new_entities' (list) and 'updates' (list).\n\nText: ${content}`;
+    }
+
     static generateCinematicGridTimelinePrompt(content: string, characterProfiles: string = ""): string {
         let charInstruction = "";
         if (characterProfiles) {
@@ -119,5 +154,36 @@ Dialogue: ${dialogue || 'None'}`;
 Return the result as a JSON object with a key 'profiles' containing the list of character objects.
 
 Text: ${content}`;
+    }
+
+    static analyzeCharacterEvolution(characterJson: string, newText: string): string {
+        return `You are a Character Consistency Manager for a long-running series.
+Compare the existing character data with their appearance in the NEW CHAPTER TEXT.
+
+### Existing Character Data:
+${characterJson}
+
+### New Chapter Text:
+${newText}
+
+Determine whether the appearance requires a new variant, keeps the current variant, or is only a scene modifier.
+Return JSON:
+{
+  "action": "new_variant" | "keep_current" | "scene_modifier",
+  "reason": "Explanation",
+  "new_variant": { "name": "...", "tags": "..." },
+  "modifier_tags": "..."
+}`;
+    }
+
+    static generateStoryboardGridPrompt(storyText: string): string {
+        return `STORY-TO-STORYBOARD META-PROMPT
+
+IMPORTANT: Do not create the image, create the detailed prompt for the image.
+
+When the user provides a short story synopsis, create a full 3x3 cinematic storyboard grid prompt with 9 distinct shots of the same subjects in the same environment.
+
+Input Story:
+${storyText}`;
     }
 }

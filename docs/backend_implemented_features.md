@@ -1,97 +1,35 @@
-# NovaStory Backend - Implemented Features & Key Processes
+# Node.js 后端已实现能力
 
-## 1. Overview
-The backend is built using **FastAPI** and **SQLAlchemy**. It provides a RESTful API for managing the novel creation process, including project structure, character management, timeline generation, and integration with AI agents/services (Google Gemini, OpenAI, Grok, Nebula).
+后端入口为 `backend/src/server.ts`，生产构建输出到 `backend/dist`。
 
-**Entry Point:** `backend/main.py`
-**API Router:** `backend/app/api/api.py`
+## 领域能力
 
-## 2. API Endpoints
+- 项目、章节、角色、场景、工作流完整 CRUD
+- TXT 项目导入、完整 JSON 导出和项目复制
+- 章节自动分镜与场景编辑
+- 单场景 9 镜头 coverage 的生成、应用与提升
+- AI 续写、内容分析、上下文读取和导演助手工具调用
+- 角色抽取、跨章节外观演化、素材上传与头像裁剪
+- 图片任务、状态查询、SSE、Redis 可选 Pub/Sub 和 ComfyUI 中断
+- 漫画字幕栅格化与 PDF 输出
 
-### Project Management (`/api/projects`)
-Handled by `backend/app/api/endpoints/projects.py`.
-*   **CRUD**: Create, Read, Update, Delete projects.
-*   *Status:* ✅ Implemented.
+## AI 与媒体
 
-### Character Management (`/api/characters`)
-Handled by `backend/app/api/endpoints/characters.py`.
-*   **CRUD**: Manage characters per project, including visual tags for AI generation.
-*   *Status:* ✅ Implemented.
+- 文本：Gemini、OpenAI、Grok、Ollama 和 OpenAI 兼容服务
+- 结构化输出：Zod JSON Schema、校验、重试和模式化降级
+- 云生图：Gemini/Imagen、OpenAI Images、xAI 兼容端点
+- 本地生图：ComfyUI 自动探活/启动、内置 Pony/FLUX 工作流、参考图、参数注入、LoRA 实际连线
+- FLUX：东亚特征提示增强及本地风格 LoRA 自动发现
 
-### Structure Management (`/api/chapters`)
-Handled by `backend/app/api/endpoints/structure.py`.
-*   **CRUD**: Manage chapters.
-*   **Reordering**: Move chapters within a project.
-*   *Status:* ✅ Implemented.
+## 数据与可靠性
 
-### Timeline Service (`/api/timeline`)
-Handled by `backend/app/api/endpoints/timeline.py`.
-*   **POST /generate**: Uses LLM (Gemini/Nebula) to break down chapter text into a list of visual scenes (Timeline DSL).
-*   *Status:* ✅ Implemented.
+- SQLite 幂等版本迁移
+- 完整领域表和索引
+- 内置工作流自动初始化
+- 时间线替换、coverage 提升、项目/章节删除使用事务
+- 旧数据库缺失级联约束时执行显式子记录清理
+- 配置目录、数据目录和静态目录可通过 `NOVASTORY_*_DIR` 独立挂载
 
-### Workflow Management (`/api/workflows`)
-Handled by `backend/app/api/endpoints/workflows.py`.
-*   **CRUD**: Manage ComfyUI workflow templates (JSON).
-*   *Status:* ✅ Implemented.
+## 验证
 
-### Asset Generation (`/api/assets`)
-Handled by `backend/app/api/endpoints/assets.py`.
-*   **POST /generate**: Triggers MediaService image generation (Async via BackgroundTasks).
-*   **GET /stream/{task_id}**: Server-Sent Events (SSE) for real-time generation progress.
-*   *Status:* ✅ Implemented.
-
-### Creative Agent (`/api/agent`)
-Handled by `backend/app/api/endpoints/creative.py`.
-*   **Drafting & Analysis**: LLM-based text generation and entity extraction.
-*   *Status:* ✅ Implemented.
-
-### Agentic Assistant (`/api/assistant`)
-Handled by `backend/app/api/endpoints/agent_assistant.py`.
-*   **Chat Interface**: Conversational agent for directing the story.
-*   **Tools**:
-    *   `analyze_chapter`: Mood and pacing analysis.
-    *   `generate_timeline`: Automatic storyboard creation.
-    *   `get/update_character_info`: Character management.
-*   *Status:* ✅ Implemented.
-
-## 3. Data Models
-Defined in `backend/app/models/`.
-
-*   **Project**: Container for the story (Title, Description, Settings).
-*   **Character**: Story characters with roles and visual descriptions.
-*   **Chapter**: Story units with content, summary, and order index.
-*   **Scene**: Visual breakdown units with prompts, duration, and asset links.
-*   **Workflow**: Stored ComfyUI JSON templates.
-
-## 4. Key Services
-
-### Media Service (`backend/app/services/media_service.py`)
-Unified interface for asset generation.
-*   **Providers**:
-    *   `GeminiProvider`: Uses Google Imagen.
-    *   `OpenAIProvider`: Uses DALL-E 3.
-    *   `GrokProvider`: Uses Flux (via xAI).
-    *   `ComfyUIService`: Uses local ComfyUI instance.
-
-### LLM Service (`backend/app/services/llm.py` & `gemini_provider.py`)
-Wrapper for Large Language Models.
-*   **Routing**: Supports direct Gemini API or routing via Nebula platform.
-*   **Capabilities**: Text generation, Timeline breakdown, Character analysis.
-
-### Agent Service (`backend/app/services/ai/agent_service.py`)
-Orchestrates the Director's Assistant.
-*   **Context Awareness**: Injects project state (Characters, Chapter Content) into prompts.
-*   **Tool Use**: Parses and executes JSON-based tool calls.
-
-### Nebula Client (`backend/app/services/nebula.py`)
-Integration client for the Nebula Ecosystem.
-*   **Authentication**: Verifies system tokens.
-*   **Storage**: Uploads generated assets to cloud storage.
-*   **Model Relay**: Routes chat completion requests.
-
-## 5. Summary of Status
-*   **Core Logic**: ✅ Complete (Projects, Characters, Chapters, Workflows).
-*   **Database**: ✅ Managed via Alembic Migrations.
-*   **AI Architecture**: ✅ Modular Provider System (Gemini, OpenAI, Grok, Nebula).
-*   **Agentic Features**: ✅ Director's Assistant with Tool Use.
-*   **Infrastructure**: ✅ Redis + BackgroundTasks for async processing.
+`npm run check` 覆盖类型检查与测试；`npm run build` 验证生产编译。完整 Fastify 应用测试会对照 main 的 48 个 API 操作检查 OpenAPI 路由契约。

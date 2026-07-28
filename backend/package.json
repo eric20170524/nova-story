@@ -7,9 +7,12 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "tsx --test src/services/text_import.test.ts src/services/ai/openai_provider.test.ts",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "start": "node dist/server.js"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +22,8 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/multipart": "^10.1.0",
     "@fastify/static": "^10.1.2",
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.0",
     "@fastify/websocket": "^11.3.0",
     "@google/generative-ai": "^0.24.1",
     "@types/pdfkit": "^0.17.6",

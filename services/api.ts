@@ -6,6 +6,7 @@ import {
   MOCK_WORKFLOWS, 
   MOCK_TIMELINE 
 } from '../constants';
+import type { ProjectExport } from '../types';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -75,6 +76,28 @@ class ApiService {
         // Projects
         if (endpoint.startsWith('/projects/')) {
            if (method === 'GET' && endpoint === '/projects/') return resolve(MOCK_PROJECTS as any);
+           if (method === 'GET' && endpoint.endsWith('/export')) {
+             return resolve({
+               format: 'novastory-project',
+               version: 1,
+               exported_at: new Date().toISOString(),
+               project: MOCK_PROJECTS[0],
+               screenplay: { chapters: MOCK_CHAPTERS },
+               character_center: { characters: MOCK_CHARACTERS },
+               director: {
+                 scenes: MOCK_TIMELINE.timeline,
+                 coverage_groups: [],
+                 coverage_shots: []
+               },
+               summary: {
+                 chapters: MOCK_CHAPTERS.length,
+                 characters: MOCK_CHARACTERS.length,
+                 scenes: MOCK_TIMELINE.timeline.length,
+                 coverage_groups: 0,
+                 coverage_shots: 0
+               }
+             } as any);
+           }
            if (method === 'GET' && endpoint !== '/projects/') return resolve(MOCK_PROJECTS[0] as any);
            if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000), created_at: new Date().toISOString() } as any);
            if (method === 'PUT') return resolve({ ...MOCK_PROJECTS[0], ...body } as any);
@@ -142,6 +165,7 @@ class ApiService {
     body: title ? { title } : {}
   });
   getProject = (id: number) => this.request<any>(`/projects/${id}`);
+  exportProject = (id: number) => this.request<ProjectExport>(`/projects/${id}/export`);
   updateProject = (id: number, data: any) => this.request<any>(`/projects/${id}`, { method: 'PUT', body: data });
   deleteProject = (id: number) => this.request(`/projects/${id}`, { method: 'DELETE' });
   importProject = (file: File) => {

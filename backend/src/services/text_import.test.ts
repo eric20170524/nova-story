@@ -73,12 +73,14 @@ test('imports qiongming-style text through the HTTP route and persists its chapt
     { default: Fastify },
     { default: multipart },
     { projectRoutes },
-    { chapterRoutes }
+    { chapterRoutes },
+    { db }
   ] = await Promise.all([
     import('fastify'),
     import('@fastify/multipart'),
     import('../routes/projects'),
-    import('../routes/chapters')
+    import('../routes/chapters'),
+    import('../db/database')
   ]);
 
   const app = Fastify();
@@ -117,6 +119,94 @@ test('imports qiongming-style text through the HTTP route and persists its chapt
     chaptersResponse.json().map((chapter: { title: string }) => chapter.title),
     ['初章', '第二章', '第三章']
   );
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS character (
+      id INTEGER PRIMARY KEY,
+      project_id INTEGER,
+      name TEXT NOT NULL,
+      visual_tags TEXT
+    );
+    CREATE TABLE IF NOT EXISTS scene (
+      id INTEGER PRIMARY KEY,
+      chapter_id TEXT NOT NULL,
+      "index" INTEGER NOT NULL,
+      visual_prompt TEXT,
+      shot_spec TEXT
+    );
+    CREATE TABLE IF NOT EXISTS coverage_group (
+      id INTEGER PRIMARY KEY,
+      source_scene_id INTEGER NOT NULL,
+      version INTEGER,
+      status TEXT
+    );
+    CREATE TABLE IF NOT EXISTS coverage_shot (
+      id INTEGER PRIMARY KEY,
+      coverage_group_id INTEGER NOT NULL,
+      slot INTEGER NOT NULL,
+      visual_prompt TEXT
+    );
+  `);
+
+  const chapterId = chaptersResponse.json()[0]!.id;
+  await db.run(
+    'INSERT INTO character (project_id, name, visual_tags) VALUES (?, ?, ?)',
+    project.id,
+    '云瑶',
+    JSON.stringify({ hair: 'silver' })
+  );
+  const sceneResult = await db.run(
+    'INSERT INTO scene (chapter_id, "index", visual_prompt, shot_spec) VALUES (?, ?, ?, ?)',
+    chapterId,
+    1,
+    '云海玉楼远景',
+    JSON.stringify({ lens: '24mm' })
+  );
+  const coverageGroupResult = await db.run(
+    'INSERT INTO coverage_group (source_scene_id, version, status) VALUES (?, ?, ?)',
+    sceneResult.lastID,
+    1,
+    'completed'
+  );
+  await db.run(
+    'INSERT INTO coverage_shot (coverage_group_id, slot, visual_prompt) VALUES (?, ?, ?)',
+    coverageGroupResult.lastID,
+    1,
+    '高角度俯拍'
+  );
+
+  const exportResponse = await app.inject({
+    method: 'GET',
+    url: `/api/projects/${project.id}/export`
+  });
+
+  assert.equal(exportResponse.statusCode, 200, exportResponse.body);
+  assert.match(
+    String(exportResponse.headers['content-disposition']),
+    /\.novastory\.json$/
+  );
+
+  const exportedProject = exportResponse.json();
+  assert.equal(exportedProject.format, 'novastory-project');
+  assert.equal(exportedProject.project.id, project.id);
+  assert.equal(exportedProject.screenplay.chapters.length, 3);
+  assert.deepEqual(
+    exportedProject.character_center.characters[0].visual_tags,
+    { hair: 'silver' }
+  );
+  assert.deepEqual(
+    exportedProject.director.scenes[0].shot_spec,
+    { lens: '24mm' }
+  );
+  assert.equal(exportedProject.director.coverage_groups.length, 1);
+  assert.equal(exportedProject.director.coverage_shots.length, 1);
+  assert.deepEqual(exportedProject.summary, {
+    chapters: 3,
+    characters: 1,
+    scenes: 1,
+    coverage_groups: 1,
+    coverage_shots: 1
+  });
 
   await app.close();
 });

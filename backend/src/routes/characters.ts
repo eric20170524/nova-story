@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { LLMService } from '../services/llm';
+import { getGeneratedDirectory } from '../core/paths';
 
 // Dummy implementation of current_user auth
 const mockGetCurrentUser = (request: any) => ({
@@ -87,13 +88,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const visualTags = profile.visual_tags || {};
-        const mergedTags = {
+        const mergedTags: any = {
           ...existingTags,
           timeline_map: existingTags.timeline_map || {},
           variants: existingTags.variants || [{
             id: 'v1_default',
             name: 'Default',
-            tags: {}
+            tags: visualTags
           }],
           base_model: {
             ...(existingTags.base_model || {}),
@@ -108,6 +109,35 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
         let characterId: number;
         if (existing) {
+          const evolution = await LLMService.analyzeCharacterEvolution(
+            {
+              name: existing.name,
+              role: existing.role,
+              description: existing.description,
+              visual_tags: mergedTags
+            },
+            chapter.content
+          );
+
+          if (evolution.action === 'new_variant' && evolution.new_variant) {
+            const variantId = `var_${crypto.randomUUID().substring(0, 8)}`;
+            mergedTags.variants.push({
+              id: variantId,
+              name: evolution.new_variant.name,
+              tags: evolution.new_variant.tags
+            });
+            mergedTags.timeline_map[chapter_id] = variantId;
+          } else {
+            const activeVariantId = mergedTags.timeline_map[chapter_id]
+              || mergedTags.variants[mergedTags.variants.length - 1]?.id
+              || 'v1_default';
+            mergedTags.timeline_map[chapter_id] = activeVariantId;
+            if (evolution.action === 'scene_modifier' && evolution.modifier_tags) {
+              mergedTags.scene_modifiers = mergedTags.scene_modifiers || {};
+              mergedTags.scene_modifiers[chapter_id] = evolution.modifier_tags;
+            }
+          }
+
           await db.run(
             `UPDATE character
              SET role = ?, description = ?, visual_tags = ?
@@ -119,6 +149,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
           );
           characterId = existing.id;
         } else {
+          mergedTags.timeline_map[chapter_id] = 'v1_default';
           const result = await db.run(
             `INSERT INTO character (project_id, name, role, description, visual_tags)
              VALUES (?, ?, ?, ?, ?)`,
@@ -347,7 +378,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ detail: 'No turnaround or avatar image available for face cropping' });
     }
 
-    const staticDir = path.join(__dirname, '../../app/static/generated');
+    const staticDir = getGeneratedDirectory();
     const filename = path.basename(srcUrl);
     const filepath = path.join(staticDir, filename);
 
@@ -421,7 +452,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ detail: 'No file uploaded' });
     }
 
-    const staticDir = path.join(__dirname, '../../app/static/generated');
+    const staticDir = getGeneratedDirectory();
     if (!fs.existsSync(staticDir)) {
       fs.mkdirSync(staticDir, { recursive: true });
     }
@@ -445,7 +476,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ detail: 'Character not found' });
     }
 
-    const staticDir = path.join(__dirname, '../../app/static/generated');
+    const staticDir = getGeneratedDirectory();
     if (!fs.existsSync(staticDir)) {
       fs.mkdirSync(staticDir, { recursive: true });
     }

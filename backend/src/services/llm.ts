@@ -73,6 +73,25 @@ export class LLMService {
         return null;
     }
 
+    static async generateDraft(instructions: string, context: string = "", token?: string): Promise<string> {
+        const provider = LLMService.getProvider(token);
+        return provider.generateText(Prompts.generateDraft(instructions, context));
+    }
+
+    static async analyzeContent(content: string, token?: string): Promise<z.infer<typeof ContentAnalysisSchema>> {
+        const result = await LLMService.generateStructuredWithRetry(
+            Prompts.analyzeContent(content),
+            ContentAnalysisSchema,
+            token
+        );
+        return result || { new_entities: [], updates: ["Analysis failed"] };
+    }
+
+    static async generateStoryboardGrid(storyText: string, token?: string): Promise<string> {
+        const provider = LLMService.getProvider(token);
+        return provider.generateText(Prompts.generateStoryboardGridPrompt(storyText));
+    }
+
     static validateNineShotCoverage(shots: any[]): boolean {
         if (shots.length !== 9) return false;
         for (const s of shots) {
@@ -83,7 +102,7 @@ export class LLMService {
 
     static generateNineShotFallback(content: string): any[] {
         const sentences = content.split(/[。！？\n]+/).map(s => s.trim()).filter(s => s);
-        const baseSentence = sentences.length > 0 ? sentences[0] : content.substring(0, 100);
+        const baseSentence = sentences[0] ?? content.substring(0, 100);
 
         const nineSpecs = [
             ["Extreme Long Shot", "Static", "Eye-level"],
@@ -98,7 +117,9 @@ export class LLMService {
         ];
 
         return nineSpecs.map((spec, idx) => {
-            const sText = sentences.length > 0 ? sentences[idx % sentences.length] : baseSentence;
+            const sText = sentences.length > 0
+                ? (sentences[idx % sentences.length] ?? baseSentence)
+                : baseSentence;
             const hasDialog = sText.includes('：') || sText.includes(':') || sText.includes('“');
             return {
                 id: idx + 1,
@@ -233,5 +254,25 @@ export class LLMService {
             return result.profiles;
         }
         return [];
+    }
+
+    static async analyzeCharacterEvolution(
+        characterData: Record<string, any>,
+        newText: string,
+        token?: string
+    ): Promise<z.infer<typeof CharacterEvolutionSchema>> {
+        const prompt = Prompts.analyzeCharacterEvolution(
+            JSON.stringify(characterData, null, 2),
+            newText
+        );
+        const result = await LLMService.generateStructuredWithRetry(
+            prompt,
+            CharacterEvolutionSchema,
+            token
+        );
+        return result || {
+            action: "keep_current",
+            reason: "LLM failed to return a valid character evolution result"
+        };
     }
 }

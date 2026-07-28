@@ -1,15 +1,16 @@
-import { GoogleGenerativeAI, Schema } from '@google/generative-ai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { z } from 'zod';
 import { AIProvider } from './base';
 import { logger } from '../../core/logging';
-import { settings } from '../../core/config';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { SettingsManager } from '../../core/settings_manager';
 
 export class GeminiProvider implements AIProvider {
     private genAI: GoogleGenerativeAI;
     private model: string;
+    private apiKey: string;
 
     constructor(apiKey: string, model: string = 'gemini-2.5-flash') {
+        this.apiKey = apiKey;
         this.genAI = new GoogleGenerativeAI(apiKey);
         this.model = model;
     }
@@ -31,8 +32,7 @@ export class GeminiProvider implements AIProvider {
     }
 
     async generateStructured<T>(prompt: string, responseSchema: z.ZodSchema<T>, systemInstruction?: string): Promise<T> {
-        const jsonSchema = zodToJsonSchema(responseSchema, "ResponseSchema") as any;
-        const schemaRef = jsonSchema.definitions?.ResponseSchema || jsonSchema;
+        const schemaRef = z.toJSONSchema(responseSchema) as any;
 
         // Convert to Gemini compatible schema if needed.
         // For basic properties this often just maps straight over, but we need to ensure type is an enum compatible with Gemini API.
@@ -60,12 +60,11 @@ export class GeminiProvider implements AIProvider {
             const text = result.response.text();
 
             // basic json repair
-            let cleanText = text.trim();
-            if (cleanText.includes('```json')) {
-                cleanText = cleanText.split('```json')[1].split('```')[0].trim();
-            } else if (cleanText.includes('```')) {
-                cleanText = cleanText.split('```')[1].split('```')[0].trim();
-            }
+            const cleanText = text
+                .trim()
+                .replace(/^```(?:json)?\s*/i, '')
+                .replace(/\s*```$/, '')
+                .trim();
 
             const parsed = JSON.parse(cleanText);
 
@@ -79,9 +78,61 @@ export class GeminiProvider implements AIProvider {
     }
 
     async generateImage(prompt: string, size: string = "1024x1024", token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }> {
-        logger.warn("Gemini Image Generation: Returning placeholder in Fastify migration phase 4.");
-        const encodedPrompt = encodeURIComponent(prompt.substring(0, 20));
-        const url = `https://placehold.co/1024x1024/1e293b/6366f1.png?text=Gemini+Mock:+${encodedPrompt}`;
-        return { url };
+        if (!this.apiKey) {
+            return { error: 'GEMINI_API_KEY is not configured.' };
+        }
+
+        const imageModel = SettingsManager.loadSettings().image_model
+            || 'gemini-2.5-flash-image';
+        const isImagen = /imagen|veo/i.test(imageModel);
+        const operation = isImagen ? 'predict' : 'generateContent';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(imageModel)}:${operation}?key=${encodeURIComponent(this.apiKey)}`;
+        const payload = isImagen
+            ? {
+                instances: [{ prompt }],
+                parameters: { sampleCount: 1 }
+              }
+            : {
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseModalities: ['TEXT', 'IMAGE']
+                }
+              };
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(120_000)
+            });
+            if (!response.ok) {
+                const detail = await response.text();
+                return {
+                    error: `Gemini image generation failed (${response.status}): ${detail.substring(0, 500)}`
+                };
+            }
+
+            const data = await response.json() as Record<string, any>;
+            if (isImagen) {
+                const encoded = data.predictions?.[0]?.bytesBase64Encoded
+                    || data.predictions?.[0]?.image?.bytesBase64Encoded;
+                return encoded
+                    ? { data: Buffer.from(encoded, 'base64') }
+                    : { error: 'Gemini Imagen response contained no image data.' };
+            }
+
+            const parts = data.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+                const inlineData = part.inlineData || part.inline_data;
+                if (inlineData?.data) {
+                    return { data: Buffer.from(inlineData.data, 'base64') };
+                }
+            }
+            return { error: 'Gemini response contained no image data.' };
+        } catch (error: any) {
+            logger.error(`Gemini image generation error: ${error}`);
+            return { error: error?.message || String(error) };
+        }
     }
 }

@@ -41,13 +41,15 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
 
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379/0';
+    const redisUrl = process.env.REDIS_URL;
     let redis: Redis | null = null;
 
-    try {
-        redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, retryStrategy: () => null });
-    } catch (e) {
-        logger.error(`Failed to connect to redis: ${e}`);
+    if (redisUrl) {
+      try {
+          redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, retryStrategy: () => null });
+      } catch (e) {
+          logger.error(`Failed to connect to redis: ${e}`);
+      }
     }
 
     const channel = `task_progress:${task_id}`;

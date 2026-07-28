@@ -7,6 +7,34 @@ export interface Project {
   created_at?: string;
 }
 
+export interface ProjectExport {
+  format: 'novastory-project';
+  version: number;
+  exported_at: string;
+  project: Omit<Project, 'settings'> & {
+    settings?: string | Record<string, any>;
+    [key: string]: any;
+  };
+  screenplay: {
+    chapters: Array<Chapter & Record<string, any>>;
+  };
+  character_center: {
+    characters: Array<Character & Record<string, any>>;
+  };
+  director: {
+    scenes: Array<Scene & Record<string, any>>;
+    coverage_groups: Array<CoverageGroup & Record<string, any>>;
+    coverage_shots: Array<CoverageShot & Record<string, any>>;
+  };
+  summary: {
+    chapters: number;
+    characters: number;
+    scenes: number;
+    coverage_groups: number;
+    coverage_shots: number;
+  };
+}
+
 // Characters
 export interface Character {
   id: number;

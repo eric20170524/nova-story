@@ -89,8 +89,33 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ detail: 'Chapter not found' });
     }
 
-    await db.run('DELETE FROM chapter WHERE id = ?', id);
-    return { status: 'success', id };
+    await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      await db.run(
+        `DELETE FROM coverage_shot
+         WHERE coverage_group_id IN (
+           SELECT coverage_group.id
+           FROM coverage_group
+           INNER JOIN scene ON scene.id = coverage_group.source_scene_id
+           WHERE scene.chapter_id = ?
+         )`,
+        id
+      );
+      await db.run(
+        `DELETE FROM coverage_group
+         WHERE source_scene_id IN (
+           SELECT id FROM scene WHERE chapter_id = ?
+         )`,
+        id
+      );
+      await db.run('DELETE FROM scene WHERE chapter_id = ?', id);
+      await db.run('DELETE FROM chapter WHERE id = ?', id);
+      await db.exec('COMMIT');
+      return { status: 'success', id };
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      throw error;
+    }
   });
 
   app.put('/:id/move', async (request, reply) => {

@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import { getConfigDirectory } from './paths';
 
 const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
-const BACKEND_DIR = path.resolve(__dirname, '../../');
 
 const DEFAULT_SETTINGS = {
     llm_model: 'gemini-2.5-flash',
@@ -31,11 +31,11 @@ const DEFAULT_SETTINGS = {
 
 export class SettingsManager {
     static getFilePath() {
-        return path.join(BACKEND_DIR, SETTINGS_FILE);
+        return path.join(getConfigDirectory(), SETTINGS_FILE);
     }
 
     static getEnvPath() {
-        return path.join(BACKEND_DIR, ENV_FILE);
+        return path.join(getConfigDirectory(), ENV_FILE);
     }
 
     static loadSettings() {
@@ -94,6 +94,7 @@ export class SettingsManager {
     static saveSettings(newSettings: Record<string, any>) {
         const currentSettings = SettingsManager.loadSettings();
         const envPath = SettingsManager.getEnvPath();
+        fs.mkdirSync(getConfigDirectory(), { recursive: true });
 
         if (!fs.existsSync(envPath)) {
             fs.writeFileSync(envPath, '');

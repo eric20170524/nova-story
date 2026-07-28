@@ -87,12 +87,11 @@ export class OpenAIProvider implements AIProvider {
 
             const content = response.choices[0]?.message?.content || '';
 
-            let cleanText = content.trim();
-            if (cleanText.includes('```json')) {
-                cleanText = cleanText.split('```json')[1].split('```')[0].trim();
-            } else if (cleanText.includes('```')) {
-                cleanText = cleanText.split('```')[1].split('```')[0].trim();
-            }
+            const cleanText = content
+                .trim()
+                .replace(/^```(?:json)?\s*/i, '')
+                .replace(/\s*```$/, '')
+                .trim();
 
             const parsed = JSON.parse(cleanText);
 
@@ -126,7 +125,8 @@ export class OpenAIProvider implements AIProvider {
                 response_format: 'url',
             });
 
-            return { url: response.data[0]?.url };
+            const url = response.data?.[0]?.url;
+            return url ? { url } : { error: 'The image provider returned no image URL.' };
         } catch (error: any) {
             logger.error(`OpenAI Image generation error: ${error}`);
             return { error: error.message };
