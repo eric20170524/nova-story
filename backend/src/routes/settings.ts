@@ -3,9 +3,35 @@ import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 
+import fs from 'fs';
+import path from 'path';
+
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async (request, reply) => {
     return SettingsManager.loadSettings();
+  });
+
+  app.get('/loras', async (request, reply) => {
+    const settings = SettingsManager.loadSettings();
+    const installPath = settings.comfyui?.install_path || 'D:\\ComfyUI';
+    const loraDirectory = path.join(String(installPath), 'models', 'loras');
+    
+    let loras: string[] = [];
+    let exists = false;
+    if (fs.existsSync(loraDirectory)) {
+      exists = true;
+      try {
+        loras = fs.readdirSync(loraDirectory)
+          .filter((f) => /\.(safetensors|ckpt|pt)$/i.test(f))
+          .sort((a, b) => a.localeCompare(b));
+      } catch (err) {}
+    }
+
+    return {
+      lora_directory: loraDirectory,
+      exists,
+      loras
+    };
   });
 
   app.post('/', async (request, reply) => {

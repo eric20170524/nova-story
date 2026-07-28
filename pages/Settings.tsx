@@ -35,6 +35,8 @@ export const SettingsPage: React.FC = () => {
     }
   });
   const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
+  const [availableLoras, setAvailableLoras] = useState<string[]>([]);
+  const [loraDirectoryInfo, setLoraDirectoryInfo] = useState<{ lora_directory: string; exists: boolean }>({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [verifyingLLM, setVerifyingLLM] = useState(false);
@@ -91,15 +93,18 @@ export const SettingsPage: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [settingsData, filesData] = await Promise.all([
+      const [settingsData, filesData, lorasData] = await Promise.all([
         api.getSettings(),
-        api.getWorkflowFiles()
+        api.getWorkflowFiles(),
+        api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] }))
       ]);
       
       const defaultComfyUI = {
         base_url: 'http://127.0.0.1:8188',
         enabled: false,
-        selected_workflow_file: null
+        selected_workflow_file: null,
+        flux_lora: 'XLabs_Flux_Realism.safetensors',
+        pony_lora: 'Pony_DetailV2.0.safetensors'
       };
 
       const defaultLLM = {
@@ -111,8 +116,8 @@ export const SettingsPage: React.FC = () => {
 
       const defaultAdvanced = {
         nsfw_enabled: false,
-        pony_nsfw_lora: '',
-        flux_nsfw_lora: '',
+        pony_nsfw_lora: 'Pony_DetailV2.0.safetensors',
+        flux_nsfw_lora: 'XLabs_Flux_Realism.safetensors',
         nsfw_lora_strength: 0.8
       };
 
@@ -130,6 +135,10 @@ export const SettingsPage: React.FC = () => {
         advanced: { ...defaultAdvanced, ...(settingsData.advanced || {}) }
       });
       setWorkflowFiles(filesData);
+      if (lorasData?.loras) {
+        setAvailableLoras(lorasData.loras);
+        setLoraDirectoryInfo({ lora_directory: lorasData.lora_directory, exists: lorasData.exists });
+      }
     } catch (error) {
       console.error("Failed to load data", error);
       setMessage({ type: 'error', text: t('settings_page.error') });
@@ -327,15 +336,29 @@ export const SettingsPage: React.FC = () => {
                     <label className="block text-sm font-medium text-slate-400">
                       {t('settings_page.pony_nsfw_lora_label')}
                     </label>
-                    <span className="text-xs text-indigo-400">Recommended: Pony_Detail_Tweaker.safetensors</span>
+                    <span className="text-xs text-indigo-400">Detected: Pony_DetailV2.0.safetensors</span>
                   </div>
-                  <input
-                    type="text"
-                    value={settings.advanced?.pony_nsfw_lora ?? ''}
-                    onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
-                    placeholder="Pony_Detail_Tweaker.safetensors"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                  />
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <select
+                      value={availableLoras.includes(settings.advanced?.pony_nsfw_lora) ? settings.advanced?.pony_nsfw_lora : ''}
+                      onChange={(e) => {
+                        if (e.target.value) handleAdvancedChange('pony_nsfw_lora', e.target.value);
+                      }}
+                      className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">{t('settings_page.lora_select_placeholder')}</option>
+                      {availableLoras.map((lora) => (
+                        <option key={lora} value={lora}>{lora}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={settings.advanced?.pony_nsfw_lora ?? ''}
+                      onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
+                      placeholder="Pony_DetailV2.0.safetensors"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
                 </div>
 
                 {/* FLUX.1-dev NSFW LoRA */}
@@ -344,15 +367,29 @@ export const SettingsPage: React.FC = () => {
                     <label className="block text-sm font-medium text-slate-400">
                       {t('settings_page.flux_nsfw_lora_label')}
                     </label>
-                    <span className="text-xs text-indigo-400">Recommended: aidmaNSFWunlock.safetensors</span>
+                    <span className="text-xs text-indigo-400">Detected: XLabs_Flux_Realism.safetensors</span>
                   </div>
-                  <input
-                    type="text"
-                    value={settings.advanced?.flux_nsfw_lora ?? ''}
-                    onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
-                    placeholder="aidmaNSFWunlock.safetensors"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                  />
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <select
+                      value={availableLoras.includes(settings.advanced?.flux_nsfw_lora) ? settings.advanced?.flux_nsfw_lora : ''}
+                      onChange={(e) => {
+                        if (e.target.value) handleAdvancedChange('flux_nsfw_lora', e.target.value);
+                      }}
+                      className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">{t('settings_page.lora_select_placeholder')}</option>
+                      {availableLoras.map((lora) => (
+                        <option key={lora} value={lora}>{lora}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={settings.advanced?.flux_nsfw_lora ?? ''}
+                      onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
+                      placeholder="XLabs_Flux_Realism.safetensors"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    />
+                  </div>
                 </div>
 
                 {/* LoRA Strength */}
@@ -464,11 +501,59 @@ export const SettingsPage: React.FC = () => {
                           </option>
                         ))}
                       </select>
-                      <WorkflowIcon className="absolute right-3 top-2.5 w-5 h-5 text-slate-500 pointer-events-none" />
                     </div>
                     <p className="text-xs text-slate-500 mt-2">
                       {t('settings_page.comfyui_workflow_desc')}
                     </p>
+                  </div>
+
+                  {/* LoRA Model Configuration */}
+                  <div className="pt-4 border-t border-slate-800 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-sm font-medium text-slate-300 flex items-center gap-2">
+                        <span>📦</span>
+                        <span>{t('settings_page.detected_loras_title')}</span>
+                      </label>
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-mono ${availableLoras.length > 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/50' : 'bg-amber-950 text-amber-400 border border-amber-800/50'}`}>
+                        {availableLoras.length} files detected
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* FLUX Default LoRA */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                          {t('settings_page.comfyui_flux_lora_label')}
+                        </label>
+                        <select
+                          value={settings.comfyui?.flux_lora || ''}
+                          onChange={(e) => handleComfyUIChange('flux_lora', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">{t('settings_page.lora_select_placeholder')}</option>
+                          {availableLoras.map((lora) => (
+                            <option key={lora} value={lora}>{lora}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Pony Default LoRA */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                          {t('settings_page.comfyui_pony_lora_label')}
+                        </label>
+                        <select
+                          value={settings.comfyui?.pony_lora || ''}
+                          onChange={(e) => handleComfyUIChange('pony_lora', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">{t('settings_page.lora_select_placeholder')}</option>
+                          {availableLoras.map((lora) => (
+                            <option key={lora} value={lora}>{lora}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </section>
