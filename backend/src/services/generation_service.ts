@@ -124,6 +124,22 @@ const findFluxStyleLora = (runtimeSettings: any) => {
     ) || candidates[0] || null;
 };
 
+const isConfiguredLoraAvailable = (runtimeSettings: any, loraName: unknown) => {
+    if (!loraName) return false;
+
+    const installPath = runtimeSettings.comfyui?.install_path;
+    // A remote ComfyUI instance cannot be validated through the local
+    // filesystem, so preserve the configured name and let the remote validate
+    // it. Local installations should never receive a known-missing LoRA.
+    if (!installPath) return true;
+
+    const loraDirectory = path.join(String(installPath), 'models', 'loras');
+    if (!fs.existsSync(loraDirectory)) return false;
+    return fs.existsSync(
+        path.join(loraDirectory, path.basename(String(loraName)))
+    );
+};
+
 export const compileComfyWorkflow = async (
     workflowData: any,
     finalPrompt: string,
@@ -260,14 +276,21 @@ export const compileComfyWorkflow = async (
     }
 
     if (advancedSettings.nsfw_enabled) {
-        injectLora(
-            workflow,
-            isFlux
-                ? advancedSettings.flux_nsfw_lora
-                : advancedSettings.pony_nsfw_lora,
-            Number(advancedSettings.nsfw_lora_strength || 0.8),
-            isFlux ? 'flux' : 'pony'
-        );
+        const nsfwLora = isFlux
+            ? advancedSettings.flux_nsfw_lora
+            : advancedSettings.pony_nsfw_lora;
+        if (isConfiguredLoraAvailable(runtimeSettings, nsfwLora)) {
+            injectLora(
+                workflow,
+                nsfwLora,
+                Number(advancedSettings.nsfw_lora_strength || 0.8),
+                isFlux ? 'flux' : 'pony'
+            );
+        } else if (nsfwLora) {
+            logger.warn(
+                `Skipping configured ${isFlux ? 'FLUX' : 'Pony'} LoRA because it is not installed: ${path.basename(String(nsfwLora))}`
+            );
+        }
     }
 
     return workflow;

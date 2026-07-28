@@ -32,6 +32,7 @@ export const CharacterManager: React.FC = () => {
   const [genType, setGenType] = useState<'turnaround' | 'portrait'>('turnaround');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
+  const [isPromptLoading, setIsPromptLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [useRefPortrait, setUseRefPortrait] = useState<boolean>(true);
@@ -127,6 +128,9 @@ export const CharacterManager: React.FC = () => {
     const initialGenType = overrideGenType || ((!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround');
     setGenType(initialGenType);
     setGeneratedImageUrl(null);
+    setPrompt('');
+    setNegativePrompt('');
+    setIsPromptLoading(true);
 
     try {
       const res = await api.buildCharacterPrompt(
@@ -140,8 +144,13 @@ export const CharacterManager: React.FC = () => {
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
-      setPrompt(`score_9, score_8_up, character turnaround sheet, multi-view layout, full body, front view, side view, back view, ${char.description || ''}`);
+      const fallbackComposition = initialGenType === 'portrait'
+        ? 'character portrait, full body, front view'
+        : 'character turnaround sheet, multi-view layout, full body, front view, side view, back view';
+      setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
+    } finally {
+      setIsPromptLoading(false);
     }
   };
 
@@ -152,6 +161,7 @@ export const CharacterManager: React.FC = () => {
     refUrl: string | null = refImageUrl
   ) => {
     if (!sheetModalChar) return;
+    setIsPromptLoading(true);
     try {
       const res = await api.buildCharacterPrompt(
         sheetModalChar.id, 
@@ -165,11 +175,20 @@ export const CharacterManager: React.FC = () => {
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
       showToast("Failed to generate prompt", 'error');
+    } finally {
+      setIsPromptLoading(false);
     }
   };
 
   const handleGenerateSheetImage = async () => {
-    if (!sheetModalChar || !prompt) return;
+    if (!sheetModalChar) {
+      showToast("未选择要生成立绘的角色", 'error');
+      return;
+    }
+    if (!prompt.trim()) {
+      showToast(isPromptLoading ? "正在准备生成提示词，请稍候" : "生成提示词为空，请先填写提示词", 'error');
+      return;
+    }
     setIsGenerating(true);
     setGeneratedImageUrl(null);
 
@@ -189,20 +208,33 @@ export const CharacterManager: React.FC = () => {
 
       const res = await api.generateAsset(payload, 999990 + sheetModalChar.id);
       const taskId = res.task_id;
+      if (!taskId) {
+        throw new Error("后端没有返回生成任务 ID");
+      }
 
       // Subscribe to SSE or poll for completion
       const eventSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
+      let hasSettled = false;
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'complete' || data.status === 'completed') {
+          if (data.status === 'failed') {
+            hasSettled = true;
+            showToast(data.error || "Generation failed", 'error');
+            setIsGenerating(false);
+            eventSource.close();
+          } else if (data.status === 'completed' || (data.type === 'complete' && data.image_url)) {
+            hasSettled = true;
             if (data.image_url) {
               setGeneratedImageUrl(data.image_url);
               showToast("Image generated successfully", 'success');
+            } else {
+              showToast("生成已结束，但没有返回图片", 'error');
             }
             setIsGenerating(false);
             eventSource.close();
-          } else if (data.status === 'failed') {
+          } else if (data.type === 'complete') {
+            hasSettled = true;
             showToast(data.error || "Generation failed", 'error');
             setIsGenerating(false);
             eventSource.close();
@@ -213,12 +245,15 @@ export const CharacterManager: React.FC = () => {
       };
 
       eventSource.onerror = () => {
+        if (!hasSettled) {
+          showToast("生成状态连接中断，请确认 ComfyUI 已启动后重试", 'error');
+        }
         setIsGenerating(false);
         eventSource.close();
       };
     } catch (e) {
       console.error(e);
-      showToast("Generation failed", 'error');
+      showToast(e instanceof Error ? e.message : "Generation failed", 'error');
       setIsGenerating(false);
     }
   };
@@ -885,11 +920,16 @@ export const CharacterManager: React.FC = () => {
               <div className="border-t border-slate-800 pt-4 flex flex-col items-center">
                 <button
                   type="button"
-                  disabled={isGenerating}
+                  disabled={isGenerating || isPromptLoading || !prompt.trim()}
                   onClick={handleGenerateSheetImage}
                   className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium px-8 py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
                 >
-                  {isGenerating ? (
+                  {isPromptLoading ? (
+                    <>
+                      <RefreshCw size={18} className="animate-spin" />
+                      正在准备提示词...
+                    </>
+                  ) : isGenerating ? (
                     <>
                       <RefreshCw size={18} className="animate-spin" />
                       {t('director.status_generating')}...

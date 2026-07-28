@@ -114,6 +114,35 @@ test('builds the deterministic nine-panel image prompt without negative suffixes
   assert.doesNotMatch(prompt, /cars, text/);
 });
 
+test('skips a configured local LoRA when the file is not installed', async () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-missing-lora-'));
+  fs.mkdirSync(path.join(installPath, 'models', 'loras'), { recursive: true });
+
+  try {
+    const compiled = await compileComfyWorkflow(
+      ponyWorkflow(),
+      'Hero opens a door',
+      'standard',
+      {},
+      {
+        advanced: {
+          nsfw_enabled: true,
+          pony_nsfw_lora: 'missing.safetensors',
+          nsfw_lora_strength: 0.75
+        },
+        comfyui: { install_path: installPath }
+      }
+    );
+    assert.equal(
+      Object.values(compiled).some((node: any) => node.class_type === 'LoraLoader'),
+      false
+    );
+    assert.deepEqual(compiled["3"].inputs.model, ["4", 0]);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
 test('preserves main FLUX prompt enhancement and discovers a local style LoRA', async () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-'));
   const loraDirectory = path.join(installPath, 'models', 'loras');

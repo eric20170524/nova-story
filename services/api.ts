@@ -319,7 +319,14 @@ class ApiService {
       headers: headers,
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error('Failed to start generation');
+    if (!res.ok) {
+      let detail = `Failed to start generation (${res.status})`;
+      try {
+        const errorPayload = await res.json();
+        detail = errorPayload?.detail || errorPayload?.message || detail;
+      } catch (_) {}
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    }
     return res.json();
   };
 

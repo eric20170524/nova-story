@@ -60,7 +60,9 @@ export class ComfyUIService {
                 parsedUrl.hostname || '127.0.0.1',
                 '--port',
                 parsedUrl.port || '8188',
-                '--lowvram'
+                '--lowvram',
+                '--disable-pinned-memory',
+                '--cache-none'
             ],
             {
                 cwd: installPath,

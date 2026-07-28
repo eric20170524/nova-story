@@ -89,6 +89,18 @@ test('full application exposes parity routes and API documentation', async () =>
     });
     assert.equal(invalidDraftResponse.statusCode, 422);
     assert.ok(Array.isArray(invalidDraftResponse.json().detail));
+
+    const { AssetTaskStore } = await import('./services/task_store');
+    AssetTaskStore.completed('sse-regression', 1, '/static/generated/test.png');
+    const sseResponse = await app.inject({
+      method: 'GET',
+      url: '/api/assets/stream/sse-regression',
+      headers: { origin: 'http://localhost:3000' }
+    });
+    assert.equal(sseResponse.statusCode, 200);
+    assert.equal(sseResponse.headers['content-type'], 'text/event-stream');
+    assert.equal(sseResponse.headers['access-control-allow-origin'], '*');
+    assert.match(sseResponse.body, /"status":"completed"/);
   } finally {
     await app.close();
   }

@@ -37,9 +37,14 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     const paramsSchema = z.object({ task_id: z.string() });
     const { task_id } = paramsSchema.parse(request.params);
 
+    // Fastify otherwise considers the async handler complete and may close the
+    // raw response before the generation task publishes its next event.
+    reply.hijack();
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
+    // Hijacked responses bypass Fastify's normal CORS onSend hook.
+    reply.raw.setHeader('Access-Control-Allow-Origin', '*');
 
     const redisUrl = process.env.REDIS_URL;
     let redis: Redis | null = null;
@@ -139,12 +144,12 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
             }
         }, 3000);
 
-        request.raw.on('close', () => {
+        reply.raw.on('close', () => {
             clearInterval(pollInterval);
         });
     }
 
-    request.raw.on('close', () => {
+    reply.raw.on('close', () => {
         logger.info(`SSE Client disconnected: ${task_id}`);
         if (redis) redis.disconnect();
     });

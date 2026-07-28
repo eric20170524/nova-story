@@ -155,10 +155,19 @@ function Start-ComfyUI {
         Select-Object -First 1
     if ($ollamaExe) {
         Write-Host '  Releasing local LLM VRAM before starting ComfyUI...' -ForegroundColor DarkGray
-        & $ollamaExe stop 'novastory-qwen3:8b' 2>$null
+        # Ollama writes terminal control sequences to stderr even when the
+        # command succeeds. Windows PowerShell turns that stderr output into a
+        # terminating NativeCommandError because this script uses
+        # $ErrorActionPreference = 'Stop'. Run it through cmd so both native
+        # streams are suppressed before PowerShell can reinterpret them.
+        $ollamaStopCommand = "`"$ollamaExe`" stop novastory-qwen3:8b >nul 2>&1"
+        & $env:ComSpec /d /c $ollamaStopCommand
     }
 
-    $command = "chcp 65001 >nul && title ComfyUI Server (8188) && cd /d `"$comfyDir`" && `"$pythonExe`" main.py --listen 127.0.0.1 --port 8188 --lowvram"
+    # Pinned model weights can consume more than 6 GB of system RAM on this
+    # 16 GB Windows machine and make Pony XL fail while initializing its text
+    # encoder. Avoid pinned copies and cached node outputs in local mode.
+    $command = "chcp 65001 >nul && title ComfyUI Server (8188) && cd /d `"$comfyDir`" && `"$pythonExe`" main.py --listen 127.0.0.1 --port 8188 --lowvram --disable-pinned-memory --cache-none"
     Start-Process -FilePath $env:ComSpec -ArgumentList @('/k', $command) -WorkingDirectory $comfyDir | Out-Null
     return $true
 }
