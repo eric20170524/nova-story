@@ -40,7 +40,9 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   });
 
   await app.register(cors, {
-    origin: '*'
+    origin: '*',
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
   });
   const staticDirectory = getStaticDirectory();
   fs.mkdirSync(staticDirectory, { recursive: true });
