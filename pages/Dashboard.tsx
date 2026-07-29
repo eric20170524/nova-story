@@ -282,7 +282,7 @@ export const Dashboard: React.FC = () => {
                 <div className="relative">
                     <input
                       type="file"
-                      accept=".txt"
+                      accept=".txt,.json,.novastory.json"
                       required
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 text-sm"
                       onChange={(e) => {
