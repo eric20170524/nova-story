@@ -33,9 +33,9 @@ npm run dev
 默认地址：
 
 - 前端：`http://localhost:3000/novastory/`
-- 后端：`http://127.0.0.1:8087/`
-- Swagger：`http://127.0.0.1:8087/docs`
-- OpenAPI：`http://127.0.0.1:8087/openapi.json`
+- 后端：`http://localhost:3000/`
+- Swagger：`http://localhost:3000/api/docs`
+- OpenAPI：`http://localhost:3000/api/openapi.json`
 
 首次启动会在 `backend/sql_app.db` 中创建完整数据结构，并写入内置 ComfyUI 工作流。
 

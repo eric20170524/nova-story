@@ -202,7 +202,7 @@ try {
     Install-DependenciesIfNeeded -Directory $BackendDir -ExpectedExecutable 'node_modules\.bin\tsx.cmd' -Label 'backend'
     Install-DependenciesIfNeeded -Directory $RootDir -ExpectedExecutable 'node_modules\.bin\vite.cmd' -Label 'frontend'
 
-    $ports = @(8087, 3000)
+    $ports = @(3000)
     if (-not $SkipComfyUI) {
         $ports += 8188
     }
@@ -212,8 +212,7 @@ try {
     Start-Sleep -Seconds 1
 
     Write-Host '[3/4] Starting Fastify backend and Vite frontend...' -ForegroundColor Green
-    Start-NpmService -Title 'NovaStory Backend (8087)' -Directory $BackendDir -Script 'dev'
-    Start-NpmService -Title 'NovaStory Frontend (3000)' -Directory $RootDir -Script 'dev'
+    Start-NpmService -Title 'NovaStory Fullstack Server (3000)' -Directory $RootDir -Script 'dev'
 
     Write-Host '[4/4] Starting optional ComfyUI service...' -ForegroundColor Green
     $comfyStarted = $false
@@ -223,8 +222,8 @@ try {
 
     Write-Host ''
     Write-Host 'Start commands dispatched successfully.' -ForegroundColor Cyan
-    Write-Host '  Backend:  http://127.0.0.1:8087/' -ForegroundColor Gray
-    Write-Host '  Frontend: http://localhost:3000/novastory/' -ForegroundColor Gray
+    Write-Host '  App URL:  http://localhost:3000/' -ForegroundColor Gray
+    Write-Host '  API URL:  http://localhost:3000/api' -ForegroundColor Gray
     if ($SkipComfyUI) {
         Write-Host '  ComfyUI:  skipped by -SkipComfyUI' -ForegroundColor DarkGray
     }

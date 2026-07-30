@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-开发地址为 `http://localhost:3000/novastory/`，API 指向 `http://127.0.0.1:8087/api`。
+开发地址为 `http://localhost:3000/novastory/`，API 指向 `http://localhost:3000/api`。
 
 ## 验证与构建
 
