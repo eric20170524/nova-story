@@ -3,6 +3,12 @@ import { z } from 'zod';
 import type { AIProvider } from './base';
 import { logger } from '../../core/logging';
 
+function truncateLog(text: string, maxLength = 500): string {
+    if (!text) return '';
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}... [truncated, total length ${text.length}]`;
+}
+
 export class OpenAIProvider implements AIProvider {
     private openai: OpenAI;
     private model: string;
@@ -44,9 +50,13 @@ export class OpenAIProvider implements AIProvider {
                 request.reasoning_effort = 'none';
             }
 
+            logger.info(`[OpenAI Prompt Input]: ${truncateLog(prompt)}`);
             const response = await this.openai.chat.completions.create(request);
 
-            return response.choices[0]?.message?.content || '';
+            const content = response.choices[0]?.message?.content || '';
+            logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
+
+            return content;
         } catch (error) {
             logger.error(`OpenAI generateText error: ${error}`);
             throw error;
@@ -83,9 +93,11 @@ export class OpenAIProvider implements AIProvider {
                 request.reasoning_effort = 'none';
             }
 
+            logger.info(`[OpenAI Structured Prompt Input]: ${truncateLog(prompt)}`);
             const response = await this.openai.chat.completions.create(request);
 
             const content = response.choices[0]?.message?.content || '';
+            logger.info(`[OpenAI Structured Output Raw]: ${truncateLog(content)}`);
 
             const cleanText = content
                 .trim()
@@ -95,7 +107,6 @@ export class OpenAIProvider implements AIProvider {
 
             const parsed = JSON.parse(cleanText);
 
-            // Adjust common array wrapper mismatch from generic json generation
             let targetParsed = parsed;
             const fieldKeys = Object.keys(schemaRef?.properties || {});
             const onlyField = fieldKeys.length === 1 ? fieldKeys[0] : undefined;

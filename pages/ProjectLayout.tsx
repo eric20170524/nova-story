@@ -1,16 +1,37 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import { BookOpen, Users, Clapperboard, Settings } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
+import { api } from '../services/api';
 
 export const ProjectLayout: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { t } = useLanguage();
+  const [projectTitle, setProjectTitle] = useState<string>('');
+
+  useEffect(() => {
+    if (id) {
+      api.getProject(Number(id))
+        .then(project => {
+          setProjectTitle(project.title);
+        })
+        .catch(console.error);
+    }
+  }, [id]);
 
   return (
     <div className="flex flex-col h-full">
       {/* Project Top Bar Navigation */}
-      <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center px-4 sm:px-6 gap-4 sm:gap-8 flex-shrink-0 overflow-x-auto custom-scrollbar">
+      <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center px-4 sm:px-6 gap-2 sm:gap-6 flex-shrink-0 overflow-x-auto custom-scrollbar">
+        
+        {projectTitle && (
+            <div className="hidden sm:flex items-center gap-2 mr-2 border-r border-slate-800 pr-6">
+                <span className="font-semibold text-slate-200 truncate max-w-[200px]" title={projectTitle}>
+                    {projectTitle}
+                </span>
+            </div>
+        )}
+
         <TabLink to={`/project/${id}/story`} icon={<BookOpen size={16} />} label={t('project_nav.story')} />
         <TabLink to={`/project/${id}/characters`} icon={<Users size={16} />} label={t('project_nav.characters')} />
         <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />

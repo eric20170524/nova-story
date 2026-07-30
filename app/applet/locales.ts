@@ -2,7 +2,7 @@ export const translations = {
   en: {
     app_title: "NovaStory Studio",
     dashboard_label: "Dashboard",
-    settings_label: "Settings",
+    settings: "Settings",
     help: "Help",
     save_changes: "Save Changes",
     saved: "Saved",
@@ -12,16 +12,6 @@ export const translations = {
     save_failed: "Failed to save settings",
     settings_title: "Global Settings",
     settings_subtitle: "Manage your AI models, backend connections, and application preferences.",
-    pony: "Pony XL",
-    flux: "FLUX.1",
-
-    settings: {
-      failed_load: "Failed to load project settings",
-      updated: "Project updated successfully",
-      failed_update: "Failed to update project settings",
-      deleted: "Project deleted successfully",
-      failed_delete: "Failed to delete project",
-    },
 
     app: {
       dashboard: "Dashboard",
@@ -379,7 +369,7 @@ export const translations = {
   zh: {
     app_title: "NovaStory 影视动画工作台",
     dashboard_label: "项目大厅",
-    settings_label: "全局设置",
+    settings: "全局设置",
     help: "帮助",
     save_changes: "保存更改",
     saved: "已保存",
@@ -389,16 +379,6 @@ export const translations = {
     save_failed: "保存设置失败",
     settings_title: "全局配置",
     settings_subtitle: "管理您的 AI 模型、后端服务连接以及全局应用偏好。",
-    pony: "Pony XL 模型",
-    flux: "FLUX.1 模型",
-
-    settings: {
-      failed_load: "加载项目设置失败",
-      updated: "项目设置更新成功",
-      failed_update: "更新项目设置失败",
-      deleted: "项目删除成功",
-      failed_delete: "删除项目失败",
-    },
 
     app: {
       dashboard: "项目大厅",
@@ -508,7 +488,7 @@ export const translations = {
       MAIN: "主角",
       PROTAGONIST: "主角",
       ANTAGONIST: "反派",
-      SUPPORTING: "支持角色",
+      SUPPORTING: "配角",
       EXTRA: "群众",
     },
 

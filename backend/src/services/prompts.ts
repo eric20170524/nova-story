@@ -44,9 +44,13 @@ ${characterProfiles}
 `;
         }
         return `You are a master film director and cinematographer.
-Your task is to take a short story beat and expand it into a EXACTLY 9 cinematic shots that cover the same action from different angles and compositions.
+Your task is to take a short story beat and expand it into EXACTLY 9 cinematic shots that cover the same action from different angles and compositions.
 
 CRITICAL: Return EXACTLY 9 shots. Not 8, not 10. EXACTLY 9.
+
+### Language Rules:
+- 'dialogue': Can be in Chinese or English matching the source story text so it can serve directly as comic subtitles.
+- 'visual_prompt', 'audio_prompt': MUST remain in detailed English for image generation models.
 
 ### 9-Shot Grid Structure:
 Slot 1: Extreme Long Shot, Eye-level
@@ -78,10 +82,11 @@ ${characterProfiles}
 Break down the following story text into a sequence of storyboard shots based on 'Independent Action Units'.
 
 ### Core Cinematography & Storyboarding Principles:
-1. **Action-Driven Prompts (CRITICAL)**: Every 'visual_prompt' MUST describe a SPECIFIC physical action, gesture, or posture.
-2. **Props & Environmental Objects (CRITICAL)**: Always include key props, tools, or handheld items.
+1. **Action-Driven Prompts (CRITICAL)**: Every 'visual_prompt' MUST describe a SPECIFIC physical action, gesture, or posture in English.
+2. **Props & Environmental Objects (CRITICAL)**: Always include key props, tools, or handheld items in English.
 3. **Multi-Person Spatial Interaction**: Explicitly describe their relative physical positions.
 4. **Visual Variety & Dynamic Framing**: Alternate between Shot Sizes.
+5. **Language Rule**: The 'dialogue' field SHOULD preserve original text language (Chinese or English) for subtitle use in comics. 'visual_prompt' and 'audio_prompt' MUST be in English.
 ${charInstruction}
 ### Required Output Format (JSON Object):
 Return a JSON object with a key 'shots' containing a list of shot objects. Example:
@@ -94,7 +99,7 @@ Return a JSON object with a key 'shots' containing a list of shot objects. Examp
       "camera_angle": "Eye-level",
       "visual_prompt": "Detailed English scene description including [Specific Physical Action & Body Language]",
       "audio_prompt": "Background music and sound effects in English",
-      "dialogue": "Speaker: Line",
+      "dialogue": "Speaker: Line (in Chinese or English)",
       "duration": 4.0
     }
   ]
@@ -136,7 +141,7 @@ Return a JSON object with a key 'shots' containing a list of EXACTLY 9 objects m
 - 'camera_movement': Movement choice
 - 'visual_prompt': Detailed English description for image generation
 - 'audio_prompt': Audio BGM/SFX description in English
-- 'dialogue': Keep original dialogue if applicable or null
+- 'dialogue': Keep original dialogue (Chinese or English) if applicable or null
 - 'duration': 3.0
 
 Source Scene Description:

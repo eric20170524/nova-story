@@ -49,7 +49,7 @@ main 只用于追溯行为，不继续维护 Python/Node 双实现。
 - 后端类型检查、生产编译与自动化测试
 - 前端类型检查与生产构建
 - 可运行的 Node 后端/前端 Dockerfile、Nginx 和 Compose
-- Windows 一键启动继续使用 Fastify 8087
+- Windows 一键启动继续使用 Fastify 3000
 - API、架构和部署文档切换到 Node 实现
 
 ## 验收门槛

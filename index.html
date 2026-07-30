@@ -4,24 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NovaStory</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✨</text></svg>">
-    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      if (typeof tailwind !== 'undefined') {
-        tailwind.config = {
-          theme: {
-            extend: {
-              colors: {
-                gray: {
-                  750: '#2d3748',
-                  850: '#1a202c',
-                  950: '#0d1117',
-                }
-              }
-            }
+      (function() {
+        try {
+          var nativeFetch = window.fetch;
+          if (nativeFetch) {
+            var currentFetch = nativeFetch;
+            Object.defineProperty(window, 'fetch', {
+              get: function() { return currentFetch; },
+              set: function(v) { currentFetch = v; },
+              configurable: true,
+              enumerable: true
+            });
           }
-        }
-      }
+        } catch (e) {}
+      })();
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
@@ -102,23 +99,6 @@
         background-color: #334155 !important;
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react-router-dom": "https://esm.sh/react-router-dom@^7.13.0",
-    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
-    "path": "https://esm.sh/path@^0.12.7",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.4",
-    "url": "https://esm.sh/url@^0.11.4",
-    "easymde": "https://esm.sh/easymde@2.18.0",
-    "react-simplemde-editor": "https://esm.sh/react-simplemde-editor@5.2.0?deps=react@19.2.4,react-dom@19.2.4,easymde@2.18.0"
-  }
-}
-</script>
 </head>
   <body>
     <div id="root"></div>

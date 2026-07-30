@@ -1,6 +1,4 @@
-export const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || ((import.meta as any).env?.PROD 
-  ? '/novastory/api' 
-  : '/api');
+export const API_BASE_URL = '/api';
 
 export const CHARACTER_ROLES = [
   { value: 'protagonist', label: '主角 (Protagonist)' },

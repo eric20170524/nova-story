@@ -1,10 +1,12 @@
-# Frontend TODO List
+# NovaStory Development TODO List
 
 ## 🟢 Completed Features (已完成功能)
 
-### Infrastructure
-- [x] Project structure (React + Vite + TypeScript).
+### Infrastructure & Full-Stack Server
+- [x] Project structure (React + Vite + TypeScript + Node.js + Fastify + SQLite).
 - [x] Routing setup (`App.tsx`, `Layout.tsx`).
+- [x] Single entrypoint full-stack server (`server.ts` with Fastify & Vite middleware on port 3000).
+- [x] Resolved dev server self-proxy issues (`EMFILE`, `socket hang up`, `ECONNRESET`).
 - [x] API Service with Mock Data fallback (`services/api.ts`).
 - [x] Localization support (`LanguageContext.tsx`, `locales.ts`).
 - [x] Basic UI Components and Styling (Tailwind CSS).
@@ -12,6 +14,18 @@
 - [x] **Loading States**: Implemented Skeleton loaders for Dashboard and Director Mode.
 - [x] **Mobile Responsiveness**: Implemented collapsible sidebars, mobile menus, and responsive layouts.
 - [x] **Authentication**: Implemented `AuthGuard`, Login redirection, and Token management (`AuthService`).
+
+### One-Click Comic Generation (一键生成漫画功能)
+- [x] Chapter-level comic rendering (`/api/comics/:chapter_id/generate`).
+- [x] Image composition with subtitles placed at bottom center with automatic line wrapping.
+- [x] PDF Export (`chapter_<id>_comic.pdf`) using PDFKit.
+- [x] Interactive Gallery / Flip-book Previewer (`ComicViewer`).
+
+### LLM Structured Output & Subtitles (LLM 结构化输出与中英文对白)
+- [x] **Native Structured Output**: Configured JSON Schema / OpenAPI compatible schema response for Gemini & OpenAI providers.
+- [x] **Zod Validation & Retry Loop**: 3-attempt validation and fallback recovery in `LLMService.generateStructuredWithRetry`.
+- [x] **Bilingual Dialogue Subtitles**: Auto-storyboard timeline prompts preserve Chinese/English dialogues for comic subtitles while keeping visual/audio prompts in English.
+- [x] **LLM I/O Logging**: Truncated input prompt and model response logging in backend.
 
 ### Story Editor (`StoryEditor.tsx`)
 - [x] Chapter List Sidebar (View, Create).
@@ -80,7 +94,6 @@
         - [x] Backend: Implement logic to first call LLM with "Version 3 Meta-Prompt" to generate the image prompt, then call Image Provider.
         - [x] Frontend: Add "Asset Mode" toggle (Standard / Cinematic Grid) in Director Mode settings.
         - [x] Frontend: Update `generateAsset` calls to respect the selected mode.
-
 
 ---
 

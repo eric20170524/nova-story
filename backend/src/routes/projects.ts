@@ -482,10 +482,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // Fallback to text file import
     let parsed;
     try {
-      parsed = parseTextProject(rawText, filename);
+      const content = decodeTextFile(await file.toBuffer());
+      parsed = parseTextProject(content, file.filename);
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Could not parse the selected file';
       return reply.status(400).send({ detail });

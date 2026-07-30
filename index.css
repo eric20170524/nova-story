@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+    --color-gray-750: #2d3748;
+    --color-gray-850: #1a202c;
+    --color-gray-950: #0d1117;
+}
+
+body {
+    background-color: #0f172a; /* slate-950 */
+    color: #e2e8f0; /* slate-200 */
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #1e293b; 
+}
+::-webkit-scrollbar-thumb {
+    background: #475569; 
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #64748b; 
+}
+
+/* EasyMDE Dark Mode Overrides */
+.EasyMDEContainer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.EasyMDEContainer .editor-toolbar {
+    background-color: #1e293b; /* slate-800 */
+    border-color: #334155; /* slate-700 */
+    border-radius: 8px 8px 0 0;
+    opacity: 0.8;
+}
+.EasyMDEContainer .editor-toolbar i {
+    color: #94a3b8; /* slate-400 */
+}
+.EasyMDEContainer .editor-toolbar button:hover,
+.EasyMDEContainer .editor-toolbar button.active {
+    background-color: #334155;
+    border-color: #475569;
+}
+.EasyMDEContainer .editor-toolbar button:hover i,
+.EasyMDEContainer .editor-toolbar button.active i {
+    color: #e2e8f0;
+}
+.EasyMDEContainer .CodeMirror {
+    background-color: #0f172a; /* slate-950 */
+    border-color: #334155; /* slate-700 */
+    color: #e2e8f0; /* slate-200 */
+    border-radius: 0 0 8px 8px;
+    flex: 1;
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    font-size: 1.125rem; /* text-lg */
+    line-height: 1.75;
+}
+.EasyMDEContainer .CodeMirror-cursor {
+    border-left: 1px solid #6366f1; /* indigo-500 */
+}
+.EasyMDEContainer .editor-preview {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    padding: 2rem;
+}
+.EasyMDEContainer .editor-statusbar {
+    display: none; /* Hide status bar */
+}
+
+/* Hide toolbar completely if preferred, or maintain style */
+.editor-toolbar.fullscreen {
+    background-color: #1e293b;
+}
+
+.CodeMirror-selected {
+    background-color: #334155 !important;
+}
+.CodeMirror-line::selection, .CodeMirror-line > span::selection, .CodeMirror-line > span > span::selection {
+    background-color: #334155 !important;
+}

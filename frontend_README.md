@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-统一开发访问地址为 `http://localhost:3000/novastory/`，所有 API (`/api/`) 与静态资源 (`/static/`) 均由 Vite 自动代理至后端 `http://127.0.0.1:8087`。
+开发地址为 `http://localhost:3000/novastory/`，API 指向 `http://localhost:3000/api`。
 
 ## 验证与构建
 

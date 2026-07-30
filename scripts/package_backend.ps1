@@ -114,8 +114,8 @@ if %errorlevel% neq 0 (
 )
 
 echo [INFO] Starting Uvicorn server...
-echo [INFO] API Documentation: http://localhost:8087/docs
-uvicorn main:app --host 0.0.0.0 --port 8087
+echo [INFO] API Documentation: http://localhost:3000/api/docs
+uvicorn main:app --host 0.0.0.0 --port 3000
 
 pause
 "@

@@ -1,10 +1,10 @@
 # NovaStory Backend API
 
-基础地址：`http://127.0.0.1:8087/api`（前端通过 `http://localhost:3000/api` 统一代理访问）
+基础地址：`http://localhost:3000/api`
 
-可交互文档：`http://127.0.0.1:8087/docs`
+可交互文档：`http://localhost:3000/api/docs`
 
-OpenAPI JSON：`http://127.0.0.1:8087/openapi.json`
+OpenAPI JSON：`http://localhost:3000/api/openapi.json`
 
 校验失败统一返回 HTTP 422：
 

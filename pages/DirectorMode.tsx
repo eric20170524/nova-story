@@ -360,7 +360,7 @@ export const DirectorMode: React.FC = () => {
 
       stopBatchRef.current = false;
       setIsBatchGenerating(true);
-      showToast("Sequential batch generation started", 'info');
+      showToast(t("director.batch_started", "Sequential batch generation started"), 'info');
       
       for (const scene of timeline) {
           if (stopBatchRef.current) break;
@@ -379,7 +379,7 @@ export const DirectorMode: React.FC = () => {
       if (wasStopped) {
           showToast(t('director.batch_stopped') || "Batch generation stopped", 'warning');
       } else {
-          showToast("Batch generation complete", 'success');
+          showToast(t("director.batch_complete", "Batch generation complete"), 'success');
       }
   };
 
@@ -407,13 +407,13 @@ export const DirectorMode: React.FC = () => {
             setComicPages(res.pages);
             setComicPdf(res.pdf_url);
             setShowComicViewer(true);
-            showToast("Comic generated successfully", 'success');
+            showToast(t("director.comic_generated", "Comic generated successfully"), 'success');
         } else {
-            showToast("No pages generated.", 'error');
+            showToast(t("director.comic_no_pages", "No pages generated."), 'error');
         }
     } catch (e) {
         console.error(e);
-        showToast("Failed to generate comic. Ensure all scenes have images.", 'error');
+        showToast(t("director.comic_failed", "Failed to generate comic. Ensure all scenes have images."), 'error');
     } finally {
         setGeneratingComic(false);
     }
@@ -426,13 +426,13 @@ export const DirectorMode: React.FC = () => {
           const res = await api.renderVideo(timeline, Number(projectId));
           if (res.video_url) {
               window.open(res.video_url, '_blank');
-              showToast("Video rendering completed", 'success');
+              showToast(t("director.video_completed", "Video rendering completed"), 'success');
           } else {
-              showToast("Video rendering started", 'info');
+              showToast(t("director.video_started", "Video rendering started"), 'info');
           }
       } catch (e) {
           console.error(e);
-          showToast("Failed to start video rendering.", 'error');
+          showToast(t("director.video_failed", "Failed to start video rendering."), 'error');
       } finally {
           setRenderingVideo(false);
       }

@@ -7,7 +7,7 @@ type Translations = typeof translations.en;
 interface LanguageContextType {
   language: Language;
   setLanguage: (lang: Language) => void;
-  t: (path: string, params?: Record<string, string | number>) => string;
+  t: (path: string, fallbackOrParams?: string | Record<string, string | number>, params?: Record<string, string | number>) => string;
 }
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -15,25 +15,39 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('zh'); // Default to Chinese
 
-  const t = (path: string, params?: Record<string, string | number>): string => {
-    const keys = path.split('.');
-    let value: any = translations[language];
+  const t = (path: string, fallbackOrParams?: string | Record<string, string | number>, extraParams?: Record<string, string | number>): string => {
+    let fallback = path;
+    let params: Record<string, string | number> | undefined = extraParams;
 
-    for (const key of keys) {
-      if (value && typeof value === 'object' && key in value) {
-        value = value[key as keyof typeof value];
-      } else {
-        return path; // Fallback to key if not found
-      }
+    if (typeof fallbackOrParams === 'string') {
+      fallback = fallbackOrParams;
+    } else if (typeof fallbackOrParams === 'object' && fallbackOrParams !== null) {
+      params = fallbackOrParams;
     }
 
-    if (typeof value === 'string' && params) {
+    const resolveKey = (lang: Language): string | null => {
+      const keys = path.split('.');
+      let value: any = translations[lang];
+
+      for (const key of keys) {
+        if (value && typeof value === 'object' && key in value) {
+          value = value[key as keyof typeof value];
+        } else {
+          return null;
+        }
+      }
+      return typeof value === 'string' ? value : null;
+    };
+
+    let result = resolveKey(language) || resolveKey('en') || fallback;
+
+    if (params) {
       return Object.entries(params).reduce((acc, [key, val]) => {
         return acc.split(`{${key}}`).join(String(val));
-      }, value);
+      }, result);
     }
 
-    return typeof value === 'string' ? value : path;
+    return result;
   };
 
   return (
