@@ -20,7 +20,13 @@ async function startServer() {
     });
 
     app.use((req: any, res: any, next: any) => {
-      if (req.url && req.url.startsWith('/api')) {
+      if (
+        req.url &&
+        (req.url.startsWith('/api') ||
+         req.url.startsWith('/static') ||
+         req.url.startsWith('/docs') ||
+         req.url === '/openapi.json')
+      ) {
         return next();
       }
       vite.middlewares(req, res, next);
@@ -29,7 +35,7 @@ async function startServer() {
     const distPath = path.join(process.cwd(), 'dist');
     if (fs.existsSync(distPath)) {
       app.setNotFoundHandler((req, reply) => {
-        if (req.url.startsWith('/api')) {
+        if (req.url.startsWith('/api') || req.url.startsWith('/static')) {
           reply.status(404).send({ error: 'Not found' });
         } else {
           reply.sendFile('index.html', distPath);
