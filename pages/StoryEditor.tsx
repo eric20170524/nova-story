@@ -79,7 +79,7 @@ export const StoryEditor: React.FC = () => {
       }
     } catch (err) {
       console.error("[StoryEditor] Could not load chapters", err);
-      showToast("Failed to load chapters", 'error');
+      showToast(t("story.failed_load_chapters", "Failed to load chapters"), 'error');
     }
   };
 
@@ -96,10 +96,10 @@ export const StoryEditor: React.FC = () => {
       });
       setChapters([...chapters, newChapter]);
       setSelectedChapter(newChapter);
-      showToast("Chapter created", 'success');
+      showToast(t("story.chapter_created", "Chapter created"), 'success');
     } catch (e) {
       console.error("[StoryEditor] Create chapter failed", e);
-      showToast("Failed to create chapter", 'error');
+      showToast(t("story.failed_create_chapter", "Failed to create chapter"), 'error');
     }
   };
 
@@ -115,10 +115,10 @@ export const StoryEditor: React.FC = () => {
           if (selectedChapter?.id === chapterId) {
               setSelectedChapter(newChapters.length > 0 ? newChapters[0] : null);
           }
-          showToast("Chapter deleted", 'success');
+          showToast(t("story.chapter_deleted", "Chapter deleted"), 'success');
       } catch (e) {
           console.error("Delete failed", e);
-          showToast("Failed to delete chapter.", 'error');
+          showToast(t("story.failed_delete_chapter", "Failed to delete chapter."), 'error');
       }
   };
 
@@ -147,7 +147,7 @@ export const StoryEditor: React.FC = () => {
           await api.moveChapter(chapter.id, targetIndex);
       } catch (e) {
           console.error("Move failed", e);
-          showToast("Failed to move chapter", 'error');
+          showToast(t("story.failed_move_chapter", "Failed to move chapter"), 'error');
           loadChapters();
       }
   };
@@ -162,10 +162,10 @@ export const StoryEditor: React.FC = () => {
       });
       console.log(`[StoryEditor] Chapter saved.`);
       setChapters(chapters.map(c => c.id === selectedChapter.id ? { ...c, content } : c));
-      showToast("Saved", 'success');
+      showToast(t("story.saved", "Saved"), 'success');
     } catch (e) {
       console.error("[StoryEditor] Save failed", e);
-      showToast("Failed to save", 'error');
+      showToast(t("story.failed_save", "Failed to save"), 'error');
     }
   };
 
@@ -214,7 +214,7 @@ export const StoryEditor: React.FC = () => {
       setBreakdownLoading(true);
       try {
           await api.generateTimeline(selectedChapter.id);
-          showToast("Timeline generated. Switching to Director Mode...", 'success');
+          showToast(t("story.timeline_generated", "Timeline generated. Switching to Director Mode..."), 'success');
           setTimeout(() => navigate(`/project/${projectId}/director`), 1000);
       } catch (e) {
           console.error(e);
@@ -233,7 +233,7 @@ export const StoryEditor: React.FC = () => {
       showToast(t('story.analysis_complete'), 'success');
     } catch (e) {
       console.error(e);
-      showToast("Analysis failed", 'error');
+      showToast(t("story.analysis_failed", "Analysis failed"), 'error');
     } finally {
       setIsAnalyzing(false);
     }
@@ -245,10 +245,10 @@ export const StoryEditor: React.FC = () => {
     try {
         const res = await api.analyzeText(content);
         setAnalysisResult(res);
-        showToast("Analysis complete", 'success');
+        showToast(t("story.analysis_complete"), 'success');
     } catch (e) {
         console.error(e);
-        showToast("Analysis failed", 'error');
+        showToast(t("story.analysis_failed", "Analysis failed"), 'error');
     } finally {
         setIsAnalyzing(false);
     }
@@ -340,7 +340,7 @@ export const StoryEditor: React.FC = () => {
               title="Go to Director Mode"
             >
                <Clapperboard size={16} />
-               <span>To Storyboard</span>
+               <span>{t("story.to_storyboard", "To Storyboard")}</span>
             </button>
 
             <button 

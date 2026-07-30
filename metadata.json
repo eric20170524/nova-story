@@ -1,5 +1,1 @@
-{
-  "name": "NovaStory",
-  "description": "A comprehensive creative platform for story writing and AI-assisted storyboard generation.",
-  "requestFramePermissions": []
-}
+{"name":"nova-story","description":"A comprehensive creative platform for story writing and AI-assisted storyboard generation.","requestFramePermissions":[]}

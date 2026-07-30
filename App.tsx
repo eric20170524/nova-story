@@ -49,7 +49,7 @@ const App: React.FC = () => {
   return (
     <LanguageProvider>
       <ToastProvider>
-        <BrowserRouter basename="/novastory">
+        <BrowserRouter>
           <AuthGuard>
               <Routes>
               <Route path="/" element={<Layout />}>

@@ -49,7 +49,7 @@ export const CharacterManager: React.FC = () => {
       if (Array.isArray(data)) setCharacters(data);
     } catch (e) {
       console.error(e);
-      showToast("Failed to load characters", 'error');
+      showToast(t("characters.failed_load", "Failed to load characters"), 'error');
     }
   };
 
@@ -96,9 +96,9 @@ export const CharacterManager: React.FC = () => {
       }
       setShowModal(false);
       loadCharacters();
-      showToast("Character saved", 'success');
+      showToast(t("characters.saved", "Character saved"), 'success');
     } catch (e) {
-      showToast("Failed to save character", 'error');
+      showToast(t("characters.failed_save", "Failed to save character"), 'error');
     }
   };
   
@@ -107,9 +107,9 @@ export const CharacterManager: React.FC = () => {
     try {
         await api.deleteCharacter(id);
         loadCharacters();
-        showToast("Character deleted", 'success');
+        showToast(t("characters.deleted", "Character deleted"), 'success');
     } catch (e) {
-        showToast("Failed to delete character", 'error');
+        showToast(t("characters.failed_delete", "Failed to delete character"), 'error');
     }
   };
 
@@ -174,7 +174,7 @@ export const CharacterManager: React.FC = () => {
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
-      showToast("Failed to generate prompt", 'error');
+      showToast(t("characters.failed_gen_prompt", "Failed to generate prompt"), 'error');
     } finally {
       setIsPromptLoading(false);
     }
@@ -182,11 +182,11 @@ export const CharacterManager: React.FC = () => {
 
   const handleGenerateSheetImage = async () => {
     if (!sheetModalChar) {
-      showToast("未选择要生成立绘的角色", 'error');
+      showToast(t("casting.gen_error_no_char"), 'error');
       return;
     }
     if (!prompt.trim()) {
-      showToast(isPromptLoading ? "正在准备生成提示词，请稍候" : "生成提示词为空，请先填写提示词", 'error');
+      showToast(isPromptLoading ? t("casting.prep_prompt") : t("casting.gen_error_no_prompt"), 'error');
       return;
     }
     setIsGenerating(true);
@@ -209,7 +209,7 @@ export const CharacterManager: React.FC = () => {
       const res = await api.generateAsset(payload, 999990 + sheetModalChar.id);
       const taskId = res.task_id;
       if (!taskId) {
-        throw new Error("后端没有返回生成任务 ID");
+        throw new Error(t("casting.gen_error_no_task"));
       }
 
       // Subscribe to SSE or poll for completion
@@ -227,9 +227,9 @@ export const CharacterManager: React.FC = () => {
             hasSettled = true;
             if (data.image_url) {
               setGeneratedImageUrl(data.image_url);
-              showToast("Image generated successfully", 'success');
+              showToast(t("characters.gen_success", "Image generated successfully"), 'success');
             } else {
-              showToast("生成已结束，但没有返回图片", 'error');
+              showToast(t("casting.gen_error_no_image"), 'error');
             }
             setIsGenerating(false);
             eventSource.close();
@@ -246,7 +246,7 @@ export const CharacterManager: React.FC = () => {
 
       eventSource.onerror = () => {
         if (!hasSettled) {
-          showToast("生成状态连接中断，请确认 ComfyUI 已启动后重试", 'error');
+          showToast(t("casting.gen_error_connection"), 'error');
         }
         setIsGenerating(false);
         eventSource.close();
@@ -271,11 +271,11 @@ export const CharacterManager: React.FC = () => {
       }
 
       const updatedChar = await api.updateCharacter(sheetModalChar.id, updatePayload);
-      showToast("Asset saved to character profile!", 'success');
+      showToast(t("characters.asset_saved", "Asset saved to character profile!"), 'success');
       setCharacters(prev => prev.map(c => c.id === sheetModalChar.id ? updatedChar : c));
       setSheetModalChar(null);
     } catch (e) {
-      showToast("Failed to save asset", 'error');
+      showToast(t("characters.failed_save_asset", "Failed to save asset"), 'error');
     }
   };
 
@@ -285,17 +285,17 @@ export const CharacterManager: React.FC = () => {
       showToast(t('characters.crop_face') + " Success!", 'success');
       setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
     } catch (e) {
-      showToast("Failed to crop face ref", 'error');
+      showToast(t("characters.failed_crop", "Failed to crop face ref"), 'error');
     }
   };
 
   const handleTrainLora = async (charId: number) => {
     try {
       const updated = await api.trainCharacterLora(charId);
-      showToast("Character LoRA Initialized & Ready!", 'success');
+      showToast(t("characters.lora_ready", "Character LoRA Initialized & Ready!"), 'success');
       setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
     } catch (e) {
-      showToast("Failed to initialize LoRA", 'error');
+      showToast(t("characters.failed_lora", "Failed to initialize LoRA"), 'error');
     }
   };
 
@@ -305,7 +305,7 @@ export const CharacterManager: React.FC = () => {
     try {
       if (charId) {
         const updatedChar = await api.uploadCharacterAsset(charId, assetType, file);
-        showToast("Local asset uploaded successfully!", 'success');
+        showToast(t("characters.upload_success", "Local asset uploaded successfully!"), 'success');
         setCharacters(prev => prev.map(c => c.id === charId ? updatedChar : c));
         if (editingChar.id === charId) {
           setEditingChar(updatedChar);
@@ -317,10 +317,10 @@ export const CharacterManager: React.FC = () => {
         } else {
           setEditingChar(prev => ({ ...prev, turnaround_url: res.url }));
         }
-        showToast("Image uploaded!", 'success');
+        showToast(t("characters.upload_success", "Image uploaded!"), 'success');
       }
     } catch (err) {
-      showToast("Failed to upload image", 'error');
+      showToast(t("characters.failed_upload", "Failed to upload image"), 'error');
     }
   };
 
@@ -392,10 +392,10 @@ export const CharacterManager: React.FC = () => {
               
               <p className="text-slate-400 text-sm mb-4 line-clamp-3 h-14">{char.description}</p>
 
-              {/* Character Visual Assets Dual Preview (正面立绘 + 角色三视图) */}
+              {/* Character Visual Assets Dual Preview (Front Portrait + Turnaround) */}
               <div className="mb-4">
                 <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
-                  <span>视觉形象资产 (Concept & Turnaround)</span>
+                  <span>{t("casting.visual_assets_preview")}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {/* Front Portrait Box */}
@@ -414,7 +414,7 @@ export const CharacterManager: React.FC = () => {
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
                         <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-emerald-300 font-semibold px-1.5 py-0.5 rounded border border-emerald-500/30">
-                          正面立绘
+                          {t("casting.front_portrait")}
                         </div>
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
                           <button
@@ -422,10 +422,10 @@ export const CharacterManager: React.FC = () => {
                             onClick={() => openSheetModal(char, 'portrait')}
                             className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
                           >
-                            AI 重新生成
+                            {t("casting.ai_regenerate")}
                           </button>
                           <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
-                            <Upload size={10} /> 上传本地图
+                            <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
                               accept="image/*"
@@ -444,10 +444,10 @@ export const CharacterManager: React.FC = () => {
                             onClick={() => openSheetModal(char, 'portrait')}
                             className="text-emerald-400 hover:underline font-medium"
                           >
-                            + AI 生成立绘
+                            {t("casting.ai_generate_portrait")}
                           </button>
                           <label className="cursor-pointer text-slate-400 hover:text-white underline flex items-center justify-center gap-0.5">
-                            <Upload size={10} /> 上传本地图
+                            <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
                               accept="image/*"
@@ -476,7 +476,7 @@ export const CharacterManager: React.FC = () => {
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
                         <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-indigo-300 font-semibold px-1.5 py-0.5 rounded border border-indigo-500/30">
-                          角色三视图
+                          {t("casting.turnaround_sheet")}
                         </div>
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
                           <button
@@ -484,10 +484,10 @@ export const CharacterManager: React.FC = () => {
                             onClick={() => openSheetModal(char, 'turnaround')}
                             className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
                           >
-                            AI 重新生成
+                            {t("casting.ai_regenerate")}
                           </button>
                           <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
-                            <Upload size={10} /> 上传本地图
+                            <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
                               accept="image/*"
@@ -506,10 +506,10 @@ export const CharacterManager: React.FC = () => {
                             onClick={() => openSheetModal(char, 'turnaround')}
                             className="text-indigo-400 hover:underline font-medium"
                           >
-                            + AI 生成三视图
+                            {t("casting.ai_generate_turnaround")}
                           </button>
                           <label className="cursor-pointer text-slate-400 hover:text-white underline flex items-center justify-center gap-0.5">
-                            <Upload size={10} /> 上传本地图
+                            <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
                               accept="image/*"
@@ -617,7 +617,7 @@ export const CharacterManager: React.FC = () => {
               {/* Local Visual Assets Upload */}
               <div className="bg-slate-950 rounded-lg p-4 border border-slate-800 space-y-4">
                 <label className="block text-sm font-semibold text-indigo-400">
-                  {t('characters.upload_hint') || "本地形象图设置 (正面立绘 + 角色三视图)"}
+                  {t('characters.upload_hint') || t("casting.upload_hint")}
                 </label>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -631,12 +631,12 @@ export const CharacterManager: React.FC = () => {
                     ) : (
                       <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
                         <User size={20} className="mb-1 opacity-50" />
-                        <span>未选择本地立绘</span>
+                        <span>{t("casting.no_local_portrait")}</span>
                       </div>
                     )}
                     <label className="cursor-pointer bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/50 px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition-all">
                       <Upload size={14} />
-                      <span>选择本地立绘图片</span>
+                      <span>{t("casting.select_local_portrait")}</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -656,12 +656,12 @@ export const CharacterManager: React.FC = () => {
                     ) : (
                       <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
                         <ImageIcon size={20} className="mb-1 opacity-50" />
-                        <span>未选择本地三视图</span>
+                        <span>{t("casting.no_local_turnaround")}</span>
                       </div>
                     )}
                     <label className="cursor-pointer bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/50 px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1.5 transition-all">
                       <Upload size={14} />
-                      <span>选择本地三视图图片</span>
+                      <span>{t("casting.select_local_turnaround")}</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -679,7 +679,7 @@ export const CharacterManager: React.FC = () => {
                 <div className="flex flex-col sm:flex-row gap-2 mb-3">
                   <input placeholder={t('characters.key_placeholder')} className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white" value={tagKey} onChange={e => setTagKey(e.target.value)} />
                   <input placeholder={t('characters.val_placeholder')} className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white" value={tagValue} onChange={e => setTagValue(e.target.value)} />
-                  <button type="button" onClick={handleAddTag} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded text-white self-end sm:self-auto flex items-center justify-center gap-1"><Plus size={16} /><span className="sm:hidden text-xs">Add Tag</span></button>
+                  <button type="button" onClick={handleAddTag} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded text-white self-end sm:self-auto flex items-center justify-center gap-1"><Plus size={16} /><span className="sm:hidden text-xs">{t("characters.add_tag", "Add")}</span></button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(editingChar.visual_tags || {}).map(([k, v]) => (
@@ -815,10 +815,10 @@ export const CharacterManager: React.FC = () => {
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-emerald-400 mb-0.5">
-                        {useRefPortrait ? t('characters.ref_portrait_active') : "未勾选参考图（仅凭提示词生成）"}
+                        {useRefPortrait ? t('characters.ref_portrait_active') : t("casting.ref_portrait_inactive")}
                       </p>
                       <p className="text-[11px] text-slate-400 truncate">
-                        {sheetModalChar.name} - 正面立绘基准特征（可全角度比对正面、侧面、背面）
+                        {sheetModalChar.name} - {t("casting.ref_portrait_feature")}
                       </p>
                     </div>
                   </div>
@@ -826,7 +826,7 @@ export const CharacterManager: React.FC = () => {
                   <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded-lg text-xs text-amber-300 flex items-center justify-between">
                     <span>{t('characters.no_ref_portrait')}</span>
                     <label className="cursor-pointer bg-amber-900/40 hover:bg-amber-800/60 text-amber-200 px-2.5 py-1 rounded text-[11px] font-medium border border-amber-700/50 flex items-center gap-1 transition-all">
-                      <Upload size={12} /> 上传立绘
+                      <Upload size={12} /> {t("casting.upload_portrait_btn")}
                       <input
                         type="file"
                         accept="image/*"
@@ -839,10 +839,10 @@ export const CharacterManager: React.FC = () => {
                               setRefImageUrl(updated.avatar_url);
                               setUseRefPortrait(true);
                               setCharacters(prev => prev.map(c => c.id === sheetModalChar.id ? updated : c));
-                              showToast("参考立绘上传成功！", 'success');
+                              showToast(t("casting.upload_portrait_success"), 'success');
                               handleRebuildPrompt(modelType, genType, true, updated.avatar_url);
                             } catch(err) {
-                              showToast("上传立绘失败", 'error');
+                              showToast(t("casting.upload_portrait_fail"), 'error');
                             }
                           }
                         }}
@@ -861,28 +861,28 @@ export const CharacterManager: React.FC = () => {
                     onClick={() => setPrompt(p => p ? `${p}, front view, side view, back view` : 'front view, side view, back view')}
                     className="px-2 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/50 rounded text-[11px] font-mono transition-all"
                   >
-                    +正面/侧面/背面全角度
+                    {t("casting.angle_full")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPrompt(p => p ? `${p}, full body model sheet, 3 views turnaround sheet` : 'full body model sheet, 3 views turnaround sheet')}
                     className="px-2 py-1 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/50 rounded text-[11px] font-mono transition-all"
                   >
-                    +等高排版角色三视图
+                    {t("casting.angle_grid")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPrompt(p => p ? `${p}, solid white background, clean simple background` : 'solid white background, clean simple background')}
                     className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-[11px] font-mono transition-all"
                   >
-                    +纯白 Studio 背景
+                    {t("casting.white_bg")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPrompt(p => p ? `${p}, consistent character design across all views` : 'consistent character design across all views')}
                     className="px-2 py-1 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/50 rounded text-[11px] font-mono transition-all"
                   >
-                    +保持服饰发型一致
+                    {t("casting.consistent_outfit")}
                   </button>
                 </div>
               )}
@@ -927,7 +927,7 @@ export const CharacterManager: React.FC = () => {
                   {isPromptLoading ? (
                     <>
                       <RefreshCw size={18} className="animate-spin" />
-                      正在准备提示词...
+                      {t("casting.prep_prompt")}
                     </>
                   ) : isGenerating ? (
                     <>

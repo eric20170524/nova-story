@@ -27,8 +27,7 @@ $excludeDirs = @(
     '.vscode',
     '.idea',
     'backend\app\static\generated',
-    'backend\app\data',
-    'docs'
+    'backend\app\data'
 )
 
 $excludeFiles = @(
@@ -79,8 +78,7 @@ try {
         $entryName = $file.FullName.Substring($scriptDir.Length + 1).Replace('\', '/')
         $null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $entryName)
     }
-}
-finally {
+} finally {
     $zip.Dispose()
 }
 

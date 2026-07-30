@@ -33,7 +33,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (error) {
       console.error("Failed to load projects", error);
-      showToast("Failed to load projects", 'error');
+      showToast(t('dashboard.failed_load'), 'error');
     } finally {
       const elapsed = Date.now() - start;
       if (elapsed < 500) await new Promise(r => setTimeout(r, 500 - elapsed));
@@ -49,9 +49,9 @@ export const Dashboard: React.FC = () => {
       setProjects([...projects, created]);
       setShowCreateModal(false);
       setNewProject({ title: '', description: '' });
-      showToast("Project created successfully", 'success');
+      showToast(t('dashboard.created'), 'success');
     } catch (error) {
-      showToast('Failed to create project', 'error');
+      showToast(t('dashboard.failed_create'), 'error');
     }
   };
 
@@ -63,7 +63,7 @@ export const Dashboard: React.FC = () => {
         setProjects([...projects, imported]);
         setShowImportModal(false);
         setImportFile(null);
-        showToast("Project imported successfully", 'success');
+        showToast(t('dashboard.imported'), 'success');
     } catch (error) {
         const message = error instanceof Error
           ? error.message
@@ -79,10 +79,10 @@ export const Dashboard: React.FC = () => {
       try {
         await api.deleteProject(id);
         setProjects(projects.filter(p => p.id !== id));
-        showToast("Project deleted", 'success');
+        showToast(t('dashboard.deleted'), 'success');
       } catch (error) {
         console.error("Delete failed", error);
-        showToast("Failed to delete project", 'error');
+        showToast(t('dashboard.failed_delete'), 'error');
       }
     }
   };
@@ -199,7 +199,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                         <h3 className="text-xl font-semibold text-slate-100 mb-2">{project.title}</h3>
                         <p className="text-slate-400 text-sm mb-6 line-clamp-2 h-10">
-                        {project.description || "No description provided."}
+                        {project.description || t('dashboard.no_description')}
                         </p>
                         <div className="flex items-center justify-between text-xs text-slate-500 pt-4 border-t border-slate-800">
                         <div className="flex items-center gap-1">
@@ -282,7 +282,7 @@ export const Dashboard: React.FC = () => {
                 <div className="relative">
                     <input
                       type="file"
-                      accept=".txt,.json,.novastory.json"
+                      accept=".txt,text/plain,.json,application/json,.novastory.json"
                       required
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 text-sm"
                       onChange={(e) => {

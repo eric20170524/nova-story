@@ -64,7 +64,7 @@ export const ProjectSettings: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      showToast("Failed to load project", 'error');
+      showToast(t("settings.failed_load", "Failed to load project"), 'error');
     } finally {
       setLoading(false);
     }
@@ -91,10 +91,10 @@ export const ProjectSettings: React.FC = () => {
         // We can update the override key:
         localStorage.setItem('director_selectedStyle', defaultStyle);
         
-        showToast("Project updated successfully", 'success');
+        showToast(t("settings.updated", "Project updated successfully"), 'success');
     } catch (e) {
         console.error(e);
-        showToast("Failed to update project", 'error');
+        showToast(t("settings.failed_update", "Failed to update project"), 'error');
     } finally {
         setSaving(false);
     }
@@ -107,11 +107,11 @@ export const ProjectSettings: React.FC = () => {
       setDeleting(true);
       try {
           await api.deleteProject(project.id);
-          showToast("Project deleted", 'success');
+          showToast(t("settings.deleted", "Project deleted"), 'success');
           navigate('/');
       } catch (e) {
           console.error(e);
-          showToast("Failed to delete project", 'error');
+          showToast(t("settings.failed_delete", "Failed to delete project"), 'error');
           setDeleting(false);
       }
   };

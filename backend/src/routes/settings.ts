@@ -5,9 +5,6 @@ import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 
-import fs from 'fs';
-import path from 'path';
-
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async (request, reply) => {
     return SettingsManager.loadSettings();

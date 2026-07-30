@@ -13,16 +13,12 @@ const DEFAULT_SETTINGS = {
         base_url: 'http://127.0.0.1:8188',
         enabled: false,
         selected_workflow_file: null,
-        install_path: 'D:\\ComfyUI',
-        flux_lora: 'XLabs_Flux_Realism.safetensors',
-        pony_lora: 'Pony_DetailV2.0.safetensors',
-        flux_lora_strength: 0.8,
-        pony_lora_strength: 0.8
+        install_path: 'D:\\ComfyUI'
     },
     advanced: {
         nsfw_enabled: false,
-        pony_nsfw_lora: "Pony_DetailV2.0.safetensors",
-        flux_nsfw_lora: "XLabs_Flux_Realism.safetensors",
+        pony_nsfw_lora: "Pony_Detail_Tweaker.safetensors",
+        flux_nsfw_lora: "aidmaNSFWunlock.safetensors",
         nsfw_lora_strength: 0.8
     },
     llm: {

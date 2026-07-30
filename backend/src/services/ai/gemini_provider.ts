@@ -4,12 +4,18 @@ import { AIProvider } from './base';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
 
+function truncateLog(text: string, maxLength = 500): string {
+    if (!text) return '';
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}... [truncated, total length ${text.length}]`;
+}
+
 export class GeminiProvider implements AIProvider {
     private ai: GoogleGenAI;
     private model: string;
     private apiKey: string;
 
-    constructor(apiKey: string, model: string = 'gemini-3.6-flash') {
+    constructor(apiKey: string, model: string = 'gemini-2.5-flash') {
         this.apiKey = apiKey;
         this.ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
         this.model = model;
@@ -21,13 +27,16 @@ export class GeminiProvider implements AIProvider {
             config.systemInstruction = systemInstruction;
         }
 
+        logger.info(`[Gemini Prompt Input]: ${truncateLog(prompt)}`);
         try {
             const result = await this.ai.models.generateContent({
                 model: this.model,
                 contents: prompt,
                 config
             });
-            return result.text || '';
+            const text = result.text || '';
+            logger.info(`[Gemini Text Output]: ${truncateLog(text)}`);
+            return text;
         } catch (error) {
             logger.error(`Gemini generateText error: ${error}`);
             throw error;
@@ -39,24 +48,23 @@ export class GeminiProvider implements AIProvider {
 
         const config: any = {
             responseMimeType: "application/json",
+            responseSchema: schemaRef,
         };
 
         if (systemInstruction) {
             config.systemInstruction = systemInstruction;
         }
 
-        const sysPrompt = systemInstruction ? `${systemInstruction}\n\n` : '';
-        const fullPrompt = `${sysPrompt}${prompt}\n\nIMPORTANT: Return ONLY a valid JSON object matching this schema:\n${JSON.stringify(schemaRef, null, 2)}`;
-
+        logger.info(`[Gemini Structured Prompt Input]: ${truncateLog(prompt)}`);
         try {
             const result = await this.ai.models.generateContent({
                 model: this.model,
-                contents: fullPrompt,
+                contents: prompt,
                 config
             });
             const text = result.text || '';
+            logger.info(`[Gemini Structured Output Raw]: ${truncateLog(text)}`);
 
-            // basic json repair
             const cleanText = text
                 .trim()
                 .replace(/^```(?:json)?\s*/i, '')
@@ -64,10 +72,7 @@ export class GeminiProvider implements AIProvider {
                 .trim();
 
             const parsed = JSON.parse(cleanText);
-
-            // Validate against the original Zod schema
             return responseSchema.parse(parsed);
-
         } catch (error) {
             logger.error(`Gemini generateStructured error: ${error}`);
             throw error;
