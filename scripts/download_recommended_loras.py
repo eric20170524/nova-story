@@ -1,3 +1,21 @@
+
+def is_valid_safetensors(path):
+    if not os.path.exists(path) or os.path.getsize(path) < 50 * 1024:
+        return False
+    try:
+        with open(path, 'rb') as f:
+            header_bytes = f.read(8)
+            if len(header_bytes) < 8:
+                return False
+            import struct
+            header_len = struct.unpack('<Q', header_bytes)[0]
+            file_size = os.path.getsize(path)
+            if header_len > file_size or header_len > 100_000_000:
+                return False
+        return True
+    except Exception:
+        return False
+
 #!/usr/bin/env python3
 """
 NovaStory - Automatic Recommended NSFW LoRA Downloader
@@ -107,7 +125,7 @@ def download_file(urls, output_path, civitai_token=None):
                         sys.stdout.flush()
 
             # Sanity check: Ensure downloaded file is valid (> 50KB)
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 50 * 1024:
+            if is_valid_safetensors(output_path):
                 print("\n  [Success] Downloaded successfully!")
                 return True
             else:
