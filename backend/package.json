@@ -25,6 +25,7 @@
     "@fastify/swagger": "^9.8.1",
     "@fastify/swagger-ui": "^6.1.0",
     "@fastify/websocket": "^11.3.0",
+    "@google/genai": "*",
     "@google/generative-ai": "^0.24.1",
     "@types/pdfkit": "^0.17.6",
     "dotenv": "^17.4.2",

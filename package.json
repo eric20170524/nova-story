@@ -3,9 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": ["backend"],
   "scripts": {
     "dev": "vite",
+    "dev:backend": "cd backend && npm run dev",
     "build": "vite build",
+    "build:frontend": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run build"

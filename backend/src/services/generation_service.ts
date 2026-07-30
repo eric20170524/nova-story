@@ -120,8 +120,32 @@ const findFluxStyleLora = (runtimeSettings: any) => {
         .filter((filename) => /\.(safetensors|ckpt)$/i.test(filename))
         .sort((left, right) => left.localeCompare(right));
     return candidates.find((filename) =>
-        /(asian|guofeng|east[_-]?asian|flux[_-]?asian)/i.test(filename)
-    ) || candidates[0] || null;
+        /(flux|realism|style|asian|guofeng|east[_-]?asian)/i.test(filename)
+    ) || candidates.find((f) => !/pony/i.test(f)) || candidates[0] || null;
+};
+
+const findPonyStyleLora = (runtimeSettings: any) => {
+    const comfySettings = runtimeSettings.comfyui || {};
+    const installPath = comfySettings.install_path;
+    if (!installPath) return null;
+
+    const loraDirectory = path.join(String(installPath), 'models', 'loras');
+    if (!fs.existsSync(loraDirectory)) return null;
+
+    const configuredLora = comfySettings.pony_lora;
+    if (
+        configuredLora
+        && fs.existsSync(path.join(loraDirectory, path.basename(String(configuredLora))))
+    ) {
+        return path.basename(String(configuredLora));
+    }
+
+    const candidates = fs.readdirSync(loraDirectory)
+        .filter((filename) => /\.(safetensors|ckpt)$/i.test(filename))
+        .sort((left, right) => left.localeCompare(right));
+    return candidates.find((filename) =>
+        /(pony|detail|incase)/i.test(filename)
+    ) || candidates.find((f) => /pony/i.test(f)) || candidates[0] || null;
 };
 
 const isConfiguredLoraAvailable = (runtimeSettings: any, loraName: unknown) => {
@@ -263,6 +287,18 @@ export const compileComfyWorkflow = async (
         }
     }
 
+    // 1. Custom/Character LoRA explicitly provided in workflowData
+    const customLora = workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
+    if (isConfiguredLoraAvailable(runtimeSettings, customLora)) {
+        injectLora(
+            workflow,
+            path.basename(String(customLora)),
+            Number(workflowData?.lora_strength || 0.8),
+            isFlux ? 'flux' : 'pony'
+        );
+    }
+
+    // 2. Default Style LoRA for FLUX or Pony
     if (isFlux) {
         const styleLora = findFluxStyleLora(runtimeSettings);
         if (styleLora) {
@@ -273,8 +309,19 @@ export const compileComfyWorkflow = async (
                 'flux'
             );
         }
+    } else {
+        const styleLora = findPonyStyleLora(runtimeSettings);
+        if (styleLora) {
+            injectLora(
+                workflow,
+                styleLora,
+                Number(runtimeSettings.comfyui?.pony_lora_strength || 0.8),
+                'pony'
+            );
+        }
     }
 
+    // 3. NSFW LoRA when NSFW mode is enabled
     if (advancedSettings.nsfw_enabled) {
         const nsfwLora = isFlux
             ? advancedSettings.flux_nsfw_lora
@@ -282,7 +329,7 @@ export const compileComfyWorkflow = async (
         if (isConfiguredLoraAvailable(runtimeSettings, nsfwLora)) {
             injectLora(
                 workflow,
-                nsfwLora,
+                path.basename(String(nsfwLora)),
                 Number(advancedSettings.nsfw_lora_strength || 0.8),
                 isFlux ? 'flux' : 'pony'
             );

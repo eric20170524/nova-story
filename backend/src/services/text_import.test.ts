@@ -208,5 +208,34 @@ test('imports qiongming-style text through the HTTP route and persists its chapt
     coverage_shots: 1
   });
 
+  const boundary = '--------------------------boundary123';
+  const jsonPayload = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"; filename="qiongming.novastory.json"',
+    'Content-Type: application/json',
+    '',
+    JSON.stringify(exportedProject),
+    `--${boundary}--`
+  ].join('\r\n');
+
+  const reimportResponse = await app.inject({
+    method: 'POST',
+    url: '/api/projects/import',
+    headers: {
+      'content-type': `multipart/form-data; boundary=${boundary}`
+    },
+    payload: jsonPayload
+  });
+
+  assert.equal(reimportResponse.statusCode, 201, reimportResponse.body);
+  const reimportedProject = reimportResponse.json();
+  assert.equal(reimportedProject.title, exportedProject.project.title);
+
+  const reimportedChapters = await app.inject({
+    method: 'GET',
+    url: `/api/chapters/?project_id=${reimportedProject.id}`
+  });
+  assert.equal(reimportedChapters.json().length, 3);
+
   await app.close();
 });

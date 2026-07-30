@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import fs from 'node:fs';
+import path from 'node:path';
 import { ZodError } from 'zod';
 import { getStaticDirectory } from './core/paths';
 import { db } from './db/database';
@@ -61,7 +62,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
         version: '1.0.0'
       },
       servers: [{
-        url: 'http://127.0.0.1:8087',
+        url: 'http://127.0.0.1:3000',
         description: 'Local NovaStory backend'
       }]
     }
@@ -74,12 +75,9 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
     }
   });
 
-  app.get('/', async () => ({
-    message: 'NovaStory Fastify+SQLite Backend Operational'
-  }));
   app.get('/api/test-db', async () => {
     const result = await db.get('SELECT sqlite_version() as version');
-    return { db_version: result.version };
+    return { db_version: result?.version || 'mocked' };
   });
   app.get('/openapi.json', async () => app.swagger());
 
@@ -95,20 +93,34 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(assistantRoutes, { prefix: '/api/assistant' });
   await app.register(coverageRoutes, { prefix: '/api' });
 
+  // Serve Vite build in production
+  const frontendDist = path.join(__dirname, '../../dist');
+  if (fs.existsSync(frontendDist)) {
+    await app.register(fastifyStatic, {
+      root: frontendDist,
+      prefix: '/',
+      decorateReply: false
+    });
+    
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/')) {
+        reply.status(404).send({ error: 'Not found' });
+      } else {
+        reply.sendFile('index.html', frontendDist);
+      }
+    });
+  }
+
   return app;
 };
 
 export const startServer = async () => {
   const app = await buildApp();
   try {
-    await app.listen({ port: 8087, host: '0.0.0.0' });
+    await app.listen({ port: 3000, host: '0.0.0.0' });
     app.log.info(`Server listening on ${app.server.address()}`);
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;
   }
 };
-
-if (require.main === module) {
-  void startServer();
-}
