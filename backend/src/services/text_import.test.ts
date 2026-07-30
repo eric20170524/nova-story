@@ -211,7 +211,7 @@ test('imports qiongming-style text through the HTTP route and persists its chapt
   const boundary = '--------------------------boundary123';
   const jsonPayload = [
     `--${boundary}`,
-    'Content-Disposition: form-data; name="file"; filename="琼明仙女录（原文副本）.novastory.json"',
+    'Content-Disposition: form-data; name="file"; filename="qiongming.novastory.json"',
     'Content-Type: application/json',
     '',
     JSON.stringify(exportedProject),

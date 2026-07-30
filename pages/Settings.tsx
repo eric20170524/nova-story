@@ -48,58 +48,52 @@ export const SettingsPage: React.FC = () => {
   const handleSecretAreaClick = () => {
     const now = Date.now();
     if (now - secretClicksRef.current.lastAt > 1500) {
-      secretClicksRef.current.count = 0;
+      secretClicksRef.current.count = 1;
+    } else {
+      secretClicksRef.current.count += 1;
     }
-    secretClicksRef.current.count += 1;
     secretClicksRef.current.lastAt = now;
 
     if (secretClicksRef.current.count >= 5) {
-      secretClicksRef.current.count = 0;
-      const next = !isAdvancedStylesEnabled();
+      const next = !advancedEnabled;
       setAdvancedStylesEnabled(next);
       setAdvancedEnabled(next);
-      if (next && ADVANCED_VISUAL_STYLES.length === 0) {
-        setMessage({
-          type: 'error',
-          text: t('settings_page.advanced_styles_missing'),
-        });
-      } else {
-        setMessage({
-          type: 'success',
-          text: next
-            ? t('settings_page.advanced_styles_on')
-            : t('settings_page.advanced_styles_off'),
-        });
-      }
-      setTimeout(() => setMessage(null), 4000);
+      secretClicksRef.current.count = 0;
+      setMessage({
+        type: 'success',
+        text: next
+          ? '高级风格画风面板已开启！'
+          : '高级风格画风面板已隐藏。',
+      });
+    }
+  };
+
+  /** Secret unlock logic: click page title 5 times */
+  const handleTitleClick = () => {
+    const newCount = titleClicks + 1;
+    if (newCount >= 5) {
+      setIsUnlocked(true);
+      localStorage.setItem('settings_advanced_unlocked', 'true');
+      setMessage({ type: 'success', text: '开发者选项已解锁！隐藏页面已开放。' });
+      setTitleClicks(0);
+    } else {
+      setTitleClicks(newCount);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadSettings();
   }, []);
 
-  const handleTitleClick = () => {
-    const nextCount = titleClicks + 1;
-    setTitleClicks(nextCount);
-    if (nextCount >= 5) {
-      localStorage.setItem('settings_advanced_unlocked', 'true');
-      setIsUnlocked(true);
-      setActiveTab('advanced');
-      setMessage({ type: 'success', text: t('settings_page.unlocked_toast') });
-      setTitleClicks(0);
-    }
-  };
-
-  const loadData = async () => {
+  const loadSettings = async () => {
     try {
       const [settingsData, filesData, lorasData] = await Promise.all([
         api.getSettings(),
         api.getWorkflowFiles(),
         api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] }))
       ]);
-      
-      const defaultComfyUI = {
+
+      const comfy = settingsData.comfyui || {
         base_url: 'http://127.0.0.1:8188',
         enabled: false,
         selected_workflow_file: null,
@@ -107,783 +101,630 @@ export const SettingsPage: React.FC = () => {
         pony_lora: 'Pony_DetailV2.0.safetensors'
       };
 
-      const defaultLLM = {
-        provider: 'gemini',
-        api_key: '',
-        base_url: '',
-        model: 'gemini-2.5-flash'
-      };
-
-      const defaultAdvanced = {
+      const advanced = settingsData.advanced || {
         nsfw_enabled: false,
         pony_nsfw_lora: 'Pony_DetailV2.0.safetensors',
         flux_nsfw_lora: 'XLabs_Flux_Realism.safetensors',
         nsfw_lora_strength: 0.8
       };
 
-      const comfyui = { ...defaultComfyUI, ...(settingsData.comfyui || {}) };
-      const selectedWorkflow = comfyui.selected_workflow_file || comfyui.default_workflow || null;
-
       setSettings({
         ...settingsData,
-        comfyui: {
-          ...comfyui,
-          selected_workflow_file: selectedWorkflow,
-          default_workflow: selectedWorkflow
-        },
-        llm: { ...defaultLLM, ...(settingsData.llm || {}) },
-        advanced: { ...defaultAdvanced, ...(settingsData.advanced || {}) }
+        comfyui: comfy,
+        advanced: advanced
       });
-      setWorkflowFiles(filesData);
+      setWorkflowFiles(filesData || []);
       if (lorasData?.loras) {
         setAvailableLoras(lorasData.loras);
         setLoraDirectoryInfo({ lora_directory: lorasData.lora_directory, exists: lorasData.exists });
       }
-    } catch (error) {
-      console.error("Failed to load data", error);
-      setMessage({ type: 'error', text: t('settings_page.error') });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: t('load_failed') + ': ' + (err.message || 'Unknown error') });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
     setSaving(true);
     setMessage(null);
+
     try {
       await api.updateSettings(settings);
-      setMessage({ type: 'success', text: t('settings_page.success') });
-      setTimeout(() => setMessage(null), 3000);
-    } catch (error) {
-      console.error("Failed to save settings", error);
-      setMessage({ type: 'error', text: t('settings_page.error') });
+      setMessage({ type: 'success', text: t('save_success') });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: t('save_failed') + ': ' + (err.message || 'Unknown error') });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleModelChange = (model: string) => {
-    if (model === LOCAL_OLLAMA_MODEL) {
-      setSettings({
-        ...settings,
-        llm_model: model,
-        llm: {
-          ...settings.llm,
-          provider: 'ollama',
-          base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
-          model: LOCAL_OLLAMA_MODEL,
-          api_key: 'ollama'
-        }
-      });
-    } else {
-      setSettings({
-        ...settings,
-        llm_model: model,
-        llm: {
-          ...settings.llm,
-          model: model
-        }
-      });
-    }
-  };
-
-  const handleComfyUIChange = (field: string, value: any) => {
-    setSettings({
-      ...settings,
-      comfyui: {
-        ...settings.comfyui,
-        [field]: value
-      }
-    });
-  };
-
-  const handleLLMChange = (field: string, value: any) => {
-    setSettings({
-      ...settings,
-      llm: {
-        ...settings.llm,
-        [field]: value
-      }
-    });
-  };
-
-  const handleAdvancedChange = (field: string, value: any) => {
-    setSettings({
-      ...settings,
-      advanced: {
-        ...(settings.advanced || {}),
-        [field]: value
-      }
-    });
-  };
-
   const handleVerifyLLM = async () => {
     setVerifyingLLM(true);
     setMessage(null);
+
     try {
-      await api.verifyLLMConnection(settings.llm);
-      setMessage({ type: 'success', text: t('settings_page.llm_verify_success') });
-    } catch (error) {
-      console.error("LLM verification failed", error);
-      const detail = error instanceof Error ? error.message : String(error);
-      setMessage({
-        type: 'error',
-        text: `${t('settings_page.llm_verify_failed')}: ${detail}`
-      });
+      const response = await api.verifyLLMConnection(settings);
+      const okMessage = typeof response?.message === 'string'
+        ? response.message
+        : t('save_success');
+      setMessage({ type: 'success', text: `LLM 连接成功！${okMessage}` });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `LLM 连接验证失败: ${err.message || 'Unknown error'}` });
     } finally {
       setVerifyingLLM(false);
     }
   };
 
+  const handleComfyChange = (key: string, value: any) => {
+    setSettings((prev: any) => ({
+      ...prev,
+      comfyui: {
+        ...(prev.comfyui || {}),
+        [key]: value
+      }
+    }));
+  };
+
+  const handleLLMChange = (key: string, value: any) => {
+    setSettings((prev: any) => {
+      const currentLLM = prev.llm || {};
+      const updatedLLM = { ...currentLLM, [key]: value };
+      
+      // Keep legacy root fields in sync for backward compatibility
+      const rootUpdates: Record<string, any> = {};
+      if (key === 'provider') rootUpdates.llm_provider = value;
+      if (key === 'model') rootUpdates.llm_model = value;
+      if (key === 'api_key') rootUpdates.gemini_api_key = value;
+      if (key === 'base_url') rootUpdates.openai_base_url = value;
+
+      return {
+        ...prev,
+        ...rootUpdates,
+        llm: updatedLLM
+      };
+    });
+  };
+
+  const handleAdvancedChange = (key: string, value: any) => {
+    setSettings((prev: any) => ({
+      ...prev,
+      advanced: {
+        ...(prev.advanced || {}),
+        [key]: value
+      }
+    }));
+  };
+
   if (loading) {
-    return <div className="p-12 text-center text-slate-500">{t('dashboard.loading')}</div>;
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+      </div>
+    );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto w-full bg-slate-950 p-4 sm:p-6 lg:p-10">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-6 sm:mb-8">
-          <h1
-            onClick={handleTitleClick}
-            className="text-2xl sm:text-3xl font-bold text-white mb-2 cursor-pointer select-none flex items-center"
-            title="Click 5 times to unlock Advanced Settings"
+    <div className="max-w-4xl mx-auto space-y-6 pb-12">
+      <div>
+        <h1 
+          className="text-2xl font-bold text-slate-100 flex items-center gap-2 cursor-pointer select-none"
+          onClick={handleTitleClick}
+        >
+          <Settings className="w-6 h-6 text-indigo-400" />
+          {t('settings_title')}
+        </h1>
+        <p className="text-slate-400 text-sm mt-1">{t('settings_subtitle')}</p>
+      </div>
+
+      {/* Secret click trigger zone */}
+      <div
+        className="text-xs text-slate-400/50 hover:text-slate-400 select-none cursor-pointer py-1 px-2 rounded bg-slate-900/30 border border-slate-800/40 inline-flex items-center gap-1.5 transition-colors"
+        onClick={handleSecretAreaClick}
+        title="连续点击 5 次切换高级画风配置面板"
+      >
+        <Sliders className="w-3.5 h-3.5" />
+        <span>画风选项模式: {advancedEnabled ? '高级（全量）' : '精简（推荐）'}</span>
+      </div>
+
+      {message && (
+        <div className={`p-4 rounded-xl flex items-center gap-3 border ${
+          message.type === 'success' 
+            ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300' 
+            : 'bg-red-950/40 border-red-800/50 text-red-300'
+        }`}>
+          {message.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 flex-shrink-0" />
+          ) : (
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          )}
+          <span className="text-sm font-medium">{message.text}</span>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-800">
+        <button
+          onClick={() => setActiveTab('general')}
+          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'general'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Cloud className="w-4 h-4" />
+          API & 服务配置
+        </button>
+        <button
+          onClick={() => setActiveTab('workflow')}
+          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'workflow'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <WorkflowIcon className="w-4 h-4" />
+          工作流预设 (Workflows)
+        </button>
+
+        {isUnlocked && (
+          <button
+            onClick={() => setActiveTab('advanced')}
+            className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+              activeTab === 'advanced'
+                ? 'border-rose-500 text-rose-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
           >
-            {t('app.settings')}
-            {isUnlocked && (
-              <span className="text-xs bg-indigo-600/30 text-indigo-400 px-2.5 py-1 rounded-full ml-3 font-normal border border-indigo-500/30">
-                {t('settings_page.tabs.advanced')}
-              </span>
-            )}
-          </h1>
-          <p className="text-slate-400 text-sm sm:text-base">{t('settings_page.subtitle')}</p>
-        </div>
+            <Shield className="w-4 h-4" />
+            开发者 & 高级模式
+          </button>
+        )}
+      </div>
 
-        {/* Tabs */}
-        <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 border-b border-slate-800 overflow-x-auto pb-1 custom-scrollbar">
-           <button
-             onClick={() => setActiveTab('general')}
-             className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
-               activeTab === 'general' 
-                 ? 'border-indigo-500 text-indigo-400' 
-                 : 'border-transparent text-slate-400 hover:text-slate-200'
-             }`}
-           >
-             <Settings size={16} />
-             {t('settings_page.tabs.general')}
-           </button>
-           <button
-             onClick={() => setActiveTab('workflow')}
-             className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
-               activeTab === 'workflow' 
-                 ? 'border-indigo-500 text-indigo-400' 
-                 : 'border-transparent text-slate-400 hover:text-slate-200'
-             }`}
-           >
-             <Sliders size={16} />
-             {t('settings_page.tabs.workflow')}
-           </button>
-           {isUnlocked && (
-             <button
-               onClick={() => setActiveTab('advanced')}
-               className={`pb-3 px-3 sm:px-4 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
-                 activeTab === 'advanced'
-                   ? 'border-indigo-500 text-indigo-400'
-                   : 'border-transparent text-slate-400 hover:text-slate-200'
-               }`}
-             >
-               <Shield size={16} />
-               {t('settings_page.tabs.advanced')}
-             </button>
-           )}
-        </div>
-
-        {activeTab === 'advanced' ? (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 animate-in fade-in duration-300">
-            <section>
-              <div className="flex items-center gap-2 mb-4">
-                <Shield className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.advanced_config_title')}</h2>
-              </div>
-
-              {/* Note about Pony XL and FLUX.1-dev GGUF NSFW status */}
-              <div className="p-4 bg-indigo-950/40 border border-indigo-800/50 rounded-lg mb-6">
-                <p className="text-xs sm:text-sm text-indigo-300 leading-relaxed">
-                  💡 {t('settings_page.nsfw_workflow_note')}
-                </p>
-              </div>
-
-              <div className="space-y-6">
-                {/* Enable NSFW Toggle */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg gap-4">
+      <form onSubmit={handleSave} className="space-y-6">
+        {activeTab === 'general' && (
+          <>
+            {/* LLM Engine Configuration Card */}
+            <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6 space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-indigo-500/10 rounded-lg border border-indigo-500/20 text-indigo-400">
+                    <Cloud className="w-5 h-5" />
+                  </div>
                   <div>
-                    <h3 className="text-slate-200 font-medium text-sm sm:text-base">{t('settings_page.nsfw_enable_title')}</h3>
-                    <p className="text-xs sm:text-sm text-slate-500">{t('settings_page.nsfw_enable_desc')}</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer self-start sm:self-auto">
-                    <input
-                      type="checkbox"
-                      className="sr-only peer"
-                      checked={settings.advanced?.nsfw_enabled || false}
-                      onChange={(e) => handleAdvancedChange('nsfw_enabled', e.target.checked)}
-                    />
-                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                  </label>
-                </div>
-
-                {/* Pony XL NSFW LoRA */}
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <label className="block text-sm font-medium text-slate-400">
-                      {t('settings_page.pony_nsfw_lora_label')}
-                    </label>
-                    <span className="text-xs text-indigo-400">Detected: Pony_DetailV2.0.safetensors</span>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <select
-                      value={availableLoras.includes(settings.advanced?.pony_nsfw_lora) ? settings.advanced?.pony_nsfw_lora : ''}
-                      onChange={(e) => {
-                        if (e.target.value) handleAdvancedChange('pony_nsfw_lora', e.target.value);
-                      }}
-                      className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="">{t('settings_page.lora_select_placeholder')}</option>
-                      {availableLoras.map((lora) => (
-                        <option key={lora} value={lora}>{lora}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={settings.advanced?.pony_nsfw_lora ?? ''}
-                      onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
-                      placeholder="Pony_DetailV2.0.safetensors"
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                    />
+                    <h2 className="text-base font-semibold text-slate-200">LLM 语言模型服务</h2>
+                    <p className="text-xs text-slate-400">配置文本生成、角色提取和剧本推导的核心大语言模型引擎</p>
                   </div>
                 </div>
-
-                {/* FLUX.1-dev NSFW LoRA */}
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <label className="block text-sm font-medium text-slate-400">
-                      {t('settings_page.flux_nsfw_lora_label')}
-                    </label>
-                    <span className="text-xs text-indigo-400">Detected: XLabs_Flux_Realism.safetensors</span>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <select
-                      value={availableLoras.includes(settings.advanced?.flux_nsfw_lora) ? settings.advanced?.flux_nsfw_lora : ''}
-                      onChange={(e) => {
-                        if (e.target.value) handleAdvancedChange('flux_nsfw_lora', e.target.value);
-                      }}
-                      className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="">{t('settings_page.lora_select_placeholder')}</option>
-                      {availableLoras.map((lora) => (
-                        <option key={lora} value={lora}>{lora}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={settings.advanced?.flux_nsfw_lora ?? ''}
-                      onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
-                      placeholder="XLabs_Flux_Realism.safetensors"
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* LoRA Strength */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">
-                    {t('settings_page.nsfw_lora_strength_label')}: {settings.advanced?.nsfw_lora_strength ?? 0.8}
-                  </label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1.5"
-                    step="0.05"
-                    value={settings.advanced?.nsfw_lora_strength ?? 0.8}
-                    onChange={(e) => handleAdvancedChange('nsfw_lora_strength', parseFloat(e.target.value))}
-                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-
-                {/* CLI Script Helper Card */}
-                <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-2">
-                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">📦 Recommended LoRAs Auto-Downloader Script</h4>
-                  <p className="text-xs text-slate-400">Run this command in terminal to automatically fetch recommended LoRA files into your ComfyUI directory:</p>
-                  <pre className="bg-slate-900 border border-slate-800 p-2.5 rounded text-xs text-indigo-300 font-mono overflow-x-auto select-all">
-                    python scripts/download_recommended_loras.py -o "D:\ComfyUI\models\loras"
-                  </pre>
-                </div>
-              </div>
-            </section>
-
-            {/* Save button footer */}
-            <div className="pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-              <div>
-                {message && (
-                  <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                    {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-                    <span>{message.text}</span>
-                  </div>
-                )}
-              </div>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
-                  saving ? 'bg-indigo-600/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
-                }`}
-              >
-                <Save size={18} />
-                {saving ? t('settings_page.saving') : t('settings_page.save')}
-              </button>
-            </div>
-          </div>
-        ) : activeTab === 'workflow' ? (
-          <div className="animate-in fade-in slide-in-from-left-4 duration-300 space-y-8">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 sm:space-y-10">
-              {/* ComfyUI Configuration */}
-              <section>
-                <div className="flex items-center gap-2 mb-6">
-                  <Server className="w-5 h-5 text-indigo-400" />
-                  <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.comfyui_config')}</h2>
-                </div>
-                
-                <div className="space-y-6">
-                  {/* Enable Toggle */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-950 border border-slate-800 rounded-lg gap-4">
-                    <div>
-                      <h3 className="text-slate-200 font-medium text-sm sm:text-base">{t('settings_page.comfyui_enable_title')}</h3>
-                      <p className="text-xs sm:text-sm text-slate-500">{t('settings_page.comfyui_enable_desc')}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer self-start sm:self-auto">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only peer"
-                        checked={settings.comfyui?.enabled || false}
-                        onChange={(e) => handleComfyUIChange('enabled', e.target.checked)}
-                      />
-                      <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                    </label>
-                  </div>
-
-                  {/* Base URL */}
-                  <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                      {t('settings_page.comfyui_url_label')}
-                    </label>
-                    <input
-                      type="text"
-                      value={settings.comfyui?.base_url || ''}
-                      onChange={(e) => handleComfyUIChange('base_url', e.target.value)}
-                      placeholder="http://127.0.0.1:8188"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-
-                  {/* Workflow Selection */}
-                  <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                      {t('settings_page.comfyui_workflow_label')}
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={settings.comfyui?.selected_workflow_file || ''}
-                        onChange={(e) => handleComfyUIChange('selected_workflow_file', e.target.value || null)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 pr-10 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent appearance-none transition-all"
-                      >
-                        <option value="">{t('settings_page.comfyui_workflow_placeholder')}</option>
-                        {workflowFiles.map((file) => (
-                          <option key={file} value={file}>
-                            {file}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-2">
-                      {t('settings_page.comfyui_workflow_desc')}
-                    </p>
-                  </div>
-
-                  {/* LoRA Model Configuration */}
-                  <div className="pt-4 border-t border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-sm font-medium text-slate-300 flex items-center gap-2">
-                        <span>📦</span>
-                        <span>{t('settings_page.detected_loras_title')}</span>
-                      </label>
-                      <span className={`text-xs px-2.5 py-1 rounded-full font-mono ${availableLoras.length > 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/50' : 'bg-amber-950 text-amber-400 border border-amber-800/50'}`}>
-                        {availableLoras.length} files detected
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* FLUX Default LoRA */}
-                      <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                          {t('settings_page.comfyui_flux_lora_label')}
-                        </label>
-                        <select
-                          value={settings.comfyui?.flux_lora || ''}
-                          onChange={(e) => handleComfyUIChange('flux_lora', e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">{t('settings_page.lora_select_placeholder')}</option>
-                          {availableLoras.map((lora) => (
-                            <option key={lora} value={lora}>{lora}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Pony Default LoRA */}
-                      <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                          {t('settings_page.comfyui_pony_lora_label')}
-                        </label>
-                        <select
-                          value={settings.comfyui?.pony_lora || ''}
-                          onChange={(e) => handleComfyUIChange('pony_lora', e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">{t('settings_page.lora_select_placeholder')}</option>
-                          {availableLoras.map((lora) => (
-                            <option key={lora} value={lora}>{lora}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <div className="mt-8 sm:mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-                <div>
-                  {message && (
-                    <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                      {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-                      <span>{message.text}</span>
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
-                    saving 
-                      ? 'bg-indigo-600/50 cursor-not-allowed' 
-                      : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
-                  }`}
-                >
-                  <Save size={18} />
-                  {saving ? t('settings_page.saving') : t('settings_page.save')}
-                </button>
-              </div>
-            </div>
-
-            <WorkflowSettings />
-          </div>
-        ) : (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-8 shadow-sm space-y-8 sm:space-y-10 animate-in fade-in slide-in-from-left-4 duration-300">
-            {/* Model Configuration */}
-            <section>
-              <h2 className="text-lg sm:text-xl font-semibold text-white mb-6">{t('settings_page.model_config')}</h2>
-              
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-3">
-                    {t('settings_page.gemini_select')}
-                  </label>
-                  <div className="space-y-3">
-                    <ModelOption 
-                      id="gemini-2.5-flash"
-                      name="Gemini 2.5 Flash"
-                      description={t('settings_page.model_desc_flash25')}
-                      selected={settings.llm_model === 'gemini-2.5-flash'}
-                      onSelect={() => handleModelChange('gemini-2.5-flash')}
-                    />
-                    <ModelOption 
-                      id="gemini-2.5-pro"
-                      name="Gemini 2.5 Pro"
-                      description={t('settings_page.model_desc_pro25')}
-                      selected={settings.llm_model === 'gemini-2.5-pro'}
-                      onSelect={() => handleModelChange('gemini-2.5-pro')}
-                    />
-                    <ModelOption 
-                      id={LOCAL_OLLAMA_MODEL}
-                      name="NovaStory Qwen3 8B Abliterated (Local / 本机)"
-                      description={t('settings_page.model_desc_local_qwen')}
-                      selected={settings.llm_model === LOCAL_OLLAMA_MODEL || settings.llm?.provider === 'ollama'}
-                      onSelect={() => handleModelChange(LOCAL_OLLAMA_MODEL)}
-                    />
-                  </div>
-
-                  {/* Custom / Manual Model Input */}
-                  <div className="mt-4 pt-4 border-t border-slate-800">
-                    <label className="block text-xs font-medium text-slate-400 mb-2">
-                      {t('settings_page.custom_model_input_label')}
-                    </label>
-                    <input 
-                      type="text"
-                      value={settings.llm_model || ''}
-                      onChange={(e) => handleModelChange(e.target.value)}
-                      placeholder={t('settings_page.custom_model_input_placeholder')}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Image Model Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-3">
-                    {t('settings_page.image_model_select')}
-                  </label>
-                  <p className="text-xs text-slate-500 mb-3">{t('settings_page.image_model_desc')}</p>
-                  <div className="space-y-3">
-                    <ModelOption 
-                      id="gemini-2.5-flash-image"
-                      name="Gemini 2.5 Flash Image"
-                      description={t('settings_page.model_desc_flash_image')}
-                      selected={settings.image_model === 'gemini-2.5-flash-image'}
-                      onSelect={() => setSettings({ ...settings, image_model: 'gemini-2.5-flash-image' })}
-                    />
-                  </div>
-                  {/* Custom Image Model Input */}
-                  <div className="mt-3">
-                    <input 
-                      type="text"
-                      value={settings.image_model || ''}
-                      onChange={(e) => setSettings({ ...settings, image_model: e.target.value })}
-                      placeholder={t('settings_page.custom_image_model_placeholder')}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <div className="border-t border-slate-800" />
-
-            {/* Independent LLM Configuration */}
-            <section>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                 <div className="flex items-center gap-2">
-                  <Cloud className="w-5 h-5 text-indigo-400" />
-                  <h2 className="text-lg sm:text-xl font-semibold text-white">{t('settings_page.llm_title')}</h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSettings({
-                      ...settings,
-                      llm_model: LOCAL_OLLAMA_MODEL,
-                      llm: {
-                        provider: 'ollama',
-                        base_url: 'http://127.0.0.1:11434/v1',
-                        model: LOCAL_OLLAMA_MODEL,
-                        api_key: 'ollama'
-                      }
-                    });
-                  }}
-                  className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 self-start sm:self-auto font-medium"
-                  title={`Click to auto fill Ollama local ${LOCAL_OLLAMA_MODEL} settings`}
-                >
-                  <span>⚡ {t('settings_page.ollama_preset_btn')}</span>
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                {/* LLM Provider Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">
-                    {t('settings_page.llm_provider_label')}
-                  </label>
-                  <select
-                    value={settings.llm?.provider || 'gemini'}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === 'ollama') {
-                        setSettings({
-                          ...settings,
-                          llm_model: LOCAL_OLLAMA_MODEL,
-                          llm: {
-                            ...settings.llm,
-                            provider: 'ollama',
-                            base_url: settings.llm?.base_url || 'http://127.0.0.1:11434/v1',
-                            model: settings.llm?.model || LOCAL_OLLAMA_MODEL,
-                            api_key: 'ollama'
-                          }
-                        });
-                      } else {
-                        handleLLMChange('provider', val);
-                      }
-                    }}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
+                    (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-300'
+                      : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                      ? 'bg-blue-950/40 border-blue-800/50 text-blue-300'
+                      : 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
+                  }`}>
+                    {((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
+                      ? '离线模式'
+                      : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleVerifyLLM}
+                    disabled={verifyingLLM}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    <option value="gemini">Google Gemini</option>
-                    <option value="ollama">Ollama (Local / 本机 - NovaStory Qwen3 8B)</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="custom">Custom / OpenAI Compatible (DeepSeek, etc.)</option>
-                    <option value="grok">xAI Grok</option>
-                  </select>
+                    {verifyingLLM ? (
+                      <>
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-400"></div>
+                        <span>验证中...</span>
+                      </>
+                    ) : (
+                      <span>测试连接</span>
+                    )}
+                  </button>
                 </div>
+              </div>
 
-                {/* API Key */}
+              <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">
-                    {t('settings_page.llm_apikey_label')}
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    模型提供方 (Provider)
                   </label>
-                  <input
-                    type="password"
-                    value={settings.llm?.api_key || ''}
-                    onChange={(e) => handleLLMChange('api_key', e.target.value)}
-                    placeholder="AIzaSy... / sk-..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                {/* Base URL */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">
-                    {t('settings_page.llm_baseurl_label')}
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.llm?.base_url || ''}
-                    onChange={(e) => handleLLMChange('base_url', e.target.value)}
-                    placeholder="https://api.openai.com/v1"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                  />
-                </div>
-
-                {/* Model Name */}
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">
-                    {t('settings_page.llm_model_label')}
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="text"
-                      value={settings.llm?.model || ''}
-                      onChange={(e) => handleLLMChange('model', e.target.value)}
-                      placeholder="gemini-2.5-flash / gpt-4o / deepseek-chat"
-                      className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-slate-200 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                    />
+                  <div className="grid grid-cols-3 gap-3">
                     <button
-                      onClick={handleVerifyLLM}
-                      disabled={verifyingLLM}
-                      className={`w-full sm:w-auto px-4 py-2.5 rounded-lg font-medium text-white transition-all whitespace-nowrap ${
-                        verifyingLLM
-                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                          : 'bg-indigo-600 hover:bg-indigo-500'
+                      type="button"
+                      onClick={() => handleLLMChange('provider', 'gemini')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini'
+                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
+                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
                       }`}
                     >
-                      {verifyingLLM ? 'Verifying...' : t('settings_page.llm_verify_btn')}
+                      <div className="text-sm font-semibold mb-0.5">Google Gemini</div>
+                      <div className="text-xs opacity-75">自带 API 密钥，推荐使用 3.6 Flash / 2.5 Flash</div>
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => handleLLMChange('provider', 'openai')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
+                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold mb-0.5">OpenAI API 兼容</div>
+                      <div className="text-xs opacity-75">支持 DeepSeek, Claude, ChatGPT 或自建转发中转</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleLLMChange('provider', 'local_llm')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
+                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold mb-0.5">本地部署 (Ollama)</div>
+                      <div className="text-xs opacity-75">完全本地运行，0 API 费用，配合一键启动脚本</div>
                     </button>
                   </div>
                 </div>
-              </div>
-            </section>
 
-            <div className="mt-8 sm:mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-              <div>
-                {message && (
-                  <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                    {message.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
-                    <span>{message.text}</span>
+                {/* Gemini Specific Settings */}
+                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini' && (
+                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Gemini API Key
+                      </label>
+                      <input
+                        type="password"
+                        value={settings.llm?.api_key || settings.gemini_api_key || ''}
+                        onChange={(e) => handleLLMChange('api_key', e.target.value)}
+                        placeholder="AIzaSy..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Gemini 模型版本
+                      </label>
+                      <select
+                        value={settings.llm?.model || settings.llm_model || 'gemini-3.6-flash'}
+                        onChange={(e) => handleLLMChange('model', e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      >
+                        <option value="gemini-3.6-flash">gemini-3.6-flash (最新版，强烈推荐)</option>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash (稳定，速度极快)</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro (推理能力极强)</option>
+                        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* OpenAI / Custom Proxy Settings */}
+                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai' && (
+                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        API Key
+                      </label>
+                      <input
+                        type="password"
+                        value={settings.llm?.api_key || ''}
+                        onChange={(e) => handleLLMChange('api_key', e.target.value)}
+                        placeholder="sk-..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Base URL
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.llm?.base_url || settings.openai_base_url || 'https://api.openai.com/v1'}
+                        onChange={(e) => handleLLMChange('base_url', e.target.value)}
+                        placeholder="https://api.openai.com/v1"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        模型名称
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.llm?.model || settings.llm_model || 'gpt-4o-mini'}
+                        onChange={(e) => handleLLMChange('model', e.target.value)}
+                        placeholder="gpt-4o-mini 或 deepseek-chat"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Local LLM Settings */}
+                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm' && (
+                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        Ollama 服务端地址
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.llm?.base_url || 'http://127.0.0.1:11434/v1'}
+                        onChange={(e) => handleLLMChange('base_url', e.target.value)}
+                        placeholder="http://127.0.0.1:11434/v1"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        本地模型名称
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.llm?.model || LOCAL_OLLAMA_MODEL}
+                        onChange={(e) => handleLLMChange('model', e.target.value)}
+                        placeholder={LOCAL_OLLAMA_MODEL}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white transition-all ${
-                  saving 
-                    ? 'bg-indigo-600/50 cursor-not-allowed' 
-                    : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'
-                }`}
-              >
-                <Save size={18} />
-                {saving ? t('settings_page.saving') : t('settings_page.save')}
-              </button>
             </div>
 
-            {/* Once unlocked, allow easy toggle off without re-discovering the secret */}
-            {advancedEnabled && (
-              <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3">
-                <div>
-                  <p className="text-sm text-slate-300">{t('settings_page.advanced_styles_title')}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{t('settings_page.advanced_styles_desc')}</p>
+            {/* ComfyUI Image Generation Engine Card */}
+            <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6 space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20 text-emerald-400">
+                    <Server className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-200">{t('comfyui_settings')}</h2>
+                    <p className="text-xs text-slate-400">配置本地/远程 ComfyUI 绘图引擎服务</p>
+                  </div>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
+                    checked={settings.comfyui?.enabled ?? false}
+                    onChange={(e) => handleComfyChange('enabled', e.target.checked)}
                     className="sr-only peer"
-                    checked={advancedEnabled}
-                    onChange={(e) => {
-                      const next = e.target.checked;
-                      setAdvancedStylesEnabled(next);
-                      setAdvancedEnabled(next);
-                      setMessage({
-                        type: 'success',
-                        text: next
-                          ? t('settings_page.advanced_styles_on')
-                          : t('settings_page.advanced_styles_off'),
-                      });
-                      setTimeout(() => setMessage(null), 3000);
-                    }}
                   />
-                  <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                 </label>
               </div>
-            )}
 
-            {/* Hidden unlock: click this empty strip 5 times (no label by design) */}
-            <div
-              role="presentation"
-              onClick={handleSecretAreaClick}
-              className="mt-6 h-8 w-full select-none"
-              aria-hidden="true"
-            />
+              {settings.comfyui?.enabled && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      {t('comfyui_url')}
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.comfyui?.base_url || 'http://127.0.0.1:8188'}
+                      onChange={(e) => handleComfyChange('base_url', e.target.value)}
+                      placeholder="http://127.0.0.1:8188"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      ComfyUI 安装根目录 (用来检测本地与加载 LoRA 路径)
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.comfyui?.install_path || 'D:\\ComfyUI'}
+                      onChange={(e) => handleComfyChange('install_path', e.target.value)}
+                      placeholder="D:\ComfyUI"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  {/* Detected LoRAs Section */}
+                  <div className="pt-2 border-t border-slate-800/60 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-medium text-slate-300">
+                        {t('detected_loras_title')}
+                      </label>
+                      <span className={`text-xs px-2 py-0.5 rounded ${loraDirectoryInfo.exists ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' : 'bg-amber-950/50 text-amber-400 border border-amber-800/40'}`}>
+                        {loraDirectoryInfo.exists ? `找到 ${availableLoras.length} 个 LoRA 模型` : '路径未发现或为空'}
+                      </span>
+                    </div>
+
+                    {/* Default FLUX.1 LoRA Dropdown */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        {t('comfyui_flux_lora_label')}
+                      </label>
+                      <select
+                        value={settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'}
+                        onChange={(e) => handleComfyChange('flux_lora', e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      >
+                        {availableLoras.map((lora) => (
+                          <option key={lora} value={lora}>{lora}</option>
+                        ))}
+                        {!availableLoras.includes(settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors') && (
+                          <option value={settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'}>
+                            {settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'} (自定义配置)
+                          </option>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Default Pony XL LoRA Dropdown */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        {t('comfyui_pony_lora_label')}
+                      </label>
+                      <select
+                        value={settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'}
+                        onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      >
+                        {availableLoras.map((lora) => (
+                          <option key={lora} value={lora}>{lora}</option>
+                        ))}
+                        {!availableLoras.includes(settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors') && (
+                          <option value={settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'}>
+                            {settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'} (自定义配置)
+                          </option>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      {t('comfyui_workflow')}
+                    </label>
+                    <select
+                      value={settings.comfyui?.selected_workflow_file || ''}
+                      onChange={(e) => handleComfyChange('selected_workflow_file', e.target.value || null)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                    >
+                      <option value="">-- {t('comfyui_default')} --</option>
+                      {workflowFiles.map((file) => (
+                        <option key={file} value={file}>
+                          {file}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {activeTab === 'workflow' && (
+          <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6">
+            <WorkflowSettings />
           </div>
         )}
-      </div>
+
+        {activeTab === 'advanced' && isUnlocked && (
+          <div className="bg-slate-900/60 backdrop-blur-sm border border-rose-900/40 rounded-2xl p-6 space-y-6">
+            <div className="flex items-center justify-between border-b border-rose-900/40 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-rose-500/10 rounded-lg border border-rose-500/20 text-rose-400">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-rose-200">高级画风与 NSFW 混纳模式</h2>
+                  <p className="text-xs text-rose-300/60">特定偏好画风 LoRA 的底层挂载管理</p>
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.advanced?.nsfw_enabled ?? false}
+                  onChange={(e) => handleAdvancedChange('nsfw_enabled', e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+              </label>
+            </div>
+
+            {settings.advanced?.nsfw_enabled && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Pony XL 画风控制 LoRA 权重文件名
+                  </label>
+                  <select
+                    value={settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'}
+                    onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
+                  >
+                    {availableLoras.map((lora) => (
+                      <option key={lora} value={lora}>{lora}</option>
+                    ))}
+                    {!availableLoras.includes(settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors') && (
+                      <option value={settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'}>
+                        {settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'} (自定义配置)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    FLUX.1-dev 画风控制 LoRA 权重文件名
+                  </label>
+                  <select
+                    value={settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'}
+                    onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
+                  >
+                    {availableLoras.map((lora) => (
+                      <option key={lora} value={lora}>{lora}</option>
+                    ))}
+                    {!availableLoras.includes(settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors') && (
+                      <option value={settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'}>
+                        {settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'} (自定义配置)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-medium text-slate-300">
+                      LoRA 叠加强度 (Strength)
+                    </label>
+                    <span className="text-xs text-rose-400 font-mono">
+                      {settings.advanced?.nsfw_lora_strength ?? 0.8}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={settings.advanced?.nsfw_lora_strength ?? 0.8}
+                    onChange={(e) => handleAdvancedChange('nsfw_lora_strength', parseFloat(e.target.value))}
+                    className="w-full accent-rose-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-4 border-t border-slate-800/80">
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 disabled:opacity-50"
+          >
+            {saving ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                <span>{t('saving')}...</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4" />
+                <span>{t('save_settings')}</span>
+              </>
+            )}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };
-
-interface ModelOptionProps {
-  id: string;
-  name: string;
-  description: string;
-  selected: boolean;
-  onSelect: () => void;
-}
-
-const ModelOption: React.FC<ModelOptionProps> = ({ id, name, description, selected, onSelect }) => (
-  <div 
-    onClick={onSelect}
-    className={`relative flex items-start p-4 cursor-pointer rounded-lg border transition-all ${
-      selected 
-        ? 'bg-indigo-600/10 border-indigo-500 ring-1 ring-indigo-500/50' 
-        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-    }`}
-  >
-    <div className="flex items-center h-5">
-      <input
-        type="radio"
-        name="model-selection"
-        checked={selected}
-        onChange={onSelect}
-        className="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500 bg-slate-800"
-      />
-    </div>
-    <div className="ml-3 text-sm">
-      <label className={`font-medium ${selected ? 'text-indigo-300' : 'text-slate-200'}`}>
-        {name}
-      </label>
-      <p className="text-slate-500 mt-1">{description}</p>
-    </div>
-  </div>
-);

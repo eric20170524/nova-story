@@ -29,3 +29,4 @@ frontend/local/
 *.bak
 backend/system_settings.json
 docs/短剧/qiongming.txt
+*.zip

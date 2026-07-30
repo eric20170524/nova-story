@@ -1,6 +1,4 @@
-export const API_BASE_URL = (import.meta as any).env?.PROD 
-  ? '/novastory/api' 
-  : 'http://127.0.0.1:8087/api';
+export const API_BASE_URL = '/api';
 
 export const CHARACTER_ROLES = [
   { value: 'protagonist', label: '主角 (Protagonist)' },

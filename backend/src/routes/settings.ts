@@ -1,4 +1,6 @@
 import { FastifyPluginAsync } from 'fastify';
+import fs from 'fs';
+import path from 'path';
 import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';

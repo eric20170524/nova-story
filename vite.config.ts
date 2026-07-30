@@ -9,13 +9,12 @@ const __dirname = path.dirname(__filename);
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-      base: '/novastory/',
       server: {
         port: 3000,
         host: '0.0.0.0',
         proxy: {
           '/api': {
-            target: 'http://127.0.0.1:8087',
+            target: 'http://127.0.0.1:3000',
             changeOrigin: true,
             secure: false,
           }
