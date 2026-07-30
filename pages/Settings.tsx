@@ -624,8 +624,11 @@ export const SettingsPage: React.FC = () => {
                   <Shield className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-semibold text-rose-200">高级画风与 NSFW 混纳模式</h2>
-                  <p className="text-xs text-rose-300/60">特定偏好画风 LoRA 的底层挂载管理</p>
+                  <h2 className="text-base font-semibold text-rose-200">{t('advanced_settings.advanced_config_title')}</h2>
+                  <p className="text-xs text-rose-300/80 mt-1">
+                    {t('advanced_settings.nsfw_enable_title')}
+                    <br/>{t('advanced_settings.nsfw_enable_desc')}
+                  </p>
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
@@ -643,7 +646,7 @@ export const SettingsPage: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Pony XL 画风控制 LoRA 权重文件名
+                    {t('advanced_settings.pony_nsfw_lora_label')}
                   </label>
                   <select
                     value={settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'}
@@ -663,7 +666,7 @@ export const SettingsPage: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">
-                    FLUX.1-dev 画风控制 LoRA 权重文件名
+                    {t('advanced_settings.flux_nsfw_lora_label')}
                   </label>
                   <select
                     value={settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'}
@@ -684,7 +687,7 @@ export const SettingsPage: React.FC = () => {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-medium text-slate-300">
-                      LoRA 叠加强度 (Strength)
+                      {t('advanced_settings.nsfw_lora_strength_label')}
                     </label>
                     <span className="text-xs text-rose-400 font-mono">
                       {settings.advanced?.nsfw_lora_strength ?? 0.8}

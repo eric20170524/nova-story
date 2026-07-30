@@ -1,5 +1,13 @@
 export const translations = {
   en: {
+    advanced_settings: {
+      advanced_config_title: "Advanced & NSFW LoRA Settings",
+      nsfw_enable_title: "Enable NSFW Mode / LoRA Enhancement",
+      nsfw_enable_desc: "Automatically append NSFW prompt triggers and apply configured NSFW LoRAs during image generation. Note: Enabling this option does NOT automatically download model files from the internet.",
+      pony_nsfw_lora_label: "Pony XL NSFW LoRA Filename (Optional)",
+      flux_nsfw_lora_label: "FLUX.1-dev NSFW LoRA Filename (Optional)",
+      nsfw_lora_strength_label: "NSFW LoRA Weight / Strength"
+    },
     app_title: "NovaStory Studio",
     dashboard_label: "Dashboard",
     settings_label: "Settings",
@@ -238,6 +246,27 @@ export const translations = {
     },
 
     director: {
+      styles: {
+        anime: "Anime",
+        ancient_fantasy: "Gu Feng Fantasy",
+        xianxia_immortal: "Xianxia Immortal",
+        guoman_painterly: "Guoman Painterly",
+        ethereal_glow: "Ethereal Glow",
+        aesthetic_romance: "Aesthetic Romance",
+        elegant_mature: "Elegant Mature",
+        sensual_gufeng: "Sensual Gu Feng",
+        alluring_portrait: "Alluring Portrait",
+        game_illustration: "Game Illustration",
+        chibi: "Cute/Chibi",
+        semi_realistic: "Semi-Realistic",
+        cyberpunk: "Cyberpunk",
+        ink_wash: "Ink Wash",
+        surreal: "Surreal/Dreamlike",
+        ai_generated: "AI Generated",
+        sketch: "Hand-Drawn",
+        mecha: "Mecha",
+        cinematic_photo: "Cinematic Photo",
+      },
       batch_started: "Sequential batch generation started",
       batch_complete: "Batch generation complete",
       comic_generated: "Comic generated successfully",
@@ -377,6 +406,14 @@ export const translations = {
   },
 
   zh: {
+    advanced_settings: {
+      advanced_config_title: "高级画风与 NSFW 混纳模式",
+      nsfw_enable_title: "开启后，若使用支持的底层大模型（如 Pony），将自动在尾部注入 NSFW 触发词以解锁大尺度构图。",
+      nsfw_enable_desc: "注：此开关并不包含模型文件本身下载。",
+      pony_nsfw_lora_label: "Pony XL NSFW LoRA 文件名 (可选)",
+      flux_nsfw_lora_label: "FLUX.1-dev NSFW LoRA 文件名 (可选)",
+      nsfw_lora_strength_label: "NSFW LoRA 权重强度"
+    },
     app_title: "NovaStory 影视动画工作台",
     dashboard_label: "项目大厅",
     settings_label: "全局设置",
@@ -615,6 +652,27 @@ export const translations = {
     },
 
     director: {
+      styles: {
+        anime: "日系动漫 (Anime)",
+        ancient_fantasy: "古风幻想 (Gu Feng Fantasy)",
+        xianxia_immortal: "仙侠清冷 (Xianxia Immortal)",
+        guoman_painterly: "国漫厚涂 (Guoman Painterly)",
+        ethereal_glow: "光晕仙气 (Ethereal Glow)",
+        aesthetic_romance: "唯美氛围 (Aesthetic Romance)",
+        elegant_mature: "御姐半写实 (Elegant Mature)",
+        sensual_gufeng: "魅惑古风 (Sensual Gu Feng)",
+        alluring_portrait: "魅惑肖像 (Alluring Portrait)",
+        game_illustration: "游戏立绘 (Game Illustration)",
+        chibi: "可爱/Q版 (Cute/Chibi)",
+        semi_realistic: "半写实 (Semi-Realistic)",
+        cyberpunk: "赛博朋克 (Cyberpunk)",
+        ink_wash: "水墨/传统墨绘 (Ink Wash)",
+        surreal: "超现实/梦幻 (Surreal)",
+        ai_generated: "AI生成风格 (AI Generated)",
+        sketch: "手绘/草图 (Hand-Drawn)",
+        mecha: "机甲/机器人 (Mecha)",
+        cinematic_photo: "电影写实 (Cinematic Photo)",
+      },
       batch_started: "顺序批量生成已启动",
       batch_complete: "批量生成完成",
       comic_generated: "漫画生成成功",
