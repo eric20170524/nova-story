@@ -2,6 +2,8 @@ import { FastifyPluginAsync } from 'fastify';
 import { db } from '../db/database';
 import { z } from 'zod';
 import { LLMService } from '../services/llm';
+import { SettingsManager } from '../core/settings_manager';
+import { parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:chapter_id', async (request, reply) => {
@@ -93,12 +95,24 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       charProfilesStr = profiles.join('\n');
     }
 
+    const project = await db.get('SELECT settings FROM project WHERE id = ?', chapter.project_id);
+    const projectSettings = parseProjectSettings(project?.settings);
+    const nsfwEnabled = resolveEffectiveNsfw({
+      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
+      projectSettings
+    });
+
     // Attempt to generate timeline via LLM
     let timelineData: any[] = [];
     try {
-      // Dummy token injection could be handled in interceptors
       const token = undefined;
-      timelineData = await LLMService.generateTimeline(chapter.content, charProfilesStr, 'narrative', token);
+      timelineData = await LLMService.generateTimeline(
+        chapter.content,
+        charProfilesStr,
+        'narrative',
+        token,
+        { nsfwEnabled }
+      );
     } catch (error: any) {
       return reply.status(500).send({ detail: `Failed to generate timeline: ${error.message}` });
     }

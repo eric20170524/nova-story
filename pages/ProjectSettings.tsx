@@ -27,6 +27,8 @@ export const ProjectSettings: React.FC = () => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
+  /** inherit | on | off — project-level NSFW policy */
+  const [nsfwMode, setNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
 
   useEffect(() => {
     if (id) loadProject();
@@ -55,9 +57,19 @@ export const ProjectSettings: React.FC = () => {
       
       // Parse settings JSON if available
       try {
-          const settingsObj = data.settings ? JSON.parse(data.settings) : {};
+          const raw = data.settings;
+          const settingsObj = typeof raw === 'string'
+            ? (raw ? JSON.parse(raw) : {})
+            : (raw && typeof raw === 'object' ? raw : {});
           if (settingsObj.default_style) {
               setDefaultStyle(settingsObj.default_style);
+          }
+          if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
+              setNsfwMode(settingsObj.nsfw_mode);
+          } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
+              setNsfwMode(settingsObj.nsfw_enabled ? 'on' : 'off');
+          } else {
+              setNsfwMode('inherit');
           }
       } catch (e) {
           console.error("Failed to parse project settings", e);
@@ -77,7 +89,8 @@ export const ProjectSettings: React.FC = () => {
     
     try {
         const settingsJson = JSON.stringify({
-            default_style: defaultStyle
+            default_style: defaultStyle,
+            nsfw_mode: nsfwMode
         });
 
         await api.updateProject(project.id, {
@@ -86,10 +99,12 @@ export const ProjectSettings: React.FC = () => {
             settings: settingsJson
         });
         
-        // Also update local storage so Director Mode picks up new default immediately?
-        // Actually Director Mode uses its own localStorage override or default.
-        // We can update the override key:
+        // Seed Director Mode style for this session
         localStorage.setItem('director_selectedStyle', defaultStyle);
+        if (id) {
+          localStorage.setItem(`director_project_${id}_style`, defaultStyle);
+          localStorage.setItem(`director_project_${id}_nsfw_mode`, nsfwMode);
+        }
         
         showToast(t("settings.updated", "Project updated successfully"), 'success');
     } catch (e) {
@@ -179,6 +194,24 @@ export const ProjectSettings: React.FC = () => {
                                 {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
                             </option>
                         ))}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        {t('project_settings.nsfw_mode')}
+                    </label>
+                    <p className="text-xs text-slate-500 mb-2">
+                        {t('project_settings.nsfw_mode_desc')}
+                    </p>
+                    <select
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-rose-500 focus:outline-none text-sm sm:text-base"
+                        value={nsfwMode}
+                        onChange={(e) => setNsfwMode(e.target.value as 'inherit' | 'on' | 'off')}
+                    >
+                        <option value="inherit">{t('project_settings.nsfw_inherit')}</option>
+                        <option value="on">{t('project_settings.nsfw_on')}</option>
+                        <option value="off">{t('project_settings.nsfw_off')}</option>
                     </select>
                 </div>
             </div>

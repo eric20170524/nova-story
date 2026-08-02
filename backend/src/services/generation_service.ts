@@ -9,6 +9,12 @@ import { logger } from '../core/logging';
 import { Prompts } from './prompts';
 import { AssetTaskStore } from './task_store';
 import { getGeneratedDirectory } from '../core/paths';
+import {
+    applyPromptEnhancement,
+    resolveGenerationPlan,
+    type ImageModelFamily
+} from './image_generation_policy';
+import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 
 const isComfyWorkflow = (value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -100,70 +106,6 @@ const injectLora = (
     }
 };
 
-const findFluxStyleLora = (runtimeSettings: any) => {
-    const comfySettings = runtimeSettings.comfyui || {};
-    const installPath = comfySettings.install_path;
-    if (!installPath) return null;
-
-    const loraDirectory = path.join(String(installPath), 'models', 'loras');
-    if (!fs.existsSync(loraDirectory)) return null;
-
-    const configuredLora = comfySettings.flux_lora;
-    if (
-        configuredLora
-        && fs.existsSync(path.join(loraDirectory, path.basename(String(configuredLora))))
-    ) {
-        return path.basename(String(configuredLora));
-    }
-
-    const candidates = fs.readdirSync(loraDirectory)
-        .filter((filename) => /\.(safetensors|ckpt)$/i.test(filename))
-        .sort((left, right) => left.localeCompare(right));
-    return candidates.find((filename) =>
-        /(flux|realism|style|asian|guofeng|east[_-]?asian)/i.test(filename)
-    ) || candidates.find((f) => !/pony/i.test(f)) || candidates[0] || null;
-};
-
-const findPonyStyleLora = (runtimeSettings: any) => {
-    const comfySettings = runtimeSettings.comfyui || {};
-    const installPath = comfySettings.install_path;
-    if (!installPath) return null;
-
-    const loraDirectory = path.join(String(installPath), 'models', 'loras');
-    if (!fs.existsSync(loraDirectory)) return null;
-
-    const configuredLora = comfySettings.pony_lora;
-    if (
-        configuredLora
-        && fs.existsSync(path.join(loraDirectory, path.basename(String(configuredLora))))
-    ) {
-        return path.basename(String(configuredLora));
-    }
-
-    const candidates = fs.readdirSync(loraDirectory)
-        .filter((filename) => /\.(safetensors|ckpt)$/i.test(filename))
-        .sort((left, right) => left.localeCompare(right));
-    return candidates.find((filename) =>
-        /(pony|detail|incase)/i.test(filename)
-    ) || candidates.find((f) => /pony/i.test(f)) || candidates[0] || null;
-};
-
-const isConfiguredLoraAvailable = (runtimeSettings: any, loraName: unknown) => {
-    if (!loraName) return false;
-
-    const installPath = runtimeSettings.comfyui?.install_path;
-    // A remote ComfyUI instance cannot be validated through the local
-    // filesystem, so preserve the configured name and let the remote validate
-    // it. Local installations should never receive a known-missing LoRA.
-    if (!installPath) return true;
-
-    const loraDirectory = path.join(String(installPath), 'models', 'loras');
-    if (!fs.existsSync(loraDirectory)) return false;
-    return fs.existsSync(
-        path.join(loraDirectory, path.basename(String(loraName)))
-    );
-};
-
 export const compileComfyWorkflow = async (
     workflowData: any,
     finalPrompt: string,
@@ -213,29 +155,53 @@ export const compileComfyWorkflow = async (
             && /flux/i.test(node.inputs?.ckpt_name || '')
         )
     ));
-    const preserveTemplateConditioning = !isFlux && /pony/i.test(JSON.stringify(workflow));
-    let effectivePrompt = finalPrompt;
-    if (
-        isFlux
-        && !/(east asian|chinese|japanese|asian|guofeng|xianxia)/i.test(effectivePrompt)
-    ) {
-        effectivePrompt = `${effectivePrompt}, East Asian facial features, soft facial contour, East Asian beauty`;
-    }
-
+    const modelFamily: ImageModelFamily = isFlux ? 'flux' : 'pony';
     const advancedSettings = runtimeSettings.advanced || {};
+
+    // Request override → project nsfw_mode → system advanced.nsfw_enabled
+    const projectSettings = parseProjectSettings(workflowData?.project_settings);
+    const nsfwEnabled = resolveEffectiveNsfw({
+        systemNsfwEnabled: Boolean(advancedSettings.nsfw_enabled),
+        projectSettings,
+        requestOverride:
+            typeof workflowData?.nsfw_enabled === 'boolean'
+                ? workflowData.nsfw_enabled
+                : null
+    });
+
+    // Prefer explicit style_preset; fall back to project default_style
+    const enrichedWorkflowData = {
+        ...workflowData,
+        style_preset:
+            workflowData?.style_preset
+            || workflowData?.style
+            || workflowData?.visual_style
+            || projectSettings.default_style
+            || null,
+        nsfw_enabled: nsfwEnabled
+    };
+
+    // Unified policy: LoRA stack (character → style → nsfw) + SFW/NSFW prompt boosters
+    const plan = resolveGenerationPlan({
+        modelFamily,
+        nsfwEnabled,
+        runtimeSettings,
+        workflowData: enrichedWorkflowData,
+        basePrompt: finalPrompt
+    });
+
+    const effectivePrompt = applyPromptEnhancement(finalPrompt, plan.enhancement);
+    const preserveTemplateConditioning = !isFlux && /pony/i.test(JSON.stringify(workflow));
+
     const negativeParts = [
         workflowData?.negative_prompt || '',
-        'low quality, worst quality, bad anatomy, extra limbs, text, watermark'
+        plan.enhancement.negativeExtra
     ];
-    if (isFlux && !/(western face|caucasian)/i.test(negativeParts.join(', '))) {
-        negativeParts.push('western face, caucasian');
-    }
-    if (!advancedSettings.nsfw_enabled) {
-        negativeParts.push(
-            'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act'
-        );
-    }
     const negativePrompt = negativeParts.filter(Boolean).join(', ');
+
+    // FLUX prefers lower CFG; keep Pony defaults unless the client overrides
+    const defaultSteps = Number(generationParams?.steps || (isFlux ? 24 : 25));
+    const defaultCfg = Number(generationParams?.cfg || (isFlux ? 3.5 : 7));
 
     const samplerNodes = Object.values(workflow).filter(
         (node: any) => node?.class_type?.includes('KSampler')
@@ -259,8 +225,8 @@ export const compileComfyWorkflow = async (
         }
 
         sampler.inputs.seed = Math.floor(Math.random() * 1_000_000_000);
-        sampler.inputs.steps = Number(generationParams?.steps || 20);
-        sampler.inputs.cfg = Number(generationParams?.cfg || 7);
+        sampler.inputs.steps = defaultSteps;
+        sampler.inputs.cfg = defaultCfg;
         if (generationParams?.sampler_name) sampler.inputs.sampler_name = generationParams.sampler_name;
         if (generationParams?.scheduler) sampler.inputs.scheduler = generationParams.scheduler;
     }
@@ -287,57 +253,18 @@ export const compileComfyWorkflow = async (
         }
     }
 
-    // 1. Custom/Character LoRA explicitly provided in workflowData
-    const customLora = workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
-    if (isConfiguredLoraAvailable(runtimeSettings, customLora)) {
-        injectLora(
-            workflow,
-            path.basename(String(customLora)),
-            Number(workflowData?.lora_strength || 0.8),
-            isFlux ? 'flux' : 'pony'
+    for (const slot of plan.loras) {
+        injectLora(workflow, slot.name, slot.strength, modelFamily);
+        logger.info(
+            `Injected ${slot.role} LoRA for ${modelFamily}: ${slot.name} @ ${slot.strength}`
         );
     }
 
-    // 2. Default Style LoRA for FLUX or Pony
-    if (isFlux) {
-        const styleLora = findFluxStyleLora(runtimeSettings);
-        if (styleLora) {
-            injectLora(
-                workflow,
-                styleLora,
-                Number(runtimeSettings.comfyui?.flux_lora_strength || 0.8),
-                'flux'
-            );
-        }
-    } else {
-        const styleLora = findPonyStyleLora(runtimeSettings);
-        if (styleLora) {
-            injectLora(
-                workflow,
-                styleLora,
-                Number(runtimeSettings.comfyui?.pony_lora_strength || 0.8),
-                'pony'
-            );
-        }
-    }
-
-    // 3. NSFW LoRA when NSFW mode is enabled
-    if (advancedSettings.nsfw_enabled) {
-        const nsfwLora = isFlux
-            ? advancedSettings.flux_nsfw_lora
-            : advancedSettings.pony_nsfw_lora;
-        if (isConfiguredLoraAvailable(runtimeSettings, nsfwLora)) {
-            injectLora(
-                workflow,
-                path.basename(String(nsfwLora)),
-                Number(advancedSettings.nsfw_lora_strength || 0.8),
-                isFlux ? 'flux' : 'pony'
-            );
-        } else if (nsfwLora) {
-            logger.warn(
-                `Skipping configured ${isFlux ? 'FLUX' : 'Pony'} LoRA because it is not installed: ${path.basename(String(nsfwLora))}`
-            );
-        }
+    if (nsfwEnabled && !plan.loras.some((l) => l.role === 'nsfw')) {
+        logger.warn(
+            `NSFW mode is enabled but no ${modelFamily} NSFW LoRA was found under models/loras. `
+            + 'Install Incase_Style_PonyXL (Pony) or aidmaNSFWunlock (FLUX), or set advanced.*_nsfw_lora.'
+        );
     }
 
     return workflow;
@@ -398,11 +325,58 @@ export class GenerationService {
             let result: any = null;
             let finalPrompt = "";
 
+            // Attach project settings from scene → chapter → project when available
+            let effectiveWorkflowData = { ...workflowData };
+            try {
+                const sceneRow = await db.get('SELECT chapter_id FROM scene WHERE id = ?', sceneId);
+                if (sceneRow?.chapter_id) {
+                    const chapterRow = await db.get(
+                        'SELECT project_id FROM chapter WHERE id = ?',
+                        sceneRow.chapter_id
+                    );
+                    if (chapterRow?.project_id) {
+                        const projectRow = await db.get(
+                            'SELECT settings FROM project WHERE id = ?',
+                            chapterRow.project_id
+                        );
+                        if (projectRow) {
+                            const projectSettings = parseProjectSettings(projectRow.settings);
+                            effectiveWorkflowData = {
+                                ...effectiveWorkflowData,
+                                project_settings: {
+                                    ...projectSettings,
+                                    ...(effectiveWorkflowData.project_settings || {})
+                                },
+                                style_preset:
+                                    effectiveWorkflowData.style_preset
+                                    || projectSettings.default_style
+                                    || null
+                            };
+                        }
+                    }
+                }
+            } catch (e) {
+                logger.warn(`[Task ${taskId}] Could not load project settings for scene ${sceneId}: ${e}`);
+            }
+
+            const nsfwEnabled = resolveEffectiveNsfw({
+                systemNsfwEnabled: Boolean(settings.advanced?.nsfw_enabled),
+                projectSettings: parseProjectSettings(effectiveWorkflowData.project_settings),
+                requestOverride:
+                    typeof effectiveWorkflowData.nsfw_enabled === 'boolean'
+                        ? effectiveWorkflowData.nsfw_enabled
+                        : null
+            });
+            effectiveWorkflowData.nsfw_enabled = nsfwEnabled;
+            logger.info(
+                `[Task ${taskId}] Effective NSFW=${nsfwEnabled}, style_preset=${effectiveWorkflowData.style_preset || 'none'}`
+            );
+
             if (mode === "cinematic_grid") {
-                const rawPrompt = workflowData?.prompt || workflowData?.text || workflowData?.description || JSON.stringify(workflowData);
+                const rawPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
                 finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
             } else {
-                finalPrompt = workflowData?.prompt || workflowData?.text || workflowData?.description || JSON.stringify(workflowData);
+                finalPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
             }
 
             if (useComfy) {
@@ -417,13 +391,13 @@ export class GenerationService {
                 }
 
                 copyReferenceImageToComfy(
-                    workflowData,
+                    effectiveWorkflowData,
                     staticDir,
                     comfySettings.install_path
                 );
 
                 const finalWorkflow = await compileComfyWorkflow(
-                    workflowData,
+                    effectiveWorkflowData,
                     finalPrompt,
                     mode,
                     generationParams,

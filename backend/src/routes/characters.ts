@@ -7,6 +7,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { LLMService } from '../services/llm';
 import { getGeneratedDirectory } from '../core/paths';
+import { SettingsManager } from '../core/settings_manager';
+import { buildCharacterPromptHeader } from '../services/image_generation_policy';
 
 // Dummy implementation of current_user auth
 const mockGetCurrentUser = (request: any) => ({
@@ -331,24 +333,24 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       refHintFlux = ", (consistent character appearance matching reference portrait:1.2), same costume and facial features across all 3 angles";
     }
 
-    let prompt = "";
-    let negativePrompt = "";
+    const nsfwEnabled = Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
+    const modelFamily = req.model_type.toLowerCase().includes('flux') ? 'flux' as const : 'pony' as const;
+    const header = buildCharacterPromptHeader(modelFamily, nsfwEnabled, req.gen_type);
 
-    if (req.model_type.toLowerCase() === "pony") {
+    let prompt = "";
+    let negativePrompt = header.negative;
+
+    if (modelFamily === "pony") {
       if (req.gen_type === "turnaround") {
-        prompt = `score_9, score_8_up, score_7_up, character turnaround sheet, full body model sheet, multi-view layout, front view, side view, back view, 3 views, aligned character turnaround, consistent character design, ${genderTag}, simple background, solid white background, ${combinedDesc}${refHintPony}`;
-        negativePrompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face";
+        prompt = `${header.prefix}, ${genderTag}, simple background, solid white background, ${combinedDesc}${refHintPony}`;
       } else {
-        prompt = `score_9, score_8_up, score_7_up, portrait, upper body, front view, ${genderTag}, simple background, white background, masterpiece, detailed face and eyes, ${combinedDesc}`;
-        negativePrompt = "score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, distorted face";
+        prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
       }
     } else {
       if (req.gen_type === "turnaround") {
-        prompt = `full body character turnaround sheet, split view layout, front view, side view, back view, complete 3-view character model sheet, character reference sheet, consistent character design from all angles, clean studio white background, masterpiece quality, ${genderTag}, ${combinedDesc}${refHintFlux}`;
-        negativePrompt = "low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume";
+        prompt = `${header.prefix}, ${genderTag}, ${combinedDesc}${refHintFlux}`;
       } else {
-        prompt = `high quality character portrait, front view, ${genderTag}, detailed face and eyes, clean studio background, ${combinedDesc}`;
-        negativePrompt = "low quality, blurry, bad anatomy, distorted face";
+        prompt = `${header.prefix}, ${genderTag}, ${combinedDesc}`;
       }
     }
 
@@ -357,6 +359,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       negative_prompt: negativePrompt,
       model_type: req.model_type,
       gen_type: req.gen_type,
+      nsfw_enabled: nsfwEnabled,
       ref_image_url: req.use_ref_portrait ? refUrl : null
     };
   });

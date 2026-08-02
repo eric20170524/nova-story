@@ -13,13 +13,20 @@ const DEFAULT_SETTINGS = {
         base_url: 'http://127.0.0.1:8188',
         enabled: false,
         selected_workflow_file: null,
-        install_path: 'D:\\ComfyUI'
+        install_path: 'D:\\ComfyUI',
+        // Style/detail LoRAs (auto-discovered if missing; see image_generation_policy.ts)
+        flux_lora: 'XLabs_Flux_Realism.safetensors',
+        pony_lora: 'Pony_DetailV2.0.safetensors',
+        flux_lora_strength: 0.75,
+        pony_lora_strength: 0.65,
+        default_workflow: 'pony_xl_12gb.json'
     },
     advanced: {
         nsfw_enabled: false,
-        pony_nsfw_lora: "Pony_Detail_Tweaker.safetensors",
-        flux_nsfw_lora: "aidmaNSFWunlock.safetensors",
-        nsfw_lora_strength: 0.8
+        // Adult style / unlock LoRAs — separate from style/detail; auto-discovered by filename patterns
+        pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+        flux_nsfw_lora: 'aidmaNSFWunlock.safetensors',
+        nsfw_lora_strength: 0.55
     },
     llm: {
         provider: 'gemini',

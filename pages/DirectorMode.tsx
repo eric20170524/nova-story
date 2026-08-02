@@ -11,6 +11,23 @@ import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
 import { AlertTriangle, Film, Settings } from 'lucide-react';
 
+/** Match Chinese character names against English/pinyin mentions in visual_prompt */
+const CHARACTER_NAME_ALIASES: Record<string, string[]> = {
+  陆嘉静: ['lu jiajing', 'lujiajing', 'jiajing', 'lu jia jing'],
+  裴雨涵: ['pei yuhan', 'peiyuhan', 'yuhan', 'pei yu han'],
+  南宫雪: ['nangong xue', 'nangongxue', 'nangong', 'xue'],
+};
+
+const isCharacterMentionedInPrompt = (prompt: string, charName: string): boolean => {
+  if (!charName || !prompt) return false;
+  const lower = prompt.toLowerCase();
+  if (lower.includes(charName.toLowerCase())) return true;
+  const compact = lower.replace(/[\s_\-]/g, '');
+  if (compact.includes(charName.toLowerCase().replace(/[\s_\-]/g, ''))) return true;
+  const aliases = CHARACTER_NAME_ALIASES[charName] || [];
+  return aliases.some((alias) => lower.includes(alias) || compact.includes(alias.replace(/[\s_\-]/g, '')));
+};
+
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
@@ -50,6 +67,8 @@ export const DirectorMode: React.FC = () => {
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [activeTab, setActiveTab] = useState<'control' | 'agent'>('control');
+  const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
+  const [systemNsfw, setSystemNsfw] = useState(false);
 
   // Comic State
   const [generatingComic, setGeneratingComic] = useState(false);
@@ -92,6 +111,47 @@ export const DirectorMode: React.FC = () => {
       localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapterId);
     }
   }, [projectId, selectedChapterId]);
+
+  // Load project defaults + system NSFW (style + policy strip)
+  useEffect(() => {
+    if (!projectId) return;
+    Promise.all([
+      api.getProject(Number(projectId)).catch(() => null),
+      api.getSettings().catch(() => null)
+    ]).then(([data, sys]) => {
+      const sysOn = Boolean(sys?.advanced?.nsfw_enabled);
+      setSystemNsfw(sysOn);
+
+      try {
+        const raw = data?.settings;
+        const settingsObj = typeof raw === 'string'
+          ? (raw ? JSON.parse(raw) : {})
+          : (raw && typeof raw === 'object' ? raw : {});
+        if (settingsObj.default_style) {
+          const styles = getVisualStyles();
+          if (styles.some((s) => s.value === settingsObj.default_style)) {
+            setSelectedStyle(settingsObj.default_style);
+            localStorage.setItem('director_selectedStyle', settingsObj.default_style);
+          }
+        }
+        let mode: 'inherit' | 'on' | 'off' = 'inherit';
+        if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
+          mode = settingsObj.nsfw_mode;
+        } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
+          mode = settingsObj.nsfw_enabled ? 'on' : 'off';
+        }
+        setProjectNsfwMode(mode);
+        localStorage.setItem(`director_project_${projectId}_nsfw_mode`, mode);
+      } catch {
+        /* ignore */
+      }
+    });
+  }, [projectId]);
+
+  const effectiveNsfw =
+    projectNsfwMode === 'on' ? true
+    : projectNsfwMode === 'off' ? false
+    : systemNsfw;
 
   // Load initial data
   useEffect(() => {
@@ -209,45 +269,47 @@ export const DirectorMode: React.FC = () => {
     finalPrompt += scene.visual_prompt || "";
 
     if (projectCharacters.length > 0 && scene.visual_prompt) {
-        const lowerPrompt = scene.visual_prompt.toLowerCase();
         const shotTypeLower = (scene.shot_type || "").toLowerCase();
         const isWideOrFullShot = ["wide", "long shot", "full body", "extreme long", "establishing"].some(k => shotTypeLower.includes(k));
 
         projectCharacters.forEach(char => {
-            if (char.name && lowerPrompt.includes(char.name.toLowerCase())) {
-                let tagMap: Record<string, string> = {};
-                const tags = char.visual_tags;
-                
-                if (tags && typeof tags === 'object') {
-                    if ("base_model" in tags) {
-                        const baseTags = tags.base_model?.tags || {};
-                        let variantTags = {};
-                        const timelineMap = tags.timeline_map || {};
-                        let variantId = timelineMap[selectedChapterId];
-                        const variants = tags.variants || [];
-                        if (variantId) {
-                            const variant = variants.find((v: any) => v.id === variantId);
-                            if (variant) variantTags = variant.tags || {};
-                        }
-                        tagMap = { ...(typeof baseTags === 'object' ? baseTags : {}), ...(typeof variantTags === 'object' ? variantTags : {}) };
-                    } else {
-                        tagMap = { ...tags };
-                    }
-                }
+            if (!isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)) return;
 
-                if (isWideOrFullShot && Object.keys(tagMap).length > 0) {
-                    // For wide/long shots, exclude fine facial micro-details to emphasize action and full body posture
-                    const filtered = Object.entries(tagMap)
-                        .filter(([k]) => !['eyes', 'face_features', 'skin_tone', 'eyebrows', 'lashes'].includes(k.toLowerCase()))
-                        .map(([, v]) => v);
-                    if (filtered.length > 0) {
-                        finalPrompt += `, ${char.name} outfit & build: ${filtered.join(", ")}`;
+            let tagMap: Record<string, string> = {};
+            const tags = char.visual_tags;
+
+            if (tags && typeof tags === 'object') {
+                if ("base_model" in tags) {
+                    const baseTags = tags.base_model?.tags || {};
+                    let variantTags = {};
+                    const timelineMap = tags.timeline_map || {};
+                    let variantId = timelineMap[selectedChapterId];
+                    const variants = tags.variants || [];
+                    if (variantId) {
+                        const variant = variants.find((v: any) => v.id === variantId);
+                        if (variant) variantTags = variant.tags || {};
                     }
+                    tagMap = { ...(typeof baseTags === 'object' ? baseTags : {}), ...(typeof variantTags === 'object' ? variantTags : {}) };
                 } else {
-                    const tagStr = Object.values(tagMap).join(", ");
-                    if (tagStr) {
-                        finalPrompt += `, ${char.name} appearance: ${tagStr}`;
-                    }
+                    // Flat tag map: only visual keys
+                    const skip = new Set(['assets', 'timeline_map', 'variants', 'base_model', 'model_type', 'avatar_url', 'turnaround_url', 'face_url']);
+                    tagMap = Object.fromEntries(
+                      Object.entries(tags).filter(([k, v]) => !skip.has(k) && typeof v === 'string')
+                    ) as Record<string, string>;
+                }
+            }
+
+            if (isWideOrFullShot && Object.keys(tagMap).length > 0) {
+                const filtered = Object.entries(tagMap)
+                    .filter(([k]) => !['eyes', 'face_features', 'skin_tone', 'eyebrows', 'lashes'].includes(k.toLowerCase()))
+                    .map(([, v]) => v);
+                if (filtered.length > 0) {
+                    finalPrompt += `, ${char.name} outfit & build: ${filtered.join(", ")}`;
+                }
+            } else {
+                const tagStr = Object.values(tagMap).join(", ");
+                if (tagStr) {
+                    finalPrompt += `, ${char.name} appearance: ${tagStr}`;
                 }
             }
         });
@@ -275,9 +337,8 @@ export const DirectorMode: React.FC = () => {
       let referenceModelType = 'pony';
 
       if (projectCharacters.length > 0 && scene.visual_prompt) {
-        const lowerPrompt = scene.visual_prompt.toLowerCase();
         for (const char of projectCharacters) {
-          if (char.name && lowerPrompt.includes(char.name.toLowerCase())) {
+          if (isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)) {
             if (char.turnaround_url || char.avatar_url) {
               referenceImageUrl = char.turnaround_url || char.avatar_url;
               referenceModelType = char.model_type || 'pony';
@@ -484,6 +545,9 @@ export const DirectorMode: React.FC = () => {
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
         onStopBatchGenerate={handleStopBatchGenerate}
+        projectNsfwMode={projectNsfwMode}
+        effectiveNsfw={effectiveNsfw}
+        systemNsfw={systemNsfw}
       />
 
       {showComicViewer && (

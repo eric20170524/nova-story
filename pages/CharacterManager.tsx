@@ -38,9 +38,67 @@ export const CharacterManager: React.FC = () => {
   const [useRefPortrait, setUseRefPortrait] = useState<boolean>(true);
   const [refImageUrl, setRefImageUrl] = useState<string | null>(null);
 
+  // Project policy for consistent style/NSFW on character gens
+  const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
+  const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
+  const [systemNsfw, setSystemNsfw] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState('');
+  const stopBatchRef = React.useRef(false);
+
   useEffect(() => {
-    if (projectId) loadCharacters();
+    if (projectId) {
+      loadCharacters();
+      Promise.all([
+        api.getProject(Number(projectId)).catch(() => null),
+        api.getSettings().catch(() => null)
+      ]).then(([proj, sys]) => {
+        setSystemNsfw(Boolean(sys?.advanced?.nsfw_enabled));
+        try {
+          const raw = proj?.settings;
+          const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
+          if (s.default_style) setProjectStyle(s.default_style);
+          if (s.nsfw_mode === 'on' || s.nsfw_mode === 'off' || s.nsfw_mode === 'inherit') {
+            setProjectNsfwMode(s.nsfw_mode);
+          }
+        } catch { /* ignore */ }
+      });
+    }
   }, [projectId]);
+
+  const effectiveNsfw =
+    projectNsfwMode === 'on' ? true
+    : projectNsfwMode === 'off' ? false
+    : systemNsfw;
+
+  const waitForAssetTask = (taskId: string): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const eventSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
+      let settled = false;
+      const finish = (err?: Error, url?: string) => {
+        if (settled) return;
+        settled = true;
+        eventSource.close();
+        if (err) reject(err);
+        else resolve(url || '');
+      };
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.status === 'failed' || (data.type === 'complete' && data.status === 'failed')) {
+            finish(new Error(data.error || 'Generation failed'));
+          } else if (data.status === 'completed' || (data.type === 'complete' && data.image_url)) {
+            if (data.image_url) finish(undefined, data.image_url);
+            else finish(new Error('No image URL'));
+          }
+        } catch (e) {
+          /* ignore parse errors mid-stream */
+        }
+      };
+      eventSource.onerror = () => {
+        finish(new Error(t('casting.gen_error_connection') || 'SSE connection error'));
+      };
+    });
 
   const loadCharacters = async () => {
     if (!projectId) return;
@@ -193,13 +251,19 @@ export const CharacterManager: React.FC = () => {
     setGeneratedImageUrl(null);
 
     try {
-      // Trigger generation via asset API
+      // Trigger generation via asset API — attach project style/NSFW so policy stack applies
       const payload: any = {
         prompt: prompt,
         negative_prompt: negativePrompt,
         model_type: modelType,
         mode: 'standard',
-        gen_type: genType
+        gen_type: genType,
+        style_preset: projectStyle,
+        nsfw_enabled: effectiveNsfw,
+        project_settings: {
+          default_style: projectStyle,
+          nsfw_mode: projectNsfwMode
+        }
       };
 
       if (useRefPortrait && refImageUrl) {
@@ -212,49 +276,93 @@ export const CharacterManager: React.FC = () => {
         throw new Error(t("casting.gen_error_no_task"));
       }
 
-      // Subscribe to SSE or poll for completion
-      const eventSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
-      let hasSettled = false;
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.status === 'failed') {
-            hasSettled = true;
-            showToast(data.error || "Generation failed", 'error');
-            setIsGenerating(false);
-            eventSource.close();
-          } else if (data.status === 'completed' || (data.type === 'complete' && data.image_url)) {
-            hasSettled = true;
-            if (data.image_url) {
-              setGeneratedImageUrl(data.image_url);
-              showToast(t("characters.gen_success", "Image generated successfully"), 'success');
-            } else {
-              showToast(t("casting.gen_error_no_image"), 'error');
-            }
-            setIsGenerating(false);
-            eventSource.close();
-          } else if (data.type === 'complete') {
-            hasSettled = true;
-            showToast(data.error || "Generation failed", 'error');
-            setIsGenerating(false);
-            eventSource.close();
-          }
-        } catch (err) {
-          console.error(err);
-        }
-      };
-
-      eventSource.onerror = () => {
-        if (!hasSettled) {
-          showToast(t("casting.gen_error_connection"), 'error');
-        }
-        setIsGenerating(false);
-        eventSource.close();
-      };
+      const imageUrl = await waitForAssetTask(taskId);
+      setGeneratedImageUrl(imageUrl);
+      showToast(t("characters.gen_success", "Image generated successfully"), 'success');
+      setIsGenerating(false);
     } catch (e) {
       console.error(e);
       showToast(e instanceof Error ? e.message : "Generation failed", 'error');
       setIsGenerating(false);
+    }
+  };
+
+  /** Sequential portrait → turnaround for all project characters using current tags + policy */
+  const handleBatchRegenerateAll = async () => {
+    if (!characters.length) return;
+    if (!confirm(t('characters.batch_confirm') || `Regenerate portrait + turnaround for ${characters.length} characters? This may take several minutes.`)) {
+      return;
+    }
+    stopBatchRef.current = false;
+    setBatchRunning(true);
+    let ok = 0;
+    let fail = 0;
+
+    try {
+      for (let i = 0; i < characters.length; i++) {
+        if (stopBatchRef.current) break;
+        const char = characters[i];
+        const mType = (char.model_type as 'pony' | 'flux') || 'pony';
+
+        // 1) Portrait
+        setBatchProgress(`${i + 1}/${characters.length} ${char.name} · portrait…`);
+        try {
+          const portraitPrompt = await api.buildCharacterPrompt(
+            char.id, mType, 'portrait', char.description, false
+          );
+          const portraitRes = await api.generateAsset({
+            prompt: portraitPrompt.prompt,
+            negative_prompt: portraitPrompt.negative_prompt,
+            model_type: mType,
+            mode: 'standard',
+            gen_type: 'portrait',
+            style_preset: projectStyle,
+            nsfw_enabled: effectiveNsfw,
+            project_settings: { default_style: projectStyle, nsfw_mode: projectNsfwMode }
+          }, 999991 + char.id);
+          if (!portraitRes.task_id) throw new Error('No task id');
+          const portraitUrl = await waitForAssetTask(portraitRes.task_id);
+          await api.updateCharacter(char.id, { avatar_url: portraitUrl, model_type: mType });
+
+          if (stopBatchRef.current) break;
+
+          // 2) Turnaround with portrait as ref
+          setBatchProgress(`${i + 1}/${characters.length} ${char.name} · turnaround…`);
+          const turnPrompt = await api.buildCharacterPrompt(
+            char.id, mType, 'turnaround', char.description, true, portraitUrl
+          );
+          const turnRes = await api.generateAsset({
+            prompt: turnPrompt.prompt,
+            negative_prompt: turnPrompt.negative_prompt,
+            model_type: mType,
+            mode: 'standard',
+            gen_type: 'turnaround',
+            style_preset: projectStyle,
+            nsfw_enabled: effectiveNsfw,
+            ref_image_url: portraitUrl,
+            project_settings: { default_style: projectStyle, nsfw_mode: projectNsfwMode }
+          }, 999992 + char.id);
+          if (!turnRes.task_id) throw new Error('No task id');
+          const turnUrl = await waitForAssetTask(turnRes.task_id);
+          await api.updateCharacter(char.id, { turnaround_url: turnUrl, model_type: mType });
+          ok += 1;
+        } catch (err) {
+          console.error(err);
+          fail += 1;
+          showToast(`${char.name}: ${err instanceof Error ? err.message : 'failed'}`, 'error');
+        }
+      }
+      await loadCharacters();
+      showToast(
+        t('characters.batch_done', `Batch done: ${ok} ok, ${fail} failed`)
+          .replace('{ok}', String(ok))
+          .replace('{fail}', String(fail))
+          || `Batch done: ${ok} ok, ${fail} failed`,
+        fail ? 'error' : 'success'
+      );
+    } finally {
+      setBatchRunning(false);
+      setBatchProgress('');
     }
   };
 
@@ -326,14 +434,44 @@ export const CharacterManager: React.FC = () => {
 
   return (
     <div className="flex-1 bg-slate-950 p-4 sm:p-8 overflow-y-auto h-full">
-      <div className="flex justify-between items-center mb-6 sm:mb-8">
-        <h2 className="text-xl sm:text-2xl font-bold text-white">{t('characters.title')}</h2>
-        <button
-          onClick={() => openModal()}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm sm:text-base font-medium"
-        >
-          <Plus size={18} /> {t('characters.add_btn')}
-        </button>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6 sm:mb-8">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-white">{t('characters.title')}</h2>
+          <p className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+            <span className={`px-2 py-0.5 rounded-full font-semibold ${effectiveNsfw ? 'bg-rose-900/60 text-rose-200' : 'bg-emerald-900/50 text-emerald-200'}`}>
+              {effectiveNsfw ? 'NSFW' : 'SFW'}
+            </span>
+            <span className="text-slate-500">style: {projectStyle}</span>
+            {batchProgress && <span className="text-indigo-400 animate-pulse">{batchProgress}</span>}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {batchRunning ? (
+            <button
+              type="button"
+              onClick={() => { stopBatchRef.current = true; }}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/50 px-4 py-2 rounded-lg text-sm font-medium"
+            >
+              <RefreshCw size={16} className="animate-spin" /> {t('characters.batch_stop') || 'Stop batch'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleBatchRegenerateAll}
+              disabled={!characters.length}
+              className="flex items-center gap-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              title={t('characters.batch_hint') || 'Portrait then turnaround for every character'}
+            >
+              <Wand2 size={16} /> {t('characters.batch_regen') || 'Batch regenerate all'}
+            </button>
+          )}
+          <button
+            onClick={() => openModal()}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm sm:text-base font-medium"
+          >
+            <Plus size={18} /> {t('characters.add_btn')}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">

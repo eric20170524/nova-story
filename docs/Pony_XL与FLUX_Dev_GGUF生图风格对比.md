@@ -208,4 +208,16 @@ FLUX 的 LoRA 相对较少，但核心需求已很清晰。**GGUF 版本支持 L
 - **Pony XL**：Pony Detail Tweaker + Incase Style / ExpressiveH
 - **FLUX GGUF**：aidmaNSFWunlock + XLabs Flux Realism 或 Best of Flux
 
+### NovaStory 自动策略（系统设置 · NSFW 开关）
+
+实现见 `backend/src/services/image_generation_policy.ts`，由 `generation_service.compileComfyWorkflow` 统一调用。
+
+| 模式 | LoRA 栈 | 提示词 | 分镜 LLM |
+| --- | --- | --- | --- |
+| **NSFW 关** | 仅 style/detail（Pony Detail / FLUX Realism·东亚） | + SFW 负向；Pony 补 `source_anime` | 全年龄、无裸露 |
+| **NSFW 开** | style + adult（去重；缺文件则按文件名模式发现） | 注入 rating/触发词（如 aidma）；亲密镜头强化 anatomy | 允许成人标签，优先 2girls 拆镜 |
+
+默认权重：`pony_lora_strength=0.65`，`nsfw_lora_strength=0.55`，`flux_lora_strength=0.75`。  
+推荐文件名默认：`Pony_DetailV2.0` + `Incase_Style_PonyXL`；FLUX `XLabs_Flux_Realism` + `aidmaNSFWunlock`。
+
 需要特定角色、姿势或更细分风格（如 furry、特定画师）的话，告诉我方向，我可以再精准推荐。

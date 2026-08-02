@@ -5,6 +5,8 @@ import { formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '..
 import { useLanguage } from '../../LanguageContext';
 import { AgentAssistant } from '../AgentAssistant';
 
+export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
+
 interface DirectorRightPanelProps {
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
@@ -30,6 +32,11 @@ interface DirectorRightPanelProps {
   isBatchGenerating?: boolean;
   onBatchGenerate?: () => void;
   onStopBatchGenerate?: () => void;
+  /** Project nsfw_mode from settings */
+  projectNsfwMode?: ProjectNsfwMode;
+  /** Effective NSFW after resolve(system, project) */
+  effectiveNsfw?: boolean;
+  systemNsfw?: boolean;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
@@ -56,7 +63,10 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   onRefreshTimeline,
   isBatchGenerating,
   onBatchGenerate,
-  onStopBatchGenerate
+  onStopBatchGenerate,
+  projectNsfwMode = 'inherit',
+  effectiveNsfw = false,
+  systemNsfw = false
 }) => {
   const { t } = useLanguage();
   const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
@@ -124,6 +134,41 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                      <Sliders size={14} />
                      {t('director.production_settings')}
                    </h4>
+
+                   {/* Project image policy strip */}
+                   <div className={`rounded-lg border px-3 py-2.5 text-xs space-y-1.5 ${
+                     effectiveNsfw
+                       ? 'bg-rose-950/40 border-rose-800/50 text-rose-100'
+                       : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-100'
+                   }`}>
+                     <div className="flex items-center justify-between gap-2">
+                       <span className="font-semibold tracking-wide uppercase text-[10px] opacity-80">
+                         {t('director.policy_title') || 'Image Policy'}
+                       </span>
+                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                         effectiveNsfw
+                           ? 'bg-rose-600/80 text-white'
+                           : 'bg-emerald-600/80 text-white'
+                       }`}>
+                         {effectiveNsfw
+                           ? (t('director.policy_nsfw_on') || 'NSFW ON')
+                           : (t('director.policy_nsfw_off') || 'SFW')}
+                       </span>
+                     </div>
+                     <p className="text-[11px] leading-relaxed opacity-90">
+                       {projectNsfwMode === 'on' && (t('director.policy_project_on') || 'Project forces adult LoRA + prompt policy.')}
+                       {projectNsfwMode === 'off' && (t('director.policy_project_off') || 'Project forces SFW only.')}
+                       {projectNsfwMode === 'inherit' && (
+                         effectiveNsfw
+                           ? (t('director.policy_inherit_on') || 'Following system NSFW (enabled).')
+                           : (t('director.policy_inherit_off') || 'Following system NSFW (disabled).')
+                       )}
+                       {' '}
+                       <span className="opacity-70">
+                         ({t('director.policy_system') || 'System'}: {systemNsfw ? 'ON' : 'OFF'})
+                       </span>
+                     </p>
+                   </div>
                    
                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
                      <div>

@@ -1,3 +1,5 @@
+import { buildTimelineVisualPromptPolicy } from './image_generation_policy';
+
 export class Prompts {
     static buildCinematicGridImagePrompt(scenePrompt: string): string {
         const normalizedPrompt = String(scenePrompt || '').replace(/\s+/g, ' ').trim();
@@ -34,8 +36,12 @@ export class Prompts {
         return `Analyze the following text and extract new characters (entities) and key plot updates. Return JSON with keys 'new_entities' (list) and 'updates' (list).\n\nText: ${content}`;
     }
 
-    static generateCinematicGridTimelinePrompt(content: string, characterProfiles: string = ""): string {
-        let charInstruction = "";
+    static generateCinematicGridTimelinePrompt(
+        content: string,
+        characterProfiles: string = '',
+        nsfwEnabled: boolean = false
+    ): string {
+        let charInstruction = '';
         if (characterProfiles) {
             charInstruction = `
 ### Character Visual Consistency:
@@ -51,7 +57,7 @@ CRITICAL: Return EXACTLY 9 shots. Not 8, not 10. EXACTLY 9.
 ### Language Rules:
 - 'dialogue': Can be in Chinese or English matching the source story text so it can serve directly as comic subtitles.
 - 'visual_prompt', 'audio_prompt': MUST remain in detailed English for image generation models.
-
+${buildTimelineVisualPromptPolicy(nsfwEnabled)}
 ### 9-Shot Grid Structure:
 Slot 1: Extreme Long Shot, Eye-level
 Slot 2: Long Shot, Eye-level
@@ -67,8 +73,12 @@ Story Beat:
 ${content}`;
     }
 
-    static generateTimeline(content: string, characterProfiles: string = ""): string {
-        let charInstruction = "";
+    static generateTimeline(
+        content: string,
+        characterProfiles: string = '',
+        nsfwEnabled: boolean = false
+    ): string {
+        let charInstruction = '';
         if (characterProfiles) {
             charInstruction = `
 ### Character Visual Consistency:
@@ -87,6 +97,7 @@ Break down the following story text into a sequence of storyboard shots based on
 3. **Multi-Person Spatial Interaction**: Explicitly describe their relative physical positions.
 4. **Visual Variety & Dynamic Framing**: Alternate between Shot Sizes.
 5. **Language Rule**: The 'dialogue' field SHOULD preserve original text language (Chinese or English) for subtitle use in comics. 'visual_prompt' and 'audio_prompt' MUST be in English.
+${buildTimelineVisualPromptPolicy(nsfwEnabled)}
 ${charInstruction}
 ### Required Output Format (JSON Object):
 Return a JSON object with a key 'shots' containing a list of shot objects. Example:
@@ -109,8 +120,13 @@ Story Text:
 ${content}`;
     }
 
-    static generateSceneCoveragePrompt(scenePrompt: string, dialogue: string = "", characterProfiles: string = ""): string {
-        let charInstruction = "";
+    static generateSceneCoveragePrompt(
+        scenePrompt: string,
+        dialogue: string = '',
+        characterProfiles: string = '',
+        nsfwEnabled: boolean = false
+    ): string {
+        let charInstruction = '';
         if (characterProfiles) {
             charInstruction = `
 ### Character Visual Consistency:
@@ -121,7 +137,7 @@ ${characterProfiles}
 
         return `You are a professional film cinematographer creating a 9-shot coverage package for a SINGLE SCENE beat.
 CRITICAL: All 9 candidate shots MUST describe the EXACT SAME moment, action, environment, time of day, weather, lighting, and character state as the input scene. Do NOT advance the story timeline. Do NOT change character clothing or location.
-
+${buildTimelineVisualPromptPolicy(nsfwEnabled)}
 ### Mandatory 9-Shot Coverage Slots:
 Slot 1: Extreme Long Shot (ELS), Eye-level. Establishing environment and subject spatial context.
 Slot 2: Long Shot (LS), Eye-level. Full body subject silhouette and posture.
@@ -149,12 +165,17 @@ ${scenePrompt}
 Dialogue: ${dialogue || 'None'}`;
     }
 
-    static extractCharacterProfiles(content: string): string {
+    static extractCharacterProfiles(content: string, nsfwEnabled: boolean = false): string {
+        const tagLang = nsfwEnabled
+            ? `Write ALL visual_tags values in concise English image-model tags (Danbooru-style when possible). Characters are adults. Include distinctive costume colors and body type for consistency.`
+            : `Write ALL visual_tags values in concise English image-model tags (Danbooru-style when possible). Keep designs safe-for-work and fully clothed. Include distinctive costume colors and body type for consistency.`;
+
         return `Analyze the story text and extract a list of characters. For each character, provide:
 - 'name': Name
 - 'role': 'main', 'supporting', or 'minor'
 - 'description': Brief biography and personality
 - 'visual_tags': A dictionary of visual traits for AI image generation. MUST include keys: 'hair', 'eyes', 'skin_tone', 'face_features', 'build', 'clothing', 'accessories' (e.g. glasses, jewelry). Make descriptions specific (e.g. 'scar on left cheek', 'round wire-rimmed glasses').
+${tagLang}
 
 Return the result as a JSON object with a key 'profiles' containing the list of character objects.
 

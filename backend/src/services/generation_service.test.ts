@@ -167,9 +167,64 @@ test('preserves main FLUX prompt enhancement and discovers a local style LoRA', 
     assert.ok(loraEntry);
     assert.equal((loraEntry![1] as any).inputs.strength_model, 0.65);
     assert.deepEqual(compiled["6"].inputs.model, [loraEntry![0], 0]);
+    // FLUX default CFG is lower when client does not override
+    assert.equal(compiled["6"].inputs.cfg, 3.5);
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
+});
+
+test('NSFW ON stacks style + adult LoRAs and wires both into Pony workflow', async () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-nsfw-stack-'));
+  const loraDirectory = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDirectory, { recursive: true });
+  fs.writeFileSync(path.join(loraDirectory, 'Pony_DetailV2.0.safetensors'), '');
+  fs.writeFileSync(path.join(loraDirectory, 'Incase_Style_PonyXL.safetensors'), '');
+
+  try {
+    const compiled = await compileComfyWorkflow(
+      {
+        ...ponyWorkflow(),
+        // pass style via workflowData for preset boost
+      },
+      'cloud sea jade palace establishing shot',
+      'standard',
+      {},
+      {
+        advanced: {
+          nsfw_enabled: true,
+          pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+          nsfw_lora_strength: 0.55
+        },
+        comfyui: {
+          install_path: installPath,
+          pony_lora: 'Pony_DetailV2.0.safetensors',
+          pony_lora_strength: 0.65
+        }
+      }
+    );
+
+    const loraNodes = Object.values(compiled).filter(
+      (node: any) => node.class_type === 'LoraLoader'
+    ) as any[];
+    assert.equal(loraNodes.length, 2);
+    const names = loraNodes.map((n) => n.inputs.lora_name).sort();
+    assert.deepEqual(names, ['Incase_Style_PonyXL.safetensors', 'Pony_DetailV2.0.safetensors'].sort());
+    assert.match(compiled["6"].inputs.text, /rating_/);
+    assert.doesNotMatch(compiled["7"].inputs.text, /explicit sexual content/);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('timeline prompt policy mentions NSFW or SFW rules', () => {
+  const nsfwPrompt = Prompts.generateTimeline('spring tide chapter', '', true);
+  assert.match(nsfwPrompt, /NSFW mode ENABLED/i);
+  assert.match(nsfwPrompt, /1girl|2girls|3girls/i);
+
+  const sfwPrompt = Prompts.generateTimeline('spring tide chapter', '', false);
+  assert.match(sfwPrompt, /SFW|family-safe/i);
+  assert.match(sfwPrompt, /no nudity/i);
 });
 
 test('decodes real Gemini inline image responses instead of returning a placeholder', async () => {

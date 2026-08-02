@@ -135,7 +135,13 @@ export class LLMService {
         });
     }
 
-    static async generateTimeline(content: string, characterProfiles: string = "", mode: string = "narrative", token?: string): Promise<any[]> {
+    static async generateTimeline(
+        content: string,
+        characterProfiles: string = "",
+        mode: string = "narrative",
+        token?: string,
+        options?: { nsfwEnabled?: boolean }
+    ): Promise<any[]> {
         const normalizedMode = mode.toLowerCase();
         let targetMode = "narrative";
         if (['cinematic_grid', 'nine_shot_coverage'].includes(normalizedMode)) {
@@ -144,12 +150,15 @@ export class LLMService {
 
         logger.info(`Generating timeline (raw_mode=${mode}, normalized=${targetMode})...`);
 
+        const nsfwEnabled =
+            typeof options?.nsfwEnabled === 'boolean'
+                ? options.nsfwEnabled
+                : Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
         let prompt = "";
         if (targetMode === "nine_shot_coverage") {
-            // Note: Since Prompts class porting is needed, let's assume we have it
-            prompt = Prompts.generateCinematicGridTimelinePrompt(content, characterProfiles);
+            prompt = Prompts.generateCinematicGridTimelinePrompt(content, characterProfiles, nsfwEnabled);
         } else {
-            prompt = Prompts.generateTimeline(content, characterProfiles);
+            prompt = Prompts.generateTimeline(content, characterProfiles, nsfwEnabled);
         }
 
         const result = await LLMService.generateStructuredWithRetry(prompt, TimelineResponseSchema, token);
@@ -201,12 +210,21 @@ export class LLMService {
         });
     }
 
-    static async generateSceneCoverage(sceneData: any, characterProfiles: string = "", token?: string): Promise<any[]> {
+    static async generateSceneCoverage(
+        sceneData: any,
+        characterProfiles: string = "",
+        token?: string,
+        options?: { nsfwEnabled?: boolean }
+    ): Promise<any[]> {
         const rawPrompt = sceneData.visual_prompt || "";
         const dialogue = sceneData.dialogue || "";
         logger.info(`Generating single-scene 9-shot coverage for prompt: ${rawPrompt.substring(0, 40)}...`);
 
-        const prompt = Prompts.generateSceneCoveragePrompt(rawPrompt, dialogue, characterProfiles);
+        const nsfwEnabled =
+            typeof options?.nsfwEnabled === 'boolean'
+                ? options.nsfwEnabled
+                : Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
+        const prompt = Prompts.generateSceneCoveragePrompt(rawPrompt, dialogue, characterProfiles, nsfwEnabled);
         const result = await LLMService.generateStructuredWithRetry(prompt, TimelineResponseSchema, token);
 
         if (result && result.shots && LLMService.validateNineShotCoverage(result.shots)) {
@@ -248,7 +266,8 @@ export class LLMService {
 
     static async extractCharacterProfiles(content: string, token?: string): Promise<any[]> {
         logger.info("Extracting character profiles...");
-        const prompt = Prompts.extractCharacterProfiles(content);
+        const nsfwEnabled = Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
+        const prompt = Prompts.extractCharacterProfiles(content, nsfwEnabled);
         const result = await LLMService.generateStructuredWithRetry(prompt, CharacterProfilesResponseSchema, token);
         if (result) {
             return result.profiles;

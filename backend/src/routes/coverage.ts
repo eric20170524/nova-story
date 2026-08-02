@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/database';
 import { LLMService } from '../services/llm';
+import { SettingsManager } from '../core/settings_manager';
+import { parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 
 const serializeGroup = async (group: any) => ({
   ...group,
@@ -35,9 +37,19 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       .map((character: any) => `- Name: ${character.name}\n  Description: ${character.description || ''}`)
       .join('\n');
 
+    const project = chapter
+      ? await db.get('SELECT settings FROM project WHERE id = ?', chapter.project_id)
+      : null;
+    const nsfwEnabled = resolveEffectiveNsfw({
+      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
+      projectSettings: parseProjectSettings(project?.settings)
+    });
+
     const candidates = await LLMService.generateSceneCoverage(
       sourceScene,
-      characterProfiles
+      characterProfiles,
+      undefined,
+      { nsfwEnabled }
     );
     if (candidates.length !== 9) {
       return reply.status(500).send({

@@ -29,9 +29,9 @@ export const SettingsPage: React.FC = () => {
     },
     advanced: {
       nsfw_enabled: false,
-      pony_nsfw_lora: '',
-      flux_nsfw_lora: '',
-      nsfw_lora_strength: 0.8
+      pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+      flux_nsfw_lora: 'aidmaNSFWunlock.safetensors',
+      nsfw_lora_strength: 0.55
     }
   });
   const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
@@ -98,14 +98,16 @@ export const SettingsPage: React.FC = () => {
         enabled: false,
         selected_workflow_file: null,
         flux_lora: 'XLabs_Flux_Realism.safetensors',
-        pony_lora: 'Pony_DetailV2.0.safetensors'
+        pony_lora: 'Pony_DetailV2.0.safetensors',
+        flux_lora_strength: 0.75,
+        pony_lora_strength: 0.65
       };
 
       const advanced = settingsData.advanced || {
         nsfw_enabled: false,
-        pony_nsfw_lora: 'Pony_DetailV2.0.safetensors',
-        flux_nsfw_lora: 'XLabs_Flux_Realism.safetensors',
-        nsfw_lora_strength: 0.8
+        pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+        flux_nsfw_lora: 'aidmaNSFWunlock.safetensors',
+        nsfw_lora_strength: 0.55
       };
 
       setSettings({
@@ -548,16 +550,18 @@ export const SettingsPage: React.FC = () => {
                         {t('comfyui_flux_lora_label')}
                       </label>
                       <select
-                        value={settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'}
+                        value={settings.comfyui?.flux_lora || ''}
                         onChange={(e) => handleComfyChange('flux_lora', e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
                       >
+                        <option value="">(自动发现 · 写实/东亚/国风)</option>
                         {availableLoras.map((lora) => (
                           <option key={lora} value={lora}>{lora}</option>
                         ))}
-                        {!availableLoras.includes(settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors') && (
-                          <option value={settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'}>
-                            {settings.comfyui?.flux_lora || 'XLabs_Flux_Realism.safetensors'} (自定义配置)
+                        {settings.comfyui?.flux_lora
+                          && !availableLoras.includes(settings.comfyui.flux_lora) && (
+                          <option value={settings.comfyui.flux_lora}>
+                            {settings.comfyui.flux_lora} (自定义配置)
                           </option>
                         )}
                       </select>
@@ -569,16 +573,18 @@ export const SettingsPage: React.FC = () => {
                         {t('comfyui_pony_lora_label')}
                       </label>
                       <select
-                        value={settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'}
+                        value={settings.comfyui?.pony_lora || ''}
                         onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
                       >
+                        <option value="">(自动发现 · Detail 细节)</option>
                         {availableLoras.map((lora) => (
                           <option key={lora} value={lora}>{lora}</option>
                         ))}
-                        {!availableLoras.includes(settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors') && (
-                          <option value={settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'}>
-                            {settings.comfyui?.pony_lora || 'Pony_DetailV2.0.safetensors'} (自定义配置)
+                        {settings.comfyui?.pony_lora
+                          && !availableLoras.includes(settings.comfyui.pony_lora) && (
+                          <option value={settings.comfyui.pony_lora}>
+                            {settings.comfyui.pony_lora} (自定义配置)
                           </option>
                         )}
                       </select>
@@ -647,16 +653,18 @@ export const SettingsPage: React.FC = () => {
                     {t('advanced_settings.pony_nsfw_lora_label')}
                   </label>
                   <select
-                    value={settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'}
+                    value={settings.advanced?.pony_nsfw_lora || ''}
                     onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
                   >
+                    <option value="">(自动发现 · Incase / ExpressiveH 等)</option>
                     {availableLoras.map((lora) => (
                       <option key={lora} value={lora}>{lora}</option>
                     ))}
-                    {!availableLoras.includes(settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors') && (
-                      <option value={settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'}>
-                        {settings.advanced?.pony_nsfw_lora || 'Pony_DetailV2.0.safetensors'} (自定义配置)
+                    {settings.advanced?.pony_nsfw_lora
+                      && !availableLoras.includes(settings.advanced.pony_nsfw_lora) && (
+                      <option value={settings.advanced.pony_nsfw_lora}>
+                        {settings.advanced.pony_nsfw_lora} (自定义配置)
                       </option>
                     )}
                   </select>
@@ -667,16 +675,18 @@ export const SettingsPage: React.FC = () => {
                     {t('advanced_settings.flux_nsfw_lora_label')}
                   </label>
                   <select
-                    value={settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'}
+                    value={settings.advanced?.flux_nsfw_lora || ''}
                     onChange={(e) => handleAdvancedChange('flux_nsfw_lora', e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
                   >
+                    <option value="">(自动发现 · aidmaNSFWunlock)</option>
                     {availableLoras.map((lora) => (
                       <option key={lora} value={lora}>{lora}</option>
                     ))}
-                    {!availableLoras.includes(settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors') && (
-                      <option value={settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'}>
-                        {settings.advanced?.flux_nsfw_lora || 'XLabs_Flux_Realism.safetensors'} (自定义配置)
+                    {settings.advanced?.flux_nsfw_lora
+                      && !availableLoras.includes(settings.advanced.flux_nsfw_lora) && (
+                      <option value={settings.advanced.flux_nsfw_lora}>
+                        {settings.advanced.flux_nsfw_lora} (自定义配置)
                       </option>
                     )}
                   </select>
@@ -688,7 +698,7 @@ export const SettingsPage: React.FC = () => {
                       {t('advanced_settings.nsfw_lora_strength_label')}
                     </label>
                     <span className="text-xs text-rose-400 font-mono">
-                      {settings.advanced?.nsfw_lora_strength ?? 0.8}
+                      {settings.advanced?.nsfw_lora_strength ?? 0.55}
                     </span>
                   </div>
                   <input
@@ -696,10 +706,14 @@ export const SettingsPage: React.FC = () => {
                     min="0"
                     max="2"
                     step="0.05"
-                    value={settings.advanced?.nsfw_lora_strength ?? 0.8}
+                    value={settings.advanced?.nsfw_lora_strength ?? 0.55}
                     onChange={(e) => handleAdvancedChange('nsfw_lora_strength', parseFloat(e.target.value))}
                     className="w-full accent-rose-500 cursor-pointer"
                   />
+                  <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                    开启 NSFW 后：自动叠加载 细节/风格 LoRA + 成人向 LoRA（去重），并按题材注入触发词与分镜策略。
+                    关闭时：仅风格/细节 LoRA，并强制 SFW 负向词。文件缺失时会按文件名模式自动发现。
+                  </p>
                 </div>
               </div>
             )}
