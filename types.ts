@@ -36,6 +36,19 @@ export interface ProjectExport {
 }
 
 // Characters
+export interface CharacterVersionSummary {
+  version: number;
+  label?: string;
+  description?: string | null;
+  avatar_url?: string | null;
+  turnaround_url?: string | null;
+  face_url?: string | null;
+  has_avatar?: boolean;
+  has_turnaround?: boolean;
+  model_type?: string;
+  created_at?: string;
+}
+
 export interface Character {
   id: number;
   project_id: number;
@@ -47,6 +60,9 @@ export interface Character {
   turnaround_url?: string;
   face_url?: string;
   model_type?: 'pony' | 'flux';
+  /** Active look/content version (1-based) */
+  active_version?: number;
+  versions?: CharacterVersionSummary[];
 }
 
 // Chapters (Structure)
@@ -59,6 +75,15 @@ export interface Chapter {
 }
 
 // Timeline & Director Mode
+export interface SceneVersionSummary {
+  version: number;
+  label?: string;
+  asset_status?: string;
+  asset_url?: string | null;
+  has_image?: boolean;
+  created_at?: string;
+}
+
 export interface Scene {
   id: number | string;
   visual_prompt: string;
@@ -72,6 +97,10 @@ export interface Scene {
   asset_status?: 'idle' | 'generating' | 'completed' | 'failed';
   asset_url?: string; // URL to generated image
   task_id?: string; // ComfyUI task ID
+  /** Active generation/content version (1-based) */
+  active_version?: number;
+  /** Available versions for A/B switching */
+  versions?: SceneVersionSummary[];
 }
 
 export type StoryboardMode = 'narrative' | 'nine_shot_coverage';

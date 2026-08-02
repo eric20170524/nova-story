@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Loader2, Film, PanelRight, ImageIcon, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Music, Grid, X, Check, ArrowRight } from 'lucide-react';
 import { Scene, CoverageGroup, CoverageShot } from '../../types';
-import { API_BASE_URL, SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
+import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
+import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
 
 interface DirectorTimelineProps {
   timeline: Scene[];
@@ -13,9 +14,11 @@ interface DirectorTimelineProps {
   onGenerateTimeline: () => void;
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
-  onGenerateAsset: (sceneId: number | string) => void;
+  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean }) => void;
   onUpdateScene: (id: number | string, field: keyof Scene, value: any) => void;
   onRefreshTimeline?: () => void;
+  onActivateVersion?: (sceneId: number | string, version: number) => void;
+  onCreateVersion?: (sceneId: number | string, clearAsset?: boolean) => void;
 }
 
 export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
@@ -27,7 +30,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   setShowRightPanel,
   onGenerateAsset,
   onUpdateScene,
-  onRefreshTimeline
+  onRefreshTimeline,
+  onActivateVersion,
+  onCreateVersion
 }) => {
   const { t } = useLanguage();
   const [expandedCards, setExpandedCards] = useState<Set<number | string>>(new Set());
@@ -37,6 +42,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   const [coverageGroup, setCoverageGroup] = useState<CoverageGroup | null>(null);
   const [loadingCoverage, setLoadingCoverage] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const { openPreview, lightbox } = useImagePreview();
 
   const toggleExpand = (id: number | string) => {
     const newSet = new Set(expandedCards);
@@ -151,15 +157,48 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     return (
                     <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl hover:shadow-2xl transition-all group animate-in fade-in zoom-in-95 duration-300">
                         {/* Header */}
-                        <div className="p-3 bg-slate-850 border-b border-slate-800 flex justify-between items-center">
-                            <div className="flex items-center gap-2">
+                        <div className="p-3 bg-slate-850 border-b border-slate-800 flex justify-between items-center gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
                               <span className="font-mono text-xs text-indigo-400 font-bold">{t('director.scene')} {idx + 1}</span>
                               <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">
                                 {scene.duration}s
                               </span>
+                              {/* Version switcher for A/B testing copy + image */}
+                              <div className="flex items-center gap-1">
+                                <select
+                                  className="bg-slate-950 border border-amber-800/50 text-amber-200 text-[10px] font-mono rounded px-1.5 py-0.5 max-w-[4.5rem] focus:outline-none focus:border-amber-500"
+                                  value={scene.active_version || 1}
+                                  title="切换生成版本（文案+图片）"
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (onActivateVersion && v !== (scene.active_version || 1)) {
+                                      onActivateVersion(scene.id, v);
+                                    }
+                                  }}
+                                >
+                                  {(scene.versions && scene.versions.length > 0
+                                    ? scene.versions
+                                    : [{ version: scene.active_version || 1, label: `v${scene.active_version || 1}` }]
+                                  ).map((v) => (
+                                    <option key={v.version} value={v.version}>
+                                      {v.label || `v${v.version}`}{v.has_image ? ' ●' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                                {onCreateVersion && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onCreateVersion(scene.id, true)}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/50 text-amber-200"
+                                    title="新建版本（复制当前文案，清空图片）"
+                                  >
+                                    +V
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                                 <button
                                   onClick={() => handleOpenCoverage(scene)}
                                   className="text-xs bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/60 text-purple-300 px-2 py-1 rounded flex items-center gap-1 transition-all"
@@ -171,14 +210,17 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             </div>
                         </div>
 
-                        {/* Image Area */}
+                        {/* Image Area — click image for full preview; hover for regenerate */}
                         <div className="aspect-square bg-black relative flex items-center justify-center group/image h-64">
                             {scene.asset_status === 'completed' && scene.asset_url ? (
-                                <img 
-                                src={scene.asset_url.startsWith('/static') ? `${API_BASE_URL.replace('/api', '')}${scene.asset_url}` : scene.asset_url} 
-                                alt="Scene" 
-                                className="w-full h-full object-cover" 
-                                />
+                                <>
+                                  <PreviewableImage
+                                    src={scene.asset_url}
+                                    alt={`Scene ${scene.id}`}
+                                    className="w-full h-full object-cover"
+                                  />
+                                  <ZoomHint className="group-hover/image:opacity-100" />
+                                </>
                             ) : (
                                 <div className="text-slate-600 flex flex-col items-center">
                                 {scene.asset_status === 'generating' ? (
@@ -192,15 +234,44 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 </div>
                             )}
                             
-                            {/* Overlay Trigger */}
-                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/image:opacity-100 flex items-center justify-center transition-opacity">
+                            {/* Overlay: preview + regenerate (don't block image click on empty area) */}
+                            <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/image:opacity-100 flex flex-wrap items-center justify-center gap-1.5 transition-opacity pointer-events-none">
+                                {scene.asset_status === 'completed' && scene.asset_url && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openPreview(scene.asset_url);
+                                    }}
+                                    className="pointer-events-auto bg-slate-800/90 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 shadow-lg border border-slate-600"
+                                  >
+                                    放大
+                                  </button>
+                                )}
                                 <button 
-                                onClick={() => onGenerateAsset(scene.id)}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onGenerateAsset(scene.id, { newVersion: false });
+                                }}
                                 disabled={scene.asset_status === 'generating'}
-                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-full font-medium text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                title="覆盖当前版本图片"
                                 >
-                                <RefreshCw size={14} className={scene.asset_status === 'generating' ? "animate-spin" : ""} />
-                                {scene.asset_status === 'generating' ? t('director.status_generating') : t('director.generate')}
+                                <RefreshCw size={12} className={scene.asset_status === 'generating' ? "animate-spin" : ""} />
+                                {scene.asset_status === 'generating' ? t('director.status_generating') : '生成本版'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onGenerateAsset(scene.id, { newVersion: true });
+                                  }}
+                                  disabled={scene.asset_status === 'generating'}
+                                  className="pointer-events-auto bg-amber-700 hover:bg-amber-600 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                  title="新建版本并生成（保留旧版文案与图片）"
+                                >
+                                  +新版生成
                                 </button>
                             </div>
                         </div>
@@ -445,6 +516,8 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
           </div>
         </div>
       )}
+
+      {lightbox}
     </div>
   );
 };

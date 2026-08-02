@@ -15,6 +15,7 @@ import {
     type ImageModelFamily
 } from './image_generation_policy';
 import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
+import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
 
 const isComfyWorkflow = (value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -634,6 +635,12 @@ export class GenerationService {
 
                 if (finalStatus === "completed") {
                     await db.run('UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?', "completed", assetUrl, taskId, sceneId);
+                    await ensureSceneVersionBaseline(sceneId);
+                    await syncActiveVersionAssets(sceneId, {
+                        asset_status: 'completed',
+                        asset_url: assetUrl,
+                        task_id: taskId
+                    });
                 }
             }
 
@@ -647,6 +654,11 @@ export class GenerationService {
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
                 AssetTaskStore.failed(taskId, sceneId, errMsg);
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
+                await ensureSceneVersionBaseline(sceneId);
+                await syncActiveVersionAssets(sceneId, {
+                    asset_status: 'failed',
+                    task_id: taskId
+                });
                 if (redis && redis.status === 'ready') {
                     try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "failed", error: errMsg })); } catch(e) {}
                 }
@@ -657,6 +669,11 @@ export class GenerationService {
             AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
+                await ensureSceneVersionBaseline(sceneId);
+                await syncActiveVersionAssets(sceneId, {
+                    asset_status: 'failed',
+                    task_id: taskId
+                });
                 if (redis && redis.status === 'ready') {
                     await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "failed", error: error.message }));
                 }

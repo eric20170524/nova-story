@@ -6,14 +6,9 @@ import { Character } from '../types';
 import { API_BASE_URL, CHARACTER_ROLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
+import { PreviewableImage, resolveMediaUrl, useImagePreview, ZoomHint } from '../components/ImageLightbox';
 
-const formatImageUrl = (url?: string | null) => {
-  if (!url) return '';
-  if (url.startsWith('/static')) {
-    return `${API_BASE_URL.replace('/api', '')}${url}`;
-  }
-  return url;
-};
+const formatImageUrl = (url?: string | null) => resolveMediaUrl(url);
 
 export const CharacterManager: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
@@ -45,6 +40,7 @@ export const CharacterManager: React.FC = () => {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState('');
   const stopBatchRef = React.useRef(false);
+  const { openPreview, lightbox: imageLightbox } = useImagePreview();
 
   useEffect(() => {
     if (projectId) {
@@ -168,6 +164,36 @@ export const CharacterManager: React.FC = () => {
         showToast(t("characters.deleted", "Character deleted"), 'success');
     } catch (e) {
         showToast(t("characters.failed_delete", "Failed to delete character"), 'error');
+    }
+  };
+
+  const handleActivateCharacterVersion = async (charId: number, version: number) => {
+    try {
+      const updated = await api.activateCharacterVersion(charId, version);
+      setCharacters((prev) => prev.map((c) => (c.id === charId ? { ...c, ...updated } : c)));
+      if (sheetModalChar?.id === charId) {
+        setSheetModalChar({ ...sheetModalChar, ...updated });
+      }
+      showToast(`角色已切换到 v${version}`, 'success');
+    } catch (e: any) {
+      showToast(e.message || '切换版本失败', 'error');
+    }
+  };
+
+  const handleCreateCharacterVersion = async (charId: number, clearAssets = true) => {
+    try {
+      const res = await api.createCharacterVersion(charId, {
+        clear_assets: clearAssets,
+        activate: true
+      });
+      if (res?.character) {
+        setCharacters((prev) => prev.map((c) => (c.id === charId ? { ...c, ...res.character } : c)));
+      } else {
+        await loadCharacters();
+      }
+      showToast(`已新建角色 ${res?.version?.label || '版本'}`, 'success');
+    } catch (e: any) {
+      showToast(e.message || '新建版本失败', 'error');
     }
   };
 
@@ -366,9 +392,25 @@ export const CharacterManager: React.FC = () => {
     }
   };
 
-  const saveAssetToCharacter = async (assetType: 'turnaround' | 'avatar') => {
+  const saveAssetToCharacter = async (
+    assetType: 'turnaround' | 'avatar',
+    options: { newVersion?: boolean } = {}
+  ) => {
     if (!sheetModalChar || !generatedImageUrl) return;
     try {
+      let charId = sheetModalChar.id;
+      if (options.newVersion) {
+        // Fork look first (keep previous assets), then write into the new active version
+        const forked = await api.createCharacterVersion(charId, {
+          clear_assets: true,
+          activate: true
+        });
+        if (forked?.character?.id) {
+          charId = forked.character.id;
+          setSheetModalChar((prev) => (prev ? { ...prev, ...forked.character } : prev));
+        }
+      }
+
       const updatePayload: any = {
         model_type: modelType
       };
@@ -378,9 +420,14 @@ export const CharacterManager: React.FC = () => {
         updatePayload.avatar_url = generatedImageUrl;
       }
 
-      const updatedChar = await api.updateCharacter(sheetModalChar.id, updatePayload);
-      showToast(t("characters.asset_saved", "Asset saved to character profile!"), 'success');
-      setCharacters(prev => prev.map(c => c.id === sheetModalChar.id ? updatedChar : c));
+      const updatedChar = await api.updateCharacter(charId, updatePayload);
+      showToast(
+        options.newVersion
+          ? `已保存到新版本 v${updatedChar.active_version || '?'}`
+          : t("characters.asset_saved", "Asset saved to character profile!"),
+        'success'
+      );
+      setCharacters(prev => prev.map(c => c.id === charId ? updatedChar : c));
       setSheetModalChar(null);
     } catch (e) {
       showToast(t("characters.failed_save_asset", "Failed to save asset"), 'error');
@@ -484,8 +531,8 @@ export const CharacterManager: React.FC = () => {
                 <div className="flex items-center gap-3">
                   <div className="relative">
                     {char.avatar_url || char.turnaround_url ? (
-                      <img
-                        src={formatImageUrl(char.avatar_url || char.turnaround_url)}
+                      <PreviewableImage
+                        src={char.avatar_url || char.turnaround_url}
                         alt={char.name}
                         className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500/50 shadow-md"
                       />
@@ -495,8 +542,8 @@ export const CharacterManager: React.FC = () => {
                       </div>
                     )}
                     {char.face_url && (
-                      <img
-                        src={formatImageUrl(char.face_url)}
+                      <PreviewableImage
+                        src={char.face_url}
                         alt="Face Ref"
                         title="Face Reference"
                         className="w-6 h-6 rounded-full object-cover border border-amber-400 absolute -bottom-1 -right-1 shadow"
@@ -517,9 +564,39 @@ export const CharacterManager: React.FC = () => {
                         </span>
                       )}
                     </h3>
-                    <span className="text-xs uppercase tracking-wide text-indigo-400 font-semibold">
-                      {t(`roles.${char.role}`) || char.role}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                      <span className="text-xs uppercase tracking-wide text-indigo-400 font-semibold">
+                        {t(`roles.${char.role}`) || char.role}
+                      </span>
+                      <select
+                        className="bg-slate-950 border border-amber-800/50 text-amber-200 text-[10px] font-mono rounded px-1.5 py-0.5 focus:outline-none focus:border-amber-500"
+                        value={char.active_version || 1}
+                        title="切换角色外观版本（描述+标签+立绘/三视图）"
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (v !== (char.active_version || 1)) {
+                            handleActivateCharacterVersion(char.id, v);
+                          }
+                        }}
+                      >
+                        {(char.versions && char.versions.length > 0
+                          ? char.versions
+                          : [{ version: char.active_version || 1, label: `v${char.active_version || 1}` }]
+                        ).map((v) => (
+                          <option key={v.version} value={v.version}>
+                            {v.label || `v${v.version}`}{v.has_avatar ? ' ●' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleCreateCharacterVersion(char.id, true)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/50 text-amber-200"
+                        title="新建版本：复制描述/标签，清空图片"
+                      >
+                        +V
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -534,6 +611,9 @@ export const CharacterManager: React.FC = () => {
               <div className="mb-4">
                 <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
                   <span>{t("casting.visual_assets_preview")}</span>
+                  <span className="text-[10px] text-amber-500/80 font-mono">
+                    v{char.active_version || 1}
+                  </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {/* Front Portrait Box */}
@@ -546,23 +626,31 @@ export const CharacterManager: React.FC = () => {
                   >
                     {char.avatar_url ? (
                       <>
-                        <img
-                          src={formatImageUrl(char.avatar_url)}
-                          alt="Front Portrait"
+                        <PreviewableImage
+                          src={char.avatar_url}
+                          alt={`${char.name} portrait`}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
-                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-emerald-300 font-semibold px-1.5 py-0.5 rounded border border-emerald-500/30">
+                        <ZoomHint />
+                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-emerald-300 font-semibold px-1.5 py-0.5 rounded border border-emerald-500/30 pointer-events-none">
                           {t("casting.front_portrait")}
                         </div>
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
+                        <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1 pointer-events-none">
                           <button
                             type="button"
-                            onClick={() => openSheetModal(char, 'portrait')}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                            onClick={(e) => { e.stopPropagation(); openPreview(char.avatar_url); }}
+                            className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                          >
+                            大图
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openSheetModal(char, 'portrait'); }}
+                            className="pointer-events-auto bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
                           >
                             {t("casting.ai_regenerate")}
                           </button>
-                          <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
+                          <label className="pointer-events-auto cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
                             <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
@@ -608,23 +696,31 @@ export const CharacterManager: React.FC = () => {
                   >
                     {char.turnaround_url ? (
                       <>
-                        <img
-                          src={formatImageUrl(char.turnaround_url)}
-                          alt="Turnaround Sheet"
+                        <PreviewableImage
+                          src={char.turnaround_url}
+                          alt={`${char.name} turnaround`}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
-                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-indigo-300 font-semibold px-1.5 py-0.5 rounded border border-indigo-500/30">
+                        <ZoomHint />
+                        <div className="absolute top-1 left-1 bg-black/80 backdrop-blur-sm text-[9px] text-indigo-300 font-semibold px-1.5 py-0.5 rounded border border-indigo-500/30 pointer-events-none">
                           {t("casting.turnaround_sheet")}
                         </div>
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2">
+                        <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1 pointer-events-none">
                           <button
                             type="button"
-                            onClick={() => openSheetModal(char, 'turnaround')}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                            onClick={(e) => { e.stopPropagation(); openPreview(char.turnaround_url); }}
+                            className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
+                          >
+                            大图
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openSheetModal(char, 'turnaround'); }}
+                            className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium px-2 py-1 rounded shadow"
                           >
                             {t("casting.ai_regenerate")}
                           </button>
-                          <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
+                          <label className="pointer-events-auto cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2 py-1 rounded shadow flex items-center gap-1">
                             <Upload size={10} /> {t("casting.upload_local")}
                             <input
                               type="file"
@@ -764,7 +860,7 @@ export const CharacterManager: React.FC = () => {
                     <span className="text-xs text-emerald-400 font-semibold">{t('characters.upload_portrait')}</span>
                     {editingChar.avatar_url ? (
                       <div className="w-full h-24 rounded overflow-hidden relative border border-emerald-500/40">
-                        <img src={formatImageUrl(editingChar.avatar_url)} alt="Portrait" className="w-full h-full object-cover" />
+                        <PreviewableImage src={editingChar.avatar_url} alt="Portrait" className="w-full h-full object-cover" />
                       </div>
                     ) : (
                       <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
@@ -789,7 +885,7 @@ export const CharacterManager: React.FC = () => {
                     <span className="text-xs text-indigo-400 font-semibold">{t('characters.upload_turnaround')}</span>
                     {editingChar.turnaround_url ? (
                       <div className="w-full h-24 rounded overflow-hidden relative border border-indigo-500/40">
-                        <img src={formatImageUrl(editingChar.turnaround_url)} alt="Turnaround" className="w-full h-full object-cover" />
+                        <PreviewableImage src={editingChar.turnaround_url} alt="Turnaround" className="w-full h-full object-cover" />
                       </div>
                     ) : (
                       <div className="w-full h-24 rounded border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 text-xs">
@@ -946,8 +1042,8 @@ export const CharacterManager: React.FC = () => {
 
                 {refImageUrl ? (
                   <div className="flex items-center gap-4 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
-                    <img
-                      src={formatImageUrl(refImageUrl)}
+                    <PreviewableImage
+                      src={refImageUrl}
                       alt="Reference Portrait"
                       className="w-16 h-16 rounded-lg object-cover border border-emerald-500/50 shadow"
                     />
@@ -1083,25 +1179,43 @@ export const CharacterManager: React.FC = () => {
                 {/* Image Output Display */}
                 {generatedImageUrl && (
                   <div className="mt-6 w-full flex flex-col items-center space-y-4">
-                    <div className="relative rounded-xl overflow-hidden border border-indigo-500/40 bg-black/60 max-h-80 shadow-2xl">
-                      <img src={formatImageUrl(generatedImageUrl)} alt="Generated Asset" className="max-h-80 object-contain" />
+                    <div className="relative rounded-xl overflow-hidden border border-indigo-500/40 bg-black/60 max-h-80 shadow-2xl group">
+                      <PreviewableImage src={generatedImageUrl} alt="Generated Asset" className="max-h-80 object-contain" />
+                      <ZoomHint />
                     </div>
 
-                    <div className="flex gap-4">
-                      <button
-                        type="button"
-                        onClick={() => saveAssetToCharacter('turnaround')}
-                        className="bg-indigo-900/60 hover:bg-indigo-600 text-indigo-100 hover:text-white px-4 py-2 rounded-lg text-xs font-semibold border border-indigo-500/40 flex items-center gap-1.5 transition-all"
-                      >
-                        <CheckCircle size={14} /> {t('characters.save_as_turnaround')}
-                      </button>
-
+                    <div className="flex flex-wrap gap-2 justify-center">
                       <button
                         type="button"
                         onClick={() => saveAssetToCharacter('avatar')}
-                        className="bg-emerald-900/60 hover:bg-emerald-600 text-emerald-100 hover:text-white px-4 py-2 rounded-lg text-xs font-semibold border border-emerald-500/40 flex items-center gap-1.5 transition-all"
+                        className="bg-emerald-900/60 hover:bg-emerald-600 text-emerald-100 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold border border-emerald-500/40 flex items-center gap-1.5 transition-all"
+                        title="覆盖当前版本立绘"
                       >
-                        <CheckCircle size={14} /> {t('characters.save_as_avatar')}
+                        <CheckCircle size={14} /> 保存立绘·本版
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveAssetToCharacter('avatar', { newVersion: true })}
+                        className="bg-amber-900/50 hover:bg-amber-700 text-amber-100 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold border border-amber-500/40 flex items-center gap-1.5 transition-all"
+                        title="新建版本并保存为立绘"
+                      >
+                        <CheckCircle size={14} /> 立绘·新版
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveAssetToCharacter('turnaround')}
+                        className="bg-indigo-900/60 hover:bg-indigo-600 text-indigo-100 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold border border-indigo-500/40 flex items-center gap-1.5 transition-all"
+                        title="覆盖当前版本三视图"
+                      >
+                        <CheckCircle size={14} /> 三视图·本版
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveAssetToCharacter('turnaround', { newVersion: true })}
+                        className="bg-amber-900/50 hover:bg-amber-700 text-amber-100 hover:text-white px-3 py-2 rounded-lg text-xs font-semibold border border-amber-500/40 flex items-center gap-1.5 transition-all"
+                        title="新建版本并保存为三视图"
+                      >
+                        <CheckCircle size={14} /> 三视图·新版
                       </button>
                     </div>
                   </div>
@@ -1111,6 +1225,8 @@ export const CharacterManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      {imageLightbox}
     </div>
   );
 };

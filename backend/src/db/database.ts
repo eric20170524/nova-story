@@ -187,6 +187,121 @@ const migrations: Migration[] = [
           ON coverage_shot(coverage_group_id, slot);
       `);
     }
+  },
+  {
+    version: '004_scene_versions',
+    up: async (database) => {
+      await ensureColumns(database, 'scene', {
+        active_version: 'INTEGER DEFAULT 1'
+      });
+
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS scene_version (
+          id INTEGER PRIMARY KEY,
+          scene_id INTEGER NOT NULL,
+          version INTEGER NOT NULL,
+          label VARCHAR(100),
+          visual_prompt TEXT,
+          audio_prompt TEXT,
+          dialogue TEXT,
+          duration REAL DEFAULT 3.0,
+          shot_type VARCHAR(50),
+          camera_movement VARCHAR(50),
+          camera_angle VARCHAR(50),
+          negative_prompt TEXT,
+          asset_status VARCHAR(50) DEFAULT 'idle',
+          task_id VARCHAR(255),
+          asset_url VARCHAR(500),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(scene_id, version),
+          FOREIGN KEY(scene_id) REFERENCES scene(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_scene_version_scene
+          ON scene_version(scene_id, version);
+      `);
+
+      // Backfill v1 from existing scene rows (idempotent)
+      const scenes = await database.all('SELECT * FROM scene');
+      for (const scene of scenes as any[]) {
+        const existing = await database.get(
+          'SELECT id FROM scene_version WHERE scene_id = ? AND version = 1',
+          scene.id
+        );
+        if (existing) continue;
+        await database.run(
+          `INSERT INTO scene_version (
+            scene_id, version, label, visual_prompt, audio_prompt, dialogue, duration,
+            shot_type, camera_movement, camera_angle, negative_prompt,
+            asset_status, task_id, asset_url
+          ) VALUES (?, 1, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          scene.id,
+          scene.visual_prompt ?? null,
+          scene.audio_prompt ?? null,
+          scene.dialogue ?? null,
+          scene.duration ?? 3.0,
+          scene.shot_type ?? null,
+          scene.camera_movement ?? null,
+          scene.camera_angle ?? null,
+          scene.negative_prompt ?? null,
+          scene.asset_status || 'idle',
+          scene.task_id ?? null,
+          scene.asset_url ?? null
+        );
+        if (scene.active_version == null) {
+          await database.run('UPDATE scene SET active_version = 1 WHERE id = ?', scene.id);
+        }
+      }
+    }
+  },
+  {
+    version: '005_character_versions',
+    up: async (database) => {
+      await ensureColumns(database, 'character', {
+        active_version: 'INTEGER DEFAULT 1'
+      });
+
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS character_version (
+          id INTEGER PRIMARY KEY,
+          character_id INTEGER NOT NULL,
+          version INTEGER NOT NULL,
+          label VARCHAR(100),
+          description TEXT,
+          visual_tags TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(character_id, version),
+          FOREIGN KEY(character_id) REFERENCES character(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_character_version_char
+          ON character_version(character_id, version);
+      `);
+
+      const chars = await database.all('SELECT * FROM character');
+      for (const char of chars as any[]) {
+        const existing = await database.get(
+          'SELECT id FROM character_version WHERE character_id = ? AND version = 1',
+          char.id
+        );
+        if (existing) continue;
+        const tagsStr =
+          typeof char.visual_tags === 'string'
+            ? char.visual_tags
+            : JSON.stringify(char.visual_tags || {});
+        await database.run(
+          `INSERT INTO character_version (character_id, version, label, description, visual_tags)
+           VALUES (?, 1, 'v1', ?, ?)`,
+          char.id,
+          char.description ?? null,
+          tagsStr
+        );
+        if (char.active_version == null) {
+          await database.run(
+            'UPDATE character SET active_version = 1 WHERE id = ?',
+            char.id
+          );
+        }
+      }
+    }
   }
 ];
 

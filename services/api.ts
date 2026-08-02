@@ -199,6 +199,16 @@ class ApiService {
   createCharacter = (data: any) => this.request<any>('/characters/', { method: 'POST', body: data });
   updateCharacter = (id: number, data: any) => this.request<any>(`/characters/${id}`, { method: 'PUT', body: data });
   deleteCharacter = (id: number) => this.request(`/characters/${id}`, { method: 'DELETE' });
+  listCharacterVersions = (id: number) =>
+    this.request<{ character_id: number; active_version: number; versions: any[] }>(
+      `/characters/${id}/versions`
+    );
+  createCharacterVersion = (
+    id: number,
+    body: { from_version?: number; clear_assets?: boolean; label?: string; activate?: boolean } = {}
+  ) => this.request<any>(`/characters/${id}/versions`, { method: 'POST', body });
+  activateCharacterVersion = (id: number, version: number) =>
+    this.request<any>(`/characters/${id}/versions/${version}/activate`, { method: 'POST' });
   extractCharacters = (chapterId: string) => this.request<any[]>('/characters/extract', { method: 'POST', body: { chapter_id: chapterId } });
   buildCharacterPrompt = (
     characterId: number, 
@@ -285,6 +295,17 @@ class ApiService {
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
   generateTimeline = (chapterId: string, mode: string = 'narrative') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
   updateScene = (sceneId: number | string, data: any) => this.request<any>(`/timeline/scene/${sceneId}`, { method: 'PUT', body: data });
+
+  listSceneVersions = (sceneId: number | string) =>
+    this.request<{ scene_id: number; active_version: number; versions: any[] }>(
+      `/timeline/scene/${sceneId}/versions`
+    );
+  createSceneVersion = (
+    sceneId: number | string,
+    body: { from_version?: number; clear_asset?: boolean; label?: string; activate?: boolean } = {}
+  ) => this.request<any>(`/timeline/scene/${sceneId}/versions`, { method: 'POST', body });
+  activateSceneVersion = (sceneId: number | string, version: number) =>
+    this.request<any>(`/timeline/scene/${sceneId}/versions/${version}/activate`, { method: 'POST' });
   
   // Single-Scene 9-Shot Coverage
   generateSceneCoverage = (sceneId: number | string) => this.request<any>(`/scenes/${sceneId}/coverage`, { method: 'POST' });
@@ -303,7 +324,8 @@ class ApiService {
     const payload: any = {
         workflow: workflowData,
         scene_id: sceneId,
-        mode: workflowData.mode || 'standard'
+        mode: workflowData.mode || 'standard',
+        new_version: Boolean(workflowData.new_version || workflowData.create_new_version)
     };
     if (workflowData.generation_params) {
         payload.generation_params = workflowData.generation_params;

@@ -9,6 +9,15 @@ import { LLMService } from '../services/llm';
 import { getGeneratedDirectory } from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
 import { buildCharacterPromptHeader } from '../services/image_generation_policy';
+import {
+  activateCharacterVersion,
+  annotateCharacterWithVersions,
+  annotateCharactersWithVersions,
+  createCharacterVersion,
+  ensureCharacterVersionBaseline,
+  listCharacterVersions,
+  syncActiveCharacterVersion
+} from '../services/character_versions';
 
 // Dummy implementation of current_user auth
 const mockGetCurrentUser = (request: any) => ({
@@ -45,7 +54,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const rows = await db.all(sql, ...params);
-    return rows.map(serializeCharacter);
+    return annotateCharactersWithVersions(rows || [], serializeCharacter);
   });
 
   app.post('/extract', async (request, reply) => {
@@ -184,7 +193,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (!char) {
       return reply.status(404).send({ detail: 'Character not found' });
     }
-    return serializeCharacter(char);
+    return annotateCharacterWithVersions(char, serializeCharacter);
   });
 
   app.post('/', async (request, reply) => {
@@ -214,8 +223,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     );
 
     const newChar = await db.get('SELECT * FROM character WHERE id = ?', result.lastID);
-
-    return serializeCharacter(newChar);
+    if (newChar) {
+      await ensureCharacterVersionBaseline(newChar.id);
+    }
+    return annotateCharacterWithVersions(newChar, serializeCharacter);
   });
 
   app.put('/:id', async (request, reply) => {
@@ -270,10 +281,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (updateFields.length > 0) {
       params.push(id);
       await db.run(`UPDATE character SET ${updateFields.join(', ')} WHERE id = ?`, ...params);
+      await syncActiveCharacterVersion(id);
     }
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    return serializeCharacter(updatedChar);
+    return annotateCharacterWithVersions(updatedChar, serializeCharacter);
   });
 
   app.delete('/:id', async (request, reply) => {
@@ -522,8 +534,65 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     tags.assets = assets;
     await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
+    await syncActiveCharacterVersion(id);
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    return serializeCharacter(updatedChar);
+    return annotateCharacterWithVersions(updatedChar, serializeCharacter);
+  });
+
+  // --- Character visual versions (description + tags + assets) ---
+
+  app.get('/:id/versions', async (request, reply) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(request.params);
+    const char = await db.get('SELECT * FROM character WHERE id = ?', id);
+    if (!char) return reply.status(404).send({ detail: 'Character not found' });
+    const versions = await listCharacterVersions(id);
+    return {
+      character_id: id,
+      active_version: Number(char.active_version || 1),
+      versions
+    };
+  });
+
+  app.post('/:id/versions', async (request, reply) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(request.params);
+    const body = z
+      .object({
+        from_version: z.coerce.number().optional().nullable(),
+        clear_assets: z.boolean().optional().default(true),
+        label: z.string().optional().nullable(),
+        activate: z.boolean().optional().default(true)
+      })
+      .parse(request.body || {});
+
+    const char = await db.get('SELECT * FROM character WHERE id = ?', id);
+    if (!char) return reply.status(404).send({ detail: 'Character not found' });
+
+    const created = await createCharacterVersion(id, {
+      fromVersion: body.from_version,
+      clearAssets: body.clear_assets,
+      label: body.label,
+      activate: body.activate
+    });
+    if (!created) return reply.status(500).send({ detail: 'Failed to create character version' });
+
+    const annotated = await annotateCharacterWithVersions(
+      await db.get('SELECT * FROM character WHERE id = ?', id),
+      serializeCharacter
+    );
+    return {
+      character: annotated,
+      version: created.version,
+      versions: annotated.versions
+    };
+  });
+
+  app.post('/:id/versions/:version/activate', async (request, reply) => {
+    const params = z
+      .object({ id: z.coerce.number(), version: z.coerce.number() })
+      .parse(request.params);
+    const char = await activateCharacterVersion(params.id, params.version);
+    if (!char) return reply.status(404).send({ detail: 'Version not found' });
+    return annotateCharacterWithVersions(char, serializeCharacter);
   });
 };

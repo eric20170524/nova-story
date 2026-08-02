@@ -9,6 +9,7 @@ import { ComfyUIService } from '../services/ai/comfyui_service';
 import { SettingsManager } from '../core/settings_manager';
 import Redis from 'ioredis';
 import { AssetTaskStore } from '../services/task_store';
+import { createSceneVersion, ensureSceneVersionBaseline, syncActiveVersionAssets } from '../services/scene_versions';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -18,12 +19,51 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'})`);
     const taskId = randomUUID();
 
+    // Optional: fork a new scene version before generating (A/B test slot)
+    const asNewVersion = Boolean(
+      req.new_version
+      || req.workflow?.new_version
+      || req.workflow?.create_new_version
+    );
+    if (req.scene_id < 90000000) {
+      // Skip synthetic character scene ids (99999xxx)
+      if (asNewVersion) {
+        await createSceneVersion(req.scene_id, {
+          clearAsset: true,
+          activate: true,
+          label: null
+        });
+      } else {
+        await ensureSceneVersionBaseline(req.scene_id);
+      }
+      await db.run(
+        'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
+        'generating',
+        taskId,
+        req.scene_id
+      );
+      await syncActiveVersionAssets(req.scene_id, {
+        asset_status: 'generating',
+        task_id: taskId,
+        asset_url: null
+      });
+    }
+
     // Fire and forget background task
     GenerationService.generateAssets(taskId, req.workflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
       logger.error(`Background task execution failed: ${err}`);
     });
 
-    return { task_id: taskId, status: "processing" };
+    const scene = req.scene_id < 90000000
+      ? await db.get('SELECT id, active_version FROM scene WHERE id = ?', req.scene_id)
+      : null;
+
+    return {
+      task_id: taskId,
+      status: "processing",
+      active_version: scene?.active_version ?? null,
+      new_version: asNewVersion
+    };
   });
 
   app.get('/status/:task_id', async (request, reply) => {

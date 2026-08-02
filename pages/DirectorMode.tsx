@@ -246,7 +246,37 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
-  const generateAsset = async (sceneId: number | string) => {
+  const handleActivateVersion = async (sceneId: number | string, version: number) => {
+    if (typeof sceneId !== 'number') return;
+    try {
+      const updated = await api.activateSceneVersion(sceneId, version);
+      setTimeline((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...updated } : s)));
+      showToast(`已切换到 v${version}`, 'success');
+    } catch (e: any) {
+      showToast(e.message || '切换版本失败', 'error');
+    }
+  };
+
+  const handleCreateVersion = async (sceneId: number | string, clearAsset = true) => {
+    if (typeof sceneId !== 'number') return;
+    try {
+      const res = await api.createSceneVersion(sceneId, {
+        clear_asset: clearAsset,
+        activate: true
+      });
+      if (res?.scene) {
+        setTimeline((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...res.scene } : s)));
+      }
+      showToast(`已新建 ${res?.version?.label || '版本'}`, 'success');
+    } catch (e: any) {
+      showToast(e.message || '新建版本失败', 'error');
+    }
+  };
+
+  const generateAsset = async (
+    sceneId: number | string,
+    options: { newVersion?: boolean } = {}
+  ) => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
 
@@ -379,6 +409,7 @@ export const DirectorMode: React.FC = () => {
           // Close single: mild identity lock. Story frames: no ref / denoise 1 (txt2img).
           denoise: referenceImageUrl ? 0.62 : 1.0,
           gen_type: 'scene',
+          new_version: Boolean(options.newVersion),
           generation_params: showAdvancedParams ? {
              steps: genSteps,
              cfg: genCfg,
@@ -389,8 +420,15 @@ export const DirectorMode: React.FC = () => {
       
       const response = await api.generateAsset(payload, sceneId);
       const taskId = response.task_id;
+      const activeVer = response.active_version;
 
-      setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, task_id: taskId } : s));
+      setTimeline(prev => prev.map(s => s.id === sceneId ? {
+        ...s,
+        task_id: taskId,
+        asset_status: 'generating',
+        asset_url: options.newVersion ? undefined : s.asset_url,
+        active_version: activeVer ?? s.active_version
+      } : s));
 
       return new Promise<void>((resolve) => {
           if (taskId === 'mock-task-999') {
@@ -408,9 +446,53 @@ export const DirectorMode: React.FC = () => {
               const data: StreamMessage = JSON.parse(event.data);
               
               if (data.status === 'completed' && data.image_url) {
-                setTimeline(prev => prev.map(s => 
-                  s.id === sceneId ? { ...s, asset_status: 'completed', asset_url: data.image_url } : s
-                ));
+                setTimeline(prev => prev.map(s => {
+                  if (s.id !== sceneId) return s;
+                  const versions = (s.versions || []).map((v) =>
+                    v.version === (s.active_version || 1)
+                      ? { ...v, asset_url: data.image_url, asset_status: 'completed', has_image: true }
+                      : v
+                  );
+                  // Ensure active version appears in list after new_version fork
+                  const active = s.active_version || 1;
+                  if (!versions.some((v) => v.version === active)) {
+                    versions.push({
+                      version: active,
+                      label: `v${active}`,
+                      asset_url: data.image_url,
+                      asset_status: 'completed',
+                      has_image: true
+                    });
+                    versions.sort((a, b) => a.version - b.version);
+                  }
+                  return {
+                    ...s,
+                    asset_status: 'completed',
+                    asset_url: data.image_url,
+                    versions
+                  };
+                }));
+                // Refresh versions from server for accuracy
+                if (typeof sceneId === 'number') {
+                  api.listSceneVersions(sceneId).then((res) => {
+                    setTimeline((prev) => prev.map((s) =>
+                      s.id === sceneId
+                        ? {
+                            ...s,
+                            active_version: res.active_version,
+                            versions: res.versions.map((v: any) => ({
+                              version: v.version,
+                              label: v.label,
+                              asset_status: v.asset_status,
+                              asset_url: v.asset_url,
+                              has_image: Boolean(v.asset_url),
+                              created_at: v.created_at
+                            }))
+                          }
+                        : s
+                    ));
+                  }).catch(() => {});
+                }
                 evtSource.close();
                 activeEvtSourceRef.current = null;
                 resolve();
@@ -542,6 +624,8 @@ export const DirectorMode: React.FC = () => {
         onGenerateAsset={generateAsset}
         onUpdateScene={handleUpdateScene}
         onRefreshTimeline={() => loadTimeline(selectedChapterId)}
+        onActivateVersion={handleActivateVersion}
+        onCreateVersion={handleCreateVersion}
       />
       
       <DirectorRightPanel

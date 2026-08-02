@@ -4,6 +4,15 @@ import { z } from 'zod';
 import { LLMService } from '../services/llm';
 import { SettingsManager } from '../core/settings_manager';
 import { parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
+import {
+  activateSceneVersion,
+  annotateScenesWithVersions,
+  annotateSceneWithVersions,
+  createSceneVersion,
+  ensureSceneVersionBaseline,
+  listSceneVersions,
+  syncActiveVersionFromScene
+} from '../services/scene_versions';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:chapter_id', async (request, reply) => {
@@ -16,11 +25,12 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const scenes = await db.all('SELECT * FROM scene WHERE chapter_id = ? ORDER BY `index` ASC', chapter_id);
+    const timeline = await annotateScenesWithVersions(scenes || []);
 
     return {
       chapter_id: chapter.id,
       storyboard_mode: 'narrative',
-      timeline: scenes
+      timeline
     };
   });
 
@@ -146,7 +156,10 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
          item.negative_prompt || null);
 
          const newScene = await db.get('SELECT * FROM scene WHERE id = ?', result.lastID);
-         newScenes.push(newScene);
+         if (newScene) {
+           await ensureSceneVersionBaseline(newScene.id);
+           newScenes.push(await annotateSceneWithVersions(newScene));
+         }
       }
 
       await db.run('COMMIT');
@@ -198,9 +211,65 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
     if (updateFields.length > 0) {
       params.push(scene_id);
       await db.run(`UPDATE scene SET ${updateFields.join(', ')} WHERE id = ?`, ...params);
+      await syncActiveVersionFromScene(scene_id);
     }
 
     const updatedScene = await db.get('SELECT * FROM scene WHERE id = ?', scene_id);
-    return updatedScene;
+    return annotateSceneWithVersions(updatedScene);
+  });
+
+  // --- Scene versions (A/B test copy + images) ---
+
+  app.get('/scene/:scene_id/versions', async (request, reply) => {
+    const { scene_id } = z.object({ scene_id: z.coerce.number() }).parse(request.params);
+    const scene = await db.get('SELECT * FROM scene WHERE id = ?', scene_id);
+    if (!scene) return reply.status(404).send({ detail: 'Scene not found' });
+    const versions = await listSceneVersions(scene_id);
+    return {
+      scene_id,
+      active_version: Number(scene.active_version || 1),
+      versions
+    };
+  });
+
+  app.post('/scene/:scene_id/versions', async (request, reply) => {
+    const { scene_id } = z.object({ scene_id: z.coerce.number() }).parse(request.params);
+    const body = z
+      .object({
+        from_version: z.coerce.number().optional().nullable(),
+        clear_asset: z.boolean().optional().default(true),
+        label: z.string().optional().nullable(),
+        activate: z.boolean().optional().default(true)
+      })
+      .parse(request.body || {});
+
+    const scene = await db.get('SELECT * FROM scene WHERE id = ?', scene_id);
+    if (!scene) return reply.status(404).send({ detail: 'Scene not found' });
+
+    const created = await createSceneVersion(scene_id, {
+      fromVersion: body.from_version,
+      clearAsset: body.clear_asset,
+      label: body.label,
+      activate: body.activate
+    });
+    if (!created) return reply.status(500).send({ detail: 'Failed to create version' });
+
+    const annotated = await annotateSceneWithVersions(
+      await db.get('SELECT * FROM scene WHERE id = ?', scene_id)
+    );
+    return {
+      scene: annotated,
+      version: created.version,
+      versions: annotated.versions
+    };
+  });
+
+  app.post('/scene/:scene_id/versions/:version/activate', async (request, reply) => {
+    const params = z
+      .object({ scene_id: z.coerce.number(), version: z.coerce.number() })
+      .parse(request.params);
+    const scene = await activateSceneVersion(params.scene_id, params.version);
+    if (!scene) return reply.status(404).send({ detail: 'Version not found' });
+    return annotateSceneWithVersions(scene);
   });
 };
