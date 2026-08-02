@@ -40,6 +40,8 @@ export interface LoraResolveInput {
   /** NSFW LoRA config (advanced.pony_nsfw_lora / flux_nsfw_lora) */
   nsfwLora?: string | null;
   nsfwLoraStrength?: number;
+  /** Visual style preset (affects whether Western NSFW LoRAs like Incase are used) */
+  stylePreset?: string | null;
   /** When true, missing install_path still accepts configured names (remote ComfyUI) */
   allowRemoteUnverified?: boolean;
 }
@@ -108,38 +110,47 @@ const TRIGGER_BY_PATTERN: Array<{ pattern: RegExp; trigger: string }> = [
   { pattern: /incase/i, trigger: '' } // Incase is often triggerless
 ];
 
+/** Shared East-Asian feminine beauty anchors (Pony tags + FLUX phrases). */
+export const EAST_ASIAN_FEMALE_BEAUTY_PONY =
+  'beautiful East Asian woman, chinese beauty, japanese anime beauty, delicate feminine face, soft jawline, large expressive eyes, clear skin, pretty face, female, woman';
+export const EAST_ASIAN_FEMALE_BEAUTY_FLUX =
+  'beautiful young East Asian woman, Chinese and Japanese beauty aesthetics, delicate feminine face, soft facial contour, clear skin, elegant female features';
+export const EAST_ASIAN_FEMALE_NEGATIVE =
+  'western face, caucasian, european face, male, man, boy, androgynous, masculine face, ugly face, deformed face, asymmetrical eyes, cross-eyed, extra eyes, beard, mustache';
+
 const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   ancient_fantasy: {
-    pony: 'ancient chinese xianxia, guofeng, East Asian features, ethereal silk, volumetric light',
-    flux: 'ancient Chinese xianxia fantasy, East Asian facial features, guofeng national style, ethereal silk textures, volumetric god rays'
+    pony: `ancient chinese xianxia, guofeng national style, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, ethereal silk, volumetric light, semi-realistic digital painting`,
+    flux: `ancient Chinese xianxia fantasy, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, guofeng national style, ethereal silk textures, volumetric god rays`
   },
   xianxia_immortal: {
-    pony: 'xianxia immortal, cool jade tones, sheer fabric light, East Asian features, ethereal atmosphere',
-    flux: 'xianxia immortal aesthetic, East Asian beauty, cool jade and mist tones, translucent fabric lighting, serene atmosphere'
+    pony: `xianxia immortal aesthetic, cool jade tones, sheer fabric light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, ethereal atmosphere, polished semi-realistic illustration`,
+    flux: `xianxia immortal aesthetic, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, cool jade and mist tones, translucent fabric lighting, serene atmosphere`
   },
   ethereal_glow: {
-    pony: 'ethereal bloom, soft glow, luminous skin, light particles, dreamy backlighting',
-    flux: 'ethereal bloom and soft glow, luminous skin highlights, delicate light particles, dreamy backlighting'
+    pony: `ethereal bloom, soft glow, luminous skin, light particles, dreamy backlighting, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
+    flux: `ethereal bloom and soft glow, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, luminous skin highlights, delicate light particles, dreamy backlighting`
   },
   guoman_painterly: {
-    pony: 'chinese manhua painterly, thick brushwork, strong rim light, East Asian features',
-    flux: 'Chinese manhua thick painterly style, East Asian features, rich digital brushwork, dramatic rim light'
+    pony: `chinese manhua painterly, thick brushwork, strong rim light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
+    flux: `Chinese manhua thick painterly style, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, rich digital brushwork, dramatic rim light`
   },
   sensual_gufeng: {
-    pony: 'alluring ancient chinese fantasy, sheer fabric rim light, luxurious silk, intimate atmosphere',
-    flux: 'alluring ancient Chinese fantasy beauty, sheer fabric rim light, luxurious silk, intimate atmospheric haze'
+    // User-preferred “魅惑古风” look — keep as primary for 琼明-class stories
+    pony: `alluring ancient chinese guofeng fantasy illustration, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
+    flux: `alluring ancient Chinese guofeng fantasy beauty, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, sheer fabric rim light, luxurious silk, intimate atmospheric haze, cinematic lighting`
   },
   elegant_mature: {
-    pony: 'elegant mature beauty, refined semi-realistic face, sophisticated proportions, cinematic key light',
-    flux: 'elegant mature East Asian beauty, refined semi-realistic face, sophisticated proportions, soft cinematic key light'
+    pony: `elegant mature beauty, refined semi-realistic face, sophisticated proportions, cinematic key light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
+    flux: `elegant mature East Asian beauty, refined semi-realistic face, sophisticated proportions, soft cinematic key light, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
   },
   alluring_portrait: {
-    pony: 'alluring portrait, soft beauty lighting, skin highlights, shallow depth of field',
-    flux: 'alluring portrait, soft beauty lighting, subtle skin highlights, shallow depth of field, magazine key visual'
+    pony: `alluring portrait, soft beauty lighting, skin highlights, shallow depth of field, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
+    flux: `alluring portrait, soft beauty lighting, subtle skin highlights, shallow depth of field, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
   },
   anime: {
-    pony: 'source_anime, cel shaded, clean lines, vibrant colors',
-    flux: 'anime illustration style, clean lines, vibrant colors, East Asian anime features'
+    pony: `source_anime, cel shaded, clean lines, vibrant colors, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
+    flux: `anime illustration style, clean lines, vibrant colors, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
   },
   cinematic_photo: {
     pony: 'cinematic lighting, shallow depth of field, film still',
@@ -348,6 +359,10 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
     });
   }
 
+  const stylePreset = String(input.stylePreset || '').toLowerCase();
+  const isGuofengFamily =
+    /gufeng|xianxia|ancient_fantasy|guoman|ethereal|sensual|immortal|guofeng/.test(stylePreset);
+
   if (input.nsfwEnabled) {
     const nsfwName = resolveNsfwLora(input.modelFamily, {
       installPath: input.installPath,
@@ -373,11 +388,27 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
           finalNsfw = ''; // skip duplicate
         }
       }
+
+      // Incase is a Western/comic NSFW style LoRA — it fights guofeng/xianxia East-Asian faces.
+      // For 国风/仙侠 presets, rely on uncensored Pony base + explicit tags instead of Incase.
+      if (
+        finalNsfw
+        && input.modelFamily === 'pony'
+        && isGuofengFamily
+        && /incase/i.test(finalNsfw)
+      ) {
+        finalNsfw = '';
+      }
+
       if (finalNsfw) {
+        let strength = Number(input.nsfwLoraStrength ?? defaultNsfwStrength);
+        if (isGuofengFamily && input.modelFamily === 'pony') {
+          strength = Math.min(strength, 0.4);
+        }
         push({
           role: 'nsfw',
           name: finalNsfw,
-          strength: Number(input.nsfwLoraStrength ?? defaultNsfwStrength)
+          strength
         });
       }
     }
@@ -417,11 +448,26 @@ export const buildPromptEnhancement = (options: {
     }
   }
 
-  if (modelFamily === 'pony') {
-    // Workflow template already has score_* for pony; only add if prompt is standalone
-    if (!/(score_9|score_8_up)/i.test(existingPrompt) && !lower.includes('score_9')) {
-      // Keep light — compile step may still prepend workflow template
+  // Always push East-Asian feminine beauty unless the shot is clearly male-only or environment-only
+  const looksLikeMaleOnly =
+    /\b1boy\b|\b2boys\b|\bmen only\b/i.test(existingPrompt)
+    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|female/i.test(existingPrompt);
+  const looksLikeEnvironmentOnly =
+    /\bextreme long shot\b|\bestablishing\b|\bcloud sea\b|\bempty (palace|hall|room)\b/i.test(existingPrompt)
+    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|portrait|goddess|immortal/i.test(existingPrompt);
+
+  if (!looksLikeMaleOnly && !looksLikeEnvironmentOnly) {
+    if (modelFamily === 'pony') {
+      if (!/(east asian|chinese beauty|japanese anime beauty)/i.test(existingPrompt)) {
+        suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_PONY);
+      }
+    } else if (!/(east asian|chinese|japanese|korean)/i.test(existingPrompt)) {
+      suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_FLUX);
     }
+  }
+  negativeParts.push(EAST_ASIAN_FEMALE_NEGATIVE);
+
+  if (modelFamily === 'pony') {
     if (nsfwEnabled) {
       // Unlock adult capability without forcing nudity on establishing / clothed shots
       const intimateCue =
@@ -446,11 +492,6 @@ export const buildPromptEnhancement = (options: {
     }
   } else {
     // FLUX
-    if (
-      !/(east asian|chinese|japanese|korean|asian|guofeng|xianxia)/i.test(existingPrompt)
-    ) {
-      suffixParts.push('East Asian facial features, soft facial contour, East Asian beauty');
-    }
     if (nsfwEnabled) {
       suffixParts.push('detailed skin texture, natural anatomy');
     } else {
@@ -458,13 +499,12 @@ export const buildPromptEnhancement = (options: {
         'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act'
       );
     }
-    if (!/(western face|caucasian)/i.test(existingPrompt)) {
-      negativeParts.push('western face, caucasian');
-    }
   }
 
   // Shared quality / safety
-  negativeParts.push('low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota');
+  negativeParts.push(
+    'low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota, blurry face, mutated hands'
+  );
 
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
   const booster = presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined;
@@ -541,6 +581,9 @@ export const resolveGenerationPlan = (options: {
   const characterLora =
     workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
 
+  const stylePreset =
+    workflowData?.style_preset || workflowData?.style || workflowData?.visual_style || null;
+
   const loras = resolveLoraStack({
     modelFamily,
     nsfwEnabled,
@@ -551,11 +594,9 @@ export const resolveGenerationPlan = (options: {
     styleLoraStrength: styleStrength,
     nsfwLora,
     nsfwLoraStrength: advanced.nsfw_lora_strength,
+    stylePreset,
     allowRemoteUnverified: !comfy.install_path
   });
-
-  const stylePreset =
-    workflowData?.style_preset || workflowData?.style || workflowData?.visual_style || null;
 
   const enhancement = buildPromptEnhancement({
     modelFamily,
@@ -602,20 +643,20 @@ export const buildCharacterPromptHeader = (
   if (modelFamily === 'pony') {
     const base =
       genType === 'turnaround'
-        ? 'score_9, score_8_up, score_7_up, character turnaround sheet, full body model sheet, multi-view layout, front view, side view, back view, 3 views, aligned character turnaround, consistent character design'
-        : 'score_9, score_8_up, score_7_up, portrait, upper body, front view, masterpiece, detailed face and eyes';
+        ? `score_9, score_8_up, score_7_up, source_anime, character turnaround sheet, full body model sheet, multi-view layout, front view, side view, back view, 3 views, aligned character turnaround, consistent character design, same face across all views, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`
+        : `score_9, score_8_up, score_7_up, source_anime, portrait, upper body, front view, masterpiece, detailed face and eyes, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`;
+    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
     const neg = nsfwEnabled
-      ? 'score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli'
-      : 'score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, nsfw, nude, child, loli';
+      ? negCore
+      : `${negCore}, nsfw, nude`;
     return { prefix: base, negative: neg };
   }
 
   const base =
     genType === 'turnaround'
-      ? 'full body character turnaround sheet, split view layout, front view, side view, back view, complete 3-view character model sheet, character reference sheet, consistent character design from all angles, clean studio white background, masterpiece quality, East Asian facial features'
-      : 'high quality character portrait, front view, detailed face and eyes, clean studio background, East Asian facial features';
-  const neg = nsfwEnabled
-    ? 'low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, western face, child'
-    : 'low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, western face, nsfw, nude, child';
+      ? `full body character turnaround sheet, split view layout, front view, side view, back view, complete 3-view character model sheet, character reference sheet, consistent character design from all angles, same face across views, clean studio white background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+      : `high quality character portrait, front view, detailed face and eyes, clean studio background, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`;
+  const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, child`;
+  const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
   return { prefix: base, negative: neg };
 };

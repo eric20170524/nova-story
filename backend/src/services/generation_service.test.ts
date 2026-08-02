@@ -160,7 +160,7 @@ test('preserves main FLUX prompt enhancement and discovers a local style LoRA', 
         comfyui: { install_path: installPath, flux_lora_strength: 0.65 }
       }
     );
-    assert.match(compiled["5"].inputs.text, /East Asian facial features/);
+    assert.match(compiled["5"].inputs.text, /East Asian/i);
     const loraEntry = Object.entries(compiled).find(
       ([, node]: [string, any]) => node.inputs?.lora_name === 'flux_asian_style.safetensors'
     );
@@ -174,7 +174,7 @@ test('preserves main FLUX prompt enhancement and discovers a local style LoRA', 
   }
 });
 
-test('NSFW ON stacks style + adult LoRAs and wires both into Pony workflow', async () => {
+test('NSFW ON stacks style + adult LoRAs for non-guofeng styles', async () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-nsfw-stack-'));
   const loraDirectory = path.join(installPath, 'models', 'loras');
   fs.mkdirSync(loraDirectory, { recursive: true });
@@ -185,9 +185,9 @@ test('NSFW ON stacks style + adult LoRAs and wires both into Pony workflow', asy
     const compiled = await compileComfyWorkflow(
       {
         ...ponyWorkflow(),
-        // pass style via workflowData for preset boost
+        style_preset: 'anime'
       },
-      'cloud sea jade palace establishing shot',
+      '1girl, cyberpunk night city',
       'standard',
       {},
       {
@@ -215,6 +215,89 @@ test('NSFW ON stacks style + adult LoRAs and wires both into Pony workflow', asy
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
+});
+
+test('guofeng/xianxia styles skip Incase LoRA to protect East Asian faces', async () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-guofeng-'));
+  const loraDirectory = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDirectory, { recursive: true });
+  fs.writeFileSync(path.join(loraDirectory, 'Pony_DetailV2.0.safetensors'), '');
+  fs.writeFileSync(path.join(loraDirectory, 'Incase_Style_PonyXL.safetensors'), '');
+
+  try {
+    const compiled = await compileComfyWorkflow(
+      { ...ponyWorkflow(), style_preset: 'sensual_gufeng' },
+      '1girl, Lu Jiajing on jade stairs, moon-white dress',
+      'standard',
+      {},
+      {
+        advanced: {
+          nsfw_enabled: true,
+          pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+          nsfw_lora_strength: 0.55
+        },
+        comfyui: {
+          install_path: installPath,
+          pony_lora: 'Pony_DetailV2.0.safetensors',
+          pony_lora_strength: 0.65
+        }
+      }
+    );
+    const loraNames = Object.values(compiled)
+      .filter((node: any) => node.class_type === 'LoraLoader')
+      .map((n: any) => n.inputs.lora_name);
+    assert.deepEqual(loraNames, ['Pony_DetailV2.0.safetensors']);
+    assert.match(compiled['6'].inputs.text, /East Asian|chinese beauty/i);
+    assert.match(compiled['7'].inputs.text, /western face|male/i);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('wires real img2img path when ref_image_url is set for turnaround', async () => {
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      ref_image_url: '/static/generated/avatar_test.png',
+      gen_type: 'turnaround',
+      denoise: 0.55
+    },
+    '1girl, turnaround sheet, same face',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+
+  const loadNode = Object.values(compiled).find(
+    (n: any) => n.class_type === 'LoadImage' && n.inputs?.image === 'avatar_test.png'
+  );
+  const encodeNode = Object.values(compiled).find((n: any) => n.class_type === 'VAEEncode');
+  const scaleNode = Object.values(compiled).find((n: any) => n.class_type === 'ImageScale');
+  assert.ok(loadNode, 'LoadImage for reference');
+  assert.ok(encodeNode, 'VAEEncode for img2img');
+  assert.ok(scaleNode, 'ImageScale for target resolution');
+  assert.equal(compiled['3'].inputs.denoise, 0.55);
+  assert.deepEqual(compiled['3'].inputs.latent_image[1], 0);
+});
+
+test('skips img2img for multi-person story scenes even if ref is passed', async () => {
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      ref_image_url: '/static/generated/avatar_test.png',
+      gen_type: 'scene',
+      denoise: 0.65
+    },
+    '2girls, yuri, embracing on silk couch, story moment',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: true }, comfyui: {} }
+  );
+  assert.equal(
+    Object.values(compiled).some((n: any) => n.class_type === 'VAEEncode'),
+    false
+  );
+  assert.equal(compiled['3'].inputs.denoise, 1);
 });
 
 test('timeline prompt policy mentions NSFW or SFW rules', () => {

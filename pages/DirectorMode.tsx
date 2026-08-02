@@ -336,14 +336,35 @@ export const DirectorMode: React.FC = () => {
       let referenceImageUrl = null;
       let referenceModelType = 'pony';
 
+      // Portrait img2img only for single-character close-ups.
+      // Multi-person / action / wide shots must stay txt2img or the latent collapses to a solo portrait.
       if (projectCharacters.length > 0 && scene.visual_prompt) {
-        for (const char of projectCharacters) {
-          if (isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)) {
-            if (char.turnaround_url || char.avatar_url) {
-              referenceImageUrl = char.turnaround_url || char.avatar_url;
-              referenceModelType = char.model_type || 'pony';
-              break;
-            }
+        const shotTypeLower = (scene.shot_type || '').toLowerCase();
+        const isClose = ['close-up', 'close up', 'portrait', 'medium close', 'extreme close'].some(
+          (k) => shotTypeLower.includes(k)
+        );
+        const isWide = ['wide', 'long shot', 'full body', 'extreme long', 'establishing'].some(
+          (k) => shotTypeLower.includes(k)
+        );
+        const mentioned = projectCharacters.filter((char) =>
+          isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)
+        );
+        const multiFromPrompt = /\b[23]girls?\b|\b[23]boys?\b/i.test(scene.visual_prompt || '');
+        const storyAction =
+          /\b(embrac|kiss|sitting|lying|straddl|between|on bed|couch|yuri|tendril|walking|reaching)\b/i.test(
+            scene.visual_prompt || ''
+          );
+        if (
+          mentioned.length === 1
+          && isClose
+          && !isWide
+          && !multiFromPrompt
+          && !storyAction
+        ) {
+          const char = mentioned[0];
+          if (char.avatar_url || char.turnaround_url) {
+            referenceImageUrl = char.avatar_url || char.turnaround_url;
+            referenceModelType = char.model_type || 'pony';
           }
         }
       }
@@ -355,6 +376,9 @@ export const DirectorMode: React.FC = () => {
           mode: backendAssetMode,
           ref_image_url: referenceImageUrl,
           reference_model_type: referenceModelType,
+          // Close single: mild identity lock. Story frames: no ref / denoise 1 (txt2img).
+          denoise: referenceImageUrl ? 0.62 : 1.0,
+          gen_type: 'scene',
           generation_params: showAdvancedParams ? {
              steps: genSteps,
              cfg: genCfg,

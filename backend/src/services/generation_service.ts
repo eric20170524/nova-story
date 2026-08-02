@@ -106,6 +106,156 @@ const injectLora = (
     }
 };
 
+/**
+ * Wire a real img2img path when a reference image is provided.
+ * The base Pony/FLUX templates only do text2img — previously ref_image_url was
+ * copied to ComfyUI/input but never connected (no LoadImage node), so turnaround
+ * and scene consistency never used the portrait.
+ */
+const injectImg2ImgReference = (
+    workflow: any,
+    imageFilename: string,
+    denoise: number,
+    width: number,
+    height: number,
+    isFlux: boolean
+) => {
+    const vaeSourceId = isFlux
+        ? findNodeId(workflow, (node) => node?.class_type === 'VAELoader')
+        : findNodeId(workflow, (node) => node?.class_type === 'CheckpointLoaderSimple');
+    if (!vaeSourceId) {
+        logger.warn('Cannot inject img2img: no VAE source node found');
+        return false;
+    }
+    const vaeOutputIndex = isFlux ? 0 : 2;
+
+    const loadId = nextNodeId(workflow);
+    workflow[loadId] = {
+        inputs: { image: imageFilename },
+        class_type: 'LoadImage',
+        _meta: { title: 'NovaStory Character Reference' }
+    };
+
+    const scaleId = nextNodeId(workflow);
+    workflow[scaleId] = {
+        inputs: {
+            image: [loadId, 0],
+            upscale_method: 'lanczos',
+            width,
+            height,
+            crop: 'center'
+        },
+        class_type: 'ImageScale',
+        _meta: { title: 'NovaStory Scale Reference' }
+    };
+
+    const encodeId = nextNodeId(workflow);
+    workflow[encodeId] = {
+        inputs: {
+            pixels: [scaleId, 0],
+            vae: [vaeSourceId, vaeOutputIndex]
+        },
+        class_type: 'VAEEncode',
+        _meta: { title: 'NovaStory VAE Encode Reference' }
+    };
+
+    let wired = false;
+    for (const node of Object.values(workflow) as any[]) {
+        if (node?.class_type?.includes('KSampler') && node.inputs) {
+            node.inputs.latent_image = [encodeId, 0];
+            node.inputs.denoise = Math.min(1, Math.max(0.05, denoise));
+            wired = true;
+        }
+    }
+    if (wired) {
+        logger.info(
+            `Injected img2img reference ${imageFilename} denoise=${denoise} size=${width}x${height}`
+        );
+    }
+    return wired;
+};
+
+/**
+ * Decide whether a reference image should drive img2img.
+ * Portrait latents collapse multi-person / story shots into single-character portraits
+ * when denoise is moderate — so narrative scenes stay pure txt2img + appearance tags.
+ */
+export const resolveReferenceImg2ImgPolicy = (
+    workflowData: any,
+    finalPrompt: string = ''
+): { useImg2Img: boolean; denoise: number; reason: string } => {
+    const genType = String(workflowData?.gen_type || '').toLowerCase();
+    const explicit = workflowData?.denoise;
+    const hasExplicitDenoise = typeof explicit === 'number' && Number.isFinite(explicit);
+
+    if (genType === 'turnaround') {
+        return {
+            useImg2Img: true,
+            denoise: hasExplicitDenoise ? Number(explicit) : 0.55,
+            reason: 'turnaround'
+        };
+    }
+    if (genType === 'portrait') {
+        return {
+            useImg2Img: true,
+            denoise: hasExplicitDenoise ? Number(explicit) : 0.42,
+            reason: 'portrait'
+        };
+    }
+
+    const prompt = `${finalPrompt} ${workflowData?.prompt || ''} ${workflowData?.visual_prompt || ''}`;
+    const multiPerson =
+        /\b[23]girls?\b|\b[23]boys?\b|\bmultiple\b|\bgroup\b|yuri|threesome|sandwich|三人|两人| entwined|intertwined/i.test(
+            prompt
+        );
+    const storyWide =
+        /extreme long|establishing|wide shot|long shot|full body|environment|cloud sea|palace|inner hall|overview|bird.?s eye|high angle overview/i.test(
+            prompt
+        );
+    const storyAction =
+        /\b(embrac|kiss|sitting|lying|straddl|press|hold|whisper|kneel|behind|from behind|on (the )?(bed|couch)|between|climax|tendril|tentacle|cuddling|afterglow|walking toward|reaching)\b/i.test(
+            prompt
+        );
+    const singleClose =
+        /\b(close-?up|portrait|medium close|upper body|face shot)\b/i.test(prompt)
+        && !multiPerson
+        && /\b1girl\b|\b1boy\b|solo/i.test(prompt);
+
+    // Force skip when caller sets denoise >= 0.95 (pure txt2img)
+    if (hasExplicitDenoise && Number(explicit) >= 0.95) {
+        return { useImg2Img: false, denoise: 1, reason: 'explicit_txt2img' };
+    }
+
+    if (multiPerson || storyWide || storyAction) {
+        return {
+            useImg2Img: false,
+            denoise: 1,
+            reason: multiPerson ? 'multi_person_story' : storyWide ? 'wide_story' : 'action_story'
+        };
+    }
+
+    if (singleClose) {
+        return {
+            useImg2Img: true,
+            denoise: hasExplicitDenoise ? Number(explicit) : 0.62,
+            reason: 'single_closeup'
+        };
+    }
+
+    // Generic single-subject medium shot: very high denoise if ref used at all
+    if (hasExplicitDenoise && Number(explicit) < 0.95) {
+        // Still honor low explicit denoise only for non-story; clamp up for safety
+        const d = Math.max(Number(explicit), 0.82);
+        return { useImg2Img: d < 0.95, denoise: d, reason: 'generic_scene_clamped' };
+    }
+
+    return { useImg2Img: false, denoise: 1, reason: 'scene_txt2img_default' };
+};
+
+/** @deprecated use resolveReferenceImg2ImgPolicy */
+export const resolveImg2ImgDenoise = (workflowData: any): number =>
+    resolveReferenceImg2ImgPolicy(workflowData).denoise;
+
 export const compileComfyWorkflow = async (
     workflowData: any,
     finalPrompt: string,
@@ -243,16 +393,6 @@ export const compileComfyWorkflow = async (
         }
     }
 
-    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
-    if (referenceImageUrl) {
-        const referenceFilename = path.basename(String(referenceImageUrl));
-        for (const node of Object.values(workflow) as any[]) {
-            if (node?.class_type === 'LoadImage' && node.inputs) {
-                node.inputs.image = referenceFilename;
-            }
-        }
-    }
-
     for (const slot of plan.loras) {
         injectLora(workflow, slot.name, slot.strength, modelFamily);
         logger.info(
@@ -267,6 +407,40 @@ export const compileComfyWorkflow = async (
         );
     }
 
+    // After LoRAs: optional img2img. Story / multi-person shots stay pure txt2img
+    // so composition follows the narrative prompt instead of a portrait latent.
+    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
+    if (referenceImageUrl) {
+        const referenceFilename = path.basename(String(referenceImageUrl));
+        for (const node of Object.values(workflow) as any[]) {
+            if (node?.class_type === 'LoadImage' && node.inputs && !node._meta?.title?.includes('NovaStory')) {
+                node.inputs.image = referenceFilename;
+            }
+        }
+        const policy = resolveReferenceImg2ImgPolicy(workflowData, effectivePrompt);
+        if (policy.useImg2Img) {
+            injectImg2ImgReference(
+                workflow,
+                referenceFilename,
+                policy.denoise,
+                width,
+                height,
+                isFlux
+            );
+        } else {
+            logger.info(
+                `Skipping img2img for narrative composition (${policy.reason}); `
+                + `ref ${referenceFilename} kept for future adapters only`
+            );
+            // Ensure pure txt2img denoise
+            for (const node of Object.values(workflow) as any[]) {
+                if (node?.class_type?.includes('KSampler') && node.inputs) {
+                    node.inputs.denoise = 1;
+                }
+            }
+        }
+    }
+
     return workflow;
 };
 
@@ -279,12 +453,36 @@ const copyReferenceImageToComfy = (
     if (!referenceImageUrl || !comfyInstallPath) return;
 
     const filename = path.basename(String(referenceImageUrl));
-    const sourcePath = path.join(staticDir, filename);
-    if (!fs.existsSync(sourcePath)) return;
+    const candidates = [
+        path.join(staticDir, filename),
+        // Allow absolute filesystem paths passed as ref_image_url
+        String(referenceImageUrl).startsWith('/') || /^[A-Za-z]:[\\/]/.test(String(referenceImageUrl))
+            ? String(referenceImageUrl).replace(/^\/static\/generated\//, '')
+            : '',
+        path.join(staticDir, '..', filename)
+    ].filter(Boolean);
+
+    // Resolve /static/generated/foo.png style URLs against staticDir
+    if (String(referenceImageUrl).includes('/static/generated/')) {
+        candidates.unshift(path.join(staticDir, filename));
+    }
+
+    let sourcePath: string | null = null;
+    for (const candidate of candidates) {
+        if (candidate && fs.existsSync(candidate)) {
+            sourcePath = candidate;
+            break;
+        }
+    }
+    if (!sourcePath) {
+        logger.warn(`Reference image not found for ComfyUI input: ${referenceImageUrl}`);
+        return;
+    }
 
     const inputDirectory = path.join(comfyInstallPath, 'input');
     fs.mkdirSync(inputDirectory, { recursive: true });
     fs.copyFileSync(sourcePath, path.join(inputDirectory, filename));
+    logger.info(`Copied reference image to ComfyUI input: ${filename}`);
 };
 
 export class GenerationService {

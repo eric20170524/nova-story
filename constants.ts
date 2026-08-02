@@ -228,6 +228,17 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     tier: 'standard',
   },
   {
+    // Promoted to standard so 琼明-class projects can unify on this look without unlocking advanced styles
+    value: 'sensual_gufeng',
+    label: 'Sensual Gu Feng (魅惑古风)',
+    prompt:
+      'alluring ancient Chinese fantasy beauty illustration, seductive yet elegant mood, soft sheer fabric rim light, warm gold and deep crimson accents, refined semi-realistic digital painting, dramatic chiaroscuro, luxurious silk texture, intimate atmospheric haze, beautiful East Asian woman, chinese beauty',
+    negative_prompt:
+      'western face, caucasian, childlike face, chibi, modern streetwear, neon cyberpunk city, male, androgynous, ugly face, low quality, blurry, bad anatomy, messy hands',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
     value: 'aesthetic_romance',
     label: 'Aesthetic Romance (唯美氛围)',
     prompt: 'aesthetic romantic illustration, East Asian features, soft cinematic color grading, poetic atmosphere, elegant portrait composition, gentle depth of field, refined fabric and hair detail, warm-cool contrast mood lighting, polished digital beauty art',
