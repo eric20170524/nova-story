@@ -97,7 +97,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
 
   // Serve Vite build in production
   const frontendDist = path.join(__dirname, '../../dist');
-  if (fs.existsSync(frontendDist)) {
+  if (process.env.NODE_ENV === 'production' && fs.existsSync(frontendDist)) {
     await app.register(fastifyStatic, {
       root: frontendDist,
       prefix: '/',

@@ -202,7 +202,7 @@ try {
     Install-DependenciesIfNeeded -Directory $BackendDir -ExpectedExecutable 'node_modules\.bin\tsx.cmd' -Label 'backend'
     Install-DependenciesIfNeeded -Directory $RootDir -ExpectedExecutable 'node_modules\.bin\vite.cmd' -Label 'frontend'
 
-    $ports = @(3000)
+    $ports = @(3000, 24678)
     if (-not $SkipComfyUI) {
         $ports += 8188
     }

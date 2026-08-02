@@ -1,6 +1,7 @@
 export const translations = {
   en: {
     advanced_settings: {
+      advanced_tab_title: "Advanced & NSFW Settings",
       advanced_config_title: "Advanced & NSFW LoRA Settings",
       nsfw_enable_title: "Enable NSFW Mode / LoRA Enhancement",
       nsfw_enable_desc: "Automatically append NSFW prompt triggers and apply configured NSFW LoRAs during image generation. Note: Enabling this option does NOT automatically download model files from the internet.",
@@ -407,6 +408,7 @@ export const translations = {
 
   zh: {
     advanced_settings: {
+      advanced_tab_title: "高级 & NSFW 设置",
       advanced_config_title: "高级画风与 NSFW 混纳模式",
       nsfw_enable_title: "开启后，若使用支持的底层大模型（如 Pony），将自动在尾部注入 NSFW 触发词以解锁大尺度构图。",
       nsfw_enable_desc: "注：此开关并不包含模型文件本身下载。",

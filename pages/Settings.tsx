@@ -15,7 +15,7 @@ export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState<'general' | 'workflow' | 'advanced'>('general');
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
-    return localStorage.getItem('settings_advanced_unlocked') === 'true';
+    return localStorage.getItem('settings_advanced_unlocked') !== 'false';
   });
   const [titleClicks, setTitleClicks] = useState(0);
 
@@ -268,19 +268,17 @@ export const SettingsPage: React.FC = () => {
           工作流预设 (Workflows)
         </button>
 
-        {isUnlocked && (
-          <button
-            onClick={() => setActiveTab('advanced')}
-            className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
-              activeTab === 'advanced'
-                ? 'border-rose-500 text-rose-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Shield className="w-4 h-4" />
-            开发者 & 高级模式
-          </button>
-        )}
+        <button
+          onClick={() => setActiveTab('advanced')}
+          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'advanced'
+              ? 'border-rose-500 text-rose-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Shield className="w-4 h-4" />
+          {t('advanced_settings.advanced_tab_title')}
+        </button>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">
@@ -616,7 +614,7 @@ export const SettingsPage: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'advanced' && isUnlocked && (
+        {activeTab === 'advanced' && (
           <div className="bg-slate-900/60 backdrop-blur-sm border border-rose-900/40 rounded-2xl p-6 space-y-6">
             <div className="flex items-center justify-between border-b border-rose-900/40 pb-4">
               <div className="flex items-center gap-3">

@@ -11,9 +11,9 @@ async function startServer() {
 
   const app = await buildApp({ logger: true });
 
-  await app.register(FastifyMiddie);
-
   if (process.env.NODE_ENV !== 'production') {
+    await app.register(FastifyMiddie);
+
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -29,19 +29,11 @@ async function startServer() {
       ) {
         return next();
       }
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       vite.middlewares(req, res, next);
     });
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    if (fs.existsSync(distPath)) {
-      app.setNotFoundHandler((req, reply) => {
-        if (req.url.startsWith('/api') || req.url.startsWith('/static')) {
-          reply.status(404).send({ error: 'Not found' });
-        } else {
-          reply.sendFile('index.html', distPath);
-        }
-      });
-    }
   }
 
   try {
