@@ -49,11 +49,12 @@ RECOMMENDED_LORAS = [
         "name": "Incase Style [PonyXL]",
         "filename": "Incase_Style_PonyXL.safetensors",
         "urls": [
-            "https://civitai.com/api/download/models/350000",
-            "https://civitai.com/api/download/models/330541"
+            # Official v3.0 PonyXL Edition (~243 MB) — model 300005 / version 436219
+            "https://civitai.com/api/download/models/436219",
+            "https://civitai.com/api/download/models/436219?type=Model&format=SafeTensor"
         ],
-        "civitai_page": "https://civitai.com/models/330541",
-        "description": "Western/Comic style NSFW LoRA (Weight: 0.4-0.6)"
+        "civitai_page": "https://civitai.com/models/300005/incase-style-ponyxl",
+        "description": "Western/Comic style NSFW LoRA v3.0 (Weight: 0.4-0.6)"
     },
     {
         "category": "Pony XL",
