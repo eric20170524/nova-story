@@ -35,6 +35,7 @@ export const CharacterManager: React.FC = () => {
 
   // Project policy for consistent style/NSFW on character gens
   const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'flux'>('pony');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -42,24 +43,42 @@ export const CharacterManager: React.FC = () => {
   const stopBatchRef = React.useRef(false);
   const { openPreview, lightbox: imageLightbox } = useImagePreview();
 
+  const loadProjectSettings = () => {
+    if (!projectId) return;
+    Promise.all([
+      api.getProject(Number(projectId)).catch(() => null),
+      api.getSettings().catch(() => null)
+    ]).then(([proj, sys]) => {
+      setSystemNsfw(Boolean(sys?.advanced?.nsfw_enabled));
+      try {
+        const raw = proj?.settings;
+        const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
+        if (s.default_style) setProjectStyle(s.default_style);
+        if (s.default_model_type === 'flux' || s.default_model_type === 'pony') {
+          setProjectModelType(s.default_model_type);
+        }
+        if (s.nsfw_mode === 'on' || s.nsfw_mode === 'off' || s.nsfw_mode === 'inherit') {
+          setProjectNsfwMode(s.nsfw_mode);
+        }
+      } catch { /* ignore */ }
+    });
+  };
+
   useEffect(() => {
     if (projectId) {
       loadCharacters();
-      Promise.all([
-        api.getProject(Number(projectId)).catch(() => null),
-        api.getSettings().catch(() => null)
-      ]).then(([proj, sys]) => {
-        setSystemNsfw(Boolean(sys?.advanced?.nsfw_enabled));
-        try {
-          const raw = proj?.settings;
-          const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
-          if (s.default_style) setProjectStyle(s.default_style);
-          if (s.nsfw_mode === 'on' || s.nsfw_mode === 'off' || s.nsfw_mode === 'inherit') {
-            setProjectNsfwMode(s.nsfw_mode);
-          }
-        } catch { /* ignore */ }
-      });
+      loadProjectSettings();
     }
+  }, [projectId]);
+
+  useEffect(() => {
+    const handleSettingsChanged = () => loadProjectSettings();
+    window.addEventListener('novastory-project-settings-changed', handleSettingsChanged);
+    window.addEventListener('storage', handleSettingsChanged);
+    return () => {
+      window.removeEventListener('novastory-project-settings-changed', handleSettingsChanged);
+      window.removeEventListener('storage', handleSettingsChanged);
+    };
   }, [projectId]);
 
   const effectiveNsfw =
@@ -200,7 +219,7 @@ export const CharacterManager: React.FC = () => {
   // Open Turnaround Sheet Generator
   const openSheetModal = async (char: Character, overrideGenType?: 'turnaround' | 'portrait') => {
     setSheetModalChar(char);
-    const mType = char.model_type || 'pony';
+    const mType = projectModelType || char.model_type || 'pony';
     setModelType(mType);
 
     const availableRef = char.avatar_url || char.turnaround_url || null;
@@ -953,33 +972,22 @@ export const CharacterManager: React.FC = () => {
             <div className="p-4 sm:p-6 space-y-6">
               {/* Model & Preset Controls */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col justify-between">
                   <label className="block text-xs uppercase font-semibold tracking-wider text-slate-400 mb-2">
-                    {t('characters.model_preset')}
+                    {t('project_settings.defaults') || '项目生图预设与策略'}
                   </label>
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={() => { setModelType('pony'); handleRebuildPrompt('pony', genType); }}
-                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
-                        modelType === 'pony'
-                          ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
-                          : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Pony XL (SDXL)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setModelType('flux'); handleRebuildPrompt('flux', genType); }}
-                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
-                        modelType === 'flux'
-                          ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
-                          : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      FLUX.1-dev (GGUF)
-                    </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-md bg-indigo-950 border border-indigo-700/50 text-indigo-200 text-xs font-semibold">
+                      {modelType === 'flux' ? 'FLUX.1-dev (GGUF)' : 'Pony XL (SDXL)'}
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-300 text-xs font-medium">
+                      画风: {projectStyle}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-semibold border ${
+                      effectiveNsfw ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+                    }`}>
+                      {effectiveNsfw ? 'NSFW 开启' : 'SFW 安全'}
+                    </span>
                   </div>
                 </div>
 

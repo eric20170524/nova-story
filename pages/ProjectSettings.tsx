@@ -27,11 +27,17 @@ export const ProjectSettings: React.FC = () => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
+  const [defaultModelType, setDefaultModelType] = useState<'pony' | 'flux'>('pony');
+  const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
+  const [workflows, setWorkflows] = useState<any[]>([]);
   /** inherit | on | off — project-level NSFW policy */
   const [nsfwMode, setNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
 
   useEffect(() => {
     if (id) loadProject();
+    api.getWorkflows().then((data) => {
+      if (Array.isArray(data)) setWorkflows(data);
+    }).catch(console.error);
   }, [id]);
 
   useEffect(() => {
@@ -64,6 +70,12 @@ export const ProjectSettings: React.FC = () => {
           if (settingsObj.default_style) {
               setDefaultStyle(settingsObj.default_style);
           }
+          if (settingsObj.default_model_type === 'flux' || settingsObj.default_model_type === 'pony') {
+              setDefaultModelType(settingsObj.default_model_type);
+          }
+          if (typeof settingsObj.default_workflow_id === 'number') {
+              setDefaultWorkflowId(settingsObj.default_workflow_id);
+          }
           if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
               setNsfwMode(settingsObj.nsfw_mode);
           } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
@@ -90,6 +102,8 @@ export const ProjectSettings: React.FC = () => {
     try {
         const settingsJson = JSON.stringify({
             default_style: defaultStyle,
+            default_model_type: defaultModelType,
+            default_workflow_id: defaultWorkflowId,
             nsfw_mode: nsfwMode
         });
 
@@ -99,12 +113,14 @@ export const ProjectSettings: React.FC = () => {
             settings: settingsJson
         });
         
-        // Seed Director Mode style for this session
+        // Seed Director Mode & Character Mode settings for this session
         localStorage.setItem('director_selectedStyle', defaultStyle);
         if (id) {
           localStorage.setItem(`director_project_${id}_style`, defaultStyle);
+          localStorage.setItem(`director_project_${id}_model_type`, defaultModelType);
           localStorage.setItem(`director_project_${id}_nsfw_mode`, nsfwMode);
         }
+        window.dispatchEvent(new Event('novastory-project-settings-changed'));
         
         showToast(t("settings.updated", "Project updated successfully"), 'success');
     } catch (e) {
@@ -194,6 +210,49 @@ export const ProjectSettings: React.FC = () => {
                                 {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
                             </option>
                         ))}
+                    </select>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        {t('project_settings.default_model_preset')}
+                    </label>
+                    <p className="text-xs text-slate-500 mb-2">
+                        {t('project_settings.default_model_preset_desc')}
+                    </p>
+                    <select
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm sm:text-base"
+                        value={defaultWorkflowId ? `wf_${defaultWorkflowId}` : defaultModelType}
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            if (val.startsWith('wf_')) {
+                                const wfId = Number(val.replace('wf_', ''));
+                                setDefaultWorkflowId(wfId);
+                                const foundWf = workflows.find((w) => w.id === wfId);
+                                if (foundWf) {
+                                    const nameLower = (foundWf.name || '').toLowerCase();
+                                    if (nameLower.includes('flux')) setDefaultModelType('flux');
+                                    else setDefaultModelType('pony');
+                                }
+                            } else {
+                                setDefaultWorkflowId(null);
+                                setDefaultModelType(val as 'pony' | 'flux');
+                            }
+                        }}
+                    >
+                        <optgroup label="内置基础模型 (Base Models)">
+                            <option value="pony">Pony XL (SDXL 二次元/国风半真实)</option>
+                            <option value="flux">FLUX.1-dev (GGUF 真实/厚涂场景)</option>
+                        </optgroup>
+                        {workflows.length > 0 && (
+                            <optgroup label="ComfyUI 工作流预设 (Custom Workflows)">
+                                {workflows.map((wf) => (
+                                    <option key={wf.id} value={`wf_${wf.id}`}>
+                                        {wf.name} {wf.description ? `(${wf.description})` : ''}
+                                    </option>
+                                ))}
+                            </optgroup>
+                        )}
                     </select>
                 </div>
 

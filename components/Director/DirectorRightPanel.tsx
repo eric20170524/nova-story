@@ -32,6 +32,7 @@ interface DirectorRightPanelProps {
   isBatchGenerating?: boolean;
   onBatchGenerate?: () => void;
   onStopBatchGenerate?: () => void;
+  projectModelType?: string;
   /** Project nsfw_mode from settings */
   projectNsfwMode?: ProjectNsfwMode;
   /** Effective NSFW after resolve(system, project) */
@@ -64,6 +65,7 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   isBatchGenerating,
   onBatchGenerate,
   onStopBatchGenerate,
+  projectModelType = 'pony',
   projectNsfwMode = 'inherit',
   effectiveNsfw = false,
   systemNsfw = false
@@ -80,6 +82,11 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
       window.removeEventListener('storage', refresh);
     };
   }, []);
+
+  const activeStyleDef = visualStyles.find((s) => s.value === selectedStyle);
+  const activeStyleLabel = activeStyleDef
+    ? formatVisualStyleLabel(activeStyleDef, t(`director.styles.${activeStyleDef.value}`) || activeStyleDef.label)
+    : selectedStyle;
 
   return (
     <>
@@ -135,39 +142,30 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                      {t('director.production_settings')}
                    </h4>
 
-                   {/* Project image policy strip */}
-                   <div className={`rounded-lg border px-3 py-2.5 text-xs space-y-1.5 ${
-                     effectiveNsfw
-                       ? 'bg-rose-950/40 border-rose-800/50 text-rose-100'
-                       : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-100'
-                   }`}>
-                     <div className="flex items-center justify-between gap-2">
-                       <span className="font-semibold tracking-wide uppercase text-[10px] opacity-80">
-                         {t('director.policy_title') || 'Image Policy'}
+                   {/* Unified Project Generation Config & Policy Card */}
+                   <div className="rounded-lg border bg-slate-950 p-3.5 space-y-2.5 border-slate-800">
+                     <div className="flex items-center justify-between">
+                       <span className="font-semibold tracking-wide uppercase text-[11px] text-indigo-400">
+                         项目出图配置（全局统一）
                        </span>
-                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                         effectiveNsfw
-                           ? 'bg-rose-600/80 text-white'
-                           : 'bg-emerald-600/80 text-white'
+                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                         effectiveNsfw ? 'bg-rose-950 border border-rose-800 text-rose-300' : 'bg-emerald-950 border border-emerald-800 text-emerald-300'
                        }`}>
-                         {effectiveNsfw
-                           ? (t('director.policy_nsfw_on') || 'NSFW ON')
-                           : (t('director.policy_nsfw_off') || 'SFW')}
+                         {effectiveNsfw ? 'NSFW 开启' : 'SFW 安全'}
                        </span>
                      </div>
-                     <p className="text-[11px] leading-relaxed opacity-90">
-                       {projectNsfwMode === 'on' && (t('director.policy_project_on') || 'Project forces adult LoRA + prompt policy.')}
-                       {projectNsfwMode === 'off' && (t('director.policy_project_off') || 'Project forces SFW only.')}
-                       {projectNsfwMode === 'inherit' && (
-                         effectiveNsfw
-                           ? (t('director.policy_inherit_on') || 'Following system NSFW (enabled).')
-                           : (t('director.policy_inherit_off') || 'Following system NSFW (disabled).')
-                       )}
-                       {' '}
-                       <span className="opacity-70">
-                         ({t('director.policy_system') || 'System'}: {systemNsfw ? 'ON' : 'OFF'})
-                       </span>
-                     </p>
+
+                     <div className="space-y-1.5 text-xs">
+                       <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80">
+                         <span className="text-slate-400">默认画风:</span>
+                         <span className="text-slate-200 font-medium truncate max-w-[150px]">{activeStyleLabel}</span>
+                       </div>
+
+                       <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80">
+                         <span className="text-slate-400">模型预设:</span>
+                         <span className="text-indigo-300 font-semibold">{projectModelType === 'flux' ? 'FLUX.1-dev' : 'Pony XL'}</span>
+                       </div>
+                     </div>
                    </div>
                    
                    <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
@@ -192,27 +190,12 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                        </p>
                      </div>
 
-                     <div>
-                       <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.style')}</label>
-                       <select 
-                          className="w-full bg-slate-950 border border-slate-700 text-slate-200 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
-                          value={selectedStyle}
-                          onChange={(e) => setSelectedStyle(e.target.value)}
-                        >
-                          {visualStyles.map(s => (
-                            <option key={s.value} value={s.value}>
-                              {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
-                            </option>
-                          ))}
-                        </select>
-                     </div>
-
                      {setStyleStrength && (
                        <div>
                          <div className="flex justify-between items-center mb-2">
                             <label className="block text-xs font-medium text-slate-400 flex items-center gap-1">
                                <Zap size={12} className="text-yellow-500" />
-                               Style Strength
+                               画风权重 (Style Strength)
                             </label>
                             <span className="text-xs text-indigo-400 font-mono">{styleStrength.toFixed(1)}</span>
                          </div>

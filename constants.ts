@@ -361,12 +361,21 @@ export function setAdvancedStylesEnabled(enabled: boolean): void {
   }
 }
 
-/** Visible styles for dropdowns: standard always; advanced only when unlocked */
+/** Visible styles for dropdowns: standard always; advanced only when unlocked (deduplicated by value) */
 export function getVisualStyles(includeAdvanced: boolean = isAdvancedStylesEnabled()): VisualStyleDef[] {
-  if (includeAdvanced && ADVANCED_VISUAL_STYLES.length > 0) {
-    return [...STANDARD_VISUAL_STYLES, ...ADVANCED_VISUAL_STYLES];
+  const rawList = includeAdvanced && ADVANCED_VISUAL_STYLES.length > 0
+    ? [...STANDARD_VISUAL_STYLES, ...ADVANCED_VISUAL_STYLES]
+    : STANDARD_VISUAL_STYLES;
+
+  const seen = new Set<string>();
+  const unique: VisualStyleDef[] = [];
+  for (const style of rawList) {
+    if (!seen.has(style.value)) {
+      seen.add(style.value);
+      unique.push(style);
+    }
   }
-  return STANDARD_VISUAL_STYLES;
+  return unique;
 }
 
 export function findVisualStyle(value: string): VisualStyleDef | undefined {

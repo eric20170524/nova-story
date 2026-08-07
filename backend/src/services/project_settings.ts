@@ -10,6 +10,8 @@ export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
 
 export interface ProjectSettings {
   default_style?: string;
+  default_model_type?: string; // e.g. 'pony' | 'flux'
+  default_workflow_id?: number | null;
   nsfw_mode?: ProjectNsfwMode;
   /** @deprecated prefer nsfw_mode; still honored when nsfw_mode is absent */
   nsfw_enabled?: boolean;

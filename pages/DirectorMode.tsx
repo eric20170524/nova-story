@@ -68,6 +68,7 @@ export const DirectorMode: React.FC = () => {
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [activeTab, setActiveTab] = useState<'control' | 'agent'>('control');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'flux'>('pony');
   const [systemNsfw, setSystemNsfw] = useState(false);
 
   // Comic State
@@ -112,8 +113,7 @@ export const DirectorMode: React.FC = () => {
     }
   }, [projectId, selectedChapterId]);
 
-  // Load project defaults + system NSFW (style + policy strip)
-  useEffect(() => {
+  const loadProjectDefaults = () => {
     if (!projectId) return;
     Promise.all([
       api.getProject(Number(projectId)).catch(() => null),
@@ -134,6 +134,9 @@ export const DirectorMode: React.FC = () => {
             localStorage.setItem('director_selectedStyle', settingsObj.default_style);
           }
         }
+        if (settingsObj.default_model_type === 'flux' || settingsObj.default_model_type === 'pony') {
+          setProjectModelType(settingsObj.default_model_type);
+        }
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
         if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
           mode = settingsObj.nsfw_mode;
@@ -146,6 +149,23 @@ export const DirectorMode: React.FC = () => {
         /* ignore */
       }
     });
+  };
+
+  // Load project defaults + system NSFW (style + policy strip)
+  useEffect(() => {
+    if (projectId) {
+      loadProjectDefaults();
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    const handleSettingsChanged = () => loadProjectDefaults();
+    window.addEventListener('novastory-project-settings-changed', handleSettingsChanged);
+    window.addEventListener('storage', handleSettingsChanged);
+    return () => {
+      window.removeEventListener('novastory-project-settings-changed', handleSettingsChanged);
+      window.removeEventListener('storage', handleSettingsChanged);
+    };
   }, [projectId]);
 
   const effectiveNsfw =
@@ -653,6 +673,7 @@ export const DirectorMode: React.FC = () => {
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
         onStopBatchGenerate={handleStopBatchGenerate}
+        projectModelType={projectModelType}
         projectNsfwMode={projectNsfwMode}
         effectiveNsfw={effectiveNsfw}
         systemNsfw={systemNsfw}
