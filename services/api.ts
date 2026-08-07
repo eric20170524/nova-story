@@ -194,6 +194,21 @@ class ApiService {
     });
   };
 
+  /** Probe local ComfyUI for Tier B dual-ref readiness (IP-Adapter + ControlNet) */
+  getTierBStatus = () =>
+    this.request<{
+      ready: boolean;
+      full_dual_ref: boolean;
+      character_adapter: boolean;
+      composition_control: boolean;
+      character_kind: string;
+      composition_kind: string;
+      models: Record<string, string | null>;
+      missing: string[];
+      notes: string[];
+      install_path: string | null;
+    }>('/settings/tier-b-status');
+
   // Characters
   getCharacters = (projectId: number) => this.request<any[]>(`/characters/?project_id=${projectId}`);
   createCharacter = (data: any) => this.request<any>('/characters/', { method: 'POST', body: data });

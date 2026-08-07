@@ -27,6 +27,36 @@
    为了防止 FLUX 默认底层偏置生成欧美面孔，建议前往 Civitai 下载专为 FLUX.1-dev 训练的东亚人像或国风 LoRA（例如 `flux_asian_beauty.safetensors` 或 `flux_guofeng.safetensors`），放入 ComfyUI 的 `models/loras/` 目录下。NovaStory 后端会自动识别并以 0.8 权重挂载加载，使生图兼具 FLUX 写实光影与东方美型面孔。
 6. （可选）在系统的 `system_settings.json` 中配置 `default_workflow` 为 `flux_dev_gguf_12gb.json` 即可启用 Flux 流程。
 
+## 2.5 档位 B：人物 + 构图双参考（Pony / SDXL 推荐）
+
+NovaStory 在 **标签/LoRA/文本构图（档位 A）** 之上，支持可选的双参考增强：
+
+| 支路 | 作用 | 依赖 |
+|------|------|------|
+| 人物 `character_ref_url` | 身份锁定（IP-Adapter） | `ComfyUI_IPAdapter_plus` + SDXL IP-Adapter 权重 + CLIP Vision |
+| 构图 `composition_ref_url` | 姿势/布局锁定（ControlNet） | 原生 ControlNet + SDXL OpenPose/Depth/Canny 权重；可选 `comfyui_controlnet_aux` |
+
+**一键安装（推荐）：**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -ComfyRoot "D:\ComfyUI"
+```
+
+装完后**重启 ComfyUI**，再访问后端：
+
+`GET /api/settings/tier-b-status`
+
+- `full_dual_ref: true` → 人物+构图双参考可用  
+- 缺模型/节点时**自动回退档位 A**，不会硬失败  
+
+导演模式行为：
+
+- 有角色立绘/头像 → 始终作为 `character_ref_url` 提交（后端有 IP-Adapter 则用，否则仅特写走 img2img）
+- **同一分镜原地重生成** → 上一张成图作为 `composition_ref_url`（锁构图微调）
+- 新建版本 / 首次生成 → 无构图参考，纯文本构图 + 可选人物适配器
+
+> FLUX.1-dev GGUF 当前仍走档位 A（双参考适配器尚未接 FLUX）。
+
 ## 3. 在 NovaStory 中对接
 
 1. 保持 ComfyUI (即那个终端窗口) 一直处于运行状态，不要关闭。

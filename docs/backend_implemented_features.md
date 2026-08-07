@@ -19,6 +19,11 @@
 - 结构化输出：Zod JSON Schema、校验、重试和模式化降级
 - 云生图：Gemini/Imagen、OpenAI Images、xAI 兼容端点
 - 本地生图：ComfyUI 自动探活/启动、内置 Pony/FLUX 工作流、参考图、参数注入、LoRA 实际连线
+- **档位 A/B 参考策略**（`reference_generation_policy.ts` + `tier_b_adapters.ts`）：
+  - A：标签 + 角色 LoRA + 文本构图；单图 img2img 仅限立绘/三视图/特写
+  - B（Pony/SDXL）：`character_ref` → IP-Adapter；`composition_ref` → ControlNet；缺节点/模型静默回退 A
+  - 探测：`GET /api/settings/tier-b-status`；安装脚本 `scripts/setup_tier_b_comfyui.ps1`
+  - FLUX GGUF 暂仅 A
 - FLUX：东亚特征提示增强及本地风格 LoRA 自动发现
 - **NSFW 开关驱动的默认生图策略**（`image_generation_policy.ts`）：
   - **开启 NSFW**：自动叠加载 风格/细节 LoRA + 成人向 LoRA（Pony：Detail + Incase 类；FLUX：写实/东亚 + aidma 解锁），去重、缺文件按文件名模式自动发现；提示词注入 unlock/rating 与触发词；分镜 LLM 按成人向英文标签策略生成

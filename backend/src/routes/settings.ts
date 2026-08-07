@@ -4,10 +4,29 @@ import path from 'path';
 import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
+import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async (request, reply) => {
     return SettingsManager.loadSettings();
+  });
+
+  /** Probe ComfyUI install for Tier B (IP-Adapter + ControlNet) readiness */
+  app.get('/tier-b-status', async () => {
+    const settings = SettingsManager.loadSettings();
+    const capability = await resolveTierBFromSettings(settings, { isFlux: false });
+    return {
+      ready: capability.characterAdapter || capability.compositionControl,
+      full_dual_ref: capability.characterAdapter && capability.compositionControl,
+      character_adapter: capability.characterAdapter,
+      composition_control: capability.compositionControl,
+      character_kind: capability.characterKind,
+      composition_kind: capability.compositionKind,
+      models: capability.models,
+      missing: capability.missing,
+      notes: capability.notes,
+      install_path: settings.comfyui?.install_path || null
+    };
   });
 
   app.get('/loras', async (request, reply) => {

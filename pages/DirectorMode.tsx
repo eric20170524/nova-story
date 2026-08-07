@@ -10,6 +10,11 @@ import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
 import { AlertTriangle, Film, Settings } from 'lucide-react';
+import {
+  buildCharacterAppearanceSnippet,
+  getCharacterLoraName,
+  shouldUsePortraitImg2ImgForScene
+} from '../services/character_appearance';
 
 /** Match Chinese character names against English/pinyin mentions in visual_prompt */
 const CHARACTER_NAME_ALIASES: Record<string, string[]> = {
@@ -318,51 +323,31 @@ export const DirectorMode: React.FC = () => {
 
     finalPrompt += scene.visual_prompt || "";
 
-    if (projectCharacters.length > 0 && scene.visual_prompt) {
-        const shotTypeLower = (scene.shot_type || "").toLowerCase();
-        const isWideOrFullShot = ["wide", "long shot", "full body", "extreme long", "establishing"].some(k => shotTypeLower.includes(k));
+    // Tier A: always inject appearance tags/description for characters in the shot.
+    // Composition stays text-driven (camera + visual_prompt); image ref is optional below.
+    const shotTypeLower = (scene.shot_type || '').toLowerCase();
+    const isWideOrFullShot = ['wide', 'long shot', 'full body', 'extreme long', 'establishing'].some(
+      (k) => shotTypeLower.includes(k)
+    );
+    const promptForMention = `${scene.visual_prompt || ''} ${finalPrompt}`;
+    let mentionedChars = projectCharacters.filter((char) =>
+      isCharacterMentionedInPrompt(promptForMention, char.name)
+    );
+    // Solo project cast: still inject the only character when the shot text omits the name
+    if (mentionedChars.length === 0 && projectCharacters.length === 1) {
+      mentionedChars = [projectCharacters[0]];
+    }
 
-        projectCharacters.forEach(char => {
-            if (!isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)) return;
-
-            let tagMap: Record<string, string> = {};
-            const tags = char.visual_tags;
-
-            if (tags && typeof tags === 'object') {
-                if ("base_model" in tags) {
-                    const baseTags = tags.base_model?.tags || {};
-                    let variantTags = {};
-                    const timelineMap = tags.timeline_map || {};
-                    let variantId = timelineMap[selectedChapterId];
-                    const variants = tags.variants || [];
-                    if (variantId) {
-                        const variant = variants.find((v: any) => v.id === variantId);
-                        if (variant) variantTags = variant.tags || {};
-                    }
-                    tagMap = { ...(typeof baseTags === 'object' ? baseTags : {}), ...(typeof variantTags === 'object' ? variantTags : {}) };
-                } else {
-                    // Flat tag map: only visual keys
-                    const skip = new Set(['assets', 'timeline_map', 'variants', 'base_model', 'model_type', 'avatar_url', 'turnaround_url', 'face_url']);
-                    tagMap = Object.fromEntries(
-                      Object.entries(tags).filter(([k, v]) => !skip.has(k) && typeof v === 'string')
-                    ) as Record<string, string>;
-                }
-            }
-
-            if (isWideOrFullShot && Object.keys(tagMap).length > 0) {
-                const filtered = Object.entries(tagMap)
-                    .filter(([k]) => !['eyes', 'face_features', 'skin_tone', 'eyebrows', 'lashes'].includes(k.toLowerCase()))
-                    .map(([, v]) => v);
-                if (filtered.length > 0) {
-                    finalPrompt += `, ${char.name} outfit & build: ${filtered.join(", ")}`;
-                }
-            } else {
-                const tagStr = Object.values(tagMap).join(", ");
-                if (tagStr) {
-                    finalPrompt += `, ${char.name} appearance: ${tagStr}`;
-                }
-            }
-        });
+    const appearanceSnippets: string[] = [];
+    for (const char of mentionedChars) {
+      const snippet = buildCharacterAppearanceSnippet(char, {
+        chapterId: selectedChapterId,
+        wideShot: isWideOrFullShot
+      });
+      if (snippet) {
+        appearanceSnippets.push(snippet);
+        finalPrompt += `, ${snippet}`;
+      }
     }
 
     if (stylePromptRaw) {
@@ -382,54 +367,68 @@ export const DirectorMode: React.FC = () => {
 
     try {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
-      
-      let referenceImageUrl = null;
-      let referenceModelType = 'pony';
 
-      // Portrait img2img only for single-character close-ups.
-      // Multi-person / action / wide shots must stay txt2img or the latent collapses to a solo portrait.
-      if (projectCharacters.length > 0 && scene.visual_prompt) {
-        const shotTypeLower = (scene.shot_type || '').toLowerCase();
-        const isClose = ['close-up', 'close up', 'portrait', 'medium close', 'extreme close'].some(
-          (k) => shotTypeLower.includes(k)
-        );
-        const isWide = ['wide', 'long shot', 'full body', 'extreme long', 'establishing'].some(
-          (k) => shotTypeLower.includes(k)
-        );
-        const mentioned = projectCharacters.filter((char) =>
-          isCharacterMentionedInPrompt(scene.visual_prompt || '', char.name)
-        );
-        const multiFromPrompt = /\b[23]girls?\b|\b[23]boys?\b/i.test(scene.visual_prompt || '');
-        const storyAction =
-          /\b(embrac|kiss|sitting|lying|straddl|between|on bed|couch|yuri|tendril|walking|reaching)\b/i.test(
-            scene.visual_prompt || ''
-          );
-        if (
-          mentioned.length === 1
-          && isClose
-          && !isWide
-          && !multiFromPrompt
-          && !storyAction
-        ) {
-          const char = mentioned[0];
-          if (char.avatar_url || char.turnaround_url) {
-            referenceImageUrl = char.avatar_url || char.turnaround_url;
-            referenceModelType = char.model_type || 'pony';
-          }
+      // Character identity ref: always attach when available.
+      // Backend Tier B uses IP-Adapter; Tier A only applies img2img on close-ups.
+      let characterRefUrl: string | null = null;
+      let referenceModelType: 'pony' | 'flux' = projectModelType || 'pony';
+      let characterLora: string | null = null;
+
+      if (mentionedChars.length > 0) {
+        const char = mentionedChars[0];
+        if (char.avatar_url || char.turnaround_url || char.face_url) {
+          characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
+          referenceModelType = (char.model_type as 'pony' | 'flux') || referenceModelType;
         }
       }
 
-      const payload = { 
+      // Composition ref (Tier B ControlNet):
+      // - in-place regenerate keeps previous frame layout
+      // - otherwise null → text composition only
+      const compositionRefUrl =
+        !options.newVersion && scene.asset_url
+          ? scene.asset_url
+          : null;
+
+      // Prefer first mentioned character's LoRA when ready (identity > img2img)
+      for (const char of mentionedChars) {
+        const lora = getCharacterLoraName(char);
+        if (lora) {
+          characterLora = lora;
+          break;
+        }
+      }
+
+      // Legacy Tier A denoise only meaningful when backend falls back to img2img
+      const useLegacyImg2ImgHint = shouldUsePortraitImg2ImgForScene({
+        shotType: scene.shot_type,
+        visualPrompt: scene.visual_prompt,
+        mentionedCount: mentionedChars.length
+      });
+
+      const payload: Record<string, unknown> = {
           prompt: finalPrompt,
           negative_prompt: finalNegative,
           style_preset: selectedStyle,
           mode: backendAssetMode,
-          ref_image_url: referenceImageUrl,
+          model_type: referenceModelType,
+          // Legacy single-ref slot (compat) + explicit Tier A/B fields
+          ref_image_url: characterRefUrl,
+          character_ref_url: characterRefUrl,
+          composition_ref_url: compositionRefUrl,
+          character_appearance_prompt: appearanceSnippets.join(', '),
+          character_appearance_snippets: appearanceSnippets,
+          character_lora: characterLora,
           reference_model_type: referenceModelType,
-          // Close single: mild identity lock. Story frames: no ref / denoise 1 (txt2img).
-          denoise: referenceImageUrl ? 0.62 : 1.0,
+          denoise: useLegacyImg2ImgHint && characterRefUrl ? 0.62 : 1.0,
           gen_type: 'scene',
+          // Backend upgrades to B when adapters + refs are ready
+          reference_tier: characterRefUrl || compositionRefUrl ? 'A+B' : 'A',
           new_version: Boolean(options.newVersion),
+          project_settings: {
+            nsfw_mode: projectNsfwMode,
+            default_style: selectedStyle
+          },
           generation_params: showAdvancedParams ? {
              steps: genSteps,
              cfg: genCfg,

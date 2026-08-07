@@ -168,7 +168,22 @@ export interface GeneratePayload {
   negative_prompt?: string;
   style_preset?: string;
   mode?: string;
+  /** @deprecated Prefer character_ref_url; kept for backward compatibility */
   ref_image_url?: string | null;
+  /** Tier A/B: character / identity reference image */
+  character_ref_url?: string | null;
+  /** Tier B: composition / pose reference (ignored until ControlNet is wired) */
+  composition_ref_url?: string | null;
+  /** Tier A: appearance tags already merged into prompt (also re-applied server-side) */
+  character_appearance_prompt?: string | null;
+  character_appearance_snippets?: string[];
+  /** Character LoRA filename when trained/ready */
+  character_lora?: string | null;
+  /** 'A' | future 'B' — documentation / logging only */
+  reference_tier?: 'A' | 'B' | string;
   reference_model_type?: string;
+  model_type?: string;
+  gen_type?: string;
+  denoise?: number;
   generation_params?: GenerationParams;
 }

@@ -14,8 +14,24 @@ import {
     resolveGenerationPlan,
     type ImageModelFamily
 } from './image_generation_policy';
+import {
+    mergeAppearanceIntoPrompt,
+    planReferenceGeneration,
+    resolveReferenceImg2ImgPolicy,
+    resolveReferenceUrls,
+    type AdapterAvailability
+} from './reference_generation_policy';
+import {
+    injectTierBAdapters,
+    probeTierBCapability,
+    resolveTierBFromSettings,
+    type TierBCapability
+} from './tier_b_adapters';
 import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
+
+// Re-export for tests and callers that imported from generation_service
+export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
 
 const isComfyWorkflow = (value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -176,83 +192,6 @@ const injectImg2ImgReference = (
     return wired;
 };
 
-/**
- * Decide whether a reference image should drive img2img.
- * Portrait latents collapse multi-person / story shots into single-character portraits
- * when denoise is moderate — so narrative scenes stay pure txt2img + appearance tags.
- */
-export const resolveReferenceImg2ImgPolicy = (
-    workflowData: any,
-    finalPrompt: string = ''
-): { useImg2Img: boolean; denoise: number; reason: string } => {
-    const genType = String(workflowData?.gen_type || '').toLowerCase();
-    const explicit = workflowData?.denoise;
-    const hasExplicitDenoise = typeof explicit === 'number' && Number.isFinite(explicit);
-
-    if (genType === 'turnaround') {
-        return {
-            useImg2Img: true,
-            denoise: hasExplicitDenoise ? Number(explicit) : 0.55,
-            reason: 'turnaround'
-        };
-    }
-    if (genType === 'portrait') {
-        return {
-            useImg2Img: true,
-            denoise: hasExplicitDenoise ? Number(explicit) : 0.42,
-            reason: 'portrait'
-        };
-    }
-
-    const prompt = `${finalPrompt} ${workflowData?.prompt || ''} ${workflowData?.visual_prompt || ''}`;
-    const multiPerson =
-        /\b[23]girls?\b|\b[23]boys?\b|\bmultiple\b|\bgroup\b|yuri|threesome|sandwich|三人|两人| entwined|intertwined/i.test(
-            prompt
-        );
-    const storyWide =
-        /extreme long|establishing|wide shot|long shot|full body|environment|cloud sea|palace|inner hall|overview|bird.?s eye|high angle overview/i.test(
-            prompt
-        );
-    const storyAction =
-        /\b(embrac|kiss|sitting|lying|straddl|press|hold|whisper|kneel|behind|from behind|on (the )?(bed|couch)|between|climax|tendril|tentacle|cuddling|afterglow|walking toward|reaching)\b/i.test(
-            prompt
-        );
-    const singleClose =
-        /\b(close-?up|portrait|medium close|upper body|face shot)\b/i.test(prompt)
-        && !multiPerson
-        && /\b1girl\b|\b1boy\b|solo/i.test(prompt);
-
-    // Force skip when caller sets denoise >= 0.95 (pure txt2img)
-    if (hasExplicitDenoise && Number(explicit) >= 0.95) {
-        return { useImg2Img: false, denoise: 1, reason: 'explicit_txt2img' };
-    }
-
-    if (multiPerson || storyWide || storyAction) {
-        return {
-            useImg2Img: false,
-            denoise: 1,
-            reason: multiPerson ? 'multi_person_story' : storyWide ? 'wide_story' : 'action_story'
-        };
-    }
-
-    if (singleClose) {
-        return {
-            useImg2Img: true,
-            denoise: hasExplicitDenoise ? Number(explicit) : 0.62,
-            reason: 'single_closeup'
-        };
-    }
-
-    // Generic single-subject medium shot: very high denoise if ref used at all
-    if (hasExplicitDenoise && Number(explicit) < 0.95) {
-        // Still honor low explicit denoise only for non-story; clamp up for safety
-        const d = Math.max(Number(explicit), 0.82);
-        return { useImg2Img: d < 0.95, denoise: d, reason: 'generic_scene_clamped' };
-    }
-
-    return { useImg2Img: false, denoise: 1, reason: 'scene_txt2img_default' };
-};
-
 /** @deprecated use resolveReferenceImg2ImgPolicy */
 export const resolveImg2ImgDenoise = (workflowData: any): number =>
     resolveReferenceImg2ImgPolicy(workflowData).denoise;
@@ -262,7 +201,9 @@ export const compileComfyWorkflow = async (
     finalPrompt: string,
     mode: string,
     generationParams?: any,
-    runtimeSettings: any = SettingsManager.loadSettings()
+    runtimeSettings: any = SettingsManager.loadSettings(),
+    /** Pre-probed Tier B capability; when omitted, filesystem-only probe is used */
+    adapterCapability?: AdapterAvailability | TierBCapability | null
 ) => {
     let workflow: any;
 
@@ -408,32 +349,123 @@ export const compileComfyWorkflow = async (
         );
     }
 
-    // After LoRAs: optional img2img. Story / multi-person shots stay pure txt2img
-    // so composition follows the narrative prompt instead of a portrait latent.
-    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
-    if (referenceImageUrl) {
-        const referenceFilename = path.basename(String(referenceImageUrl));
+    // Resolve Tier B capability (caller may pass live probe; else filesystem-only)
+    const comfyCfg = runtimeSettings?.comfyui || {};
+    const tierBCfg = comfyCfg.tier_b || {};
+    let capability: AdapterAvailability | TierBCapability =
+        adapterCapability
+        || probeTierBCapability(comfyCfg.install_path, {
+            enabled: tierBCfg.enabled !== false && comfyCfg.tier_b_enabled !== false,
+            configured: {
+                ipadapter: tierBCfg.ipadapter_model || comfyCfg.ipadapter_model,
+                clipVision: tierBCfg.clip_vision_model || comfyCfg.clip_vision_model,
+                controlnet: tierBCfg.controlnet_model || comfyCfg.controlnet_model
+            }
+        });
+
+    if (isFlux) {
+        capability = {
+            ...capability,
+            characterAdapter: false,
+            compositionControl: false
+        };
+    }
+
+    const refPlan = planReferenceGeneration(workflowData, effectivePrompt, capability);
+    for (const note of refPlan.notes) {
+        logger.info(`[ref-policy ${refPlan.tier}] ${note}`);
+    }
+
+    // Tier B: inject IP-Adapter + ControlNet when planned
+    if (refPlan.useCharacterAdapter || refPlan.useCompositionControl) {
+        const fullCap = capability as TierBCapability;
+        // Ensure we have model paths for inject (probe result)
+        const injectCap: TierBCapability = fullCap.models
+            ? fullCap
+            : probeTierBCapability(comfyCfg.install_path, {
+                enabled: true,
+                configured: {
+                    ipadapter: tierBCfg.ipadapter_model || comfyCfg.ipadapter_model,
+                    clipVision: tierBCfg.clip_vision_model || comfyCfg.clip_vision_model,
+                    controlnet: tierBCfg.controlnet_model || comfyCfg.controlnet_model
+                }
+            });
+
+        // Align inject flags with plan
+        injectCap.characterAdapter = refPlan.useCharacterAdapter;
+        injectCap.compositionControl = refPlan.useCompositionControl;
+        injectCap.characterKind =
+            refPlan.characterAdapterType === 'ip_adapter_unified'
+                ? 'ip_adapter_unified'
+                : refPlan.useCharacterAdapter
+                    ? 'ip_adapter'
+                    : 'none';
+        injectCap.compositionKind = refPlan.compositionControlType;
+
+        const charWeight = Number(
+            workflowData?.character_adapter_weight
+            ?? tierBCfg.character_weight
+            ?? 0.75
+        );
+        const compStrength = Number(
+            workflowData?.composition_control_strength
+            ?? tierBCfg.composition_strength
+            ?? 0.55
+        );
+
+        const wired = injectTierBAdapters(workflow, {
+            characterImageFilename: refPlan.refs.characterRefUrl
+                ? path.basename(String(refPlan.refs.characterRefUrl))
+                : null,
+            compositionImageFilename: refPlan.refs.compositionRefUrl
+                ? path.basename(String(refPlan.refs.compositionRefUrl))
+                : null,
+            characterWeight: charWeight,
+            compositionStrength: compStrength,
+            isFlux,
+            capability: injectCap
+        });
+        for (const n of wired.notes) {
+            logger.info(`[tier-b] ${n}`);
+        }
+        if (refPlan.useCharacterAdapter && !wired.characterWired) {
+            logger.warn('[tier-b] character adapter planned but inject failed — falling back to Tier A identity');
+        }
+        if (refPlan.useCompositionControl && !wired.compositionWired) {
+            logger.warn('[tier-b] composition control planned but inject failed — text composition only');
+        }
+    }
+
+    // Tier A img2img (only when character adapter is NOT handling identity)
+    const characterRefUrl = refPlan.refs.characterRefUrl;
+    if (characterRefUrl) {
+        const referenceFilename = path.basename(String(characterRefUrl));
         for (const node of Object.values(workflow) as any[]) {
             if (node?.class_type === 'LoadImage' && node.inputs && !node._meta?.title?.includes('NovaStory')) {
                 node.inputs.image = referenceFilename;
             }
         }
-        const policy = resolveReferenceImg2ImgPolicy(workflowData, effectivePrompt);
-        if (policy.useImg2Img) {
+        if (refPlan.img2img.useImg2Img) {
             injectImg2ImgReference(
                 workflow,
                 referenceFilename,
-                policy.denoise,
+                refPlan.img2img.denoise,
                 width,
                 height,
                 isFlux
             );
-        } else {
+        } else if (!refPlan.useCharacterAdapter) {
             logger.info(
-                `Skipping img2img for narrative composition (${policy.reason}); `
-                + `ref ${referenceFilename} kept for future adapters only`
+                `Skipping img2img (${refPlan.img2img.reason}); `
+                + `character_ref ${referenceFilename} kept for future adapters only`
             );
-            // Ensure pure txt2img denoise
+            for (const node of Object.values(workflow) as any[]) {
+                if (node?.class_type?.includes('KSampler') && node.inputs) {
+                    node.inputs.denoise = 1;
+                }
+            }
+        } else {
+            // Adapter path: ensure pure noise latent
             for (const node of Object.values(workflow) as any[]) {
                 if (node?.class_type?.includes('KSampler') && node.inputs) {
                     node.inputs.denoise = 1;
@@ -445,14 +477,11 @@ export const compileComfyWorkflow = async (
     return workflow;
 };
 
-const copyReferenceImageToComfy = (
-    workflowData: any,
+const copyOneReferenceImageToComfy = (
+    referenceImageUrl: string,
     staticDir: string,
-    comfyInstallPath?: string
+    comfyInstallPath: string
 ) => {
-    const referenceImageUrl = workflowData?.ref_image_url || workflowData?.init_image_url;
-    if (!referenceImageUrl || !comfyInstallPath) return;
-
     const filename = path.basename(String(referenceImageUrl));
     const candidates = [
         path.join(staticDir, filename),
@@ -463,7 +492,6 @@ const copyReferenceImageToComfy = (
         path.join(staticDir, '..', filename)
     ].filter(Boolean);
 
-    // Resolve /static/generated/foo.png style URLs against staticDir
     if (String(referenceImageUrl).includes('/static/generated/')) {
         candidates.unshift(path.join(staticDir, filename));
     }
@@ -484,6 +512,19 @@ const copyReferenceImageToComfy = (
     fs.mkdirSync(inputDirectory, { recursive: true });
     fs.copyFileSync(sourcePath, path.join(inputDirectory, filename));
     logger.info(`Copied reference image to ComfyUI input: ${filename}`);
+};
+
+/** Copy character + composition refs (Tier A/B) into ComfyUI/input. */
+const copyReferenceImageToComfy = (
+    workflowData: any,
+    staticDir: string,
+    comfyInstallPath?: string
+) => {
+    if (!comfyInstallPath) return;
+    const refs = resolveReferenceUrls(workflowData);
+    for (const url of refs.urlsToCopy) {
+        copyOneReferenceImageToComfy(url, staticDir, comfyInstallPath);
+    }
 };
 
 export class GenerationService {
@@ -578,6 +619,22 @@ export class GenerationService {
                 finalPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
             }
 
+            // Tier A: ensure character appearance tags survive even if a client omitted them
+            const appearanceSnippets: string[] = [];
+            if (effectiveWorkflowData?.character_appearance_prompt) {
+                appearanceSnippets.push(String(effectiveWorkflowData.character_appearance_prompt));
+            }
+            if (Array.isArray(effectiveWorkflowData?.character_appearance_snippets)) {
+                for (const s of effectiveWorkflowData.character_appearance_snippets) {
+                    if (s) appearanceSnippets.push(String(s));
+                }
+            }
+            if (appearanceSnippets.length > 0) {
+                finalPrompt = mergeAppearanceIntoPrompt(finalPrompt, appearanceSnippets);
+                // Keep workflow.prompt in sync so policy heuristics see the full text
+                effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
+            }
+
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
                 const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
@@ -595,12 +652,28 @@ export class GenerationService {
                     comfySettings.install_path
                 );
 
+                // Live Tier B probe (object_info + models) before compile
+                const isFluxRequest = String(
+                    effectiveWorkflowData?.model_type
+                    || effectiveWorkflowData?.reference_model_type
+                    || ''
+                ).toLowerCase().includes('flux');
+                const tierBCapability = await resolveTierBFromSettings(settings, {
+                    isFlux: isFluxRequest
+                });
+                logger.info(
+                    `[Task ${taskId}] Tier B probe: character=${tierBCapability.characterAdapter} `
+                    + `composition=${tierBCapability.compositionControl} `
+                    + `missing=${tierBCapability.missing.join(',') || 'none'}`
+                );
+
                 const finalWorkflow = await compileComfyWorkflow(
                     effectiveWorkflowData,
                     finalPrompt,
                     mode,
                     generationParams,
-                    settings
+                    settings,
+                    tierBCapability
                 );
 
                 result = await comfyService.generateImage(finalWorkflow, progressHandler);

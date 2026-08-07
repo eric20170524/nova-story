@@ -300,6 +300,27 @@ test('skips img2img for multi-person story scenes even if ref is passed', async 
   assert.equal(compiled['3'].inputs.denoise, 1);
 });
 
+test('character_ref_url drives img2img for turnaround (Tier A dual-field API)', async () => {
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      character_ref_url: '/static/generated/char_face.png',
+      composition_ref_url: '/static/generated/pose_sheet.png',
+      gen_type: 'turnaround',
+      denoise: 0.55
+    },
+    '1girl, turnaround sheet',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  const loadNode = Object.values(compiled).find(
+    (n: any) => n.class_type === 'LoadImage' && n.inputs?.image === 'char_face.png'
+  );
+  assert.ok(loadNode, 'LoadImage uses character_ref filename');
+  assert.equal(compiled['3'].inputs.denoise, 0.55);
+});
+
 test('timeline prompt policy mentions NSFW or SFW rules', () => {
   const nsfwPrompt = Prompts.generateTimeline('spring tide chapter', '', true);
   assert.match(nsfwPrompt, /NSFW mode ENABLED/i);

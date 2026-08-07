@@ -107,6 +107,8 @@ export const translations = {
       use_ref_portrait: "Use Reference Portrait",
       ref_portrait_active: "Reference portrait active",
       no_ref_portrait: "No reference portrait",
+      ref_tier_a_hint:
+        "Tier A/B: tags + LoRA always apply. With IP-Adapter installed, this portrait becomes a real identity lock on story shots; without it, only portrait/turnaround/close-ups use weak img2img. Composition is locked via ControlNet when you re-generate a shot (previous frame) or pass composition_ref.",
       quick_tags_label: "Quick Tags",
       prompt: "Prompt",
       negative_prompt: "Negative Prompt",
@@ -534,6 +536,8 @@ export const translations = {
       use_ref_portrait: "启用参考立绘垫图",
       ref_portrait_active: "已勾选参考图特征绑定",
       no_ref_portrait: "未选择参考图，仅凭提示词生成",
+      ref_tier_a_hint:
+        "档位 A/B：标签与 LoRA 始终生效。已安装 IP-Adapter 时，此立绘可在分镜中做身份锁定；未安装则仅立绘/三视图/特写走弱 img2img。构图：对同一镜头「原地重生成」会用上一张成图走 ControlNet；也可传 composition_ref。",
       quick_tags_label: "快捷添加",
       prompt: "ComfyUI 正向提示词",
       negative_prompt: "ComfyUI 反向提示词",

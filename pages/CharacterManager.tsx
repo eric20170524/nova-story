@@ -305,14 +305,26 @@ export const CharacterManager: React.FC = () => {
         gen_type: genType,
         style_preset: projectStyle,
         nsfw_enabled: effectiveNsfw,
+        reference_tier: 'A',
+        // Tier B composition slot reserved (portrait/turnaround only need identity)
+        composition_ref_url: null,
         project_settings: {
           default_style: projectStyle,
           nsfw_mode: projectNsfwMode
         }
       };
 
+      // Tier A: single character ref → classic img2img for portrait/turnaround only
       if (useRefPortrait && refImageUrl) {
         payload.ref_image_url = refImageUrl;
+        payload.character_ref_url = refImageUrl;
+      }
+
+      const loraPath = sheetModalChar?.visual_tags?.assets?.lora_ready
+        ? (sheetModalChar.visual_tags.assets.lora_path || sheetModalChar.visual_tags.assets.lora_name)
+        : null;
+      if (loraPath) {
+        payload.character_lora = loraPath;
       }
 
       const res = await api.generateAsset(payload, 999990 + sheetModalChar.id);
@@ -385,6 +397,9 @@ export const CharacterManager: React.FC = () => {
             style_preset: projectStyle,
             nsfw_enabled: effectiveNsfw,
             ref_image_url: portraitUrl,
+            character_ref_url: portraitUrl,
+            composition_ref_url: null,
+            reference_tier: 'A',
             project_settings: { default_style: projectStyle, nsfw_mode: projectNsfwMode }
           }, 999992 + char.id);
           if (!turnRes.task_id) throw new Error('No task id');
@@ -1061,6 +1076,9 @@ export const CharacterManager: React.FC = () => {
                       </p>
                       <p className="text-[11px] text-slate-400 truncate">
                         {sheetModalChar.name} - {t("casting.ref_portrait_feature")}
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-1 leading-relaxed">
+                        {t('characters.ref_tier_a_hint')}
                       </p>
                     </div>
                   </div>

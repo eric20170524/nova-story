@@ -19,7 +19,20 @@ const DEFAULT_SETTINGS = {
         pony_lora: 'Pony_DetailV2.0.safetensors',
         flux_lora_strength: 0.75,
         pony_lora_strength: 0.65,
-        default_workflow: 'pony_xl_12gb.json'
+        default_workflow: 'pony_xl_12gb.json',
+        /**
+         * Tier B dual-reference (Pony/SDXL):
+         * character = IP-Adapter, composition = ControlNet.
+         * Auto-probed; missing nodes/models silent-fallback to Tier A.
+         */
+        tier_b: {
+            enabled: true,
+            character_weight: 0.75,
+            composition_strength: 0.55,
+            ipadapter_model: null,
+            clip_vision_model: null,
+            controlnet_model: null
+        }
     },
     advanced: {
         nsfw_enabled: false,
