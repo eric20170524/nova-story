@@ -247,9 +247,10 @@ export const CharacterManager: React.FC = () => {
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
+      // turnaround: appearance base only (backend generates front/side/back then stitches)
       const fallbackComposition = initialGenType === 'portrait'
         ? 'character portrait, full body, front view'
-        : 'character turnaround sheet, multi-view layout, full body, front view, side view, back view';
+        : 'full body character design, standing, consistent identity';
       setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
     } finally {

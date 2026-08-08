@@ -128,6 +128,15 @@ export const resolveReferenceImg2ImgPolicy = (
   const explicit = workflowData?.denoise;
   const hasExplicitDenoise = typeof explicit === 'number' && Number.isFinite(explicit);
 
+  // Per-panel full-body view in 3-view composite pipeline — never lock to portrait latent
+  if (genType === 'turnaround_panel') {
+    return {
+      useImg2Img: false,
+      denoise: 1,
+      reason: 'turnaround_panel_txt2img'
+    };
+  }
+  // Legacy single-shot multi-view (escape hatch turnaround_mode=single): still mild img2img
   if (genType === 'turnaround') {
     return {
       useImg2Img: true,

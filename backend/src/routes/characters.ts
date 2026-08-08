@@ -354,13 +354,14 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     if (modelFamily === "pony") {
       if (req.gen_type === "turnaround") {
-        prompt = `${header.prefix}, ${genderTag}, simple background, solid white background, ${combinedDesc}${refHintPony}`;
+        // Appearance base only — GenerationService runs 3 full-body panels + stitch
+        prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHintPony}`;
       } else {
         prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
       }
     } else {
       if (req.gen_type === "turnaround") {
-        prompt = `${header.prefix}, ${genderTag}, ${combinedDesc}${refHintFlux}`;
+        prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHintFlux}`;
       } else {
         prompt = `${header.prefix}, ${genderTag}, ${combinedDesc}`;
       }
@@ -372,7 +373,9 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       model_type: req.model_type,
       gen_type: req.gen_type,
       nsfw_enabled: nsfwEnabled,
-      ref_image_url: req.use_ref_portrait ? refUrl : null
+      ref_image_url: req.use_ref_portrait ? refUrl : null,
+      // Document composite pipeline for clients
+      turnaround_pipeline: req.gen_type === 'turnaround' ? 'three_views_stitch' : undefined
     };
   });
 

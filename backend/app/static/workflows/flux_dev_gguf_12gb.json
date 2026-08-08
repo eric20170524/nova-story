@@ -8,8 +8,8 @@
   },
   "2": {
     "inputs": {
-      "clip_name1": "t5xxl_fp16.safetensors",
-      "clip_name2": "clip_l.safetensors",
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
       "type": "flux"
     },
     "class_type": "DualCLIPLoader",

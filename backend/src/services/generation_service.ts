@@ -224,10 +224,18 @@ export const compileComfyWorkflow = async (
             ? 'flux_dev_gguf_12gb'
             : 'pony_xl_12gb';
         const fallbackName = 'pony_xl_12gb';
+        // Explicit model_type on the request must win over a global UI default
+        // (otherwise "FLUX" compare runs silently on the Pony selected workflow).
+        const explicitModel =
+            Boolean(workflowData?.model_type || workflowData?.reference_model_type);
 
-        let row = selectedWorkflowName
-            ? await db.get('SELECT content FROM workflow WHERE name = ?', selectedWorkflowName)
-            : null;
+        let row = null as any;
+        if (explicitModel) {
+            row = await db.get('SELECT content FROM workflow WHERE name = ?', preferredName);
+        }
+        if (!row && selectedWorkflowName) {
+            row = await db.get('SELECT content FROM workflow WHERE name = ?', selectedWorkflowName);
+        }
         if (!row) {
             row = await db.get('SELECT content FROM workflow WHERE name = ?', preferredName);
         }
@@ -238,6 +246,10 @@ export const compileComfyWorkflow = async (
             throw new Error(`No ComfyUI workflow is configured for model '${requestedModel}'`);
         }
         workflow = parseWorkflowContent(row.content);
+        logger.info(
+            `Comfy workflow resolved: name preference=${preferredName} explicitModel=${explicitModel} `
+            + `(request model_type=${requestedModel})`
+        );
     }
 
     const isFlux = Boolean(findNodeId(workflow, (node) =>
@@ -515,7 +527,7 @@ const copyOneReferenceImageToComfy = (
 };
 
 /** Copy character + composition refs (Tier A/B) into ComfyUI/input. */
-const copyReferenceImageToComfy = (
+export const copyReferenceImageToComfy = (
     workflowData: any,
     staticDir: string,
     comfyInstallPath?: string
@@ -531,6 +543,132 @@ export class GenerationService {
     static async generateAssets(taskId: string, workflowData: any, sceneId: number, userToken?: string, mode: string = "standard", generationParams?: any) {
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
         AssetTaskStore.processing(taskId, sceneId);
+
+        // Character turnaround: 3 full-body views + stitch (reliable multi-angle sheet)
+        try {
+            const { shouldUseTurnaroundComposite, generateTurnaroundComposite } = await import(
+                './turnaround_composite'
+            );
+            if (shouldUseTurnaroundComposite(workflowData)) {
+                const settings = SettingsManager.loadSettings();
+                if (!settings.comfyui?.enabled) {
+                    throw new Error('Turnaround composite requires ComfyUI enabled');
+                }
+
+                let redis: Redis | null = null;
+                const redisUrl = process.env.REDIS_URL;
+                if (redisUrl) {
+                    try {
+                        redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, retryStrategy: () => null });
+                    } catch {
+                        redis = null;
+                    }
+                }
+                const publish = async (msgType: string, data: any) => {
+                    if (redis && redis.status === 'ready') {
+                        try {
+                            await redis.publish(
+                                `task_progress:${taskId}`,
+                                JSON.stringify({ type: msgType, data })
+                            );
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                    logger.info(`[Task ${taskId}] Progress: ${msgType}`);
+                };
+
+                try {
+                    const finalPrompt =
+                        workflowData?.prompt
+                        || workflowData?.text
+                        || workflowData?.description
+                        || '';
+                    const result = await generateTurnaroundComposite({
+                        taskId,
+                        sceneId,
+                        prompt: String(finalPrompt),
+                        negative_prompt: workflowData?.negative_prompt
+                            ? String(workflowData.negative_prompt)
+                            : undefined,
+                        workflowData,
+                        generationParams,
+                        onProgress: publish
+                    });
+
+                    const assetUrl = result.sheetUrl;
+                    if (sceneId < 90_000_000) {
+                        await db.run(
+                            'UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?',
+                            'completed',
+                            assetUrl,
+                            taskId,
+                            sceneId
+                        );
+                        await ensureSceneVersionBaseline(sceneId);
+                        await syncActiveVersionAssets(sceneId, {
+                            asset_status: 'completed',
+                            asset_url: assetUrl,
+                            task_id: taskId
+                        });
+                    }
+                    AssetTaskStore.completed(taskId, sceneId, assetUrl);
+                    if (redis && redis.status === 'ready') {
+                        try {
+                            await redis.publish(
+                                `task_progress:${taskId}`,
+                                JSON.stringify({
+                                    type: 'complete',
+                                    status: 'completed',
+                                    image_url: assetUrl,
+                                    panel_urls: result.panelUrls
+                                })
+                            );
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                    logger.info(`[Task ${taskId}] Turnaround composite completed: ${assetUrl}`);
+                    return;
+                } catch (error: any) {
+                    logger.error(`[Task ${taskId}] Turnaround composite failed: ${error?.message || error}`);
+                    AssetTaskStore.failed(taskId, sceneId, error?.message || String(error));
+                    if (sceneId < 90_000_000) {
+                        try {
+                            await db.run(
+                                'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
+                                'failed',
+                                taskId,
+                                sceneId
+                            );
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                    if (redis && redis.status === 'ready') {
+                        try {
+                            await redis.publish(
+                                `task_progress:${taskId}`,
+                                JSON.stringify({
+                                    type: 'complete',
+                                    status: 'failed',
+                                    error: error?.message || String(error)
+                                })
+                            );
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                    return;
+                } finally {
+                    if (redis) redis.disconnect();
+                }
+            }
+        } catch (importErr: any) {
+            logger.warn(
+                `[Task ${taskId}] Turnaround composite path unavailable, falling back: ${importErr?.message || importErr}`
+            );
+        }
 
         const staticDir = getGeneratedDirectory();
         if (!fs.existsSync(staticDir)) {

@@ -28,6 +28,12 @@ test('character_ref_url wins over legacy ref_image_url', () => {
   assert.equal(refs.legacyRefUrl, '/static/generated/old.png');
 });
 
+test('img2img policy: turnaround_panel is pure txt2img', () => {
+  const panel = resolveReferenceImg2ImgPolicy({ gen_type: 'turnaround_panel' }, '');
+  assert.equal(panel.useImg2Img, false);
+  assert.equal(panel.denoise, 1);
+});
+
 test('img2img policy allows turnaround and skips multi-person story', () => {
   const turn = resolveReferenceImg2ImgPolicy({ gen_type: 'turnaround' }, '');
   assert.equal(turn.useImg2Img, true);

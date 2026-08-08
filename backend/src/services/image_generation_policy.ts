@@ -118,51 +118,57 @@ export const EAST_ASIAN_FEMALE_BEAUTY_FLUX =
 export const EAST_ASIAN_FEMALE_NEGATIVE =
   'western face, caucasian, european face, male, man, boy, androgynous, masculine face, ugly face, deformed face, asymmetrical eyes, cross-eyed, extra eyes, beard, mustache';
 
+/**
+ * Style boosters should describe look (color/light/medium), not narrative content
+ * (clothing integrity, portrait composition, fashion pose). Content words are
+ * stripped on action/aftermath shots via stripStyleNarrativeTokens().
+ */
 const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   ancient_fantasy: {
-    pony: `ancient chinese xianxia, guofeng national style, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, ethereal silk, volumetric light, semi-realistic digital painting`,
-    flux: `ancient Chinese xianxia fantasy, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, guofeng national style, ethereal silk textures, volumetric god rays`
+    pony: `ancient chinese xianxia, guofeng national style, ethereal silk texture rendering, volumetric light, semi-realistic digital painting`,
+    flux: `ancient Chinese xianxia fantasy, guofeng national style, ethereal silk textures, volumetric god rays`
   },
   xianxia_immortal: {
-    pony: `xianxia immortal aesthetic, cool jade tones, sheer fabric light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, ethereal atmosphere, polished semi-realistic illustration`,
-    flux: `xianxia immortal aesthetic, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, cool jade and mist tones, translucent fabric lighting, serene atmosphere`
+    pony: `xianxia immortal aesthetic, cool jade tones, soft volumetric godrays, ethereal atmosphere, polished semi-realistic illustration`,
+    flux: `xianxia immortal aesthetic, cool jade and mist tones, translucent fabric lighting, serene atmosphere`
   },
   ethereal_glow: {
-    pony: `ethereal bloom, soft glow, luminous skin, light particles, dreamy backlighting, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
-    flux: `ethereal bloom and soft glow, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, luminous skin highlights, delicate light particles, dreamy backlighting`
+    pony: `ethereal bloom, soft glow, light particles, dreamy backlighting, smooth digital polish`,
+    flux: `ethereal bloom and soft glow, luminous highlights, delicate light particles, dreamy backlighting`
   },
   guoman_painterly: {
-    pony: `chinese manhua painterly, thick brushwork, strong rim light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
-    flux: `Chinese manhua thick painterly style, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, rich digital brushwork, dramatic rim light`
+    pony: `chinese manhua painterly, thick brushwork, strong rim light, national comic illustration finish`,
+    flux: `Chinese manhua thick painterly style, rich digital brushwork, dramatic rim light`
   },
   sensual_gufeng: {
-    // User-preferred “魅惑古风” look — keep as primary for 琼明-class stories
-    pony: `alluring ancient chinese guofeng fantasy illustration, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
-    flux: `alluring ancient Chinese guofeng fantasy beauty, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}, sheer fabric rim light, luxurious silk, intimate atmospheric haze, cinematic lighting`
+    // 魅惑古风：色调/材质/光影；alluring/sheer/intimate 在 action 镜会被自动剥离
+    pony: `alluring ancient chinese guofeng fantasy illustration, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
+    flux: `alluring ancient Chinese guofeng fantasy, sheer fabric rim light, luxurious silk texture, intimate atmospheric haze, cinematic lighting`
   },
   elegant_mature: {
-    pony: `elegant mature beauty, refined semi-realistic face, sophisticated proportions, cinematic key light, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
-    flux: `elegant mature East Asian beauty, refined semi-realistic face, sophisticated proportions, soft cinematic key light, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+    pony: `elegant mature aesthetic, refined semi-realistic face rendering, sophisticated proportions, cinematic key light`,
+    flux: `elegant mature aesthetic, refined semi-realistic face, sophisticated proportions, soft cinematic key light`
   },
   alluring_portrait: {
-    pony: `alluring portrait, soft beauty lighting, skin highlights, shallow depth of field, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
-    flux: `alluring portrait, soft beauty lighting, subtle skin highlights, shallow depth of field, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+    // Portrait-oriented; on action/aftermath becomes lighting-only via strip
+    pony: `alluring portrait, soft beauty lighting, skin highlights, shallow depth of field`,
+    flux: `alluring portrait, soft beauty lighting, subtle skin highlights, shallow depth of field`
   },
   anime: {
-    pony: `source_anime, cel shaded, clean lines, vibrant colors, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`,
-    flux: `anime illustration style, clean lines, vibrant colors, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+    pony: `source_anime, cel shaded, clean lines, vibrant colors`,
+    flux: `anime illustration style, clean lines, vibrant colors`
   },
   cinematic_photo: {
-    pony: 'cinematic lighting, shallow depth of field, film still',
+    pony: 'cinematic lighting, shallow depth of field, film still, film grain',
     flux: 'cinematic photorealistic still, natural skin texture, realistic lens bokeh, film color grade, shot on 50mm'
   },
   aesthetic_romance: {
-    pony: 'aesthetic romantic, soft color grading, poetic atmosphere, elegant portrait',
+    pony: 'aesthetic romantic, soft color grading, poetic atmosphere, gentle depth of field',
     flux: 'aesthetic romantic illustration, soft cinematic color grading, poetic atmosphere, gentle depth of field'
   },
   game_illustration: {
-    pony: 'game character splash art, sharp silhouette, polished anime-semireal shading',
-    flux: 'premium game character illustration, splash-art quality, sharp costume silhouette, cinematic character spotlight'
+    pony: 'game character splash art shading, sharp silhouette, polished anime-semireal shading',
+    flux: 'premium game character illustration shading, splash-art quality materials, cinematic character spotlight'
   },
   semi_realistic: {
     pony: 'semi-realistic digital painting, soft blending, cinematic lighting, detailed eyes',
@@ -172,6 +178,68 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
     pony: 'ink wash painting, sumi-e, brushstrokes, negative space',
     flux: 'traditional ink wash painting, sumi-e, visible brushstrokes, rice paper texture, negative space'
   }
+};
+
+/** Tokens that describe narrative content / portrait lock — strip on action & aftermath */
+const STYLE_NARRATIVE_STRIP_RE =
+  /\b(alluring|intimate|sheer fabric(?: rim light)?|portrait|looking at viewer|beauty portrait|elegant portrait|fashion pose|fully clothed|artistic portrait|group portrait|splash-art pose)\b/gi;
+
+export type StyleShotMode = 'portrait' | 'action' | 'aftermath' | 'environment' | 'general';
+
+/**
+ * Infer how aggressively style boosters may inject beauty/portrait language.
+ * Does not require wardrobe_state fields — pure prompt heuristics.
+ */
+export const inferStyleShotMode = (
+  existingPrompt: string,
+  opts?: { genType?: string | null; shotType?: string | null }
+): StyleShotMode => {
+  const p = String(existingPrompt || '');
+  const gen = String(opts?.genType || '').toLowerCase();
+  const shot = String(opts?.shotType || '').toLowerCase();
+
+  if (
+    /\bextreme long shot\b|\bestablishing\b|\bcloud sea\b|\bempty (palace|hall|room)\b/i.test(p)
+    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|portrait|goddess|immortal|martial/i.test(p)
+  ) {
+    return 'environment';
+  }
+
+  if (
+    /(torn|ripped|tattered|battle damage|clothing damage|disheveled|defeated|lying on|on (her|his|the) back|pinned|knee (on|pinning|pin)|aftermath|破损|撕|倒地|战损)/i.test(
+      p
+    )
+  ) {
+    return 'aftermath';
+  }
+
+  if (
+    /(whip kick|grappling|clinch|throw|hand-to-hand|martial arts combat|combat|fight|clash|strike|punch|kick|dash|action still|打斗|体术|交锋)/i.test(
+      p
+    )
+  ) {
+    return 'action';
+  }
+
+  if (
+    gen === 'portrait'
+    || /\b(portrait|bust shot|upper body only|looking at viewer)\b/i.test(p)
+    || (/\b(close-?up|extreme close)\b/i.test(shot) && !/\b(2girls|3girls|combat|fight)\b/i.test(p))
+  ) {
+    return 'portrait';
+  }
+
+  return 'general';
+};
+
+/** Strip content/portrait locks from a style booster string for action/aftermath. */
+export const stripStyleNarrativeTokens = (boost: string): string => {
+  return boost
+    .replace(STYLE_NARRATIVE_STRIP_RE, ' ')
+    .replace(/,\s*,/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^,\s*|,\s*$/g, '')
+    .trim();
 };
 
 const listLoraFiles = (installPath?: string | null): string[] => {
@@ -426,6 +494,7 @@ const joinUniqueCsv = (parts: string[]): string =>
 
 /**
  * Build positive/negative prompt boosters for model + NSFW mode + optional style preset.
+ * Style must not override narrative clothing state or combat composition.
  * Does NOT force explicit content into every frame when NSFW is on — only unlocks quality/triggers.
  */
 export const buildPromptEnhancement = (options: {
@@ -434,12 +503,28 @@ export const buildPromptEnhancement = (options: {
   stylePreset?: string | null;
   loadedLoras?: LoraSlot[];
   existingPrompt?: string;
+  /** Optional hints for style shot mode (gen_type / shot_type) */
+  genType?: string | null;
+  shotType?: string | null;
 }): PromptEnhancement => {
-  const { modelFamily, nsfwEnabled, stylePreset, loadedLoras = [], existingPrompt = '' } = options;
+  const {
+    modelFamily,
+    nsfwEnabled,
+    stylePreset,
+    loadedLoras = [],
+    existingPrompt = '',
+    genType = null,
+    shotType = null
+  } = options;
   const lower = existingPrompt.toLowerCase();
   const prefixParts: string[] = [];
   const suffixParts: string[] = [];
   const negativeParts: string[] = [];
+
+  const shotMode = inferStyleShotMode(existingPrompt, { genType, shotType });
+  const isActionLike = shotMode === 'action' || shotMode === 'aftermath';
+  const isPortraitLike = shotMode === 'portrait';
+  const isEnvironment = shotMode === 'environment';
 
   // LoRA trigger tokens
   for (const slot of loadedLoras) {
@@ -448,16 +533,22 @@ export const buildPromptEnhancement = (options: {
     }
   }
 
-  // Always push East-Asian feminine beauty unless the shot is clearly male-only or environment-only
+  // East-Asian feminine beauty: skip environment; lighten on action/aftermath so combat wins
   const looksLikeMaleOnly =
     /\b1boy\b|\b2boys\b|\bmen only\b/i.test(existingPrompt)
     && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|female/i.test(existingPrompt);
-  const looksLikeEnvironmentOnly =
-    /\bextreme long shot\b|\bestablishing\b|\bcloud sea\b|\bempty (palace|hall|room)\b/i.test(existingPrompt)
-    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|portrait|goddess|immortal/i.test(existingPrompt);
 
-  if (!looksLikeMaleOnly && !looksLikeEnvironmentOnly) {
-    if (modelFamily === 'pony') {
+  if (!looksLikeMaleOnly && !isEnvironment) {
+    if (isActionLike) {
+      // Identity only — no heavy beauty-portrait stack
+      if (modelFamily === 'pony') {
+        if (!/(east asian|chinese beauty)/i.test(existingPrompt)) {
+          suffixParts.push('East Asian features, female');
+        }
+      } else if (!/(east asian|chinese|japanese|korean)/i.test(existingPrompt)) {
+        suffixParts.push('East Asian facial features, female');
+      }
+    } else if (modelFamily === 'pony') {
       if (!/(east asian|chinese beauty|japanese anime beauty)/i.test(existingPrompt)) {
         suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_PONY);
       }
@@ -469,7 +560,6 @@ export const buildPromptEnhancement = (options: {
 
   if (modelFamily === 'pony') {
     if (nsfwEnabled) {
-      // Unlock adult capability without forcing nudity on establishing / clothed shots
       const intimateCue =
         /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
           existingPrompt
@@ -486,18 +576,25 @@ export const buildPromptEnhancement = (options: {
       if (!/source_anime|source_cartoon/i.test(existingPrompt)) {
         suffixParts.push('source_anime');
       }
+      // SFW = no sex/genitalia — NOT "fully clothed fashion". Allow battle tears.
       negativeParts.push(
-        'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act, pussy, penis, sex'
+        'nsfw, nude, genitalia, sexual act, pussy, penis, sex'
       );
+      // On non-damage shots still discourage gratuitous exposure; on aftermath allow tears
+      if (!isActionLike) {
+        negativeParts.push('explicit sexual content, exposed breasts');
+      } else {
+        negativeParts.push('explicit sexual content');
+      }
     }
   } else {
-    // FLUX
     if (nsfwEnabled) {
       suffixParts.push('detailed skin texture, natural anatomy');
     } else {
-      negativeParts.push(
-        'nsfw, nude, explicit sexual content, exposed breasts, genitalia, sexual act'
-      );
+      negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
+      if (!isActionLike) {
+        negativeParts.push('exposed breasts');
+      }
     }
   }
 
@@ -509,15 +606,24 @@ export const buildPromptEnhancement = (options: {
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
   const booster = presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined;
   if (booster) {
-    const boost = modelFamily === 'flux' ? booster.flux : booster.pony;
-    // Avoid re-injecting if the director already appended the full style prompt
-    const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).slice(0, 2);
-    const already = boostTokens.every((t) => t && lower.includes(t));
-    if (!already) {
+    let boost = modelFamily === 'flux' ? booster.flux : booster.pony;
+    // (2) Auto-strip alluring / intimate / portrait locks on action & aftermath
+    if (isActionLike) {
+      boost = stripStyleNarrativeTokens(boost);
+    }
+    // alluring_portrait on non-portrait scene shots: keep lighting only
+    if (presetKey === 'alluring_portrait' && !isPortraitLike) {
+      boost = stripStyleNarrativeTokens(boost);
+      if (!boost) {
+        boost = 'soft beauty lighting, shallow depth of field';
+      }
+    }
+    const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
+    const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
+    if (!already && boost) {
       suffixParts.push(boost);
     }
   } else if (
-    // Heuristic: guofeng / xianxia story content without preset
     /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠)/i.test(existingPrompt)
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
@@ -528,13 +634,25 @@ export const buildPromptEnhancement = (options: {
     );
   }
 
-  // Advanced/adult styles when NSFW off still need soft SFW framing
-  if (
-    !nsfwEnabled
-    && (presetKey === 'sensual_gufeng' || presetKey === 'alluring_portrait' || presetKey === 'elegant_mature')
-  ) {
-    suffixParts.push('tasteful elegance, fully clothed, artistic portrait');
+  // (1) Default: NO fully clothed / artistic portrait.
+  // Portrait mode only: soft elegance (not clothing lock).
+  // Action/aftermath: anti-fashion-pose negatives + combat-friendly positives.
+  if (!nsfwEnabled) {
     negativeParts.push('nude, nipples, explicit');
+    if (isPortraitLike) {
+      suffixParts.push('tasteful elegance');
+    } else if (shotMode === 'aftermath') {
+      suffixParts.push('tasteful action still, combat aftermath, ripped fabric edges visible');
+      negativeParts.push(
+        'intact pristine dress, perfect undamaged clothing, dual standing fashion pose, glamorous group portrait, looking at viewer selfie pose, both standing idle'
+      );
+    } else if (shotMode === 'action') {
+      suffixParts.push('tasteful action still, dynamic combat composition');
+      negativeParts.push(
+        'dual standing fashion pose, glamorous group portrait, looking at viewer selfie pose, static beauty portrait only'
+      );
+    }
+    // general / environment: no fully clothed injection
   }
 
   return {
@@ -603,7 +721,9 @@ export const resolveGenerationPlan = (options: {
     nsfwEnabled,
     stylePreset,
     loadedLoras: loras,
-    existingPrompt: basePrompt
+    existingPrompt: basePrompt,
+    genType: workflowData?.gen_type ?? null,
+    shotType: workflowData?.shot_type ?? null
   });
 
   return { loras, enhancement };
@@ -641,9 +761,10 @@ export const buildCharacterPromptHeader = (
   genType: string
 ): { prefix: string; negative: string } => {
   if (modelFamily === 'pony') {
+    // turnaround prompt is appearance base only — pipeline generates front/side/back panels then stitches
     const base =
       genType === 'turnaround'
-        ? `score_9, score_8_up, score_7_up, source_anime, character turnaround sheet, full body model sheet, multi-view layout, front view, side view, back view, 3 views, aligned character turnaround, consistent character design, same face across all views, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`
+        ? `score_9, score_8_up, score_7_up, source_anime, full body character design, consistent character identity, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`
         : `score_9, score_8_up, score_7_up, source_anime, portrait, upper body, front view, masterpiece, detailed face and eyes, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`;
     const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
     const neg = nsfwEnabled
@@ -654,7 +775,7 @@ export const buildCharacterPromptHeader = (
 
   const base =
     genType === 'turnaround'
-      ? `full body character turnaround sheet, split view layout, front view, side view, back view, complete 3-view character model sheet, character reference sheet, consistent character design from all angles, same face across views, clean studio white background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+      ? `full body character design, consistent character identity, clean studio white background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
       : `high quality character portrait, front view, detailed face and eyes, clean studio background, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`;
   const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, child`;
   const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
