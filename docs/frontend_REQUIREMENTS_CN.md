@@ -1,5 +1,8 @@
 # NovaStory 前端功能需求文档 (第一阶段完善)
 
+> **状态：历史需求摘要**  
+> 实现以当前代码与 [backend_implemented_features.md](./backend_implemented_features.md) 为准；文档索引见 [README.md](./README.md)。
+
 基于后端已完成的 API 更新（项目、角色、工作流、时间轴服务），前端需要实现以下功能模块以完成闭环。
 
 ## 1. 项目管理 (Project Management)

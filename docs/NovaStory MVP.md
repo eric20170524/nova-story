@@ -1,3 +1,6 @@
+> **状态：历史规划文档**  
+> 其中工作流举例（如 `flux_dev_lora.json`）已过时。现行本地栈为 **Pony XL + SD1.5 Draft**，见 [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md) 与 [README.md](./README.md)。
+
 **“全能型 AI 短剧引擎” 最佳实践实施方案 (NovaStory MVP)**
 
 ---

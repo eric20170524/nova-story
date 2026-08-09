@@ -2,6 +2,8 @@
 
 本文档整理了针对 **RTX 3060 12GB + 32GB 系统内存** 的 NovaStory 本地生图策略（2026-08 实测结论）。
 
+文档索引：[README.md](./README.md) · ComfyUI 步骤：[comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md) · 参考图策略：[local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)
+
 ## 0. 本机实测配置（参考）
 
 | 项目 | 规格 |
@@ -73,6 +75,8 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 
 装完后重启 ComfyUI，检查 `GET /api/settings/tier-b-status` → `full_dual_ref: true`。  
 缺模型时自动回退档位 A，不会硬失败。详见 `docs/comfyui_local_setup_guide_3060.md`。
+
+**门禁提醒：** 双人 / 远景 / 动作分镜**不会**对单张角色立绘启用 IP-Adapter（避免构图塌成软肖像）。立绘/三视图/单人特写才适合身份适配器。详见 [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。
 
 ---
 
@@ -158,7 +162,9 @@ Pony XL（成片 + NSFW + 角色） + SD1.5 精品模（草稿）
 
 - **Checkpoint / LoRA / 工作流**：主要 [Civitai](https://civitai.com)  
 - **ComfyUI 部署步骤**：`docs/comfyui_local_setup_guide_3060.md`  
+- **参考 / IP-Adapter 策略**：`docs/local_image_reference_policy_cn.md`  
 - **画风与模型对照（历史对比文，FLUX 仅作背景）**：`local/Pony_XL与FLUX_Dev_GGUF生图风格对比.md`  
+- **分镜批跑对照实验**：`local/shortstory/xianxia_duel/`（v2 成功基线；v4 IP 失败；v4.1 无 IP 修复）
 
 默认系统配置应保持：
 

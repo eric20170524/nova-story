@@ -168,14 +168,15 @@ test('planReferenceGeneration disables img2img when character adapter on', () =>
 });
 
 test('compileComfyWorkflow injects Tier B when capability forced', async () => {
+  // Portrait gen_type allows character IP-Adapter; composition_ref still wires ControlNet
   const compiled = await compileComfyWorkflow(
     {
       ...ponyWorkflow(),
       character_ref_url: '/static/generated/char_face.png',
       composition_ref_url: '/static/generated/layout.png',
-      gen_type: 'scene'
+      gen_type: 'portrait'
     },
-    '1girl, silver hair, sitting on throne, medium shot',
+    '1girl, silver hair, portrait, close-up face, solo',
     'standard',
     {},
     { advanced: { nsfw_enabled: false }, comfyui: { tier_b: { enabled: true } } },

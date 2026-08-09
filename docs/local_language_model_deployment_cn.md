@@ -71,8 +71,9 @@ API 只绑定回环地址，并显式设置 `OLLAMA_NO_CLOUD=1`；不应把 1143
 `stop_local_llm.bat` 只释放文本模型显存，`stop_comfyui.bat` 只停止 ComfyUI；
 `stop_all.bat` 会停止 NovaStory、ComfyUI 和 Ollama 服务。
 
-RTX 4060 8GB 不建议同时让 Qwen3-8B 和 Pony/Flux 常驻显存。若在生图模式中调用
+RTX 4060 8GB 不建议同时让 Qwen3-8B 和 **Pony / SDXL 生图**常驻显存。若在生图模式中调用
 LLM，Ollama 可能部分回退到系统内存，速度会明显下降，也可能触发内存不足。
+（本地生图默认已退役 FLUX.1-dev GGUF，见 `local_image_generation_deployment_cn.md`。）
 
 ## 配置与重新部署
 

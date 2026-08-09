@@ -1,5 +1,9 @@
 # Frontend TODO List
 
+> **状态：历史文档（2026-07 前后）**  
+> 下列「待办」多数已在主线实现（Markdown 编辑器、章节删除、分镜生成、工作流 JSON 编辑等）。  
+> **请勿当作现状清单。** 现行能力见 [backend_implemented_features.md](./backend_implemented_features.md) 与仓库根 `TODO.md`；文档索引见 [README.md](./README.md)。
+
 ## 🟢 Completed Features (已完成功能)
 
 ### Infrastructure
