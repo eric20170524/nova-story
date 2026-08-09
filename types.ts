@@ -73,6 +73,17 @@ export interface Chapter {
   title: string;
   index: number;
   content: string;
+  summary?: string | null;
+  condensed_content?: string | null;
+  status?: string;
+}
+
+export interface GlossaryItem {
+  id: number;
+  project_id: number;
+  term: string;
+  definition?: string | null;
+  category?: string | null;
 }
 
 // Timeline & Director Mode

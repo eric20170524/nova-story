@@ -292,19 +292,89 @@ class ApiService {
   getChapters = (projectId: number) => this.request<any[]>(`/chapters/?project_id=${projectId}`);
 
   // Agent / AI
-  draftText = (context: string, prompt: string) => this.request<{ content: string }>('/agent/draft', { 
-    method: 'POST', 
-    body: { 
-      context_text: context, 
-      instructions: prompt 
-    } 
+  draftText = (
+    context: string,
+    prompt: string,
+    extras?: {
+      project_id?: number;
+      chapter_id?: string;
+      target_word_count?: number;
+      apply?: boolean;
+    }
+  ) => this.request<{ content: string; condensed?: string; next_plot?: string }>('/agent/draft', {
+    method: 'POST',
+    body: {
+      context_text: context,
+      instructions: prompt,
+      project_id: extras?.project_id,
+      chapter_id: extras?.chapter_id,
+      target_word_count: extras?.target_word_count,
+      apply: extras?.apply,
+    },
   });
   analyzeText = (text: string) => this.request<any>('/agent/analyze', { method: 'POST', body: { content: text } });
   generateStoryboardGrid = (storyText: string) => this.request<{ prompt: string }>('/agent/storyboard-grid', { method: 'POST', body: { story_text: storyText } });
-  
+  checkConsistency = (projectId: number) =>
+    this.request<{ issues: Array<{ severity: string; location: string; description: string }> }>(
+      '/agent/consistency',
+      { method: 'POST', body: { project_id: projectId } }
+    );
+  applyChapterImpact = (projectId: number, chapterId: string, apply = true) =>
+    this.request<any>('/agent/impact', {
+      method: 'POST',
+      body: { project_id: projectId, chapter_id: chapterId, apply },
+    });
+  runWritingSkill = (body: {
+    project_id: number;
+    chapter_id: string;
+    skill: 'CINEMATIC_REWRITE' | 'ADD_CONFLICT' | 'REVERSE_PLOT';
+    technique?: string;
+    conflictType?: string;
+    intensity?: string;
+    reversalType?: string;
+    targetCharacter?: string;
+    instructions?: string;
+    apply?: boolean;
+  }) => this.request<{ content: string; applied: boolean }>('/agent/skill', { method: 'POST', body });
+
   // Agentic OS
-  chatWithAgent = (message: string, context: any, history: any[]) => 
-    this.request<any>('/assistant/chat', { method: 'POST', body: { message, context, history } });
+  chatWithAgent = (message: string, context: any, history: any[]) =>
+    this.request<{
+      thought: string;
+      response: string;
+      actions?: any[];
+      needs_confirmation?: boolean;
+      action?: any;
+    }>('/assistant/chat', { method: 'POST', body: { message, context, history } });
+
+  executeAgentActions = (body: {
+    project_id: number;
+    chapter_id?: string | null;
+    language?: string | null;
+    actions: any[];
+    apply?: boolean;
+  }) =>
+    this.request<{ results: Array<{ op: string; status: string; message?: string; data?: any }> }>(
+      '/assistant/execute',
+      { method: 'POST', body }
+    );
+
+  // Glossary
+  listGlossary = (projectId: number) =>
+    this.request<any[]>(`/projects/${projectId}/glossary`);
+  createGlossary = (projectId: number, data: { term: string; definition?: string; category?: string }) =>
+    this.request<any>(`/projects/${projectId}/glossary`, { method: 'POST', body: data });
+  updateGlossary = (
+    projectId: number,
+    glossaryId: number,
+    data: { term?: string; definition?: string | null; category?: string | null }
+  ) =>
+    this.request<any>(`/projects/${projectId}/glossary/${glossaryId}`, {
+      method: 'PUT',
+      body: data,
+    });
+  deleteGlossary = (projectId: number, glossaryId: number) =>
+    this.request(`/projects/${projectId}/glossary/${glossaryId}`, { method: 'DELETE' });
 
   // Timeline & Director
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);

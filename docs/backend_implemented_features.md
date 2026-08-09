@@ -10,6 +10,7 @@
 - 章节自动分镜与场景编辑
 - 单场景 9 镜头 coverage 的生成、应用与提升
 - AI 续写、内容分析、上下文读取和导演助手工具调用
+- **Agent OS（写作内核）**：多 Action 决策 + Zod 自愈；`POST /assistant/execute` 确认后执行；分层记忆与负向约束续写；一致性体检 / 定稿影响 / 写作技能；项目术语表 `glossary`；见 [agent_os_plan_cn.md](./agent_os_plan_cn.md)
 - 角色抽取、跨章节外观演化、素材上传与头像裁剪
 - **场景 / 角色内容版本**：基线版本、新建版本、激活版本、资产同步（A/B 试图）
 - 图片任务：`generation_task` SQLite 持久化、状态查询、SSE、Redis 可选 Pub/Sub  

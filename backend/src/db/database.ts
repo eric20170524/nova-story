@@ -327,6 +327,27 @@ const migrations: Migration[] = [
           ON generation_task(comfy_prompt_id);
       `);
     }
+  },
+  {
+    version: '007_agent_os_writing',
+    up: async (database) => {
+      await ensureColumns(database, 'chapter', {
+        condensed_content: 'TEXT'
+      });
+
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS glossary (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL,
+          term VARCHAR(200) NOT NULL,
+          definition TEXT,
+          category VARCHAR(100),
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_glossary_project
+          ON glossary(project_id);
+      `);
+    }
   }
 ];
 

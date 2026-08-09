@@ -1,22 +1,29 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Wand2, RefreshCw, Plus, FileText, PanelRight, X, Trash2, Film, Clapperboard, ArrowUp, ArrowDown, Users, Sparkles, BookOpen, Grid } from 'lucide-react';
+import { Save, Wand2, RefreshCw, Plus, FileText, PanelRight, X, Trash2, Clapperboard, ArrowUp, ArrowDown, Users, Sparkles, BookOpen, Grid, Undo2, Redo2, ShieldAlert, Bot } from 'lucide-react';
 import SimpleMDE from 'react-simplemde-editor';
 import { api } from '../services/api';
 import { Chapter } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
+import { useUndo } from '../hooks/useUndo';
+import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 
 export const StoryEditor: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { showToast } = useToast();
+  const agentCtx = useProjectAgentOptional();
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
-  const [content, setContent] = useState('');
+  const [content, setContent, undo, redo, canUndo, canRedo, setContentWithoutHistory] = useUndo('');
+  const [summary, setSummary] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [breakdownLoading, setBreakdownLoading] = useState(false);
+  const [consistencyIssues, setConsistencyIssues] = useState<
+    Array<{ severity: string; location: string; description: string }> | null
+  >(null);
   
   // Cinematic Grid State
   const [gridPrompt, setGridPrompt] = useState<string | null>(null);
@@ -29,7 +36,7 @@ export const StoryEditor: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<{ new_entities: string[], updates: string[] } | null>(null);
   
   const [showRightPanel, setShowRightPanel] = useState(false);
-  const [activeTab, setActiveTab] = useState<'characters' | 'analysis'>('characters');
+  const [activeTab, setActiveTab] = useState<'characters' | 'analysis' | 'writing'>('characters');
 
   useEffect(() => {
     console.log(`[StoryEditor] Mounted. ProjectId: ${projectId}`);
@@ -37,21 +44,32 @@ export const StoryEditor: React.FC = () => {
   }, [projectId]);
 
   useEffect(() => {
+    const onAgent = () => {
+      if (projectId) loadChapters();
+    };
+    window.addEventListener('novastory-agent-data-changed', onAgent);
+    return () => window.removeEventListener('novastory-agent-data-changed', onAgent);
+  }, [projectId]);
+
+  useEffect(() => {
     if (selectedChapter) {
       console.log(`[StoryEditor] Chapter selected: ${selectedChapter.id} - ${selectedChapter.title}`);
-      setContent(selectedChapter.content || '');
-      setExtractedCharacters([]); // Reset analysis when chapter changes
+      setContentWithoutHistory(selectedChapter.content || '');
+      setSummary(selectedChapter.summary || '');
+      setExtractedCharacters([]);
       setAnalysisResult(null);
+      setConsistencyIssues(null);
       
-      // Context Sync: Update local storage so Director Mode knows which chapter is active
       if (projectId) {
           localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapter.id);
+          agentCtx?.setActiveChapterId(selectedChapter.id);
       }
     } else {
       console.log(`[StoryEditor] No chapter selected.`);
-      setContent('');
+      setContentWithoutHistory('');
+      setSummary('');
     }
-  }, [selectedChapter, projectId]);
+  }, [selectedChapter?.id, projectId]);
 
   const loadChapters = async () => {
     if (!projectId) {
@@ -158,10 +176,13 @@ export const StoryEditor: React.FC = () => {
     try {
       await api.updateChapter(selectedChapter.id, {
         ...selectedChapter,
-        content: content
+        content,
+        summary,
       });
       console.log(`[StoryEditor] Chapter saved.`);
-      setChapters(chapters.map(c => c.id === selectedChapter.id ? { ...c, content } : c));
+      const updated = { ...selectedChapter, content, summary };
+      setSelectedChapter(updated);
+      setChapters(chapters.map(c => c.id === selectedChapter.id ? updated : c));
       showToast(t("story.saved", "Saved"), 'success');
     } catch (e) {
       console.error("[StoryEditor] Save failed", e);
@@ -170,17 +191,91 @@ export const StoryEditor: React.FC = () => {
   };
 
   const handleAIDraft = async () => {
+    if (!selectedChapter || !projectId) return;
     setAiLoading(true);
     try {
-      const prompt = "Continue the story naturally from the current text.";
-      const res = await api.draftText(content, prompt);
+      const prompt =
+        "Continue the story naturally from the current text. Respect chapter summary and do not spoil the next chapter.";
+      const res = await api.draftText(content, prompt, {
+        project_id: Number(projectId),
+        chapter_id: selectedChapter.id,
+        target_word_count: 800,
+      });
       if (res && res.content) {
-        setContent(prev => prev + "\n" + res.content);
+        const next = (content ? content + "\n\n" : "") + res.content;
+        setContent(next);
+        if (res.condensed) {
+          setSelectedChapter({
+            ...selectedChapter,
+            condensed_content: res.condensed,
+          });
+        }
         showToast(t('story.ai_draft_success'), 'success');
       }
     } catch (e) {
       showToast(t('story.ai_draft_fail'), 'error');
       console.error(e);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleConsistencyCheck = async () => {
+    if (!projectId) return;
+    setIsAnalyzing(true);
+    try {
+      const res = await api.checkConsistency(Number(projectId));
+      setConsistencyIssues(res.issues || []);
+      setActiveTab('writing');
+      showToast(t('story.consistency_done', 'Consistency check complete'), 'success');
+    } catch (e) {
+      console.error(e);
+      showToast(t('story.consistency_fail', 'Consistency check failed'), 'error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleChapterImpact = async () => {
+    if (!projectId || !selectedChapter) return;
+    await handleSave();
+    setIsAnalyzing(true);
+    try {
+      await api.applyChapterImpact(Number(projectId), selectedChapter.id, true);
+      showToast(t('story.impact_done', 'World state updated from chapter'), 'success');
+    } catch (e) {
+      console.error(e);
+      showToast(t('story.impact_fail', 'Impact analysis failed'), 'error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleSkill = async (
+    skill: 'CINEMATIC_REWRITE' | 'ADD_CONFLICT' | 'REVERSE_PLOT'
+  ) => {
+    if (!projectId || !selectedChapter) return;
+    await handleSave();
+    setAiLoading(true);
+    try {
+      const res = await api.runWritingSkill({
+        project_id: Number(projectId),
+        chapter_id: selectedChapter.id,
+        skill,
+        technique: skill === 'CINEMATIC_REWRITE' ? 'sensory' : undefined,
+        conflictType: skill === 'ADD_CONFLICT' ? 'variable_intrusion' : undefined,
+        intensity: 'high',
+        reversalType: skill === 'REVERSE_PLOT' ? 'motive_switch' : undefined,
+        instructions: t('story.skill_default_instr', 'Improve drama and immersion'),
+        apply: false,
+      });
+      if (res?.content) {
+        setContent(res.content);
+        showToast(t('story.skill_done', 'Rewrite ready — save when satisfied'), 'success');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast(t('story.skill_fail', 'Skill rewrite failed'), 'error');
     } finally {
       setAiLoading(false);
     }
@@ -334,6 +429,24 @@ export const StoryEditor: React.FC = () => {
             placeholder={t('story.chapter_title_placeholder')}
           />
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30"
+              title={t('story.undo', 'Undo')}
+            >
+              <Undo2 size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30"
+              title={t('story.redo', 'Redo')}
+            >
+              <Redo2 size={16} />
+            </button>
             <button 
               onClick={() => navigate(`/project/${projectId}/director`)}
               className="hidden md:flex items-center gap-1 px-3 py-1.5 text-slate-400 hover:text-indigo-400 text-sm transition-colors mr-1"
@@ -341,6 +454,14 @@ export const StoryEditor: React.FC = () => {
             >
                <Clapperboard size={16} />
                <span>{t("story.to_storyboard", "To Storyboard")}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => agentCtx?.setOpen(true)}
+              className="hidden sm:flex items-center gap-1 px-2 py-1.5 text-indigo-400 hover:text-indigo-300 text-xs"
+              title={t('agent.title_os')}
+            >
+              <Bot size={16} />
             </button>
 
             <button 
@@ -359,11 +480,26 @@ export const StoryEditor: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {selectedChapter && (
+          <div className="px-3 sm:px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80">
+            <label className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">
+              {t('story.chapter_summary', 'Chapter outline / summary')}
+            </label>
+            <textarea
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              rows={2}
+              placeholder={t('story.summary_placeholder', 'Key events, conflict, ending hook…')}
+              className="mt-1 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 resize-none"
+            />
+          </div>
+        )}
         
         <div className="flex-1 relative group/editor overflow-hidden flex flex-col">
           {selectedChapter ? (
               <SimpleMDE
-                key={selectedChapter.id} // Re-render SimpleMDE when chapter changes to ensure content sync
+                key={selectedChapter.id}
                 value={content}
                 onChange={(val) => setContent(val)}
                 options={editorOptions}
@@ -413,7 +549,7 @@ export const StoryEditor: React.FC = () => {
               }`}
             >
               <Users size={16} />
-              <span>{t('story.tab_characters')}</span>
+              <span className="hidden sm:inline">{t('story.tab_characters')}</span>
             </button>
             <button
               onClick={() => setActiveTab('analysis')}
@@ -424,7 +560,18 @@ export const StoryEditor: React.FC = () => {
               }`}
             >
               <Sparkles size={16} />
-              <span>{t('story.tab_analysis')}</span>
+              <span className="hidden sm:inline">{t('story.tab_analysis')}</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('writing')}
+              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                activeTab === 'writing' 
+                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/30' 
+                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <ShieldAlert size={16} />
+              <span className="hidden sm:inline">{t('story.tab_writing', 'Writing')}</span>
             </button>
          </div>
 
@@ -518,6 +665,91 @@ export const StoryEditor: React.FC = () => {
                         </div>
                     )}
                 </div>
+            )}
+
+            {activeTab === 'writing' && (
+              <div className="space-y-3 animate-in fade-in duration-200">
+                <button
+                  type="button"
+                  onClick={() => agentCtx?.setOpen(true)}
+                  className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs rounded flex justify-center items-center gap-2"
+                >
+                  <Bot size={14} />
+                  {t('agent.open_panel', 'Open Agent OS')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConsistencyCheck}
+                  disabled={isAnalyzing}
+                  className="w-full py-2 bg-amber-600/10 hover:bg-amber-600/20 text-amber-200 border border-amber-500/30 text-xs rounded flex justify-center items-center gap-2"
+                >
+                  {isAnalyzing ? <RefreshCw className="animate-spin" size={14} /> : <ShieldAlert size={14} />}
+                  {t('story.consistency_btn', 'Full consistency check')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleChapterImpact}
+                  disabled={isAnalyzing || !selectedChapter}
+                  className="w-full py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-200 border border-emerald-500/30 text-xs rounded flex justify-center items-center gap-2"
+                >
+                  {t('story.impact_btn', 'Apply chapter → world update')}
+                </button>
+                <div className="pt-2 border-t border-slate-800 space-y-2">
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wide">
+                    {t('story.skills', 'Writing skills')}
+                  </p>
+                  {(
+                    [
+                      ['CINEMATIC_REWRITE', t('story.skill_cinematic', 'Cinematic rewrite')],
+                      ['ADD_CONFLICT', t('story.skill_conflict', 'Add conflict')],
+                      ['REVERSE_PLOT', t('story.skill_reversal', 'Plot twist')],
+                    ] as const
+                  ).map(([skill, label]) => (
+                    <button
+                      key={skill}
+                      type="button"
+                      disabled={aiLoading || !selectedChapter}
+                      onClick={() => handleSkill(skill)}
+                      className="w-full py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 disabled:opacity-50"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {consistencyIssues && (
+                  <div className="space-y-2 pt-2">
+                    <h5 className="text-xs font-bold text-slate-500 uppercase">
+                      {t('story.issues', 'Issues')} ({consistencyIssues.length})
+                    </h5>
+                    {consistencyIssues.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic">
+                        {t('story.no_issues', 'No major issues found')}
+                      </p>
+                    ) : (
+                      consistencyIssues.map((issue, i) => (
+                        <div
+                          key={i}
+                          className="text-xs p-2 rounded border border-slate-800 bg-slate-800/40"
+                        >
+                          <span
+                            className={`font-bold mr-1 ${
+                              issue.severity === 'HIGH'
+                                ? 'text-red-400'
+                                : issue.severity === 'MEDIUM'
+                                  ? 'text-amber-400'
+                                  : 'text-slate-400'
+                            }`}
+                          >
+                            {issue.severity}
+                          </span>
+                          <span className="text-slate-500">{issue.location}</span>
+                          <p className="text-slate-300 mt-1">{issue.description}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
             )}
          </div>
       </div>

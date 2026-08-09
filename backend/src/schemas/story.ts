@@ -7,6 +7,7 @@ export const ChapterSchema = z.object({
   title: z.string(),
   content: z.string().nullable().optional(),
   summary: z.string().nullable().optional(),
+  condensed_content: z.string().nullable().optional(),
   status: z.string().default('draft')
 });
 

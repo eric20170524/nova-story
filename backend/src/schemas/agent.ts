@@ -5,31 +5,37 @@ export const AgentContextSchema = z.object({
   chapter_id: z.string().optional().nullable(),
   scene_id: z.string().optional().nullable(),
   selected_text: z.string().optional().nullable(),
-  language: z.string().default('zh').optional().nullable()
+  language: z.string().default('zh').optional().nullable(),
+  /** Current app route hint, e.g. story | director | characters */
+  route: z.string().optional().nullable(),
 });
 
 export const AgentRequestSchema = z.object({
   message: z.string(),
   context: AgentContextSchema,
-  history: z.array(z.record(z.string(), z.string())).default([])
+  history: z.array(z.record(z.string(), z.any())).default([]),
 });
 
 export const ToolCallSchema = z.object({
   tool_name: z.string(),
   arguments: z.record(z.string(), z.any()),
-  reason: z.string()
+  reason: z.string().optional(),
 });
 
 export const AgentResponseSchema = z.object({
   thought: z.string(),
   response: z.string(),
-  action: ToolCallSchema.optional().nullable()
+  /** Agent OS multi-action plan */
+  actions: z.array(z.record(z.string(), z.any())).optional().default([]),
+  needs_confirmation: z.boolean().optional().default(false),
+  /** @deprecated legacy single tool call for old UI */
+  action: ToolCallSchema.optional().nullable(),
 });
 
 export const ToolResultSchema = z.object({
   tool_name: z.string(),
   result: z.any(),
-  status: z.string().default('success')
+  status: z.string().default('success'),
 });
 
 export type AgentContext = z.infer<typeof AgentContextSchema>;

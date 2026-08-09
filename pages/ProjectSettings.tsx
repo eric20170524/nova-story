@@ -32,9 +32,24 @@ export const ProjectSettings: React.FC = () => {
   const [workflows, setWorkflows] = useState<any[]>([]);
   /** inherit | on | off — project-level NSFW policy */
   const [nsfwMode, setNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
+  const [genre, setGenre] = useState('');
+  const [storyStyle, setStoryStyle] = useState('');
+  const [mainPlot, setMainPlot] = useState('');
+  const [characterRelations, setCharacterRelations] = useState('');
+  const [glossary, setGlossary] = useState<
+    Array<{ id: number; term: string; definition?: string | null; category?: string | null }>
+  >([]);
+  const [newTerm, setNewTerm] = useState('');
+  const [newDefinition, setNewDefinition] = useState('');
 
   useEffect(() => {
-    if (id) loadProject();
+    if (id) {
+      loadProject();
+      api
+        .listGlossary(Number(id))
+        .then((rows) => setGlossary(Array.isArray(rows) ? rows : []))
+        .catch(() => setGlossary([]));
+    }
     api.getWorkflows().then((data) => {
       if (Array.isArray(data)) setWorkflows(data);
     }).catch(console.error);
@@ -86,6 +101,14 @@ export const ProjectSettings: React.FC = () => {
           } else {
               setNsfwMode('inherit');
           }
+          setGenre(typeof settingsObj.genre === 'string' ? settingsObj.genre : '');
+          setStoryStyle(typeof settingsObj.style === 'string' ? settingsObj.style : '');
+          setMainPlot(typeof settingsObj.main_plot === 'string' ? settingsObj.main_plot : '');
+          setCharacterRelations(
+            typeof settingsObj.character_relations === 'string'
+              ? settingsObj.character_relations
+              : ''
+          );
       } catch (e) {
           console.error("Failed to parse project settings", e);
       }
@@ -107,7 +130,11 @@ export const ProjectSettings: React.FC = () => {
             default_style: defaultStyle,
             default_model_type: defaultModelType,
             default_workflow_id: defaultWorkflowId,
-            nsfw_mode: nsfwMode
+            nsfw_mode: nsfwMode,
+            genre,
+            style: storyStyle,
+            main_plot: mainPlot,
+            character_relations: characterRelations,
         });
 
         await api.updateProject(project.id, {
@@ -279,6 +306,140 @@ export const ProjectSettings: React.FC = () => {
                         <option value="off">{t('project_settings.nsfw_off')}</option>
                     </select>
                 </div>
+            </div>
+
+            {/* Story Bible */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-6">
+                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
+                    {t('project_settings.story_bible', 'Story Bible')}
+                </h2>
+                <p className="text-xs text-slate-500 -mt-2">
+                    {t(
+                      'project_settings.story_bible_desc',
+                      'Used by Agent OS and chapter drafting (local LLM context).'
+                    )}
+                </p>
+                <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.genre', 'Genre')}
+                        </label>
+                        <input
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            value={genre}
+                            onChange={(e) => setGenre(e.target.value)}
+                            placeholder="xianxia / urban / suspense…"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.story_style', 'Writing style')}
+                        </label>
+                        <input
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            value={storyStyle}
+                            onChange={(e) => setStoryStyle(e.target.value)}
+                            placeholder="cinematic, webnovel…"
+                        />
+                    </div>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        {t('project_settings.main_plot', 'Main plot')}
+                    </label>
+                    <textarea
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white h-28 resize-none text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        value={mainPlot}
+                        onChange={(e) => setMainPlot(e.target.value)}
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        {t('project_settings.character_relations', 'Character relations')}
+                    </label>
+                    <textarea
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white h-20 resize-none text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        value={characterRelations}
+                        onChange={(e) => setCharacterRelations(e.target.value)}
+                    />
+                </div>
+            </div>
+
+            {/* Glossary */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-4">
+                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
+                    {t('project_settings.glossary', 'Glossary')}
+                </h2>
+                <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder={t('project_settings.glossary_term', 'Term')}
+                        value={newTerm}
+                        onChange={(e) => setNewTerm(e.target.value)}
+                    />
+                    <input
+                        className="flex-[2] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder={t('project_settings.glossary_def', 'Definition')}
+                        value={newDefinition}
+                        onChange={(e) => setNewDefinition(e.target.value)}
+                    />
+                    <button
+                        type="button"
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm"
+                        onClick={async () => {
+                            if (!id || !newTerm.trim()) return;
+                            try {
+                                const row = await api.createGlossary(Number(id), {
+                                    term: newTerm.trim(),
+                                    definition: newDefinition.trim() || undefined,
+                                });
+                                setGlossary((g) => [...g, row]);
+                                setNewTerm('');
+                                setNewDefinition('');
+                            } catch (e) {
+                                console.error(e);
+                                showToast(t('project_settings.glossary_fail', 'Failed to add term'), 'error');
+                            }
+                        }}
+                    >
+                        {t('project_settings.glossary_add', 'Add')}
+                    </button>
+                </div>
+                <ul className="space-y-2 max-h-48 overflow-y-auto">
+                    {glossary.map((g) => (
+                        <li
+                            key={g.id}
+                            className="flex items-start justify-between gap-2 text-sm bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2"
+                        >
+                            <div>
+                                <span className="text-indigo-300 font-medium">{g.term}</span>
+                                {g.definition && (
+                                    <p className="text-xs text-slate-400 mt-0.5">{g.definition}</p>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                className="text-slate-500 hover:text-red-400 p-1"
+                                onClick={async () => {
+                                    if (!id) return;
+                                    try {
+                                        await api.deleteGlossary(Number(id), g.id);
+                                        setGlossary((list) => list.filter((x) => x.id !== g.id));
+                                    } catch (e) {
+                                        console.error(e);
+                                    }
+                                }}
+                            >
+                                <Trash2 size={14} />
+                            </button>
+                        </li>
+                    ))}
+                    {glossary.length === 0 && (
+                        <li className="text-xs text-slate-600 py-2">
+                            {t('project_settings.glossary_empty', 'No glossary terms yet.')}
+                        </li>
+                    )}
+                </ul>
             </div>
 
             {/* Actions */}

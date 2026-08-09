@@ -13,6 +13,7 @@
 | REST / SSE 接口 | [API.md](./API.md) |
 | 系统分层与数据流 | [architecture_cn.md](./architecture_cn.md) |
 | 本地 LLM（Ollama 等） | [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md) |
+| Agent OS / 小说创作核心落地计划 | [agent_os_plan_cn.md](./agent_os_plan_cn.md) |
 
 ## 文档状态
 
@@ -25,6 +26,7 @@
 | `API.md` | ✅ 现行 | 接口清单（含版本 / Tier B） |
 | `architecture_cn.md` | ✅ 现行 | 架构总览 |
 | `local_language_model_deployment_cn.md` | ✅ 现行 | 本地文本模型 |
+| `agent_os_plan_cn.md` | 📋 计划 | DreamWaver 对齐 / 项目全局 Agent OS；实现以代码为准 |
 | `frontend_REQUIREMENTS_CN.md` | 📦 历史 | 早期前端需求，实现以代码与 `backend_implemented_features` 为准 |
 | `frontend_TODO.md` | 📦 历史 | 早期前端待办，多数已完成；勿当现状清单 |
 | `NovaStory MVP.md` | 📦 历史 | MVP 设想（含旧 FLUX 工作流举例），仅作背景 |

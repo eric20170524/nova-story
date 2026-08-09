@@ -16,6 +16,13 @@ export interface ProjectSettings {
   /** @deprecated prefer nsfw_mode; still honored when nsfw_mode is absent */
   nsfw_enabled?: boolean;
   storyboard_by?: string;
+  /** Story bible (Agent OS / novel writing) */
+  genre?: string;
+  style?: string;
+  main_plot?: string;
+  character_relations?: string;
+  /** Optional prompt template overrides keyed by PromptKey */
+  agent_prompts_override?: Record<string, string>;
   [key: string]: unknown;
 }
 

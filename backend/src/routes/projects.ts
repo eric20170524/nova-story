@@ -584,6 +584,103 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     return project;
   });
 
+  // --- Glossary (Agent OS / story bible) ---
+  app.get('/:id/glossary', async (request, reply) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(request.params);
+    const project = await db.get('SELECT id FROM project WHERE id = ?', id);
+    if (!project) {
+      return reply.status(404).send({ detail: 'Project not found' });
+    }
+    return db.all(
+      'SELECT * FROM glossary WHERE project_id = ? ORDER BY id ASC',
+      id
+    );
+  });
+
+  app.post('/:id/glossary', async (request, reply) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(request.params);
+    const body = z
+      .object({
+        term: z.string().min(1),
+        definition: z.string().optional().nullable(),
+        category: z.string().optional().nullable(),
+      })
+      .parse(request.body);
+    const project = await db.get('SELECT id FROM project WHERE id = ?', id);
+    if (!project) {
+      return reply.status(404).send({ detail: 'Project not found' });
+    }
+    const result = await db.run(
+      'INSERT INTO glossary (project_id, term, definition, category) VALUES (?, ?, ?, ?)',
+      id,
+      body.term,
+      body.definition ?? null,
+      body.category ?? null
+    );
+    return reply.status(201).send(
+      await db.get('SELECT * FROM glossary WHERE id = ?', result.lastID)
+    );
+  });
+
+  app.put('/:id/glossary/:glossaryId', async (request, reply) => {
+    const { id, glossaryId } = z
+      .object({ id: z.coerce.number(), glossaryId: z.coerce.number() })
+      .parse(request.params);
+    const body = z
+      .object({
+        term: z.string().min(1).optional(),
+        definition: z.string().optional().nullable(),
+        category: z.string().optional().nullable(),
+      })
+      .parse(request.body);
+    const existing = await db.get(
+      'SELECT * FROM glossary WHERE id = ? AND project_id = ?',
+      glossaryId,
+      id
+    );
+    if (!existing) {
+      return reply.status(404).send({ detail: 'Glossary term not found' });
+    }
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (body.term !== undefined) {
+      fields.push('term = ?');
+      values.push(body.term);
+    }
+    if (body.definition !== undefined) {
+      fields.push('definition = ?');
+      values.push(body.definition);
+    }
+    if (body.category !== undefined) {
+      fields.push('category = ?');
+      values.push(body.category);
+    }
+    if (fields.length) {
+      values.push(glossaryId);
+      await db.run(
+        `UPDATE glossary SET ${fields.join(', ')} WHERE id = ?`,
+        ...values
+      );
+    }
+    return db.get('SELECT * FROM glossary WHERE id = ?', glossaryId);
+  });
+
+  app.delete('/:id/glossary/:glossaryId', async (request, reply) => {
+    const { id, glossaryId } = z
+      .object({ id: z.coerce.number(), glossaryId: z.coerce.number() })
+      .parse(request.params);
+    const existing = await db.get(
+      'SELECT id FROM glossary WHERE id = ? AND project_id = ?',
+      glossaryId,
+      id
+    );
+    if (!existing) {
+      return reply.status(404).send({ detail: 'Glossary term not found' });
+    }
+    await db.run('DELETE FROM glossary WHERE id = ?', glossaryId);
+    return { status: 'success', id: glossaryId };
+  });
+
   app.post('/', async (request, reply) => {
     const user = mockGetCurrentUser(request);
     const data = ProjectCreateSchema.parse(request.body);

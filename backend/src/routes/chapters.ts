@@ -13,7 +13,9 @@ const ChapterCreateSchema = z.object({
 const ChapterUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   content: z.string().nullable().optional(),
-  summary: z.string().nullable().optional()
+  summary: z.string().nullable().optional(),
+  status: z.string().optional(),
+  condensed_content: z.string().nullable().optional(),
 });
 
 const ChapterIdSchema = z.object({
@@ -64,7 +66,13 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
 
     const fields: string[] = [];
     const values: unknown[] = [];
-    for (const field of ['title', 'content', 'summary'] as const) {
+    for (const field of [
+      'title',
+      'content',
+      'summary',
+      'status',
+      'condensed_content',
+    ] as const) {
       if (update[field] !== undefined) {
         fields.push(`${field} = ?`);
         values.push(update[field]);

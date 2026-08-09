@@ -19,6 +19,7 @@ test('full application exposes parity routes and API documentation', async () =>
     const document = openApiResponse.json();
     const mainBaselineOperations: Array<[string, string]> = [
       ['post', '/api/assistant/chat'],
+      ['post', '/api/assistant/execute'],
       ['post', '/api/assets/generate'],
       ['get', '/api/assets/status/{task_id}'],
       ['get', '/api/assets/stream/{task_id}'],
@@ -42,6 +43,9 @@ test('full application exposes parity routes and API documentation', async () =>
       ['post', '/api/agent/storyboard-grid'],
       ['post', '/api/agent/draft'],
       ['post', '/api/agent/analyze'],
+      ['post', '/api/agent/consistency'],
+      ['post', '/api/agent/impact'],
+      ['post', '/api/agent/skill'],
       ['get', '/api/agent/context/{chapter_id}'],
       ['post', '/api/projects/import'],
       ['post', '/api/projects/'],
@@ -67,7 +71,7 @@ test('full application exposes parity routes and API documentation', async () =>
       ['put', '/api/workflows/{id}'],
       ['delete', '/api/workflows/{id}']
     ];
-    assert.equal(mainBaselineOperations.length, 48);
+    assert.equal(mainBaselineOperations.length, 52);
     for (const [method, routePath] of mainBaselineOperations) {
       assert.ok(
         document.paths[routePath]?.[method],

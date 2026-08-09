@@ -13,7 +13,8 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     { characterRoutes },
     { projectRoutes },
     { LLMService },
-    { AgentService }
+    { AgentService },
+    { WritingService }
   ] = await Promise.all([
     import('fastify'),
     import('../db/database'),
@@ -23,7 +24,8 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     import('./characters'),
     import('./projects'),
     import('../services/llm'),
-    import('../services/ai/agent_service')
+    import('../services/ai/agent_service'),
+    import('../services/ai/writing_service')
   ]);
 
   const tables = (await db.all(
@@ -37,6 +39,7 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     'coverage_group',
     'coverage_shot',
     'workflow',
+    'glossary',
     'schema_migration'
   ]) {
     assert.ok(tables.includes(requiredTable), `missing table ${requiredTable}`);
@@ -62,6 +65,11 @@ test('initializes the complete schema and exposes the migrated parity routes', a
   );
 
   LLMService.generateDraft = async () => 'Generated draft';
+  WritingService.generateChapterDraft = async () => ({
+    content: 'Generated draft',
+    condensed: 'condensed',
+    nextPlot: 'hook',
+  });
   LLMService.analyzeContent = async () => ({
     new_entities: ['Hero'],
     updates: ['Door opened']
@@ -103,6 +111,8 @@ test('initializes the complete schema and exposes the migrated parity routes', a
   AgentService.prototype.processRequest = async () => ({
     thought: 'Test',
     response: 'Assistant response',
+    actions: [],
+    needs_confirmation: false,
     action: null
   });
 
