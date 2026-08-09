@@ -2,11 +2,12 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 状态 | ✅ 首版已落地（细节以代码为准；后续可迭代流式/Prompt Admin） |
+| 状态 | ✅ **首版已落地 / 生产就绪**（Approved & Implemented；后续演进见 §15） |
+| 评审 | 架构/场景/剪裁/落地均优秀；风险与边界见 §9、§15 |
 | 来源 | DreamWaver AI（`Renren/app-registry/.../DreamWaverAI`）能力对齐 |
 | 相关 | [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md)、[architecture_cn.md](./architecture_cn.md)、[backend_implemented_features.md](./backend_implemented_features.md) |
 
-本文档是可版本管理的实现规格；会话内 Plan Mode 草稿仅作过程记录。
+本文档是可版本管理的实现规格与基线参考：既记录首版设计，也对照代码落地结果与已知后续缺口。
 
 ---
 
@@ -23,15 +24,17 @@
 | **世界观** | 定稿影响分析（角色+术语表）；全书一致性体检 | `writingService.analyzeChapterImpact/checkConsistency` |
 | **UX** | Action Card 确认执行；Undo/Redo；Admin Prompt 面板 | `ContextSidebar`, `useUndo`, `AdminPanel` |
 
-### 1.2 NovaStory 现状与缺口
+### 1.2 NovaStory 现状与缺口（规划时基线，已关闭）
 
-| 区域 | 现状 | 缺口 |
-| --- | --- | --- |
-| **剧本编辑器** `StoryEditor` | 章节 CRUD、简易 AI 续写、角色抽取、分析、分镜 | 无负向约束、无分层记忆、无技能卡、无 Undo、右侧无 Agent |
-| **Agent** `agent_service.ts` | 单 `action` 工具（analyze/timeline/char）；无 Zod 自愈；导演页 tab 内嵌 | 非「写作 OS」协议；不覆盖结构/正文/技能 |
-| **LLM** | 已支持 Ollama 本地（`novastory-qwen3:8b`） | 写作 prompt 过简；Agent 未按本地 8K 优化 |
-| **数据** | 扁平 `chapter`（有 `summary`/`status` 列）；`character`；`project.settings` JSON | 无术语表；无 condensed；无 story bible 字段 |
-| **挂载点** | Agent 仅在 `DirectorRightPanel` | 非项目全局 |
+> 下表为立项时的差距分析。**首版落地后缺口已关闭**，对照见 §14。
+
+| 区域 | 规划时现状 | 当时缺口 | 首版后 |
+| --- | --- | --- | :---: |
+| **剧本编辑器** | 章节 CRUD、简易续写、角色抽取、分镜 | 无负向约束/分层记忆/技能/Undo/侧栏 Agent | ✅ |
+| **Agent** | 单 action 工具；导演页内嵌 | 非写作 OS 协议 | ✅ |
+| **LLM** | Ollama 本地可用 | 写作 prompt 简、未按 8K 裁剪 | ✅ |
+| **数据** | 扁平 chapter + character | 无 glossary / condensed / story bible | ✅ |
+| **挂载点** | 仅 Director 右栏 | 非项目全局 | ✅ |
 
 ### 1.3 已确认决策
 
@@ -158,7 +161,16 @@ GENERATE_TIMELINE | ANALYZE_CHAPTER | GET_CHARACTER | UPDATE_CHARACTER
 ### 4.1 执行层 `AgentExecutor`
 
 每个 op 对应 DB/LLM 调用；DELETE 执行前服务端再校验 chapter 属于 project。  
-DRAFT/Skill 返回 `proposed_content`（可写回章节或仅预览，由 execute 参数 `apply: true|false` 控制——默认 confirm 后 apply）。
+DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参数 `apply: true|false` 控制——默认 confirm 后 apply）。
+
+#### 批量 Action 故障语义（首版）
+
+- **非事务原子执行**：`POST /assistant/execute` 按数组**顺序**逐条执行。
+- 某一步 `error` 时：**不回滚**已成功的前序写库；默认**继续**后续 actions（每条独立 `status: success | error | skipped`）。
+- UI 应对 `results[]` **逐条展示**执行状态，避免用户误以为「全部成功」或「全部失败」。
+- 破坏性 op（如 `DELETE_CHAPTER`）仍依赖前端 Action Card + 红色二次确认；服务端做 project 归属校验。
+
+> 若未来需要「全成或全败」，应另设事务边界（SQLite `BEGIN` 包裹仅 DB 类 ops）或 `stop_on_error` 开关；首版不强制。
 
 ---
 
@@ -278,7 +290,7 @@ DRAFT/Skill 返回 `proposed_content`（可写回章节或仅预览，由 execut
 - 默认走 `LLM_PROVIDER=ollama` / `novastory-qwen3:8b`，不新增云依赖
 - Agent 决策 prompt 控制在结构树 + 摘要级，避免整书正文
 - 结构化任务用低 temperature + JSON schema（现有 OpenAIProvider isOllama 路径）
-- 长写作可流式：一期可非流式；若时延差再加 SSE（可选后续）
+- 长写作：**首版同步阻塞**；本地 8B 写 1000–1500 字常见 20–45s loading（流式见 §15.1）
 - 与 ComfyUI 显存互斥策略不变（见 [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md)）
 
 ---
@@ -288,10 +300,12 @@ DRAFT/Skill 返回 `proposed_content`（可写回章节或仅预览，由 execut
 | 风险 | 缓解 |
 | --- | --- |
 | 本地 8B JSON 格式不稳 | 自愈 retry + 宽松 parse + 失败时 ANSWER_QUESTION 降级 |
-| 8K 上下文爆掉 | 分层记忆硬裁剪；glossary/角色限条数 |
-| 执行与 UI 不同步 | execute 返回变更摘要；前端统一 reload chapters |
-| 全量范围过大 | 阶段可合并交付，但 PR 内按 Phase 文件边界清晰 |
+| 8K 上下文爆掉 | 分层记忆硬裁剪；glossary/角色限条数（动态预算见 §15.3） |
+| 执行与 UI 不同步 | execute 返回变更摘要；`novastory-agent-data-changed` + reload |
+| 全量范围过大 | Phase 1–4 已闭环；流式/脏写/动态裁剪延后 |
 | 误删章 | Action Card + 红确认；服务端 project 归属校验 |
+| 编辑器未保存 vs Agent 写库 | 首版弱防护；脏状态策略见 §15.2 |
+| 批量 action 中途失败 | 非事务、逐条结果；见 §4.1 |
 
 ---
 
@@ -352,3 +366,70 @@ DRAFT/Skill 返回 `proposed_content`（可写回章节或仅预览，由 execut
 ## 13. 实施顺序
 
 先 Phase 1 后端（可测）→ Phase 2 UI Agent → Phase 3 编辑器 → Phase 4 bible/glossary → Phase 5 验证与文档同步。
+
+**首版状态**：Phase 1–5 已在代码库闭环；`backend npm test` 与前端 `npm run check` 以 CI/本地为准。
+
+---
+
+## 14. 落地核验对照（代码 vs 规划）
+
+| 模块 / 规划点 | 规划要求 | 实际落地 | 一致性 |
+| --- | --- | :---: |
+| 数据库 | `007_agent_os_writing`、`glossary`、`condensed_content` | `backend/src/db/database.ts` | ✅ |
+| 协议 Schema | 多 Action Discriminated Union | `backend/src/schemas/agent_os.ts` | ✅ |
+| AI 核心 | layered / writing / executor / prompt_registry | `backend/src/services/ai/*` | ✅ |
+| 路由 | chat / execute / draft 增强 / glossary / consistency / impact / skill | `assistant.ts`、`creative.ts`、`projects.ts` | ✅ |
+| 全局 Agent UI | FAB + Action Card + 项目级上下文 | `ProjectLayout` + `components/agent/*` + `ProjectAgentContext` | ✅ |
+| 编辑器 UX | 章纲、Undo、体检、定稿、技能、增强续写 | `pages/StoryEditor.tsx` + `hooks/useUndo.ts` | ✅ |
+| Story Bible | genre / style / main_plot + 术语表 | `ProjectSettings` + `project.settings` | ✅ |
+
+### 14.1 首版亮点（设计意图回顾）
+
+1. **决策与执行解耦**：chat 规划（只读可自动执行，变更需确认）+ execute 写库。
+2. **L1–L4 分层记忆**：适配本地 8B/8K，拒绝全书硬塞。
+3. **负向约束**：下一章 summary 防抢跑。
+4. **自愈解析**：`stripThink` + 宽松 JSON + `agent_repair`（最多 2 次）。
+5. **Action Card + Undo**：跨页 Agent + 正文历史栈形成创作安全网。
+
+---
+
+## 15. 后续演进（评审反馈，非首版阻塞）
+
+### 15.1 长文 SSE 流式
+
+- **现状**：续写 / 技能改写同步阻塞；本地 8B 千字级常 20–45s loading。
+- **方向**：新增例如 `POST /agent/draft/stream` 或 `POST /assistant/chat/stream`（SSE），分帧推送 `thought`、正文 token、最终 `actions`。
+- **约束**：仍走本地 LLM；与 ComfyUI 显存互斥策略不变。
+
+### 15.2 编辑器脏状态（Dirty）与 Agent 写入冲突
+
+- **现状**：StoryEditor 有未保存输入时，Agent 执行 `DRAFT_CONTENT` / 技能写库可能覆盖用户本地缓冲（依赖 reload 事件，弱合并）。
+- **方向**（择一或组合）：
+  - `isDirty` 时执行前警告「保存 / 丢弃本地 / 取消」；
+  - Agent 写回前将当前本地正文推入 `useUndo` 栈，保证一键回退；
+  - 展示 diff / 三路合并（较重，可后置）。
+
+### 15.3 上下文 Token 动态预算
+
+- **现状**：`layered_context.ts` 按字符上限静态切片（如 L1 ~800 字/章、角色/术语条数上限）。
+- **方向**：总预算超标时按优先级裁剪——优先保留 lastScene + 章纲 + 活跃角色，再丢弃低频术语与远期 L3 纲要。
+
+### 15.4 批量 Action 原子性（可选增强）
+
+- **现状**：见 §4.1（非事务、失败不回滚、继续后续）。
+- **方向**：`stop_on_error`、仅结构类 ops 的 SQLite 事务包裹、或两阶段 dry-run 再 apply。
+
+### 15.5 仍明确不做 / 低优先级
+
+- Volume 表与卷级 UI  
+- 服务端全文 Undo 历史库  
+- 完整 Admin Prompt 可视化面板（可用 `agent_prompts_override` 渐进）  
+- 知识图谱可视化、语音输入  
+
+---
+
+## 16. 文档维护约定
+
+- **实现以代码为准**；本文档描述意图与验收基线。
+- 行为变更（协议 op、execute 语义、流式端点）应同步改本文档 §4 / §15 与 [backend_implemented_features.md](./backend_implemented_features.md)。
+- 索引见 [docs/README.md](./README.md)。
