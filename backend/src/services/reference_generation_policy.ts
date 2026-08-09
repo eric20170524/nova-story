@@ -152,17 +152,25 @@ export const resolveReferenceImg2ImgPolicy = (
     };
   }
 
-  const prompt = `${finalPrompt} ${workflowData?.prompt || ''} ${workflowData?.visual_prompt || ''}`;
+  const shotHint = [
+    workflowData?.shot_type,
+    workflowData?.camera_angle,
+    workflowData?.camera_movement
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const prompt = `${finalPrompt} ${workflowData?.prompt || ''} ${workflowData?.visual_prompt || ''} ${shotHint}`;
   const multiPerson =
-    /\b[23]girls?\b|\b[23]boys?\b|\bmultiple\b|\bgroup\b|yuri|threesome|sandwich|三人|两人|entwined|intertwined/i.test(
+    /\b[23]girls?\b|\b[23]boys?\b|\bmultiple\b|\bgroup\b|yuri|threesome|sandwich|三人|两人|entwined|intertwined|two-?shot|2girls/i.test(
       prompt
     );
   const storyWide =
-    /extreme long|establishing|wide shot|long shot|full body|environment|cloud sea|palace|inner hall|overview|bird.?s eye|high angle overview/i.test(
+    /extreme long|establishing|wide shot|long shot|full body|environment|cloud sea|palace|inner hall|overview|bird.?s eye|high angle overview|empty latent arena|cliff stage/i.test(
       prompt
     );
+  // Intimate + combat/martial — both collapse under portrait identity locks
   const storyAction =
-    /\b(embrac|kiss|sitting|lying|straddl|press|hold|whisper|kneel|behind|from behind|on (the )?(bed|couch)|between|climax|tendril|tentacle|cuddling|afterglow|walking toward|reaching)\b/i.test(
+    /\b(embrac|kiss|sitting|lying|straddl|press|hold|whisper|kneel|behind|from behind|on (the )?(bed|couch)|between|climax|tendril|tentacle|cuddling|afterglow|walking toward|reaching|kick|throw|clash|combat|fight|martial|whip|grapple|defeat|mid-?air|battle damage|ripped|duel|punch|block|parry|slam|pinning)\b/i.test(
       prompt
     );
   const singleClose =
@@ -199,8 +207,70 @@ export const resolveReferenceImg2ImgPolicy = (
 };
 
 /**
+ * Whether IP-Adapter / InstantID style identity adapters may lock a shot.
+ *
+ * Critical: multi-person, wide establishing, and action beats must NOT use a single
+ * portrait ref as IP-Adapter — it collapses narrative into soft solo portraits
+ * (see local/shortstory/xianxia_duel pony_v4 failure).
+ *
+ * Same compositional gates as Tier A img2img, plus explicit force flags.
+ */
+export const shouldAllowCharacterAdapter = (
+  workflowData: any,
+  finalPrompt: string = '',
+  img2imgPolicy?: Img2ImgPolicy
+): { allow: boolean; reason: string } => {
+  if (workflowData?.force_no_character_adapter === true) {
+    return { allow: false, reason: 'forced_off' };
+  }
+  if (workflowData?.force_character_adapter === true) {
+    return { allow: true, reason: 'forced_on' };
+  }
+
+  // Client asked for pure Tier A (tags + text only)
+  const tier = String(workflowData?.reference_tier || '').toUpperCase();
+  if (tier === 'A' || tier === 'TIER_A' || tier === 'TEXT') {
+    return { allow: false, reason: 'reference_tier_a' };
+  }
+
+  const genType = String(workflowData?.gen_type || '').toLowerCase();
+  // Dedicated identity pipelines may use adapters
+  if (genType === 'portrait' || genType === 'turnaround' || genType === 'turnaround_panel') {
+    return { allow: true, reason: genType };
+  }
+
+  const policy =
+    img2imgPolicy
+    || resolveReferenceImg2ImgPolicy(workflowData, finalPrompt);
+
+  // Shared scene gates with img2img — do not identity-lock these
+  if (
+    policy.reason === 'multi_person_story'
+    || policy.reason === 'wide_story'
+    || policy.reason === 'action_story'
+    || policy.reason === 'turnaround_panel_txt2img'
+  ) {
+    return { allow: false, reason: policy.reason };
+  }
+
+  // Single close-up / portrait-like: adapters help
+  if (policy.reason === 'single_closeup' || policy.reason === 'portrait') {
+    return { allow: true, reason: policy.reason };
+  }
+
+  // Explicit high denoise = composition-first txt2img; keep adapters off
+  if (policy.reason === 'explicit_txt2img') {
+    return { allow: false, reason: 'explicit_txt2img' };
+  }
+
+  // Default narrative scene: tags + text only (matches successful pony_v2 duel path)
+  return { allow: false, reason: 'scene_prefers_txt2img' };
+};
+
+/**
  * Plan which reference path to use.
- * Tier A always applies; Tier B adapters enhance when capability + refs are present.
+ * Tier A always applies; Tier B adapters enhance when capability + refs are present
+ * AND the shot type can tolerate identity locking.
  */
 export const planReferenceGeneration = (
   workflowData: any,
@@ -223,8 +293,17 @@ export const planReferenceGeneration = (
     'Tier A base: tags + LoRA + text composition always apply'
   ];
 
-  const useCharacterAdapter = Boolean(adapters.characterAdapter && refs.characterRefUrl);
+  const adapterGate = shouldAllowCharacterAdapter(workflowData, finalPrompt, img2imgBase);
+  const useCharacterAdapter = Boolean(
+    adapters.characterAdapter && refs.characterRefUrl && adapterGate.allow
+  );
   const useCompositionControl = Boolean(adapters.compositionControl && refs.compositionRefUrl);
+
+  if (adapters.characterAdapter && refs.characterRefUrl && !adapterGate.allow) {
+    notes.push(
+      `Character adapter skipped (${adapterGate.reason}) — multi/wide/action/txt2img scene keeps free composition`
+    );
+  }
 
   // When a real character adapter exists, prefer it over classic img2img for identity
   let img2img = img2imgBase;
@@ -245,7 +324,7 @@ export const planReferenceGeneration = (
   }
   if (refs.characterRefUrl && !img2img.useImg2Img && !useCharacterAdapter) {
     notes.push(
-      `character_ref kept for future adapters only (img2img skipped: ${img2img.reason})`
+      `character_ref kept for future adapters only (img2img skipped: ${img2img.reason}; adapter: ${adapterGate.reason})`
     );
   }
   if (useCharacterAdapter) {

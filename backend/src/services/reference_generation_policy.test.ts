@@ -63,6 +63,68 @@ test('planReferenceGeneration stays Tier A when adapters unavailable', () => {
   assert.ok(plan.notes.some((n) => /composition_ref present/i.test(n)));
 });
 
+test('IP-Adapter blocked on multi-person / wide / action even when adapter installed', () => {
+  const adapters = { characterAdapter: true, compositionControl: false };
+
+  const multi = planReferenceGeneration(
+    {
+      gen_type: 'scene',
+      character_ref_url: '/static/generated/face.png',
+      denoise: 1.0
+    },
+    '2girls, martial arts clash, white and red combat women',
+    adapters
+  );
+  assert.equal(multi.useCharacterAdapter, false);
+  assert.equal(multi.tier, 'A');
+  assert.ok(multi.notes.some((n) => /adapter skipped/i.test(n)));
+
+  const wide = planReferenceGeneration(
+    {
+      gen_type: 'scene',
+      shot_type: 'Extreme Long Shot',
+      character_ref_url: '/static/generated/face.png'
+    },
+    'establishing shot, cloud sea cliff arena',
+    adapters
+  );
+  assert.equal(wide.useCharacterAdapter, false);
+
+  const action = planReferenceGeneration(
+    {
+      gen_type: 'scene',
+      character_ref_url: '/static/generated/face.png'
+    },
+    '1girl, whip kick battle damage, ripped fabric',
+    adapters
+  );
+  assert.equal(action.useCharacterAdapter, false);
+
+  const portrait = planReferenceGeneration(
+    {
+      gen_type: 'portrait',
+      character_ref_url: '/static/generated/face.png'
+    },
+    '1girl, portrait, close-up face',
+    adapters
+  );
+  assert.equal(portrait.useCharacterAdapter, true);
+  assert.equal(portrait.tier, 'A+character_adapter');
+});
+
+test('reference_tier A forces no character adapter', () => {
+  const plan = planReferenceGeneration(
+    {
+      gen_type: 'portrait',
+      reference_tier: 'A',
+      character_ref_url: '/static/generated/face.png'
+    },
+    '1girl portrait',
+    { characterAdapter: true, compositionControl: false }
+  );
+  assert.equal(plan.useCharacterAdapter, false);
+});
+
 test('buildCharacterAppearanceSnippet prefers tags then description', () => {
   const withTags = buildCharacterAppearanceSnippet({
     name: '陆嘉静',
