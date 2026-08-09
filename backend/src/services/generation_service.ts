@@ -571,7 +571,7 @@ export const copyReferenceImageToComfy = (
 export class GenerationService {
     static async generateAssets(taskId: string, workflowData: any, sceneId: number, userToken?: string, mode: string = "standard", generationParams?: any) {
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
-        AssetTaskStore.processing(taskId, sceneId);
+        await AssetTaskStore.processing(taskId, sceneId);
 
         // Character turnaround: 3 full-body views + stitch (reliable multi-angle sheet)
         try {
@@ -641,7 +641,7 @@ export class GenerationService {
                             task_id: taskId
                         });
                     }
-                    AssetTaskStore.completed(taskId, sceneId, assetUrl);
+                    await AssetTaskStore.completed(taskId, sceneId, assetUrl);
                     if (redis && redis.status === 'ready') {
                         try {
                             await redis.publish(
@@ -661,7 +661,7 @@ export class GenerationService {
                     return;
                 } catch (error: any) {
                     logger.error(`[Task ${taskId}] Turnaround composite failed: ${error?.message || error}`);
-                    AssetTaskStore.failed(taskId, sceneId, error?.message || String(error));
+                    await AssetTaskStore.failed(taskId, sceneId, error?.message || String(error));
                     if (sceneId < 90_000_000) {
                         try {
                             await db.run(
@@ -843,7 +843,11 @@ export class GenerationService {
                     tierBCapability
                 );
 
-                result = await comfyService.generateImage(finalWorkflow, progressHandler);
+                result = await comfyService.generateImage(finalWorkflow, progressHandler, {
+                    onPromptQueued: async (promptId) => {
+                        await AssetTaskStore.setComfyPromptId(taskId, promptId);
+                    }
+                });
             } else {
                 logger.info(`[Task ${taskId}] Using configured cloud image provider`);
                 const aiProvider = MediaService.getProvider();
@@ -885,14 +889,14 @@ export class GenerationService {
             }
 
             if (finalStatus === "completed") {
-                AssetTaskStore.completed(taskId, sceneId, assetUrl!);
+                await AssetTaskStore.completed(taskId, sceneId, assetUrl!);
                 if (redis && redis.status === 'ready') {
                     try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "completed", image_url: assetUrl })); } catch(e) {}
                 }
             } else {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
-                AssetTaskStore.failed(taskId, sceneId, errMsg);
+                await AssetTaskStore.failed(taskId, sceneId, errMsg);
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                 await ensureSceneVersionBaseline(sceneId);
                 await syncActiveVersionAssets(sceneId, {
@@ -906,7 +910,7 @@ export class GenerationService {
 
         } catch (error: any) {
             logger.error(`[Task ${taskId}] Unexpected error in async service: ${error.message}`);
-            AssetTaskStore.failed(taskId, sceneId, error.message);
+            await AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
                 await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                 await ensureSceneVersionBaseline(sceneId);

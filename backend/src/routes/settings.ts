@@ -7,8 +7,9 @@ import type { LLMProviderConfig } from '../services/llm';
 import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/', async (request, reply) => {
-    return SettingsManager.loadSettings();
+  app.get('/', async () => {
+    // Never return raw API keys to the browser / LAN
+    return SettingsManager.toPublicSettings();
   });
 
   /** Probe ComfyUI install for Tier B (IP-Adapter + ControlNet) readiness */
@@ -59,7 +60,17 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/verify-llm', async (request, reply) => {
     const config = request.body as any;
-    const llmConfig = (config.llm || config) as LLMProviderConfig;
+    const stored = SettingsManager.loadSettings();
+    const bodyLlm = (config.llm || config || {}) as LLMProviderConfig;
+    // Merge secrets from server-side storage when UI sent redacted/empty key
+    const llmConfig: LLMProviderConfig = {
+      ...(stored.llm || {}),
+      ...bodyLlm,
+      api_key:
+        bodyLlm.api_key && String(bodyLlm.api_key).trim()
+          ? bodyLlm.api_key
+          : stored.llm?.api_key
+    };
     const providerType = (llmConfig.provider || 'gemini').toLowerCase();
 
     try {

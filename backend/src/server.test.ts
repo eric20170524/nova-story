@@ -91,7 +91,7 @@ test('full application exposes parity routes and API documentation', async () =>
     assert.ok(Array.isArray(invalidDraftResponse.json().detail));
 
     const { AssetTaskStore } = await import('./services/task_store');
-    AssetTaskStore.completed('sse-regression', 1, '/static/generated/test.png');
+    await AssetTaskStore.completed('sse-regression', 1, '/static/generated/test.png');
     const sseResponse = await app.inject({
       method: 'GET',
       url: '/api/assets/stream/sse-regression',

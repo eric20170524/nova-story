@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import { buildApp } from './backend/src/server';
 
 async function startServer() {
-  const PORT = 3000;
-  const HOST = '0.0.0.0';
+  // Loopback by default — do not bind 0.0.0.0 unless HOST is set explicitly.
+  const PORT = Number(process.env.PORT || process.env.NOVASTORY_PORT || 3000);
+  const HOST = process.env.HOST || process.env.NOVASTORY_HOST || '127.0.0.1';
 
   const app = await buildApp({ logger: true });
 

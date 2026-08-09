@@ -82,7 +82,11 @@ export class ComfyUIService {
         return false;
     }
 
-    async generateImage(workflow: any, progressCallback?: (type: string, data: any) => void): Promise<{ status: string; message?: string; images?: any[] }> {
+    async generateImage(
+        workflow: any,
+        progressCallback?: (type: string, data: any) => void,
+        options?: { onPromptQueued?: (promptId: string) => void | Promise<void> }
+    ): Promise<{ status: string; message?: string; images?: any[]; prompt_id?: string }> {
         logger.info(`Generating image via ComfyUI with workflow: ${JSON.stringify(workflow).substring(0, 50)}...`);
 
         let ws: WebSocket | null = null;
@@ -124,6 +128,12 @@ export class ComfyUIService {
                 return { status: "error", message: "No prompt_id received" };
             }
 
+            try {
+                await options?.onPromptQueued?.(promptId);
+            } catch (e) {
+                logger.warn(`onPromptQueued hook failed: ${e}`);
+            }
+
             const generatedImages: any[] = [];
 
             return new Promise((resolve) => {
@@ -155,7 +165,7 @@ export class ComfyUIService {
                             logger.error(`History fetch fallback error: ${e}`);
                         }
                     }
-                    resolve({ status: "completed", images: generatedImages });
+                    resolve({ status: "completed", images: generatedImages, prompt_id: promptId || undefined });
                 };
 
                 ws!.on('message', async (data: any) => {
@@ -240,14 +250,53 @@ export class ComfyUIService {
         }
     }
 
-    async cancelExecution(): Promise<boolean> {
+    /**
+     * Cancel a specific queued prompt and/or interrupt the currently running job.
+     * ComfyUI: POST /queue { delete: [prompt_id] } removes queue items;
+     * POST /interrupt stops the active execution (not prompt-scoped).
+     */
+    async cancelExecution(promptId?: string | null): Promise<{
+        ok: boolean;
+        deleted_from_queue: boolean;
+        interrupted: boolean;
+        message: string;
+    }> {
+        let deletedFromQueue = false;
+        let interrupted = false;
+        const notes: string[] = [];
+
+        if (promptId) {
+            try {
+                // Prefer deleting a queued item by id (no-op if already running/done)
+                const delRes = await fetch(`${this.baseUrl}/queue`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delete: [promptId] })
+                });
+                deletedFromQueue = delRes.ok;
+                notes.push(deletedFromQueue ? `queue delete ${promptId}` : `queue delete failed ${delRes.status}`);
+            } catch (error) {
+                logger.error(`Failed to delete ComfyUI queue item ${promptId}: ${error}`);
+                notes.push(`queue delete error: ${error}`);
+            }
+        }
+
         try {
+            // If this prompt is the active one (or client wants a hard stop), interrupt running graph
             const response = await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
-            return response.ok;
+            interrupted = response.ok;
+            notes.push(interrupted ? 'interrupt ok' : `interrupt failed ${response.status}`);
         } catch (error) {
             logger.error(`Failed to interrupt ComfyUI: ${error}`);
-            return false;
+            notes.push(`interrupt error: ${error}`);
         }
+
+        return {
+            ok: deletedFromQueue || interrupted,
+            deleted_from_queue: deletedFromQueue,
+            interrupted,
+            message: notes.join('; ')
+        };
     }
 
     private async downloadImage(filename: string, subfolder: string, type: string): Promise<Buffer | null> {

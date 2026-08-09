@@ -35,7 +35,8 @@
 | --- | --- |
 | `local/shortstory/xianxia_duel/` | 仙门体术对决多版本生图对照（v1 Imagine / v2 Pony / v3 电影写实备片 / v4 失败 IP 实验 / **v4.1 无 IP 12/12**） |
 | `local/Pony_XL与FLUX_Dev_GGUF生图风格对比.md` | 历史风格对照文（FLUX 仅作背景） |
-| `TODO.md`（仓库根） | 工程待办（相对较新） |
+| 仓库根 `README.md` | 启动、安全默认、架构入口 |
+| `TODO.md` / `task.md`（若存在） | 工程备忘；以代码与本索引为准 |
 | `backend/scripts/gen_duel_pony_v4.ts` | 对决对照批跑脚本（默认 v4.1 无角色参考） |
 
 ## 生图策略一句话

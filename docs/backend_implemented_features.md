@@ -12,7 +12,8 @@
 - AI 续写、内容分析、上下文读取和导演助手工具调用
 - 角色抽取、跨章节外观演化、素材上传与头像裁剪
 - **场景 / 角色内容版本**：基线版本、新建版本、激活版本、资产同步（A/B 试图）
-- 图片任务、状态查询、SSE、Redis 可选 Pub/Sub 和 ComfyUI 中断
+- 图片任务：`generation_task` SQLite 持久化、状态查询、SSE、Redis 可选 Pub/Sub  
+- 取消：按任务关联的 ComfyUI `prompt_id` 删队列 + interrupt；重启后 orphan processing → interrupted
 - 漫画字幕栅格化与 PDF 输出
 - **角色三视图**：分视生成（front/side/back）+ 横向拼接（`turnaround_composite.ts`）
 
@@ -44,6 +45,7 @@
 - 时间线替换、coverage 提升、项目/章节删除使用事务
 - 旧数据库缺失级联约束时执行显式子记录清理
 - 配置目录、数据目录和静态目录可通过 `NOVASTORY_*_DIR` 独立挂载
+- **安全默认**：监听 `127.0.0.1`；CORS 限 localhost；`GET /settings` 脱敏（`has_api_key`，不回传密钥）
 
 ## 验证
 

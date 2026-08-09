@@ -367,7 +367,11 @@ class ApiService {
     return res.json();
   };
 
-  cancelAssetGeneration = () => this.request<any>('/assets/cancel', { method: 'POST' });
+  cancelAssetGeneration = (opts?: { task_id?: string; prompt_id?: string }) =>
+    this.request<any>('/assets/cancel', {
+      method: 'POST',
+      body: opts || {}
+    });
 
   generateComic = async (chapterId: string) => {
     // Get Token for direct fetch

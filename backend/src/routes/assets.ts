@@ -49,6 +49,9 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    // Persist task row before fire-and-forget so status survives mid-flight
+    await AssetTaskStore.processing(taskId, req.scene_id);
+
     // Fire and forget background task
     GenerationService.generateAssets(taskId, req.workflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
       logger.error(`Background task execution failed: ${err}`);
@@ -69,8 +72,45 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
   app.get('/status/:task_id', async (request, reply) => {
     const paramsSchema = z.object({ task_id: z.string() });
     const { task_id } = paramsSchema.parse(request.params);
-    const task = AssetTaskStore.get(task_id);
-    return task || { task_id, status: "UNKNOWN", detail: "Task was not found in this server process" };
+    const task = await AssetTaskStore.get(task_id);
+    if (task) {
+      return {
+        task_id: task.task_id,
+        scene_id: task.scene_id,
+        status: task.status,
+        image_url: task.image_url,
+        error: task.error,
+        comfy_prompt_id: task.comfy_prompt_id ?? null,
+        updated_at: task.updated_at
+      };
+    }
+    // Fallback: scene row may still know about a historical task
+    const scene = await db.get(
+      'SELECT id, asset_status, asset_url, task_id FROM scene WHERE task_id = ?',
+      task_id
+    );
+    if (scene) {
+      const status =
+        scene.asset_status === 'completed'
+          ? 'completed'
+          : scene.asset_status === 'failed'
+            ? 'failed'
+            : scene.asset_status === 'generating'
+              ? 'processing'
+              : scene.asset_status;
+      return {
+        task_id,
+        scene_id: scene.id,
+        status,
+        image_url: scene.asset_url || null,
+        detail: 'Recovered from scene row (no generation_task memory)'
+      };
+    }
+    return {
+      task_id,
+      status: 'UNKNOWN',
+      detail: 'Task was not found in this server process or generation_task table'
+    };
   });
 
   app.get('/stream/:task_id', async (request, reply) => {
@@ -83,8 +123,19 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
-    // Hijacked responses bypass Fastify's normal CORS onSend hook.
-    reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+    // Hijacked responses bypass Fastify's normal CORS onSend hook — mirror policy.
+    const allowLan =
+      process.env.NOVASTORY_ALLOW_LAN === '1' || process.env.NOVASTORY_ALLOW_LAN === 'true';
+    const origin = request.headers.origin;
+    if (allowLan) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin || '*');
+    } else if (
+      !origin
+      || origin === 'http://127.0.0.1:3000'
+      || origin === 'http://localhost:3000'
+    ) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1:3000');
+    }
 
     const redisUrl = process.env.REDIS_URL;
     let redis: Redis | null = null;
@@ -111,13 +162,13 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     reply.raw.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
     // Initial check just in case it already finished
-    const task = AssetTaskStore.get(task_id);
+    const task = await AssetTaskStore.get(task_id);
     if (task?.status === 'completed' && task.image_url) {
         reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: task.image_url })}\n\n`);
         if (redis) redis.disconnect();
         reply.raw.end();
         return;
-    } else if (task?.status === 'failed') {
+    } else if (task?.status === 'failed' || task?.status === 'cancelled' || task?.status === 'interrupted') {
         reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: task.error || 'Generation failed' })}\n\n`);
         if (redis) redis.disconnect();
         reply.raw.end();
@@ -157,13 +208,17 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     } else {
         // Fallback polling if redis is unavailable (e.g. running locally without redis installed)
         const pollInterval = setInterval(async () => {
-            const taskState = AssetTaskStore.get(task_id);
+            const taskState = await AssetTaskStore.get(task_id);
             if (taskState?.status === 'completed' && taskState.image_url) {
                 reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: taskState.image_url })}\n\n`);
                 clearInterval(pollInterval);
                 reply.raw.end();
                 return;
-            } else if (taskState?.status === 'failed') {
+            } else if (
+              taskState?.status === 'failed'
+              || taskState?.status === 'cancelled'
+              || taskState?.status === 'interrupted'
+            ) {
                 reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: taskState.error || 'Generation failed' })}\n\n`);
                 clearInterval(pollInterval);
                 reply.raw.end();
@@ -196,18 +251,56 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/cancel', async (request, reply) => {
-    logger.info("Cancel asset generation endpoint triggered.");
+    logger.info('Cancel asset generation endpoint triggered.');
     try {
-        const settings = SettingsManager.loadSettings();
-        const comfySettings = settings.comfyui || {};
-        const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
+      const bodySchema = z.object({
+        task_id: z.string().optional(),
+        prompt_id: z.string().optional()
+      }).optional();
+      const body = bodySchema.parse(request.body || {});
+      const settings = SettingsManager.loadSettings();
+      const comfySettings = settings.comfyui || {};
+      const baseUrl = comfySettings.base_url || 'http://127.0.0.1:8188';
+      const comfyService = new ComfyUIService(baseUrl);
 
-        const comfyService = new ComfyUIService(baseUrl);
-        const cancelled = await comfyService.cancelExecution();
-        return { status: cancelled ? "success" : "failed", message: "Interrupted active tasks." };
+      let promptId = body?.prompt_id || null;
+      let taskId = body?.task_id || null;
+      let sceneId = 0;
+
+      if (taskId) {
+        const task = await AssetTaskStore.get(taskId);
+        if (task?.comfy_prompt_id) promptId = task.comfy_prompt_id;
+        if (task) sceneId = task.scene_id;
+      }
+
+      const result = await comfyService.cancelExecution(promptId);
+      if (taskId) {
+        await AssetTaskStore.cancelled(
+          taskId,
+          sceneId,
+          `Cancelled: ${result.message}`
+        );
+        if (sceneId > 0 && sceneId < 90_000_000) {
+          await db.run(
+            `UPDATE scene SET asset_status = ? WHERE id = ? AND task_id = ?`,
+            'failed',
+            sceneId,
+            taskId
+          );
+        }
+      }
+
+      return {
+        status: result.ok ? 'success' : 'failed',
+        task_id: taskId,
+        comfy_prompt_id: promptId,
+        deleted_from_queue: result.deleted_from_queue,
+        interrupted: result.interrupted,
+        message: result.message
+      };
     } catch (error: any) {
-        logger.error(`Error cancelling asset generation: ${error}`);
-        return reply.status(500).send({ status: "error", message: error.toString() });
+      logger.error(`Error cancelling asset generation: ${error}`);
+      return reply.status(500).send({ status: 'error', message: error.toString() });
     }
   });
 };

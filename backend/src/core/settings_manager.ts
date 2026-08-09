@@ -109,6 +109,42 @@ export class SettingsManager {
         return settings;
     }
 
+    /**
+     * Public view for GET /settings — never expose raw API secrets.
+     * Clients use has_api_key / empty password fields; POST with blank key keeps existing.
+     */
+    static toPublicSettings(settings: Record<string, any> = SettingsManager.loadSettings()) {
+        const publicSettings = JSON.parse(JSON.stringify(settings));
+        const llm = publicSettings.llm || {};
+        const rawKey = String(llm.api_key || publicSettings.gemini_api_key || '').trim();
+        const provider = String(llm.provider || 'gemini').toLowerCase();
+        const hasApiKey =
+            provider === 'ollama' || provider === 'local_llm'
+                ? true
+                : Boolean(rawKey && rawKey !== 'ollama');
+
+        publicSettings.llm = {
+            ...llm,
+            has_api_key: hasApiKey,
+            api_key: ''
+        };
+        if ('gemini_api_key' in publicSettings) {
+            publicSettings.has_gemini_api_key = Boolean(
+                String(publicSettings.gemini_api_key || '').trim()
+            );
+            delete publicSettings.gemini_api_key;
+        }
+        // Nested nebula / other providers if present later
+        if (publicSettings.nebula?.api_key) {
+            publicSettings.nebula = {
+                ...publicSettings.nebula,
+                has_api_key: Boolean(String(publicSettings.nebula.api_key).trim()),
+                api_key: ''
+            };
+        }
+        return publicSettings;
+    }
+
     static saveSettings(newSettings: Record<string, any>) {
         const currentSettings = SettingsManager.loadSettings();
         const envPath = SettingsManager.getEnvPath();
@@ -119,6 +155,12 @@ export class SettingsManager {
         }
 
         let newSettingsCopy = JSON.parse(JSON.stringify(newSettings));
+        // Client never needs to echo secrets back
+        if (newSettingsCopy.llm) {
+            delete newSettingsCopy.llm.has_api_key;
+        }
+        delete newSettingsCopy.has_gemini_api_key;
+
         let envContent = fs.readFileSync(envPath, 'utf-8');
         const originalEnvContent = envContent;
         const upsertEnvValue = (content: string, key: string, value: string) => {
@@ -130,16 +172,21 @@ export class SettingsManager {
             return `${content}${separator}${key}=${value}\n`;
         };
 
-        // Extract secrets to .env
+        // Extract secrets to .env — blank / placeholder means "keep existing"
         if (newSettingsCopy.llm && newSettingsCopy.llm.api_key !== undefined) {
-            const apiKey = newSettingsCopy.llm.api_key;
+            const apiKey = String(newSettingsCopy.llm.api_key || '').trim();
+            const keepExisting =
+                !apiKey
+                || apiKey === '********'
+                || apiKey === '••••••••'
+                || /^•+$/.test(apiKey);
             const isOllamaPlaceholder =
-                newSettingsCopy.llm.provider === 'ollama' && apiKey === 'ollama';
+                (newSettingsCopy.llm.provider === 'ollama'
+                    || newSettingsCopy.llm.provider === 'local_llm')
+                && (apiKey === 'ollama' || keepExisting);
 
-            // Keep an existing cloud-provider secret when the local Ollama
-            // placeholder is saved from the settings UI.
-            if (!isOllamaPlaceholder) {
-                envContent = upsertEnvValue(envContent, 'LLM_API_KEY', String(apiKey));
+            if (!keepExisting && !isOllamaPlaceholder) {
+                envContent = upsertEnvValue(envContent, 'LLM_API_KEY', apiKey);
             }
 
             delete newSettingsCopy.llm.api_key;
@@ -179,6 +226,6 @@ export class SettingsManager {
         }
 
         fs.writeFileSync(SettingsManager.getFilePath(), JSON.stringify(jsonSettingsToSave, null, 4), 'utf-8');
-        return SettingsManager.loadSettings();
+        return SettingsManager.toPublicSettings(SettingsManager.loadSettings());
     }
 }

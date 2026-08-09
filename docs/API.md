@@ -1,11 +1,11 @@
 # NovaStory Backend API
 
-基础地址：`http://localhost:3000/api`
+基础地址：`http://127.0.0.1:3000/api`（默认仅回环监听）
 
 | 资源 | URL |
 | --- | --- |
-| 交互文档 | `http://localhost:3000/api/docs` |
-| OpenAPI JSON | `http://localhost:3000/api/openapi.json` |
+| 交互文档（Swagger UI） | `http://127.0.0.1:3000/docs/` |
+| OpenAPI JSON | `http://127.0.0.1:3000/openapi.json` |
 
 校验失败统一返回 HTTP 422：
 
@@ -80,9 +80,9 @@
 | | `GET /workflows/{id}` | 工作流详情 |
 | | `PUT /workflows/{id}` | 更新工作流 |
 | | `DELETE /workflows/{id}` | 删除工作流 |
-| Settings | `GET /settings/` | 读取系统设置 |
-| | `POST /settings/` | 保存系统设置 |
-| | `POST /settings/verify-llm` | 验证 LLM 连接和推理 |
+| Settings | `GET /settings/` | 读取系统设置（**不含**明文 API Key，仅 `llm.has_api_key`） |
+| | `POST /settings/` | 保存系统设置（空 `api_key` 表示不修改已有密钥） |
+| | `POST /settings/verify-llm` | 验证 LLM 连接和推理（可用服务端已存密钥） |
 | | `GET /settings/tier-b-status` | Tier B（IP-Adapter / ControlNet）探测结果 |
 
 ## 常用请求
@@ -139,6 +139,12 @@ POST /api/assets/generate
 ```
 
 参考策略详见 [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。
+
+### 任务状态与取消
+
+- `GET /api/assets/status/{task_id}` — 读 `generation_task`（SQLite）+ 内存缓存；重启后仍可查询  
+- `POST /api/assets/cancel` — 可选 body：`{ "task_id": "..." }` 或 `{ "prompt_id": "..." }`  
+  - 有 `comfy_prompt_id` 时：`POST ComfyUI/queue` 删除队列项，并 `POST /interrupt` 中断当前执行  
 
 ### 场景版本
 

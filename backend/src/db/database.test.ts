@@ -72,8 +72,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 005_character_versions
-    assert.equal(migrationCount.count, 5);
+    // 001_core through 006_generation_task
+    assert.equal(migrationCount.count, 6);
   } finally {
     await legacyDatabase.close();
   }

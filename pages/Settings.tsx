@@ -129,7 +129,31 @@ export const SettingsPage: React.FC = () => {
     setMessage(null);
 
     try {
-      await api.updateSettings(settings);
+      // Never send blank api_key when server already has one (redacted GET).
+      const payload = JSON.parse(JSON.stringify(settings));
+      if (payload.llm) {
+        const key = String(payload.llm.api_key || '').trim();
+        if (!key && payload.llm.has_api_key) {
+          delete payload.llm.api_key;
+        }
+      }
+      const saved = await api.updateSettings(payload);
+      if (saved && typeof saved === 'object') {
+        setSettings((prev: any) => ({
+          ...prev,
+          ...saved,
+          comfyui: saved.comfyui || prev.comfyui,
+          advanced: saved.advanced || prev.advanced,
+          llm: {
+            ...(prev.llm || {}),
+            ...(saved.llm || {}),
+            // Keep local draft only if user was typing a new key
+            api_key: settings.llm?.api_key && String(settings.llm.api_key).trim()
+              ? ''
+              : ''
+          }
+        }));
+      }
       setMessage({ type: 'success', text: t('save_success') });
     } catch (err: any) {
       setMessage({ type: 'error', text: t('save_failed') + ': ' + (err.message || 'Unknown error') });
@@ -380,11 +404,19 @@ export const SettingsPage: React.FC = () => {
                       </label>
                       <input
                         type="password"
-                        value={settings.llm?.api_key || settings.gemini_api_key || ''}
+                        value={settings.llm?.api_key || ''}
                         onChange={(e) => handleLLMChange('api_key', e.target.value)}
-                        placeholder="AIzaSy..."
+                        placeholder={
+                          settings.llm?.has_api_key
+                            ? '已配置密钥（留空则不修改）'
+                            : 'AIzaSy...'
+                        }
+                        autoComplete="off"
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
                       />
+                      {settings.llm?.has_api_key && !settings.llm?.api_key && (
+                        <p className="text-[11px] text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-300 mb-1">
@@ -415,9 +447,17 @@ export const SettingsPage: React.FC = () => {
                         type="password"
                         value={settings.llm?.api_key || ''}
                         onChange={(e) => handleLLMChange('api_key', e.target.value)}
-                        placeholder="sk-..."
+                        placeholder={
+                          settings.llm?.has_api_key
+                            ? '已配置密钥（留空则不修改）'
+                            : 'sk-...'
+                        }
+                        autoComplete="off"
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
                       />
+                      {settings.llm?.has_api_key && !settings.llm?.api_key && (
+                        <p className="text-[11px] text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-300 mb-1">

@@ -20,6 +20,7 @@ import { chapterRoutes } from './routes/chapters';
 import { creativeRoutes } from './routes/creative';
 import { assistantRoutes } from './routes/assistant';
 import { coverageRoutes } from './routes/coverage';
+import { AssetTaskStore } from './services/task_store';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
   const app = Fastify({
@@ -40,8 +41,29 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
     return reply.send(error);
   });
 
+  // Default: same-origin / localhost only. Set NOVASTORY_ALLOW_LAN=1 only when
+  // intentionally exposing on a trusted LAN (still no auth — prefer tunnel/VPN).
+  const allowLan = process.env.NOVASTORY_ALLOW_LAN === '1' || process.env.NOVASTORY_ALLOW_LAN === 'true';
+  const corsOrigins = [
+    'http://127.0.0.1:3000',
+    'http://localhost:3000',
+    process.env.NOVASTORY_CORS_ORIGIN
+  ].filter(Boolean) as string[];
   await app.register(cors, {
-    origin: '*',
+    origin: allowLan
+      ? true
+      : (origin, callback) => {
+          // Non-browser clients / same-origin have no Origin header
+          if (!origin) {
+            callback(null, true);
+            return;
+          }
+          if (corsOrigins.includes(origin)) {
+            callback(null, true);
+            return;
+          }
+          callback(null, false);
+        },
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
   });
@@ -95,6 +117,14 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(assistantRoutes, { prefix: '/api/assistant' });
   await app.register(coverageRoutes, { prefix: '/api' });
 
+  // After DB migrations (import of routes/db already ran them via proxy),
+  // mark orphaned processing tasks so clients don't hang after restart.
+  try {
+    await AssetTaskStore.markOrphanedProcessingInterrupted();
+  } catch {
+    /* table may not exist in pure unit tests without full migrate */
+  }
+
   // Serve Vite build in production
   const frontendDist = path.join(__dirname, '../../dist');
   if (process.env.NODE_ENV === 'production' && fs.existsSync(frontendDist)) {
@@ -118,9 +148,13 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
 
 export const startServer = async () => {
   const app = await buildApp();
+  // Default loopback-only so API keys / settings are not reachable on the LAN.
+  // Override with HOST=0.0.0.0 only when you intentionally expose the service.
+  const host = process.env.HOST || process.env.NOVASTORY_HOST || '127.0.0.1';
+  const port = Number(process.env.PORT || process.env.NOVASTORY_PORT || 3000);
   try {
-    await app.listen({ port: 3000, host: '0.0.0.0' });
-    app.log.info(`Server listening on ${app.server.address()}`);
+    await app.listen({ port, host });
+    app.log.info(`Server listening on http://${host}:${port}`);
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;

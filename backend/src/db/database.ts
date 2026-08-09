@@ -302,6 +302,31 @@ const migrations: Migration[] = [
         }
       }
     }
+  },
+  {
+    version: '006_generation_task',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS generation_task (
+          task_id TEXT PRIMARY KEY,
+          scene_id INTEGER,
+          status VARCHAR(50) NOT NULL DEFAULT 'processing',
+          image_url TEXT,
+          error TEXT,
+          comfy_prompt_id TEXT,
+          progress_json TEXT,
+          retry_count INTEGER DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_generation_task_scene
+          ON generation_task(scene_id);
+        CREATE INDEX IF NOT EXISTS ix_generation_task_status
+          ON generation_task(status);
+        CREATE INDEX IF NOT EXISTS ix_generation_task_comfy
+          ON generation_task(comfy_prompt_id);
+      `);
+    }
   }
 ];
 

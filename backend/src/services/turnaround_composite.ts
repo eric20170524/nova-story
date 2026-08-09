@@ -317,9 +317,22 @@ export async function generateTurnaroundComposite(
       }
     }
 
-    const result = await comfyService.generateImage(finalWorkflow, async (msgType, data) => {
-      await input.onProgress?.(msgType, { ...data, view: view.id });
-    });
+    const result = await comfyService.generateImage(
+      finalWorkflow,
+      async (msgType, data) => {
+        await input.onProgress?.(msgType, { ...data, view: view.id });
+      },
+      {
+        onPromptQueued: async (promptId) => {
+          try {
+            const { AssetTaskStore } = await import('./task_store');
+            await AssetTaskStore.setComfyPromptId(input.taskId, promptId);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    );
 
     if (result?.status !== 'completed' || !result.images?.[0]?.data) {
       throw new Error(
