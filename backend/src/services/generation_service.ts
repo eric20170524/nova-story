@@ -11,6 +11,7 @@ import { AssetTaskStore } from './task_store';
 import { getGeneratedDirectory } from '../core/paths';
 import {
     applyPromptEnhancement,
+    normalizeImageModelFamily,
     resolveGenerationPlan,
     type ImageModelFamily
 } from './image_generation_policy';
@@ -57,7 +58,7 @@ const injectLora = (
     workflow: any,
     loraName: string,
     strength: number,
-    modelType: 'pony' | 'flux'
+    modelType: ImageModelFamily
 ) => {
     if (!loraName) return;
     const alreadyPresent = Object.values(workflow).some(
@@ -105,7 +106,7 @@ const injectLora = (
                 clip: currentClip
             },
             class_type: 'LoraLoader',
-            _meta: { title: 'NovaStory Pony LoRA' }
+            _meta: { title: modelType === 'sd15' ? 'NovaStory SD1.5 LoRA' : 'NovaStory Pony LoRA' }
         };
     }
 
@@ -113,8 +114,9 @@ const injectLora = (
         if (node?.class_type?.includes('KSampler') && node.inputs) {
             node.inputs.model = [loraNodeId, 0];
         }
+        // Pony + SD1.5 both use CLIP-aware LoraLoader
         if (
-            modelType === 'pony'
+            modelType !== 'flux'
             && node?.class_type === 'CLIPTextEncode'
             && node.inputs
         ) {
@@ -206,6 +208,11 @@ export const compileComfyWorkflow = async (
     adapterCapability?: AdapterAvailability | TierBCapability | null
 ) => {
     let workflow: any;
+    const requestedModel = String(
+        workflowData?.model_type
+        || workflowData?.reference_model_type
+        || ''
+    ).toLowerCase();
 
     if (isComfyWorkflow(workflowData)) {
         workflow = parseWorkflowContent(workflowData);
@@ -215,17 +222,14 @@ export const compileComfyWorkflow = async (
         const selectedWorkflowName = selectedWorkflowFile
             ? path.basename(String(selectedWorkflowFile), '.json')
             : null;
-        const requestedModel = String(
-            workflowData?.model_type
-            || workflowData?.reference_model_type
-            || 'pony'
-        ).toLowerCase();
-        const preferredName = requestedModel.includes('flux')
-            ? 'flux_dev_gguf_12gb'
-            : 'pony_xl_12gb';
+        const modelKey = requestedModel || 'pony';
+        // FLUX.1-dev GGUF retired (2026-08). Prefer SD1.5 draft or Pony XL.
+        const preferredName =
+            normalizeImageModelFamily(modelKey) === 'sd15'
+                ? 'sd15_draft_12gb'
+                : 'pony_xl_12gb';
         const fallbackName = 'pony_xl_12gb';
-        // Explicit model_type on the request must win over a global UI default
-        // (otherwise "FLUX" compare runs silently on the Pony selected workflow).
+        // Explicit model_type on the request must win over a global UI default.
         const explicitModel =
             Boolean(workflowData?.model_type || workflowData?.reference_model_type);
 
@@ -243,12 +247,12 @@ export const compileComfyWorkflow = async (
             row = await db.get('SELECT content FROM workflow WHERE name = ?', fallbackName);
         }
         if (!row) {
-            throw new Error(`No ComfyUI workflow is configured for model '${requestedModel}'`);
+            throw new Error(`No ComfyUI workflow is configured for model '${modelKey}'`);
         }
         workflow = parseWorkflowContent(row.content);
         logger.info(
             `Comfy workflow resolved: name preference=${preferredName} explicitModel=${explicitModel} `
-            + `(request model_type=${requestedModel})`
+            + `(request model_type=${modelKey})`
         );
     }
 
@@ -259,7 +263,19 @@ export const compileComfyWorkflow = async (
             && /flux/i.test(node.inputs?.ckpt_name || '')
         )
     ));
-    const modelFamily: ImageModelFamily = isFlux ? 'flux' : 'pony';
+    const ckptLooksSd15 = Boolean(findNodeId(workflow, (node) =>
+        node?.class_type === 'CheckpointLoaderSimple'
+        && /sd\s*1\.?5|anything|counterfeit|meina|chillout|sd15/i.test(
+            String(node.inputs?.ckpt_name || '')
+        )
+    ));
+    // Graph detection wins for FLUX custom graphs; otherwise honor request / SD1.5 ckpt.
+    const modelFamily: ImageModelFamily = isFlux
+        ? 'flux'
+        : normalizeImageModelFamily(
+            requestedModel
+            || (ckptLooksSd15 ? 'sd15' : 'pony')
+        );
     const advancedSettings = runtimeSettings.advanced || {};
 
     // Request override → project nsfw_mode → system advanced.nsfw_enabled
@@ -295,7 +311,8 @@ export const compileComfyWorkflow = async (
     });
 
     const effectivePrompt = applyPromptEnhancement(finalPrompt, plan.enhancement);
-    const preserveTemplateConditioning = !isFlux && /pony/i.test(JSON.stringify(workflow));
+    const preserveTemplateConditioning =
+        modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
 
     const negativeParts = [
         workflowData?.negative_prompt || '',
@@ -303,9 +320,15 @@ export const compileComfyWorkflow = async (
     ];
     const negativePrompt = negativeParts.filter(Boolean).join(', ');
 
-    // FLUX prefers lower CFG; keep Pony defaults unless the client overrides
-    const defaultSteps = Number(generationParams?.steps || (isFlux ? 24 : 25));
-    const defaultCfg = Number(generationParams?.cfg || (isFlux ? 3.5 : 7));
+    // FLUX prefers lower CFG; SD1.5 draft prefers fewer steps; Pony defaults otherwise
+    const defaultSteps = Number(
+        generationParams?.steps
+        || (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : 25)
+    );
+    const defaultCfg = Number(
+        generationParams?.cfg
+        || (modelFamily === 'flux' ? 3.5 : 7)
+    );
 
     const samplerNodes = Object.values(workflow).filter(
         (node: any) => node?.class_type?.includes('KSampler')
@@ -336,8 +359,13 @@ export const compileComfyWorkflow = async (
     }
 
     const isTurnaround = workflowData?.gen_type === 'turnaround';
-    const width = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 1152 : 768);
-    const height = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 768 : 1024);
+    let width = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 1152 : 768);
+    let height = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 768 : 1024);
+    if (modelFamily === 'sd15' && mode !== 'cinematic_grid') {
+        // Match sd15_draft_12gb latent defaults for fast iteration
+        width = isTurnaround ? 768 : 512;
+        height = isTurnaround ? 512 : 768;
+    }
 
     for (const node of Object.values(workflow) as any[]) {
         if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
@@ -357,7 +385,7 @@ export const compileComfyWorkflow = async (
     if (nsfwEnabled && !plan.loras.some((l) => l.role === 'nsfw')) {
         logger.warn(
             `NSFW mode is enabled but no ${modelFamily} NSFW LoRA was found under models/loras. `
-            + 'Install Incase_Style_PonyXL (Pony) or aidmaNSFWunlock (FLUX), or set advanced.*_nsfw_lora.'
+            + 'Install Incase_Style_PonyXL (Pony) or set advanced.pony_nsfw_lora.'
         );
     }
 
@@ -375,7 +403,8 @@ export const compileComfyWorkflow = async (
             }
         });
 
-    if (isFlux) {
+    // Tier B adapters are Pony/SDXL only
+    if (modelFamily !== 'pony') {
         capability = {
             ...capability,
             characterAdapter: false,
@@ -790,14 +819,14 @@ export class GenerationService {
                     comfySettings.install_path
                 );
 
-                // Live Tier B probe (object_info + models) before compile
-                const isFluxRequest = String(
+                // Live Tier B probe (object_info + models) before compile — Pony/SDXL only
+                const requestFamily = normalizeImageModelFamily(
                     effectiveWorkflowData?.model_type
                     || effectiveWorkflowData?.reference_model_type
-                    || ''
-                ).toLowerCase().includes('flux');
+                    || 'pony'
+                );
                 const tierBCapability = await resolveTierBFromSettings(settings, {
-                    isFlux: isFluxRequest
+                    isFlux: requestFamily !== 'pony'
                 });
                 logger.info(
                     `[Task ${taskId}] Tier B probe: character=${tierBCapability.characterAdapter} `

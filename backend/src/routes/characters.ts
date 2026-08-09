@@ -8,7 +8,10 @@ import crypto from 'crypto';
 import { LLMService } from '../services/llm';
 import { getGeneratedDirectory } from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
-import { buildCharacterPromptHeader } from '../services/image_generation_policy';
+import {
+  buildCharacterPromptHeader,
+  normalizeImageModelFamily
+} from '../services/image_generation_policy';
 import {
   activateCharacterVersion,
   annotateCharacterWithVersions,
@@ -338,39 +341,36 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const isMale = maleKeywords.some(kw => checkStr.includes(kw));
     const genderTag = isMale ? "1boy, solo, male" : "1girl, solo, female";
 
-    let refHintPony = "";
-    let refHintFlux = "";
-    if (req.use_ref_portrait && refUrl) {
-      refHintPony = ", (matching reference character design:1.2), consistent facial features, same outfit and hair across all views";
-      refHintFlux = ", (consistent character appearance matching reference portrait:1.2), same costume and facial features across all 3 angles";
-    }
-
     const nsfwEnabled = Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
-    const modelFamily = req.model_type.toLowerCase().includes('flux') ? 'flux' as const : 'pony' as const;
-    const header = buildCharacterPromptHeader(modelFamily, nsfwEnabled, req.gen_type);
+    // Retired FLUX product path maps to pony for clients; custom flux strings still normalize for headers
+    const modelFamily = normalizeImageModelFamily(req.model_type);
+    const effectiveModelType = modelFamily === 'flux' ? 'pony' : modelFamily;
+    const header = buildCharacterPromptHeader(
+      effectiveModelType === 'sd15' ? 'sd15' : 'pony',
+      nsfwEnabled,
+      req.gen_type
+    );
+
+    let refHint = "";
+    if (req.use_ref_portrait && refUrl) {
+      refHint =
+        ", (matching reference character design:1.2), consistent facial features, same outfit and hair across all views";
+    }
 
     let prompt = "";
     let negativePrompt = header.negative;
 
-    if (modelFamily === "pony") {
-      if (req.gen_type === "turnaround") {
-        // Appearance base only — GenerationService runs 3 full-body panels + stitch
-        prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHintPony}`;
-      } else {
-        prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
-      }
+    if (req.gen_type === "turnaround") {
+      // Appearance base only — GenerationService runs 3 full-body panels + stitch
+      prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHint}`;
     } else {
-      if (req.gen_type === "turnaround") {
-        prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHintFlux}`;
-      } else {
-        prompt = `${header.prefix}, ${genderTag}, ${combinedDesc}`;
-      }
+      prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
     }
 
     return {
       prompt,
       negative_prompt: negativePrompt,
-      model_type: req.model_type,
+      model_type: effectiveModelType,
       gen_type: req.gen_type,
       nsfw_enabled: nsfwEnabled,
       ref_image_url: req.use_ref_portrait ? refUrl : null,

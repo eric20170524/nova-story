@@ -3,12 +3,12 @@
  *
  * Why: single-shot multi-view prompts collapse under img2img portrait refs and
  * Pony's solo-portrait prior. Generating front/side/back independently then
- * compositing is far more reliable on local Pony/FLUX.
+ * compositing is far more reliable on local Pony / SD1.5.
  */
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import sharp from 'sharp';
+import sharp, { type OverlayOptions } from 'sharp';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
 import { getGeneratedDirectory } from '../core/paths';
@@ -18,7 +18,10 @@ import {
   copyReferenceImageToComfy
 } from './generation_service';
 import { resolveTierBFromSettings } from './tier_b_adapters';
-import type { ImageModelFamily } from './image_generation_policy';
+import {
+  normalizeImageModelFamily,
+  type ImageModelFamily
+} from './image_generation_policy';
 
 export type TurnaroundViewId = 'front' | 'side' | 'back';
 
@@ -81,7 +84,7 @@ export function buildTurnaroundViewPrompt(
   const quality =
     modelFamily === 'pony'
       ? 'score_9, score_8_up, score_7_up, source_anime, masterpiece, best quality'
-      : 'masterpiece, best quality, highly detailed';
+      : 'masterpiece, best quality, highly detailed, anime style';
 
   const prompt = [
     quality,
@@ -136,14 +139,18 @@ export async function stitchTurnaroundSheet(
   const canvasW = padding * 2 + panelWidth * 3 + gap * 2;
   const canvasH = padding * 2 + labelHeight + panelHeight;
 
-  const composites: sharp.OverlayOptions[] = [];
+  const composites: OverlayOptions[] = [];
 
   for (let i = 0; i < 3; i++) {
+    const panel = panels[i];
+    if (!panel) {
+      throw new Error(`stitchTurnaroundSheet missing panel at index ${i}`);
+    }
     const x = padding + i * (panelWidth + gap);
     const yLabel = padding;
     const yImg = padding + labelHeight;
 
-    const fitted = await sharp(panels[i].buffer)
+    const fitted = await sharp(panel.buffer)
       .resize(panelWidth, panelHeight, {
         fit: 'contain',
         background: { r: 255, g: 255, b: 255, alpha: 1 }
@@ -155,7 +162,7 @@ export async function stitchTurnaroundSheet(
       `<svg width="${panelWidth}" height="${labelHeight}" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="${background}"/>
         <text x="50%" y="60%" text-anchor="middle" font-family="Arial, sans-serif"
-          font-size="22" font-weight="700" fill="#333">${panels[i].label}</text>
+          font-size="22" font-weight="700" fill="#333">${panel.label}</text>
       </svg>`
     );
 
@@ -208,10 +215,9 @@ export async function generateTurnaroundComposite(
   const staticDir = getGeneratedDirectory();
   fs.mkdirSync(staticDir, { recursive: true });
 
-  const modelType = String(
+  const modelFamily: ImageModelFamily = normalizeImageModelFamily(
     input.workflowData?.model_type || input.workflowData?.reference_model_type || 'pony'
-  ).toLowerCase();
-  const modelFamily: ImageModelFamily = modelType.includes('flux') ? 'flux' : 'pony';
+  );
 
   const baseUrl = comfySettings.base_url || 'http://127.0.0.1:8188';
   const comfyService = new ComfyUIService(baseUrl);
@@ -239,15 +245,21 @@ export async function generateTurnaroundComposite(
     );
   }
 
+  // Tier B is Pony/SDXL only
   const tierB = await resolveTierBFromSettings(settings, {
-    isFlux: modelFamily === 'flux'
+    isFlux: modelFamily !== 'pony'
   });
 
   const panelBuffers: Array<{ buffer: Buffer; label: string; id: TurnaroundViewId }> = [];
   const panelPaths: Partial<Record<TurnaroundViewId, string>> = {};
+  const panelW = modelFamily === 'sd15' ? 512 : 768;
+  const panelH = modelFamily === 'sd15' ? 768 : 1152;
+  const defaultCfg = modelFamily === 'flux' ? 3.5 : modelFamily === 'sd15' ? 7 : 6.5;
+  const defaultSteps = modelFamily === 'sd15' ? 20 : 28;
 
   for (let i = 0; i < TURNAROUND_VIEWS.length; i++) {
     const view = TURNAROUND_VIEWS[i];
+    if (!view) continue;
     await input.onProgress?.('progress', {
       phase: 'turnaround_panel',
       view: view.id,
@@ -284,8 +296,8 @@ export async function generateTurnaroundComposite(
       built.prompt,
       'standard',
       {
-        steps: input.generationParams?.steps ?? 28,
-        cfg: input.generationParams?.cfg ?? (modelFamily === 'flux' ? 3.5 : 6.5),
+        steps: input.generationParams?.steps ?? defaultSteps,
+        cfg: input.generationParams?.cfg ?? defaultCfg,
         sampler_name: input.generationParams?.sampler_name ?? 'euler_ancestral',
         scheduler: input.generationParams?.scheduler ?? 'normal'
       },
@@ -296,8 +308,8 @@ export async function generateTurnaroundComposite(
     // Ensure full-body friendly latent (portrait ratio slightly tall)
     for (const node of Object.values(finalWorkflow) as any[]) {
       if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
-        node.inputs.width = 768;
-        node.inputs.height = 1152;
+        node.inputs.width = panelW;
+        node.inputs.height = panelH;
         node.inputs.batch_size = 1;
       }
       if (node?.class_type?.includes('KSampler') && node.inputs) {

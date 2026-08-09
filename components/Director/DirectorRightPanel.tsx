@@ -163,7 +163,9 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
 
                        <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80">
                          <span className="text-slate-400">模型预设:</span>
-                         <span className="text-indigo-300 font-semibold">{projectModelType === 'flux' ? 'FLUX.1-dev' : 'Pony XL'}</span>
+                         <span className="text-indigo-300 font-semibold">
+                           {projectModelType === 'sd15' ? 'SD 1.5 Draft' : 'Pony XL'}
+                         </span>
                        </div>
                      </div>
                    </div>

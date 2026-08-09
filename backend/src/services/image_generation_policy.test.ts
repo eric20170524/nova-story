@@ -7,6 +7,7 @@ import {
   applyPromptEnhancement,
   buildPromptEnhancement,
   inferStyleShotMode,
+  normalizeImageModelFamily,
   resolveLoraStack,
   resolveNsfwLora,
   resolveStyleLora,
@@ -40,9 +41,9 @@ test('SFW mode never auto-picks Incase as style; NSFW picks Incase for adult slo
       nsfwLoraStrength: 0.55
     });
     assert.equal(stack.length, 2);
-    assert.equal(stack[0].role, 'style');
-    assert.equal(stack[1].role, 'nsfw');
-    assert.equal(stack[1].strength, 0.55);
+    assert.equal(stack[0]?.role, 'style');
+    assert.equal(stack[1]?.role, 'nsfw');
+    assert.equal(stack[1]?.strength, 0.55);
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
@@ -165,6 +166,46 @@ test('stripStyleNarrativeTokens removes alluring/intimate/portrait locks', () =>
     'aftermath'
   );
   assert.equal(inferStyleShotMode('whip kick clash hand-to-hand combat'), 'action');
+});
+
+test('normalizeImageModelFamily maps sd15 / flux / pony', () => {
+  assert.equal(normalizeImageModelFamily('pony'), 'pony');
+  assert.equal(normalizeImageModelFamily('sd15'), 'sd15');
+  assert.equal(normalizeImageModelFamily('SD 1.5 Draft'), 'sd15');
+  assert.equal(normalizeImageModelFamily('flux'), 'flux');
+  assert.equal(normalizeImageModelFamily('flux_dev_gguf'), 'flux');
+  assert.equal(normalizeImageModelFamily(undefined), 'pony');
+});
+
+test('SD1.5 draft never auto-stacks Pony style/NSFW LoRAs', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-sd15-policy-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Incase_Style_PonyXL.safetensors'), '');
+
+  try {
+    assert.equal(resolveStyleLora('sd15', true, { installPath, styleLora: null }), null);
+    assert.equal(resolveNsfwLora('sd15', { installPath, nsfwLora: null }), null);
+    const stack = resolveLoraStack({
+      modelFamily: 'sd15',
+      nsfwEnabled: true,
+      installPath,
+      styleLora: 'Pony_DetailV2.0.safetensors',
+      nsfwLora: 'Incase_Style_PonyXL.safetensors'
+    });
+    assert.equal(stack.length, 0);
+
+    const enh = buildPromptEnhancement({
+      modelFamily: 'sd15',
+      nsfwEnabled: false,
+      existingPrompt: '1girl standing in mist'
+    });
+    assert.match(applyPromptEnhancement('1girl standing in mist', enh), /masterpiece|best quality/i);
+    assert.doesNotMatch(enh.negativeExtra, /rating_/);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
 });
 
 test('FLUX discovers asian style and aidma unlock separately', () => {

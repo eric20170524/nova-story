@@ -18,17 +18,19 @@
 - 文本：Gemini、OpenAI、Grok、Ollama 和 OpenAI 兼容服务
 - 结构化输出：Zod JSON Schema、校验、重试和模式化降级
 - 云生图：Gemini/Imagen、OpenAI Images、xAI 兼容端点
-- 本地生图：ComfyUI 自动探活/启动、内置 Pony/FLUX 工作流、参考图、参数注入、LoRA 实际连线
+- 本地生图：ComfyUI 自动探活/启动、内置 **Pony XL** + **SD1.5 Draft** 工作流、参考图、参数注入、LoRA 实际连线
+- **模型族贯通**：`model_type` / `reference_model_type` 支持 `pony` | `sd15`（legacy `flux` 在客户端与角色 prompt 路径回落为 pony）；`normalizeImageModelFamily` 统一解析
+- **FLUX.1-dev GGUF 已退役**（3060 12GB 不推荐）：权重/下载脚本/内置工作流已清理，见 `docs/local_image_generation_deployment_cn.md`
 - **档位 A/B 参考策略**（`reference_generation_policy.ts` + `tier_b_adapters.ts`）：
   - A：标签 + 角色 LoRA + 文本构图；单图 img2img 仅限立绘/三视图/特写
   - B（Pony/SDXL）：`character_ref` → IP-Adapter；`composition_ref` → ControlNet；缺节点/模型静默回退 A
   - 探测：`GET /api/settings/tier-b-status`；安装脚本 `scripts/setup_tier_b_comfyui.ps1`
-  - FLUX GGUF 暂仅 A
-- FLUX：东亚特征提示增强及本地风格 LoRA 自动发现
+  - SD1.5 草稿默认档位 A
+- Pony/SDXL：东亚特征提示增强及本地风格 LoRA 自动发现
 - **NSFW 开关驱动的默认生图策略**（`image_generation_policy.ts`）：
-  - **开启 NSFW**：自动叠加载 风格/细节 LoRA + 成人向 LoRA（Pony：Detail + Incase 类；FLUX：写实/东亚 + aidma 解锁），去重、缺文件按文件名模式自动发现；提示词注入 unlock/rating 与触发词；分镜 LLM 按成人向英文标签策略生成
+  - **开启 NSFW**：自动叠加载 风格/细节 LoRA + 成人向 LoRA（Pony：Detail + Incase 类），去重、缺文件按文件名模式自动发现；提示词注入 unlock/rating 与触发词；分镜 LLM 按成人向英文标签策略生成
   - **关闭 NSFW**：仅风格/细节 LoRA（绝不自动挂 Incase 等成人 LoRA）；强制 SFW 负向词；分镜 LLM 要求全年龄向描述
-  - 风格预设（`style_preset`）自动追加国风/仙侠等 booster；FLUX 默认 CFG 3.5
+  - 风格预设（`style_preset`）自动追加国风/仙侠等 booster
 
 ## 数据与可靠性
 

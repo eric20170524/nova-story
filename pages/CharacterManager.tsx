@@ -23,7 +23,7 @@ export const CharacterManager: React.FC = () => {
 
   // Turnaround Sheet Modal State
   const [sheetModalChar, setSheetModalChar] = useState<Character | null>(null);
-  const [modelType, setModelType] = useState<'pony' | 'flux'>('pony');
+  const [modelType, setModelType] = useState<'pony' | 'sd15'>('pony');
   const [genType, setGenType] = useState<'turnaround' | 'portrait'>('turnaround');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -35,7 +35,7 @@ export const CharacterManager: React.FC = () => {
 
   // Project policy for consistent style/NSFW on character gens
   const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'flux'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -54,8 +54,10 @@ export const CharacterManager: React.FC = () => {
         const raw = proj?.settings;
         const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
         if (s.default_style) setProjectStyle(s.default_style);
-        if (s.default_model_type === 'flux' || s.default_model_type === 'pony') {
+        if (s.default_model_type === 'sd15' || s.default_model_type === 'pony') {
           setProjectModelType(s.default_model_type);
+        } else if (s.default_model_type === 'flux') {
+          setProjectModelType('pony');
         }
         if (s.nsfw_mode === 'on' || s.nsfw_mode === 'off' || s.nsfw_mode === 'inherit') {
           setProjectNsfwMode(s.nsfw_mode);
@@ -259,7 +261,7 @@ export const CharacterManager: React.FC = () => {
   };
 
   const handleRebuildPrompt = async (
-    selectedModel: 'pony' | 'flux', 
+    selectedModel: 'pony' | 'sd15', 
     selectedGen: 'turnaround' | 'portrait',
     withRef: boolean = useRefPortrait,
     refUrl: string | null = refImageUrl
@@ -360,7 +362,7 @@ export const CharacterManager: React.FC = () => {
       for (let i = 0; i < characters.length; i++) {
         if (stopBatchRef.current) break;
         const char = characters[i];
-        const mType = (char.model_type as 'pony' | 'flux') || 'pony';
+        const mType = (char.model_type === 'sd15' ? 'sd15' : 'pony') as 'pony' | 'sd15';
 
         // 1) Portrait
         setBatchProgress(`${i + 1}/${characters.length} ${char.name} · portrait…`);
@@ -994,7 +996,7 @@ export const CharacterManager: React.FC = () => {
                   </label>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="px-2.5 py-1 rounded-md bg-indigo-950 border border-indigo-700/50 text-indigo-200 text-xs font-semibold">
-                      {modelType === 'flux' ? 'FLUX.1-dev (GGUF)' : 'Pony XL (SDXL)'}
+                      {modelType === 'sd15' ? 'SD 1.5 Draft' : 'Pony XL (SDXL)'}
                     </span>
                     <span className="px-2.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-300 text-xs font-medium">
                       画风: {projectStyle}

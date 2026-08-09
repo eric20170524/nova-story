@@ -19,7 +19,8 @@ def is_valid_safetensors(path):
 #!/usr/bin/env python3
 """
 NovaStory - Automatic Recommended NSFW LoRA Downloader
-Downloads recommended LoRA models for Pony XL and FLUX.1-dev GGUF.
+Downloads recommended LoRA models for Pony XL / SDXL.
+FLUX.1-dev GGUF LoRAs were retired (2026-08) on RTX 3060 12GB stacks.
 Supports Civitai API tokens and direct browser link fallbacks.
 
 Usage:
@@ -67,29 +68,6 @@ RECOMMENDED_LORAS = [
         "civitai_page": "https://civitai.com/models/300123",
         "description": "Classic Hentai style reference, trigger: Expressiveh (Weight: 0.4-0.6)"
     },
-    {
-        "category": "FLUX.1-dev",
-        "name": "aidmaNSFWunlock",
-        "filename": "aidmaNSFWunlock.safetensors",
-        "urls": [
-            "https://civitai.com/api/download/models/652699",
-            "https://civitai.com/api/download/models/692795"
-        ],
-        "civitai_page": "https://civitai.com/models/652699",
-        "description": "FLUX NSFW unlocker (~19MB), trigger: aidmaNSFWunlock (Weight: 0.7-0.8)"
-    },
-    {
-        "category": "FLUX.1-dev",
-        "name": "XLabs Flux Realism",
-        "filename": "XLabs_Flux_Realism.safetensors",
-        "urls": [
-            "https://huggingface.co/XLabs-AI/flux-RealismLora/resolve/main/lora.safetensors",
-            "https://civitai.com/api/download/models/638960",
-            "https://huggingface.co/XLabs-AI/flux-lora-collection/resolve/main/flux_realism_lora.safetensors"
-        ],
-        "civitai_page": "https://civitai.com/models/638960",
-        "description": "Enhances skin texture and photo realism for FLUX (Weight: 0.6-1.0)"
-    }
 ]
 
 def download_file(urls, output_path, civitai_token=None):

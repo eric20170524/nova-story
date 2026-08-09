@@ -59,7 +59,8 @@ export interface Character {
   avatar_url?: string;
   turnaround_url?: string;
   face_url?: string;
-  model_type?: 'pony' | 'flux';
+  /** Local Comfy family. `flux` kept only for reading legacy project data (maps to pony). */
+  model_type?: 'pony' | 'sd15' | 'flux';
   /** Active look/content version (1-based) */
   active_version?: number;
   versions?: CharacterVersionSummary[];

@@ -15,9 +15,8 @@ const DEFAULT_SETTINGS = {
         selected_workflow_file: null,
         install_path: 'D:\\ComfyUI',
         // Style/detail LoRAs (auto-discovered if missing; see image_generation_policy.ts)
-        flux_lora: 'XLabs_Flux_Realism.safetensors',
+        // FLUX.1-dev GGUF retired (2026-08); flux_* keys ignored if present in old settings files.
         pony_lora: 'Pony_DetailV2.0.safetensors',
-        flux_lora_strength: 0.75,
         pony_lora_strength: 0.65,
         default_workflow: 'pony_xl_12gb.json',
         /**
@@ -38,7 +37,6 @@ const DEFAULT_SETTINGS = {
         nsfw_enabled: false,
         // Adult style / unlock LoRAs — separate from style/detail; auto-discovered by filename patterns
         pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
-        flux_nsfw_lora: 'aidmaNSFWunlock.safetensors',
         nsfw_lora_strength: 0.55
     },
     llm: {

@@ -1,5 +1,7 @@
 /**
- * Image generation policy for local ComfyUI (Pony XL / FLUX.1-dev GGUF).
+ * Image generation policy for local ComfyUI (Pony XL / SDXL primary).
+ * FLUX.1-dev GGUF retired on 12GB stacks (2026-08); flux family code kept for
+ * legacy custom workflows only.
  *
  * When NSFW is ON: auto-stack style + NSFW LoRAs (deduped) and inject unlock/trigger tags.
  * When NSFW is OFF: style/detail LoRA only + hard SFW negatives for non-adult titles.
@@ -11,7 +13,27 @@
 import fs from 'fs';
 import path from 'path';
 
-export type ImageModelFamily = 'pony' | 'flux';
+/** Local Comfy model families. `flux` is legacy custom-graph only (GGUF retired 2026-08). */
+export type ImageModelFamily = 'pony' | 'sd15' | 'flux';
+
+/**
+ * Normalize free-form model_type / reference_model_type strings from UI or API.
+ * Unknown values and retired FLUX product defaults map to pony (except explicit flux graphs).
+ */
+export const normalizeImageModelFamily = (raw: unknown): ImageModelFamily => {
+  const s = String(raw ?? 'pony').toLowerCase().trim();
+  if (s.includes('flux')) return 'flux';
+  if (
+    s === 'sd15'
+    || s === 'sd1.5'
+    || s.includes('sd15')
+    || s.includes('sd1.5')
+    || /sd\s*1\.?5/.test(s)
+  ) {
+    return 'sd15';
+  }
+  return 'pony';
+};
 
 export interface LoraSlot {
   role: 'character' | 'style' | 'nsfw';
@@ -332,6 +354,11 @@ export const resolveStyleLora = (
   nsfwEnabled: boolean,
   input: Pick<LoraResolveInput, 'installPath' | 'styleLora' | 'allowRemoteUnverified'>
 ): string | null => {
+  // SD1.5 draft stack: do not auto-attach Pony/SDXL LoRAs (wrong architecture).
+  if (modelFamily === 'sd15') {
+    return null;
+  }
+
   if (modelFamily === 'flux') {
     // Prefer Asian/guofeng first, then realism — never pick pure NSFW unlock as style.
     return resolveNamedOrDiscoveredLora({
@@ -360,6 +387,11 @@ export const resolveNsfwLora = (
   modelFamily: ImageModelFamily,
   input: Pick<LoraResolveInput, 'installPath' | 'nsfwLora' | 'allowRemoteUnverified'>
 ): string | null => {
+  // SD1.5 draft: skip Pony/Incase NSFW LoRAs (incompatible).
+  if (modelFamily === 'sd15') {
+    return null;
+  }
+
   if (modelFamily === 'flux') {
     return resolveNamedOrDiscoveredLora({
       configured: input.nsfwLora,
@@ -417,7 +449,9 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
   });
 
   const defaultStyleStrength =
-    input.modelFamily === 'flux' ? DEFAULT_STRENGTHS.flux_style : DEFAULT_STRENGTHS.pony_style;
+    input.modelFamily === 'flux'
+      ? DEFAULT_STRENGTHS.flux_style
+      : DEFAULT_STRENGTHS.pony_style;
 
   if (styleName) {
     push({
@@ -541,7 +575,7 @@ export const buildPromptEnhancement = (options: {
   if (!looksLikeMaleOnly && !isEnvironment) {
     if (isActionLike) {
       // Identity only — no heavy beauty-portrait stack
-      if (modelFamily === 'pony') {
+      if (modelFamily === 'pony' || modelFamily === 'sd15') {
         if (!/(east asian|chinese beauty)/i.test(existingPrompt)) {
           suffixParts.push('East Asian features, female');
         }
@@ -551,6 +585,12 @@ export const buildPromptEnhancement = (options: {
     } else if (modelFamily === 'pony') {
       if (!/(east asian|chinese beauty|japanese anime beauty)/i.test(existingPrompt)) {
         suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_PONY);
+      }
+    } else if (modelFamily === 'sd15') {
+      if (!/(east asian|chinese beauty|japanese anime beauty)/i.test(existingPrompt)) {
+        suffixParts.push(
+          'beautiful East Asian woman, delicate feminine face, large expressive eyes, clear skin, pretty face, female'
+        );
       }
     } else if (!/(east asian|chinese|japanese|korean)/i.test(existingPrompt)) {
       suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_FLUX);
@@ -587,6 +627,19 @@ export const buildPromptEnhancement = (options: {
         negativeParts.push('explicit sexual content');
       }
     }
+  } else if (modelFamily === 'sd15') {
+    // Danbooru-style drafts: quality tags, no Pony score/rating system
+    if (!/masterpiece|best quality/i.test(existingPrompt)) {
+      prefixParts.push('masterpiece, best quality');
+    }
+    if (nsfwEnabled) {
+      suffixParts.push('detailed skin');
+    } else {
+      negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
+      if (!isActionLike) {
+        negativeParts.push('exposed breasts');
+      }
+    }
   } else {
     if (nsfwEnabled) {
       suffixParts.push('detailed skin texture, natural anatomy');
@@ -606,6 +659,7 @@ export const buildPromptEnhancement = (options: {
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
   const booster = presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined;
   if (booster) {
+    // SD1.5 drafts use tag-like pony boosters; FLUX custom graphs use natural phrases
     let boost = modelFamily === 'flux' ? booster.flux : booster.pony;
     // (2) Auto-strip alluring / intimate / portrait locks on action & aftermath
     if (isActionLike) {
@@ -631,7 +685,7 @@ export const buildPromptEnhancement = (options: {
       modelFamily === 'flux'
         ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
         : 'East Asian features, ancient chinese fantasy, guofeng'
-    );
+    ); // pony + sd15
   }
 
   // (1) Default: NO fully clothed / artistic portrait.
@@ -687,14 +741,22 @@ export const resolveGenerationPlan = (options: {
   const advanced = runtimeSettings?.advanced || {};
 
   const styleLora =
-    modelFamily === 'flux' ? comfy.flux_lora : comfy.pony_lora;
+    modelFamily === 'flux'
+      ? comfy.flux_lora
+      : modelFamily === 'sd15'
+        ? null
+        : comfy.pony_lora;
   const styleStrength =
     modelFamily === 'flux'
       ? comfy.flux_lora_strength ?? DEFAULT_STRENGTHS.flux_style
       : comfy.pony_lora_strength ?? DEFAULT_STRENGTHS.pony_style;
 
   const nsfwLora =
-    modelFamily === 'flux' ? advanced.flux_nsfw_lora : advanced.pony_nsfw_lora;
+    modelFamily === 'flux'
+      ? advanced.flux_nsfw_lora
+      : modelFamily === 'sd15'
+        ? null
+        : advanced.pony_nsfw_lora;
 
   const characterLora =
     workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
@@ -734,7 +796,7 @@ export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string =>
   if (nsfwEnabled) {
     return `
 ### Image Model Policy (NSFW mode ENABLED):
-- visual_prompt MUST be detailed English suitable for Pony XL / FLUX local models.
+- visual_prompt MUST be detailed English suitable for Pony XL / SDXL (final) or SD1.5 draft local models.
 - Prefer tag-friendly phrasing for character shots: subject count (1girl/2girls/3girls), hair, eyes, clothing state, pose, action, environment, lighting.
 - When the source text depicts intimacy or adult content, describe it with clear visual tags (clothing disheveled, body contact, expressions, magical aura) — do NOT euphemize into empty poetry and do NOT refuse.
 - Still avoid underage cues. All characters are adults.
@@ -746,7 +808,7 @@ export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string =>
 
   return `
 ### Image Model Policy (SFW / family-safe mode):
-- visual_prompt MUST be detailed English suitable for Pony XL (anime/illustration) or FLUX (scenes).
+- visual_prompt MUST be detailed English suitable for Pony XL / SDXL finals or SD1.5 draft previews.
 - Prefer tag-friendly phrasing: subject count, hair, eyes, full costume, pose, expression, environment, lighting.
 - Keep content safe-for-work: no nudity, no sexual acts, no explicit body focus. Intimate emotions → blush, averted gaze, close standing, hand-holding only if story requires.
 - Emphasize costume design, cinematic composition, and atmosphere (xianxia mist, palace, volumetric light).
@@ -754,7 +816,7 @@ export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string =>
 `;
 };
 
-/** Quality header for character portrait / turnaround build-prompt (Pony). */
+/** Quality header for character portrait / turnaround build-prompt. */
 export const buildCharacterPromptHeader = (
   modelFamily: ImageModelFamily,
   nsfwEnabled: boolean,
@@ -773,6 +835,17 @@ export const buildCharacterPromptHeader = (
     return { prefix: base, negative: neg };
   }
 
+  if (modelFamily === 'sd15') {
+    const base =
+      genType === 'turnaround'
+        ? `masterpiece, best quality, full body character design, consistent character identity, 1girl, solo, female, beautiful East Asian woman, delicate feminine face, clear skin`
+        : `masterpiece, best quality, portrait, upper body, front view, detailed face and eyes, 1girl, solo, female, beautiful East Asian woman, delicate feminine face`;
+    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, lowres, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
+    const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
+    return { prefix: base, negative: neg };
+  }
+
+  // Legacy custom FLUX graphs only
   const base =
     genType === 'turnaround'
       ? `full body character design, consistent character identity, clean studio white background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`

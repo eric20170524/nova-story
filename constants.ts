@@ -148,17 +148,18 @@ export const MOCK_TIMELINE = {
 
 /**
  * Recommended local image model for each visual style.
- * - pony_xl: Pony Diffusion V6 XL — anime/illustration/character (workflow: pony_xl_12gb.json)
- * - flux_dev_gguf: FLUX.1-dev GGUF — photoreal / complex scenes (workflow: flux_dev_gguf_12gb.json)
- * - both: either works; prefer the first-listed strength in prompt design
+ * - pony_xl: Pony Diffusion V6 XL / SDXL — anime/illustration/character (workflow: pony_xl_12gb.json)
+ * - sd15_draft: SD 1.5 finetunes — fast pose/composition drafts (workflow: sd15_draft_12gb.json)
+ * - both: either works; prefer Pony for final frames
  *
  * Style references: docs/风格参考/1/pixiv-favor.txt
- * Model guidance: docs/Pony_XL与FLUX_Dev_GGUF生图风格对比.md
+ * Model guidance: docs/local_image_generation_deployment_cn.md
+ * FLUX.1-dev GGUF retired on RTX 3060 12GB (2026-08).
  *
  * Adult-leaning styles live in frontend/local/advanced_visual_styles.ts (gitignored).
  * Unlock via Settings: click the hidden footer area 5 times.
  */
-export type RecommendedImageModel = 'pony_xl' | 'flux_dev_gguf' | 'both';
+export type RecommendedImageModel = 'pony_xl' | 'sd15_draft' | 'both';
 export type VisualStyleTier = 'standard' | 'advanced';
 
 export interface VisualStyleDef {
@@ -173,13 +174,13 @@ export interface VisualStyleDef {
 
 export const IMAGE_MODEL_LABELS: Record<RecommendedImageModel, string> = {
   pony_xl: 'Pony XL',
-  flux_dev_gguf: 'FLUX.1-dev GGUF',
-  both: 'Pony XL / FLUX.1-dev GGUF',
+  sd15_draft: 'SD1.5 Draft',
+  both: 'Pony XL / SD1.5 Draft',
 };
 
 export const IMAGE_MODEL_WORKFLOWS: Record<Exclude<RecommendedImageModel, 'both'>, string> = {
   pony_xl: 'pony_xl_12gb.json',
-  flux_dev_gguf: 'flux_dev_gguf_12gb.json',
+  sd15_draft: 'sd15_draft_12gb.json',
 };
 
 /** localStorage key for advanced (adult-leaning) style visibility */
@@ -283,7 +284,7 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     label: 'Ink Wash (水墨/传统墨绘)',
     prompt: 'traditional ink wash painting, sumi-e style, black and white with subtle color accents, visible brushstrokes, rice paper texture, negative space composition',
     negative_prompt: 'digital art, 3d, photorealistic, vibrant colors, sharp edges, modern, glossy',
-    recommended_model: 'flux_dev_gguf',
+    recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
@@ -291,7 +292,7 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     label: 'Surreal/Dreamlike (超现实/梦幻)',
     prompt: 'dreamlike atmosphere, soft focus, ethereal glow, impossible geometry, pastel color grading, fantasy concept art, magical realism',
     negative_prompt: 'realistic, mundane, ordinary, sharp focus, gritty, documentary style',
-    recommended_model: 'flux_dev_gguf',
+    recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
@@ -299,7 +300,7 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     label: 'AI Generated (AI生成风格)',
     prompt: 'highly polished, intricate details, perfect composition, trending on artstation, unreal engine 5 render, volumetric lighting, 8k',
     negative_prompt: 'low quality, artifacts, blurry, jpeg artifacts, bad composition',
-    recommended_model: 'flux_dev_gguf',
+    recommended_model: 'pony_xl',
     tier: 'standard',
   },
   {
@@ -323,7 +324,7 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     label: 'Cinematic Photo (电影写实)',
     prompt: 'cinematic photorealistic still, East Asian features, natural skin texture, realistic lens bokeh, physically based lighting, film color grade, shallow depth of field, detailed environment interaction, shot on 50mm lens look',
     negative_prompt: 'western face, caucasian, anime, cel shaded, cartoon, chibi, flat illustration, oversaturated comic colors, low quality, blurry',
-    recommended_model: 'flux_dev_gguf',
+    recommended_model: 'pony_xl',
     tier: 'standard',
   },
 ];

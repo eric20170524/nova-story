@@ -342,6 +342,23 @@ const seedBundledWorkflows = async (database: Database) => {
 
   const workflowFiles = fs.readdirSync(workflowDirectory)
     .filter((filename) => filename.toLowerCase().endsWith('.json'));
+  const bundledNames = new Set(
+    workflowFiles.map((filename) => path.basename(filename, '.json'))
+  );
+
+  // FLUX.1-dev GGUF retired (2026-08): remove stale bundled rows so UI/API
+  // cannot select missing templates after files were deleted from disk.
+  const retiredFluxNames = ['flux_dev_gguf_12gb', 'flux_dev_example'];
+  for (const name of retiredFluxNames) {
+    if (bundledNames.has(name)) continue;
+    const result = await database.run(
+      `DELETE FROM workflow WHERE name = ? AND description LIKE 'Bundled workflow%'`,
+      name
+    );
+    if ((result as { changes?: number }).changes) {
+      logger.info(`Removed retired bundled workflow: ${name}`);
+    }
+  }
 
   for (const filename of workflowFiles) {
     const name = path.basename(filename, '.json');

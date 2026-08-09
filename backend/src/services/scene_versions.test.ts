@@ -27,8 +27,8 @@ test('scene versions: baseline, create, activate, sync text', async () => {
   await ensureSceneVersionBaseline(sceneId);
   let versions = await listSceneVersions(sceneId);
   assert.equal(versions.length, 1);
-  assert.equal(versions[0].version, 1);
-  assert.equal(versions[0].visual_prompt, 'prompt A');
+  assert.equal(versions[0]?.version, 1);
+  assert.equal(versions[0]?.visual_prompt, 'prompt A');
 
   const created = await createSceneVersion(sceneId, { clearAsset: true, activate: true });
   assert.ok(created);

@@ -5,7 +5,7 @@
  * Composition:       native ControlNetLoader + ControlNetApplyAdvanced
  *                    optional comfyui_controlnet_aux OpenposePreprocessor
  *
- * FLUX GGUF is not wired here yet — probe returns false and callers fall back to Tier A.
+ * FLUX GGUF retired (2026-08). If a custom flux-like graph appears, Tier B is skipped.
  *
  * Missing custom nodes or model files → silent false; never throw into the user path.
  */
@@ -483,7 +483,8 @@ const injectIpAdapter = (
   if (samplers.length === 0) return false;
 
   // Current model link (after LoRAs if already injected)
-  const firstSampler = samplers[0][1];
+  const firstSampler = samplers[0]?.[1];
+  if (!firstSampler) return false;
   const modelLink: [string, number] = Array.isArray(firstSampler.inputs?.model)
     ? [String(firstSampler.inputs.model[0]), Number(firstSampler.inputs.model[1] ?? 0)]
     : ['0', 0];

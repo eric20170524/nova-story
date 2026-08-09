@@ -73,7 +73,7 @@ export const DirectorMode: React.FC = () => {
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [activeTab, setActiveTab] = useState<'control' | 'agent'>('control');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'flux'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
   const [systemNsfw, setSystemNsfw] = useState(false);
 
   // Comic State
@@ -139,8 +139,11 @@ export const DirectorMode: React.FC = () => {
             localStorage.setItem('director_selectedStyle', settingsObj.default_style);
           }
         }
-        if (settingsObj.default_model_type === 'flux' || settingsObj.default_model_type === 'pony') {
+        if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony') {
           setProjectModelType(settingsObj.default_model_type);
+        } else if (settingsObj.default_model_type === 'flux') {
+          // FLUX.1-dev GGUF retired — migrate to Pony XL
+          setProjectModelType('pony');
         }
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
         if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
@@ -371,14 +374,16 @@ export const DirectorMode: React.FC = () => {
       // Character identity ref: always attach when available.
       // Backend Tier B uses IP-Adapter; Tier A only applies img2img on close-ups.
       let characterRefUrl: string | null = null;
-      let referenceModelType: 'pony' | 'flux' = projectModelType || 'pony';
+      let referenceModelType: 'pony' | 'sd15' = projectModelType || 'pony';
       let characterLora: string | null = null;
 
       if (mentionedChars.length > 0) {
         const char = mentionedChars[0];
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
-          referenceModelType = (char.model_type as 'pony' | 'flux') || referenceModelType;
+          // Character model_type: sd15 stays; flux legacy and pony use pony (or project default)
+          if (char.model_type === 'sd15') referenceModelType = 'sd15';
+          else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }
 
