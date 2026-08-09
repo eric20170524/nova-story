@@ -362,8 +362,11 @@ class ApiService {
   // Glossary
   listGlossary = (projectId: number) =>
     this.request<any[]>(`/projects/${projectId}/glossary`);
-  createGlossary = (projectId: number, data: { term: string; definition?: string; category?: string }) =>
-    this.request<any>(`/projects/${projectId}/glossary`, { method: 'POST', body: data });
+  createGlossary = (projectId: number, data: {
+    term: string;
+    definition?: string;
+    category?: string;
+  }) => this.request<any>(`/projects/${projectId}/glossary`, { method: 'POST', body: data });
   updateGlossary = (
     projectId: number,
     glossaryId: number,

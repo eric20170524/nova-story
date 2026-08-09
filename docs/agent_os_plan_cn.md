@@ -2,8 +2,8 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 状态 | ✅ **首版已落地 / 生产就绪**（Approved & Implemented；后续演进见 §15） |
-| 评审 | 架构/场景/剪裁/落地均优秀；风险与边界见 §9、§15 |
+| 状态 | ⚠️ **功能已落地、待可靠性收口**（P1 修复进行中/见可靠性修订；勿称生产就绪直至 executor 集成测试与默认本地 LLM 验证通过） |
+| 评审 | 架构方向合理；曾过早宣称生产就绪。边界见 §9、§15、§17 |
 | 来源 | DreamWaver AI（`Renren/app-registry/.../DreamWaverAI`）能力对齐 |
 | 相关 | [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md)、[architecture_cn.md](./architecture_cn.md)、[backend_implemented_features.md](./backend_implemented_features.md) |
 
@@ -433,3 +433,19 @@ DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参�
 - **实现以代码为准**；本文档描述意图与验收基线。
 - 行为变更（协议 op、execute 语义、流式端点）应同步改本文档 §4 / §15 与 [backend_implemented_features.md](./backend_implemented_features.md)。
 - 索引见 [docs/README.md](./README.md)。
+
+---
+
+## 17. 可靠性收口（评审 P1/P2，相对「生产就绪」门槛）
+
+| ID | 问题 | 修复方向 | 状态 |
+| --- | --- | --- | --- |
+| P1-1 | Agent `GENERATE_TIMELINE` 绕过事务与 `scene_version` | 复用 `timeline_generation_service` | 🔧 代码已对齐路由 |
+| P1-2 | 续写忽略未保存 `context_text`；`apply=false` 仍写 condensed | draft 使用 override；仅 apply 后从整章再生 condensed | 🔧 |
+| P1-3 | 结构化输出未走低温 JSON Schema | Agent/metadata/impact/consistency → `generateStructuredWithRetry` | 🔧 |
+| P1-4 | 默认仍为 Gemini | `settings_manager` + `.env.example` 默认 ollama | 🔧 |
+| P1-5 | 写作 prompt 未硬裁剪 | writing_service 预算常量 + layered worldBible | 🔧 |
+| P2-1 | prompt override 被设置页覆盖；glossary 无编辑 | 合并保存 settings；glossary 编辑/category；override 文本框 | 🔧 |
+| P2-2 | API.md / executor 测试缺口 | 更新 API.md；`agent_executor.test.ts` | 🔧 |
+
+恢复 **「生产就绪」** 前需：本地 Ollama 冒烟 + 全量测试绿 + 导演分镜与 Agent 时间线路径对照通过。

@@ -1,18 +1,15 @@
 import { FastifyPluginAsync } from 'fastify';
 import { db } from '../db/database';
 import { z } from 'zod';
-import { LLMService } from '../services/llm';
-import { SettingsManager } from '../core/settings_manager';
-import { parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import {
   activateSceneVersion,
   annotateScenesWithVersions,
   annotateSceneWithVersions,
   createSceneVersion,
-  ensureSceneVersionBaseline,
   listSceneVersions,
   syncActiveVersionFromScene
 } from '../services/scene_versions';
+import { generateAndReplaceNarrativeTimeline } from '../services/timeline_generation_service';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:chapter_id', async (request, reply) => {
@@ -64,115 +61,25 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ detail: 'Chapter has no content' });
     }
 
-    // Extract character profiles
-    const characters = await db.all('SELECT * FROM character WHERE project_id = ?', chapter.project_id);
-    let charProfilesStr = "";
-
-    if (characters && characters.length > 0) {
-      const profiles = characters.map(c => {
-        let tags = typeof c.visual_tags === 'string' ? JSON.parse(c.visual_tags) : (c.visual_tags || {});
-        let tagStr = "";
-
-        if (tags && tags.base_model) {
-           let baseTags = tags.base_model.tags || {};
-           if (typeof baseTags === 'string') baseTags = { base: baseTags };
-           let activeVariantTags = {};
-
-           const timelineMap = tags.timeline_map || {};
-           let activeVariantId = timelineMap[chapter.id];
-           const variants = tags.variants || [];
-
-           if (!activeVariantId && variants.length > 0) {
-               activeVariantId = variants[0].id;
-           }
-
-           if (activeVariantId) {
-               const variant = variants.find((v: any) => v.id === activeVariantId);
-               if (variant) {
-                   activeVariantTags = variant.tags || {};
-                   if (typeof activeVariantTags === 'string') activeVariantTags = { variant: activeVariantTags };
-               }
-           }
-
-           const combined = { ...baseTags, ...activeVariantTags };
-           tagStr = Object.entries(combined).map(([k, v]) => `${k}: ${v}`).join(', ');
-        } else if (tags) {
-           tagStr = Object.entries(tags).map(([k, v]) => `${k}: ${v}`).join(', ');
-        }
-
-        return `- Name: ${c.name}\n  Description: ${c.description}\n  Visual Tags: ${tagStr}`;
+    try {
+      const result = await generateAndReplaceNarrativeTimeline({
+        chapterId: chapter.id,
+        projectId: chapter.project_id,
+        content: chapter.content,
+        mode: rawMode,
       });
-      charProfilesStr = profiles.join('\n');
-    }
-
-    const project = await db.get('SELECT settings FROM project WHERE id = ?', chapter.project_id);
-    const projectSettings = parseProjectSettings(project?.settings);
-    const nsfwEnabled = resolveEffectiveNsfw({
-      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
-      projectSettings
-    });
-
-    // Attempt to generate timeline via LLM
-    let timelineData: any[] = [];
-    try {
-      const token = undefined;
-      timelineData = await LLMService.generateTimeline(
-        chapter.content,
-        charProfilesStr,
-        'narrative',
-        token,
-        { nsfwEnabled }
-      );
-    } catch (error: any) {
-      return reply.status(500).send({ detail: `Failed to generate timeline: ${error.message}` });
-    }
-
-    if (!timelineData || timelineData.length === 0) {
-      return reply.status(500).send({ detail: "LLM returned empty timeline data" });
-    }
-
-    // Delete existing and insert new within a try/catch
-    try {
-      await db.run('BEGIN TRANSACTION');
-      await db.run('DELETE FROM scene WHERE chapter_id = ?', chapter.id);
-
-      const newScenes = [];
-      for (let i = 0; i < timelineData.length; i++) {
-         const item = timelineData[i];
-         const result = await db.run(`
-            INSERT INTO scene (
-               chapter_id, \`index\`, visual_prompt, audio_prompt, dialogue, duration, shot_type, camera_movement, camera_angle, negative_prompt, asset_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')
-         `,
-         chapter.id,
-         i + 1,
-         item.visual_prompt || "",
-         item.audio_prompt || "",
-         item.dialogue || "",
-         item.duration || 3.0,
-         item.shot_type || "",
-         item.camera_movement || "",
-         item.camera_angle || "",
-         item.negative_prompt || null);
-
-         const newScene = await db.get('SELECT * FROM scene WHERE id = ?', result.lastID);
-         if (newScene) {
-           await ensureSceneVersionBaseline(newScene.id);
-           newScenes.push(await annotateSceneWithVersions(newScene));
-         }
-      }
-
-      await db.run('COMMIT');
-
       return {
-        chapter_id: chapter.id,
-        storyboard_mode: 'narrative',
-        timeline: newScenes
+        chapter_id: result.chapter_id,
+        storyboard_mode: result.storyboard_mode,
+        timeline: result.timeline,
       };
-
     } catch (error: any) {
-      await db.run('ROLLBACK');
-      return reply.status(500).send({ detail: `Failed to save generated scenes to database: ${error.message}` });
+      const message = error?.message || String(error);
+      return reply.status(500).send({
+        detail: message.startsWith('Failed')
+          ? message
+          : `Failed to generate timeline: ${message}`,
+      });
     }
   });
 

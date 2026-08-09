@@ -7,7 +7,7 @@ const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
 
 const DEFAULT_SETTINGS = {
-    llm_model: 'gemini-2.5-flash',
+    llm_model: 'novastory-qwen3:8b',
     image_model: 'gemini-2.5-flash-image',
     comfyui: {
         base_url: 'http://127.0.0.1:8188',
@@ -39,11 +39,12 @@ const DEFAULT_SETTINGS = {
         pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
         nsfw_lora_strength: 0.55
     },
+    // Local-first default (Ollama OpenAI-compatible). Cloud providers still work via settings/.env.
     llm: {
-        provider: 'gemini',
-        api_key: '',
-        base_url: '',
-        model: 'gemini-2.5-flash'
+        provider: 'ollama',
+        api_key: 'ollama',
+        base_url: 'http://127.0.0.1:11434/v1',
+        model: 'novastory-qwen3:8b'
     }
 };
 
@@ -117,7 +118,7 @@ export class SettingsManager {
         const publicSettings = JSON.parse(JSON.stringify(settings));
         const llm = publicSettings.llm || {};
         const rawKey = String(llm.api_key || publicSettings.gemini_api_key || '').trim();
-        const provider = String(llm.provider || 'gemini').toLowerCase();
+        const provider = String(llm.provider || 'ollama').toLowerCase();
         const hasApiKey =
             provider === 'ollama' || provider === 'local_llm'
                 ? true

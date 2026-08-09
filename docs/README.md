@@ -26,7 +26,7 @@
 | `API.md` | ✅ 现行 | 接口清单（含版本 / Tier B） |
 | `architecture_cn.md` | ✅ 现行 | 架构总览 |
 | `local_language_model_deployment_cn.md` | ✅ 现行 | 本地文本模型 |
-| `agent_os_plan_cn.md` | ✅ 首版已落地 | Agent OS 规格 + 落地对照 + 后续演进（流式/脏写/动态预算） |
+| `agent_os_plan_cn.md` | ⚠️ 功能已落地 / 可靠性收口中 | Agent OS 规格；见 §17 P1/P2；勿过早称生产就绪 |
 | `frontend_REQUIREMENTS_CN.md` | 📦 历史 | 早期前端需求，实现以代码与 `backend_implemented_features` 为准 |
 | `frontend_TODO.md` | 📦 历史 | 早期前端待办，多数已完成；勿当现状清单 |
 | `NovaStory MVP.md` | 📦 历史 | MVP 设想（含旧 FLUX 工作流举例），仅作背景 |

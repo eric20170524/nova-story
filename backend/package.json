@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "build": "tsc -p tsconfig.build.json",

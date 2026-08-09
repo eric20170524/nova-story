@@ -41,6 +41,14 @@ export const ProjectSettings: React.FC = () => {
   >([]);
   const [newTerm, setNewTerm] = useState('');
   const [newDefinition, setNewDefinition] = useState('');
+  const [newCategory, setNewCategory] = useState('');
+  /** Preserve unknown keys (e.g. agent_prompts_override written via API) on save */
+  const [settingsBase, setSettingsBase] = useState<Record<string, unknown>>({});
+  const [promptOverrideJson, setPromptOverrideJson] = useState('');
+  const [editingGlossaryId, setEditingGlossaryId] = useState<number | null>(null);
+  const [editTerm, setEditTerm] = useState('');
+  const [editDefinition, setEditDefinition] = useState('');
+  const [editCategory, setEditCategory] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -82,6 +90,7 @@ export const ProjectSettings: React.FC = () => {
           const settingsObj = typeof raw === 'string'
             ? (raw ? JSON.parse(raw) : {})
             : (raw && typeof raw === 'object' ? raw : {});
+          setSettingsBase(settingsObj && typeof settingsObj === 'object' ? { ...settingsObj } : {});
           if (settingsObj.default_style) {
               setDefaultStyle(settingsObj.default_style);
           }
@@ -109,6 +118,16 @@ export const ProjectSettings: React.FC = () => {
               ? settingsObj.character_relations
               : ''
           );
+          if (
+            settingsObj.agent_prompts_override &&
+            typeof settingsObj.agent_prompts_override === 'object'
+          ) {
+            setPromptOverrideJson(
+              JSON.stringify(settingsObj.agent_prompts_override, null, 2)
+            );
+          } else {
+            setPromptOverrideJson('');
+          }
       } catch (e) {
           console.error("Failed to parse project settings", e);
       }
@@ -126,7 +145,28 @@ export const ProjectSettings: React.FC = () => {
     setSaving(true);
     
     try {
+        let agent_prompts_override: Record<string, string> | undefined;
+        if (promptOverrideJson.trim()) {
+          try {
+            const parsed = JSON.parse(promptOverrideJson);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              agent_prompts_override = parsed;
+            } else {
+              throw new Error('override must be object');
+            }
+          } catch {
+            showToast(
+              t('project_settings.prompt_override_invalid', 'Invalid prompt override JSON'),
+              'error'
+            );
+            setSaving(false);
+            return;
+          }
+        }
+
+        // Merge so API-only keys (and any future fields) are not wiped on save
         const settingsJson = JSON.stringify({
+            ...settingsBase,
             default_style: defaultStyle,
             default_model_type: defaultModelType,
             default_workflow_id: defaultWorkflowId,
@@ -135,6 +175,11 @@ export const ProjectSettings: React.FC = () => {
             style: storyStyle,
             main_plot: mainPlot,
             character_relations: characterRelations,
+            ...(agent_prompts_override
+              ? { agent_prompts_override }
+              : promptOverrideJson.trim() === ''
+                ? { agent_prompts_override: undefined }
+                : {}),
         });
 
         await api.updateProject(project.id, {
@@ -142,6 +187,7 @@ export const ProjectSettings: React.FC = () => {
             description,
             settings: settingsJson
         });
+        setSettingsBase(JSON.parse(settingsJson));
         
         // Seed Director Mode & Character Mode settings for this session
         localStorage.setItem('director_selectedStyle', defaultStyle);
@@ -378,6 +424,12 @@ export const ProjectSettings: React.FC = () => {
                         onChange={(e) => setNewTerm(e.target.value)}
                     />
                     <input
+                        className="w-28 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder={t('project_settings.glossary_cat', 'Category')}
+                        value={newCategory}
+                        onChange={(e) => setNewCategory(e.target.value)}
+                    />
+                    <input
                         className="flex-[2] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         placeholder={t('project_settings.glossary_def', 'Definition')}
                         value={newDefinition}
@@ -392,10 +444,12 @@ export const ProjectSettings: React.FC = () => {
                                 const row = await api.createGlossary(Number(id), {
                                     term: newTerm.trim(),
                                     definition: newDefinition.trim() || undefined,
+                                    category: newCategory.trim() || undefined,
                                 });
                                 setGlossary((g) => [...g, row]);
                                 setNewTerm('');
                                 setNewDefinition('');
+                                setNewCategory('');
                             } catch (e) {
                                 console.error(e);
                                 showToast(t('project_settings.glossary_fail', 'Failed to add term'), 'error');
@@ -405,33 +459,112 @@ export const ProjectSettings: React.FC = () => {
                         {t('project_settings.glossary_add', 'Add')}
                     </button>
                 </div>
-                <ul className="space-y-2 max-h-48 overflow-y-auto">
+                <ul className="space-y-2 max-h-56 overflow-y-auto">
                     {glossary.map((g) => (
                         <li
                             key={g.id}
-                            className="flex items-start justify-between gap-2 text-sm bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2"
+                            className="text-sm bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2"
                         >
-                            <div>
-                                <span className="text-indigo-300 font-medium">{g.term}</span>
-                                {g.definition && (
+                            {editingGlossaryId === g.id ? (
+                              <div className="space-y-2">
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                  <input
+                                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs"
+                                    value={editTerm}
+                                    onChange={(e) => setEditTerm(e.target.value)}
+                                  />
+                                  <input
+                                    className="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs"
+                                    value={editCategory}
+                                    onChange={(e) => setEditCategory(e.target.value)}
+                                    placeholder="category"
+                                  />
+                                </div>
+                                <textarea
+                                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs h-14 resize-none"
+                                  value={editDefinition}
+                                  onChange={(e) => setEditDefinition(e.target.value)}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    className="text-xs px-2 py-1 bg-indigo-600 rounded text-white"
+                                    onClick={async () => {
+                                      if (!id) return;
+                                      try {
+                                        const updated = await api.updateGlossary(Number(id), g.id, {
+                                          term: editTerm.trim(),
+                                          definition: editDefinition,
+                                          category: editCategory || null,
+                                        });
+                                        setGlossary((list) =>
+                                          list.map((x) => (x.id === g.id ? updated : x))
+                                        );
+                                        setEditingGlossaryId(null);
+                                      } catch (e) {
+                                        console.error(e);
+                                        showToast(
+                                          t('project_settings.glossary_fail', 'Failed to update term'),
+                                          'error'
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    {t('project_settings.glossary_save', 'Save')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="text-xs px-2 py-1 text-slate-400"
+                                    onClick={() => setEditingGlossaryId(null)}
+                                  >
+                                    {t('dashboard.cancel', 'Cancel')}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <span className="text-indigo-300 font-medium">{g.term}</span>
+                                  {g.category && (
+                                    <span className="ml-2 text-[10px] uppercase text-slate-500">
+                                      {g.category}
+                                    </span>
+                                  )}
+                                  {g.definition && (
                                     <p className="text-xs text-slate-400 mt-0.5">{g.definition}</p>
-                                )}
-                            </div>
-                            <button
-                                type="button"
-                                className="text-slate-500 hover:text-red-400 p-1"
-                                onClick={async () => {
-                                    if (!id) return;
-                                    try {
+                                  )}
+                                </div>
+                                <div className="flex gap-1 flex-shrink-0">
+                                  <button
+                                    type="button"
+                                    className="text-slate-500 hover:text-indigo-300 p-1 text-xs"
+                                    onClick={() => {
+                                      setEditingGlossaryId(g.id);
+                                      setEditTerm(g.term);
+                                      setEditDefinition(g.definition || '');
+                                      setEditCategory(g.category || '');
+                                    }}
+                                  >
+                                    {t('project_settings.glossary_edit', 'Edit')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="text-slate-500 hover:text-red-400 p-1"
+                                    onClick={async () => {
+                                      if (!id) return;
+                                      try {
                                         await api.deleteGlossary(Number(id), g.id);
                                         setGlossary((list) => list.filter((x) => x.id !== g.id));
-                                    } catch (e) {
+                                      } catch (e) {
                                         console.error(e);
-                                    }
-                                }}
-                            >
-                                <Trash2 size={14} />
-                            </button>
+                                      }
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                         </li>
                     ))}
                     {glossary.length === 0 && (
@@ -440,6 +573,25 @@ export const ProjectSettings: React.FC = () => {
                         </li>
                     )}
                 </ul>
+            </div>
+
+            {/* Advanced: prompt override */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-3">
+              <h2 className="text-lg font-semibold text-slate-200 border-b border-slate-800 pb-3">
+                {t('project_settings.prompt_override', 'Agent prompt overrides (advanced)')}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {t(
+                  'project_settings.prompt_override_desc',
+                  'Optional JSON map of PromptKey → template string. Empty clears override. Other project settings keys are preserved on save.'
+                )}
+              </p>
+              <textarea
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 h-32 resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder='{ "agent_core": "..." }'
+                value={promptOverrideJson}
+                onChange={(e) => setPromptOverrideJson(e.target.value)}
+              />
             </div>
 
             {/* Actions */}

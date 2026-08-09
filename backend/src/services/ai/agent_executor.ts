@@ -2,6 +2,7 @@ import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
 import { parseProjectSettings, serializeProjectSettings } from '../project_settings';
+import { generateAndReplaceNarrativeTimeline } from '../timeline_generation_service';
 import {
   AgentActionSchema,
   type AgentAction,
@@ -209,7 +210,10 @@ export class AgentExecutor {
           instructions: action.instructions,
           targetWordCount: action.targetWordCount,
           includeExisting: true,
+          // Metadata only when applying; previews must not pollute DB
+          generateMetadata: false,
         });
+        let condensed = draft.condensed;
         if (ctx.apply) {
           const chapter = await db.get(
             'SELECT content FROM chapter WHERE id = ?',
@@ -219,11 +223,16 @@ export class AgentExecutor {
             (chapter?.content ? String(chapter.content) + '\n\n' : '') +
             draft.content;
           await db.run(
-            'UPDATE chapter SET content = ?, condensed_content = COALESCE(?, condensed_content) WHERE id = ?',
+            'UPDATE chapter SET content = ? WHERE id = ?',
             merged,
-            draft.condensed ?? null,
             chapterId
           );
+          // Condensed must describe the full accepted chapter
+          condensed =
+            (await WritingService.regenerateCondensedFromChapter(
+              ctx.projectId,
+              chapterId
+            )) || condensed;
         }
         return {
           op,
@@ -234,7 +243,7 @@ export class AgentExecutor {
           data: {
             chapterId,
             content: draft.content,
-            condensed: draft.condensed,
+            condensed,
             nextPlot: draft.nextPlot,
             applied: ctx.apply,
           },
@@ -449,34 +458,21 @@ export class AgentExecutor {
             data: { chapterId },
           };
         }
-        const timelineData = await LLMService.generateTimeline(
-          chapter.content
-        );
-        await db.run('DELETE FROM scene WHERE chapter_id = ?', chapterId);
-        let savedCount = 0;
-        for (let i = 0; i < timelineData.length; i++) {
-          const sceneData = timelineData[i];
-          await db.run(
-            `INSERT INTO scene (
-              chapter_id, "index", visual_prompt, audio_prompt, duration,
-              shot_type, camera_movement, camera_angle, asset_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,
-            chapterId,
-            i,
-            sceneData.visual_prompt || '',
-            sceneData.audio_prompt || '',
-            sceneData.duration || 3.0,
-            sceneData.shot_type || 'medium',
-            sceneData.camera_movement || 'static',
-            sceneData.camera_angle || 'eye_level'
-          );
-          savedCount++;
-        }
+        const result = await generateAndReplaceNarrativeTimeline({
+          chapterId,
+          projectId: ctx.projectId,
+          content: String(chapter.content),
+          mode: action.mode || 'narrative',
+        });
         return {
           op,
           status: 'success',
-          message: `Generated ${savedCount} scenes`,
-          data: { chapterId, count: savedCount },
+          message: `Generated ${result.count} scenes`,
+          data: {
+            chapterId,
+            count: result.count,
+            storyboard_mode: result.storyboard_mode,
+          },
         };
       }
 

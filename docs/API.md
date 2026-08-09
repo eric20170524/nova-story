@@ -65,10 +65,18 @@
 | | `POST /scenes/coverage/{shot_id}/apply` | 应用候选镜头到源场景 |
 | | `POST /scenes/coverage/{shot_id}/promote` | 插入、替换或提升候选镜头 |
 | Creative | `POST /agent/storyboard-grid` | 生成九宫格提示词 |
-| | `POST /agent/draft` | AI 续写 |
+| | `POST /agent/draft` | AI 续写（可选 `project_id`/`chapter_id`/`context_text` 分层记忆；默认不写 condensed，除非 `apply`） |
 | | `POST /agent/analyze` | 内容分析 |
-| | `GET /agent/context/{chapter_id}` | 获取章节、结构和角色上下文 |
-| Assistant | `POST /assistant/chat` | 导演助手对话与工具调用 |
+| | `POST /agent/consistency` | 全书逻辑体检 `{ project_id }` → `{ issues[] }` |
+| | `POST /agent/impact` | 定稿世界观演化 `{ project_id, chapter_id, apply? }` |
+| | `POST /agent/skill` | 写作技能（电影化/冲突/反转） |
+| | `GET /agent/context/{chapter_id}` | 获取章节、结构、角色与术语表上下文 |
+| Assistant | `POST /assistant/chat` | Agent OS 决策（多 actions + needs_confirmation） |
+| | `POST /assistant/execute` | 确认后执行 action 列表（非事务原子；逐条 status） |
+| Projects | `GET /projects/{id}/glossary` | 术语表列表 |
+| | `POST /projects/{id}/glossary` | 新增术语 |
+| | `PUT /projects/{id}/glossary/{glossaryId}` | 更新术语 |
+| | `DELETE /projects/{id}/glossary/{glossaryId}` | 删除术语 |
 | Assets | `POST /assets/generate` | 提交生图任务 |
 | | `GET /assets/status/{task_id}` | 获取任务状态 |
 | | `GET /assets/stream/{task_id}` | SSE 任务进度 |

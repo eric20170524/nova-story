@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { AgentRequest, AgentResponse } from '../../schemas/agent';
 import {
+  AgentActionSchema,
   AgentOsDecisionSchema,
   needsConfirmation,
   type AgentOsDecision,
@@ -13,20 +15,6 @@ import { AgentExecutor } from './agent_executor';
 
 function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-}
-
-function parseLooseJson(text: string): any {
-  const clean = stripThink(text)
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-  try {
-    return JSON.parse(clean);
-  } catch {
-    const match = clean.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('JSON parse failed');
-  }
 }
 
 /** Normalize legacy single-action shapes into Agent OS multi-action. */
@@ -226,21 +214,44 @@ export class AgentService {
       userMessage: request.message,
     });
 
-    const provider = LLMService.getProvider();
+    // Loose object schema for provider JSON Schema path (temp 0.1 / Ollama structured).
+    // Full discriminated-union validation happens after with AgentOsDecisionSchema.
+    const LooseDecisionSchema = z.object({
+      thought: z.string(),
+      response: z.string().optional().default(''),
+      actions: z.array(z.record(z.string(), z.any())).default([]),
+    });
+
     const MAX_RETRIES = 2;
     let prompt = basePrompt;
     let lastError = '';
+    let lastRaw = '';
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const rawText = await provider.generateText(
+        const structured = await LLMService.generateStructuredWithRetry(
           prompt,
-          'Output ONLY valid JSON. No markdown fences. No thinking tags.'
+          LooseDecisionSchema
         );
-        const rawData = coerceDecision(parseLooseJson(rawText));
+        if (!structured) {
+          throw new Error('Structured decision empty');
+        }
+        lastRaw = JSON.stringify(structured).slice(0, 1000);
+        const rawData = coerceDecision(structured);
         const parsed = AgentOsDecisionSchema.safeParse(rawData);
         if (parsed.success) {
           return parsed.data;
+        }
+        const filtered = (rawData.actions || []).filter(
+          (a: any) => AgentActionSchema.safeParse(a).success
+        );
+        const second = AgentOsDecisionSchema.safeParse({
+          thought: rawData.thought || structured.thought,
+          response: rawData.response || structured.response || '',
+          actions: filtered,
+        });
+        if (second.success) {
+          return second.data;
         }
         lastError = parsed.error.toString();
         logger.warn(
@@ -249,7 +260,7 @@ export class AgentService {
         if (attempt < MAX_RETRIES) {
           const repair = formatPrompt(getPrompt('agent_repair', overrides), {
             errorMessage: lastError,
-            invalidOutput: String(rawText).slice(0, 1000),
+            invalidOutput: lastRaw,
           });
           prompt = basePrompt + '\n\n' + repair;
         }
@@ -257,6 +268,11 @@ export class AgentService {
         lastError = e?.message || String(e);
         logger.warn(`Agent decide attempt ${attempt + 1} error: ${lastError}`);
         if (attempt >= MAX_RETRIES) break;
+        const repair = formatPrompt(getPrompt('agent_repair', overrides), {
+          errorMessage: lastError,
+          invalidOutput: lastRaw || lastError,
+        });
+        prompt = basePrompt + '\n\n' + repair;
       }
     }
 

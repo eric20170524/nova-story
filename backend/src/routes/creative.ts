@@ -30,8 +30,12 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
         project_id: z.coerce.number().int().optional().nullable(),
         chapter_id: z.string().optional().nullable(),
         target_word_count: z.coerce.number().int().positive().optional(),
-        apply_metadata: z.boolean().optional().default(true),
-        /** If true, append draft to chapter content in DB */
+        /**
+         * Persist condensed_content. Default false unless apply=true.
+         * Never write metadata for unaccepted preview drafts.
+         */
+        apply_metadata: z.boolean().optional(),
+        /** If true, append draft to chapter content in DB and refresh condensed from full chapter */
         apply: z.boolean().optional().default(false),
       })
       .parse(request.body);
@@ -50,29 +54,57 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
 
       // Enhanced path: layered memory + negative constraints
       if (projectId && chapterId) {
+        const apply = body.apply === true;
+        // Only generate/persist metadata when applying, or when explicitly requested with apply
+        const wantMetadata = apply || body.apply_metadata === true;
+
         const result = await WritingService.generateChapterDraft({
           projectId,
           chapterId,
           instructions: body.instructions,
           targetWordCount: body.target_word_count,
           includeExisting: true,
+          // Live editor buffer (unsaved) takes priority over DB content
+          existingContentOverride:
+            body.context_text != null && body.context_text !== undefined
+              ? body.context_text
+              : null,
+          generateMetadata: wantMetadata,
         });
 
-        if (body.apply) {
+        if (apply) {
           const chapter = await db.get(
             'SELECT content FROM chapter WHERE id = ?',
             chapterId
           );
+          const base =
+            body.context_text != null
+              ? String(body.context_text)
+              : chapter?.content
+                ? String(chapter.content)
+                : '';
           const merged =
-            (chapter?.content ? String(chapter.content) + '\n\n' : '') +
-            result.content;
+            (base ? base + '\n\n' : '') + result.content;
           await db.run(
-            'UPDATE chapter SET content = ?, condensed_content = COALESCE(?, condensed_content) WHERE id = ?',
+            'UPDATE chapter SET content = ? WHERE id = ?',
             merged,
-            result.condensed ?? null,
             chapterId
           );
-        } else if (body.apply_metadata && result.condensed) {
+          // Condensed must describe full accepted chapter, not only the new fragment
+          const condensed =
+            await WritingService.regenerateCondensedFromChapter(
+              projectId,
+              chapterId
+            );
+          return {
+            content: result.content,
+            condensed: condensed || result.condensed,
+            next_plot: result.nextPlot,
+          };
+        }
+
+        // Preview path: never write condensed_content unless explicitly forced
+        if (body.apply_metadata === true && result.condensed) {
           await WritingService.applyMetadata(chapterId, result.condensed);
         }
 

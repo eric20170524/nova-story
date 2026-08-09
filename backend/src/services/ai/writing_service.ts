@@ -15,6 +15,21 @@ import {
   type PromptKey,
 } from './prompt_registry';
 
+/** Hard caps tuned for local ~8K context (character counts, not tokens). */
+const BUDGET = {
+  mainPlot: 400,
+  description: 200,
+  characterList: 12,
+  characterDesc: 80,
+  glossaryList: 20,
+  glossaryDef: 60,
+  existingContent: 1500,
+  skillContent: 3500,
+  chapterSummary: 300,
+  metaContent: 6000,
+  outlinesTotal: 4000,
+};
+
 const MetadataSchema = z.object({
   condensed: z.string(),
   nextPlot: z.string().optional().default(''),
@@ -53,6 +68,9 @@ const ConsistencySchema = z.object({
     .default([]),
 });
 
+const head = (text: string, max: number) =>
+  text.length > max ? text.slice(0, max) + '…' : text;
+
 async function loadWritingBundle(projectId: number, chapterId?: string | null) {
   const project = await db.get('SELECT * FROM project WHERE id = ?', projectId);
   if (!project) throw new Error('Project not found');
@@ -90,10 +108,7 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
         : undefined,
   };
 
-  const activeId =
-    chapterId ||
-    chapters[0]?.id ||
-    null;
+  const activeId = chapterId || chapters[0]?.id || null;
 
   const layered =
     activeId != null
@@ -123,18 +138,24 @@ function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
 
-function parseLooseJson(text: string): any {
-  const clean = stripThink(text)
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-  try {
-    return JSON.parse(clean);
-  } catch {
-    const match = clean.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('Failed to parse JSON from LLM');
-  }
+function budgetedCharacters(characters: any[]): string {
+  return JSON.stringify(
+    characters.slice(0, BUDGET.characterList).map((c) => ({
+      name: c.name,
+      role: c.role,
+      description: head(String(c.description || ''), BUDGET.characterDesc),
+    }))
+  );
+}
+
+function budgetedGlossary(glossary: any[]): string {
+  return JSON.stringify(
+    glossary.slice(0, BUDGET.glossaryList).map((g) => ({
+      term: g.term,
+      category: g.category,
+      definition: head(String(g.definition || ''), BUDGET.glossaryDef),
+    }))
+  );
 }
 
 export class WritingService {
@@ -145,6 +166,16 @@ export class WritingService {
     targetWordCount?: number;
     /** Append mode: include existing chapter content in prompt */
     includeExisting?: boolean;
+    /**
+     * Prefer live editor buffer over DB content (unsaved draft).
+     * When set, used as "已有正文" for continuity.
+     */
+    existingContentOverride?: string | null;
+    /**
+     * When true, compute condensed/nextPlot via structured LLM.
+     * Caller must not persist condensed unless content is applied/accepted.
+     */
+    generateMetadata?: boolean;
   }): Promise<{
     content: string;
     condensed?: string;
@@ -168,34 +199,43 @@ export class WritingService {
       .filter(Boolean)
       .join('\n\n');
 
-    const existing =
-      options.includeExisting !== false && chapter.content
-        ? String(chapter.content).slice(-1500)
-        : '';
+    let existing = '';
+    if (options.includeExisting !== false) {
+      const source =
+        options.existingContentOverride != null
+          ? String(options.existingContentOverride)
+          : String(chapter.content || '');
+      existing = source ? source.slice(-BUDGET.existingContent) : '';
+    }
+
+    // Prefer layered worldBible (already capped) over raw full dumps
+    const worldBible =
+      layered?.worldBible ||
+      [
+        `Title: ${bundle.bible.title}`,
+        bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
+        bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
+        bundle.bible.main_plot
+          ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
 
     const prompt = formatPrompt(getPrompt('writing_chapter_gen', bundle.overrides), {
       title: bundle.bible.title,
       genre: bundle.bible.genre || '',
       style: bundle.bible.style || '',
-      mainPlot: bundle.bible.main_plot || bundle.bible.description || '',
-      characters: JSON.stringify(
-        bundle.characters.map((c: any) => ({
-          name: c.name,
-          role: c.role,
-          description: c.description,
-        }))
+      mainPlot: head(
+        bundle.bible.main_plot || bundle.bible.description || '',
+        BUDGET.mainPlot
       ),
-      glossary: JSON.stringify(
-        bundle.glossary.map((g: any) => ({
-          term: g.term,
-          definition: g.definition,
-          category: g.category,
-        }))
-      ),
+      characters: budgetedCharacters(bundle.characters),
+      glossary: budgetedGlossary(bundle.glossary),
       lastScene: layered?.lastScene || '无',
-      memoryPrompt: memoryPrompt || '无',
+      memoryPrompt: memoryPrompt || worldBible || '无',
       chapterTitle: chapter.title,
-      chapterSummary: chapter.summary || '',
+      chapterSummary: head(String(chapter.summary || ''), BUDGET.chapterSummary),
       existingContent: existing || '(空 — 请从章纲开写)',
       nextChapterConstraint: nextConstraint,
       instructions: options.instructions,
@@ -208,20 +248,26 @@ export class WritingService {
 
     let condensed: string | undefined;
     let nextPlot: string | undefined;
-    try {
-      const metaPrompt = formatPrompt(
-        getPrompt('writing_metadata_gen', bundle.overrides),
-        { content: content.slice(0, 8000) }
-      );
-      const metaRaw = await provider.generateText(
-        metaPrompt,
-        'Return only valid JSON.'
-      );
-      const meta = MetadataSchema.parse(parseLooseJson(metaRaw));
-      condensed = meta.condensed;
-      nextPlot = meta.nextPlot;
-    } catch (e) {
-      logger.warn(`Metadata generation failed: ${e}`);
+    if (options.generateMetadata !== false) {
+      try {
+        // Prefer full accepted chapter when metadata is for applied content;
+        // for previews this describes only the new fragment (caller must not persist).
+        const metaSource = head(content, BUDGET.metaContent);
+        const metaPrompt = formatPrompt(
+          getPrompt('writing_metadata_gen', bundle.overrides),
+          { content: metaSource }
+        );
+        const meta = await LLMService.generateStructuredWithRetry(
+          metaPrompt,
+          MetadataSchema
+        );
+        if (meta) {
+          condensed = meta.condensed;
+          nextPlot = meta.nextPlot;
+        }
+      } catch (e) {
+        logger.warn(`Metadata generation failed: ${e}`);
+      }
     }
 
     return { content, condensed, nextPlot };
@@ -257,6 +303,35 @@ export class WritingService {
     }
   }
 
+  /**
+   * After content is accepted into the chapter, recompute condensed from full text.
+   */
+  static async regenerateCondensedFromChapter(
+    projectId: number,
+    chapterId: string
+  ): Promise<string | undefined> {
+    const chapter = await db.get(
+      'SELECT content FROM chapter WHERE id = ? AND project_id = ?',
+      chapterId,
+      projectId
+    );
+    if (!chapter?.content) return undefined;
+    const bundle = await loadWritingBundle(projectId, chapterId);
+    const metaPrompt = formatPrompt(
+      getPrompt('writing_metadata_gen', bundle.overrides),
+      { content: head(String(chapter.content), BUDGET.metaContent) }
+    );
+    const meta = await LLMService.generateStructuredWithRetry(
+      metaPrompt,
+      MetadataSchema
+    );
+    if (meta?.condensed) {
+      await WritingService.applyMetadata(chapterId, meta.condensed);
+      return meta.condensed;
+    }
+    return undefined;
+  }
+
   static async analyzeChapterImpact(
     projectId: number,
     chapterId: string,
@@ -267,15 +342,17 @@ export class WritingService {
     if (!chapter) throw new Error('Chapter not found');
 
     const prompt = formatPrompt(getPrompt('analysis_impact', bundle.overrides), {
-      characters: JSON.stringify(bundle.characters),
-      glossary: JSON.stringify(bundle.glossary),
+      characters: budgetedCharacters(bundle.characters),
+      glossary: budgetedGlossary(bundle.glossary),
       chapterTitle: chapter.title,
-      content: String(chapter.content || '').slice(0, 5000),
+      content: head(String(chapter.content || ''), 5000),
     });
 
-    const provider = LLMService.getProvider();
-    const raw = await provider.generateText(prompt, 'Return only valid JSON.');
-    const data = ImpactSchema.parse(parseLooseJson(raw));
+    const data =
+      (await LLMService.generateStructuredWithRetry(prompt, ImpactSchema)) || {
+        newOrUpdatedCharacters: [],
+        newOrUpdatedGlossary: [],
+      };
 
     if (apply) {
       for (const ch of data.newOrUpdatedCharacters) {
@@ -334,27 +411,35 @@ export class WritingService {
     projectId: number
   ): Promise<z.infer<typeof ConsistencySchema>['issues']> {
     const bundle = await loadWritingBundle(projectId, null);
-    const outlines = bundle.chapters
+    let outlines = bundle.chapters
       .map(
         (c) =>
-          `#${c.index} ${c.title}: ${c.summary || c.condensed_content || '(no summary)'}`
+          `#${c.index} ${c.title}: ${head(
+            String(c.summary || c.condensed_content || '(no summary)'),
+            120
+          )}`
       )
       .join('\n');
+    outlines = head(outlines, BUDGET.outlinesTotal);
 
     const prompt = formatPrompt(
       getPrompt('consistency_check', bundle.overrides),
       {
         title: bundle.bible.title,
-        mainPlot: bundle.bible.main_plot || bundle.bible.description || '',
-        characters: JSON.stringify(bundle.characters),
+        mainPlot: head(
+          bundle.bible.main_plot || bundle.bible.description || '',
+          BUDGET.mainPlot
+        ),
+        characters: budgetedCharacters(bundle.characters),
         outlines,
       }
     );
 
-    const provider = LLMService.getProvider();
-    const raw = await provider.generateText(prompt, 'Return only valid JSON.');
-    const data = ConsistencySchema.parse(parseLooseJson(raw));
-    return data.issues;
+    const data = await LLMService.generateStructuredWithRetry(
+      prompt,
+      ConsistencySchema
+    );
+    return data?.issues || [];
   }
 
   static async executeSkill(options: {
@@ -379,8 +464,14 @@ export class WritingService {
     const chapter = bundle.chapters.find((c) => c.id === options.chapterId);
     if (!chapter) throw new Error('Chapter not found');
 
-    const contextSummary = `Title: ${bundle.bible.title}\nGenre: ${bundle.bible.genre || ''}\nChapter: ${chapter.title}\nSummary: ${chapter.summary || ''}`;
-    const content = String(chapter.content || '(No content, write from summary)');
+    const contextSummary = head(
+      `Title: ${bundle.bible.title}\nGenre: ${bundle.bible.genre || ''}\nChapter: ${chapter.title}\nSummary: ${chapter.summary || ''}`,
+      500
+    );
+    const content = head(
+      String(chapter.content || '(No content, write from summary)'),
+      BUDGET.skillContent
+    );
 
     let prompt = '';
     const skill = options.skill;

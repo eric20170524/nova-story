@@ -103,7 +103,11 @@ test('full application exposes parity routes and API documentation', async () =>
     });
     assert.equal(sseResponse.statusCode, 200);
     assert.equal(sseResponse.headers['content-type'], 'text/event-stream');
-    assert.equal(sseResponse.headers['access-control-allow-origin'], '*');
+    // Default CORS reflects localhost origin (not *) unless NOVASTORY_ALLOW_LAN=1
+    assert.equal(
+      sseResponse.headers['access-control-allow-origin'],
+      'http://localhost:3000'
+    );
     assert.match(sseResponse.body, /"status":"completed"/);
   } finally {
     await app.close();

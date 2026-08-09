@@ -28,7 +28,7 @@ export class LLMService {
     static getProvider(token?: string, configOverride?: LLMProviderConfig): AIProvider {
         const sysSettings = SettingsManager.loadSettings();
         const llmConfig = configOverride || sysSettings.llm || {};
-        const providerType = (llmConfig.provider || 'gemini').toLowerCase();
+        const providerType = (llmConfig.provider || 'ollama').toLowerCase();
         const baseUrl = llmConfig.base_url;
 
         if (['openai', 'custom', 'ollama'].includes(providerType)) {
