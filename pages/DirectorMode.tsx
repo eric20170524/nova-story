@@ -5,6 +5,7 @@ import { Chapter, Scene, Workflow, StreamMessage, AssetMode } from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
+import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 import { ComicViewer } from '../components/ComicViewer';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
@@ -37,6 +38,7 @@ export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
   const { showToast } = useToast();
+  const agentCtx = useProjectAgentOptional();
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [timeline, setTimeline] = useState<Scene[]>([]);
@@ -71,7 +73,6 @@ export const DirectorMode: React.FC = () => {
   const [renderingVideo, setRenderingVideo] = useState(false);
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
-  const [activeTab, setActiveTab] = useState<'control' | 'agent'>('control');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
   const [systemNsfw, setSystemNsfw] = useState(false);
@@ -112,11 +113,13 @@ export const DirectorMode: React.FC = () => {
     localStorage.setItem('director_assetMode', assetMode);
   }, [assetMode]);
 
+  const setAgentChapterId = agentCtx?.setActiveChapterId;
   useEffect(() => {
     if (projectId && selectedChapterId) {
       localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapterId);
+      setAgentChapterId?.(selectedChapterId);
     }
-  }, [projectId, selectedChapterId]);
+  }, [projectId, selectedChapterId, setAgentChapterId]);
 
   const loadProjectDefaults = () => {
     if (!projectId) return;
@@ -279,9 +282,12 @@ export const DirectorMode: React.FC = () => {
     try {
       const updated = await api.activateSceneVersion(sceneId, version);
       setTimeline((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...updated } : s)));
-      showToast(`已切换到 v${version}`, 'success');
+      showToast(
+        t('director.version_switched', 'Switched to v{version}', { version }),
+        'success'
+      );
     } catch (e: any) {
-      showToast(e.message || '切换版本失败', 'error');
+      showToast(e.message || t('director.version_switch_fail', 'Failed to switch version'), 'error');
     }
   };
 
@@ -295,9 +301,14 @@ export const DirectorMode: React.FC = () => {
       if (res?.scene) {
         setTimeline((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...res.scene } : s)));
       }
-      showToast(`已新建 ${res?.version?.label || '版本'}`, 'success');
+      showToast(
+        t('director.version_created', 'Created {label}', {
+          label: res?.version?.label || t('director.version_fallback', 'version'),
+        }),
+        'success'
+      );
     } catch (e: any) {
-      showToast(e.message || '新建版本失败', 'error');
+      showToast(e.message || t('director.version_create_fail', 'Failed to create version'), 'error');
     }
   };
 
@@ -655,8 +666,6 @@ export const DirectorMode: React.FC = () => {
       <DirectorRightPanel
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
         selectedStyle={selectedStyle}
         setSelectedStyle={setSelectedStyle}
         styleStrength={styleStrength}
@@ -671,16 +680,11 @@ export const DirectorMode: React.FC = () => {
         showComicViewer={showComicViewer}
         setShowComicViewer={setShowComicViewer}
         timeline={timeline}
-        projectId={projectId}
-        selectedChapterId={selectedChapterId}
-        onRefreshTimeline={triggerGenerateTimeline}
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
         onStopBatchGenerate={handleStopBatchGenerate}
         projectModelType={projectModelType}
-        projectNsfwMode={projectNsfwMode}
         effectiveNsfw={effectiveNsfw}
-        systemNsfw={systemNsfw}
       />
 
       {showComicViewer && (

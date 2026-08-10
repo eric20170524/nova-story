@@ -3,8 +3,14 @@ import React, {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+
+type ApplyHandler = (
+  content: string,
+  opts?: { alreadyPersisted?: boolean }
+) => void;
 
 type ProjectAgentContextValue = {
   open: boolean;
@@ -15,6 +21,12 @@ type ProjectAgentContextValue = {
   notifyDataChanged: () => void;
   activeChapterId: string | null;
   setActiveChapterId: (id: string | null) => void;
+  sendPrompt: (prompt: string) => void;
+  pendingPrompt: string | null;
+  clearPendingPrompt: () => void;
+  registerApplyHandler: (handler: ApplyHandler | null) => void;
+  /** Push rewritten chapter body into the active story editor (if registered). */
+  applyContent: ApplyHandler;
 };
 
 const ProjectAgentContext = createContext<ProjectAgentContextValue | null>(
@@ -26,6 +38,9 @@ export const ProjectAgentProvider: React.FC<{
   projectId: string;
 }> = ({ children, projectId }) => {
   const [open, setOpen] = useState(false);
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  // Ref (not state): registering a handler must not re-render Provider / change context identity
+  const applyHandlerRef = useRef<ApplyHandler | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [activeChapterId, setActiveChapterId] = useState<string | null>(() => {
     try {
@@ -45,6 +60,37 @@ export const ProjectAgentProvider: React.FC<{
     );
   }, [projectId]);
 
+  const sendPrompt = useCallback((prompt: string) => {
+    setOpen(true);
+    setPendingPrompt(prompt);
+  }, []);
+
+  const clearPendingPrompt = useCallback(() => {
+    setPendingPrompt(null);
+  }, []);
+
+  const registerApplyHandler = useCallback((handler: ApplyHandler | null) => {
+    applyHandlerRef.current = handler;
+  }, []);
+
+  const applyContent = useCallback<ApplyHandler>((content, opts) => {
+    applyHandlerRef.current?.(content, opts);
+  }, []);
+
+  const setActiveChapterIdStable = useCallback(
+    (id: string | null) => {
+      setActiveChapterId(id);
+      if (id) {
+        try {
+          localStorage.setItem(`director_project_${projectId}_chapter`, id);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [projectId]
+  );
+
   const value = useMemo(
     () => ({
       open,
@@ -53,16 +99,12 @@ export const ProjectAgentProvider: React.FC<{
       refreshToken,
       notifyDataChanged,
       activeChapterId,
-      setActiveChapterId: (id: string | null) => {
-        setActiveChapterId(id);
-        if (id) {
-          try {
-            localStorage.setItem(`director_project_${projectId}_chapter`, id);
-          } catch {
-            /* ignore */
-          }
-        }
-      },
+      setActiveChapterId: setActiveChapterIdStable,
+      sendPrompt,
+      pendingPrompt,
+      clearPendingPrompt,
+      registerApplyHandler,
+      applyContent,
     }),
     [
       open,
@@ -70,7 +112,12 @@ export const ProjectAgentProvider: React.FC<{
       refreshToken,
       notifyDataChanged,
       activeChapterId,
-      projectId,
+      setActiveChapterIdStable,
+      sendPrompt,
+      pendingPrompt,
+      clearPendingPrompt,
+      registerApplyHandler,
+      applyContent,
     ]
   );
 

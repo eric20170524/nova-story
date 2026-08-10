@@ -343,6 +343,7 @@ class ApiService {
       thought: string;
       response: string;
       actions?: any[];
+      results?: any[];
       needs_confirmation?: boolean;
       action?: any;
     }>('/assistant/chat', { method: 'POST', body: { message, context, history } });

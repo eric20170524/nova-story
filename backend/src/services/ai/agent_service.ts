@@ -96,6 +96,7 @@ export class AgentService {
 
       // Auto-run read-only actions so the user gets answers immediately
       let autoNotes: string[] = [];
+      let autoResults: any[] = [];
       if (!confirm && actions.length > 0) {
         const results = await AgentExecutor.executeAll(actions, {
           projectId,
@@ -103,6 +104,7 @@ export class AgentService {
           language: request.context.language,
           apply: true,
         });
+        autoResults = results;
         autoNotes = results.map(
           (r) =>
             `[${r.op}] ${r.status}${r.message ? ': ' + r.message : ''}`
@@ -132,6 +134,7 @@ export class AgentService {
         thought: decision.thought,
         response: responseText,
         actions: actions as any[],
+        results: autoResults,
         needs_confirmation: confirm && actions.length > 0,
         action: firstMutating
           ? {
@@ -148,6 +151,7 @@ export class AgentService {
         response:
           '处理请求时发生内部错误。请稍后重试，或检查本地 LLM 是否已启动。',
         actions: [],
+        results: [],
         needs_confirmation: false,
       };
     }
@@ -165,6 +169,7 @@ export class AgentService {
       thought: 'No project context',
       response: stripThink(text),
       actions: [],
+      results: [],
       needs_confirmation: false,
     };
   }

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Loader2, Film, PanelRight, ImageIcon, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Music, Grid, X, Check, ArrowRight } from 'lucide-react';
+import { Loader2, Film, PanelRight, ImageIcon, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Music, Grid, X, Check, ArrowRight, Sparkles } from 'lucide-react';
 import { Scene, CoverageGroup, CoverageShot } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
+import { useProjectAgentOptional } from '../../contexts/ProjectAgentContext';
 import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
@@ -35,6 +36,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   onCreateVersion
 }) => {
   const { t } = useLanguage();
+  const agentCtx = useProjectAgentOptional();
   const [expandedCards, setExpandedCards] = useState<Set<number | string>>(new Set());
   
   // Single-Scene Coverage Modal State
@@ -75,9 +77,13 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
     try {
       const group = await api.generateSceneCoverage(activeCoverageScene.id);
       setCoverageGroup(group);
-      setActionNotice("9 候选镜头生成成功！");
+      setActionNotice(t('director.coverage_gen_ok', '9-shot coverage generated.'));
     } catch (err: any) {
-      setActionNotice(`生成失败: ${err.message || err}`);
+      setActionNotice(
+        t('director.coverage_gen_fail', 'Generation failed: {msg}', {
+          msg: err.message || String(err),
+        })
+      );
     } finally {
       setLoadingCoverage(false);
     }
@@ -91,41 +97,68 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
       if (shot.camera_angle) onUpdateScene(activeCoverageScene.id, 'camera_angle', shot.camera_angle);
       if (shot.camera_movement) onUpdateScene(activeCoverageScene.id, 'camera_movement', shot.camera_movement);
       if (shot.visual_prompt) onUpdateScene(activeCoverageScene.id, 'visual_prompt', shot.visual_prompt);
-      setActionNotice(`已成功将槽位 #${shot.slot} (${shot.shot_size}) 的参数应用至源场景！`);
+      setActionNotice(
+        t('director.coverage_apply_ok', 'Applied slot #{slot} ({size}) to source scene.', {
+          slot: shot.slot,
+          size: shot.shot_size || '',
+        })
+      );
     } catch (err: any) {
-      setActionNotice(`应用失败: ${err.message || err}`);
+      setActionNotice(
+        t('director.coverage_apply_fail', 'Apply failed: {msg}', {
+          msg: err.message || String(err),
+        })
+      );
     }
   };
 
   const handlePromoteShot = async (shot: CoverageShot) => {
     try {
       await api.promoteCoverageShot(shot.id, 'after');
-      setActionNotice(`已成功将槽位 #${shot.slot} 提升为正式时间线镜头！`);
+      setActionNotice(
+        t('director.coverage_promote_ok', 'Promoted slot #{slot} to timeline.', {
+          slot: shot.slot,
+        })
+      );
       if (onRefreshTimeline) onRefreshTimeline();
     } catch (err: any) {
-      setActionNotice(`提升失败: ${err.message || err}`);
+      setActionNotice(
+        t('director.coverage_promote_fail', 'Promote failed: {msg}', {
+          msg: err.message || String(err),
+        })
+      );
     }
   };
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-slate-950">
       {/* Header */}
-      <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925">
-         <div className="flex items-center gap-3">
+      <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925 gap-2">
+         <div className="flex items-center gap-3 min-w-0">
            <h2 className="text-white font-medium truncate">{t('director.storyboard')}</h2>
-           <span className="text-xs px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/50 text-indigo-300 font-mono">
-             {timeline.length} 镜头
+           <span className="text-xs px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/50 text-indigo-300 font-mono flex-shrink-0">
+             {t('director.shots_badge', '{count} shots', { count: timeline.length })}
            </span>
          </div>
          
-         <div className="flex items-center gap-3">
+         <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => agentCtx?.setOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-indigo-300 hover:text-indigo-200 bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-800/40 rounded-lg text-xs sm:text-sm font-medium transition-colors"
+              title={t('agent.open_panel', '打开 Agent OS')}
+            >
+              <Sparkles size={15} />
+              <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
+            </button>
+
             <button 
               onClick={onGenerateTimeline}
               disabled={loading || !selectedChapterId}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium disabled:opacity-50 transition-all shadow-md hover:shadow-indigo-500/20"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 sm:px-4 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium disabled:opacity-50 transition-all shadow-md hover:shadow-indigo-500/20"
             >
               {loading ? <Loader2 className="animate-spin" size={16} /> : <Film size={16} />}
-              <span>{t('director.generate_scenes')}</span>
+              <span className="hidden xs:inline sm:inline">{t('director.generate_scenes')}</span>
             </button>
             
             {/* Mobile Settings Toggle */}

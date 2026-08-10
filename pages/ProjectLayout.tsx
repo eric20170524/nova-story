@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
-import { BookOpen, Users, Clapperboard, Settings } from 'lucide-react';
+import { BookOpen, Users, Clapperboard, Settings, Sparkles } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { api } from '../services/api';
-import { ProjectAgentProvider } from '../contexts/ProjectAgentContext';
+import {
+  ProjectAgentProvider,
+  useProjectAgent,
+} from '../contexts/ProjectAgentContext';
 import { ProjectAgentPanel } from '../components/agent/ProjectAgentPanel';
 
 export const ProjectLayout: React.FC = () => {
@@ -44,6 +47,8 @@ export const ProjectLayout: React.FC = () => {
           <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />
           
           <div className="flex-1 min-w-[1rem]" />
+
+          <ProjectAgentNavButton />
           
           <NavLink
             to={`/project/${id}/settings`}
@@ -69,6 +74,28 @@ export const ProjectLayout: React.FC = () => {
         <ProjectAgentPanel projectId={id} />
       </div>
     </ProjectAgentProvider>
+  );
+};
+
+/** Top-bar Agent OS entry (visible on story / director / characters / settings). */
+const ProjectAgentNavButton: React.FC = () => {
+  const { t } = useLanguage();
+  const { open, setOpen, toggle } = useProjectAgent();
+
+  return (
+    <button
+      type="button"
+      onClick={() => (open ? setOpen(false) : toggle())}
+      className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors flex-shrink-0 border ${
+        open
+          ? 'bg-indigo-600 text-white border-indigo-500'
+          : 'bg-indigo-950/50 text-indigo-300 border-indigo-800/50 hover:bg-indigo-900/60 hover:text-indigo-200'
+      }`}
+      title={t('agent.open_panel', '打开 Agent OS')}
+    >
+      <Sparkles size={15} />
+      <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
+    </button>
   );
 };
 

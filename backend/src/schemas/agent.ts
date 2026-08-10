@@ -27,6 +27,8 @@ export const AgentResponseSchema = z.object({
   response: z.string(),
   /** Agent OS multi-action plan */
   actions: z.array(z.record(z.string(), z.any())).optional().default([]),
+  /** Execution results for auto-executed read-only actions */
+  results: z.array(z.record(z.string(), z.any())).optional().default([]),
   needs_confirmation: z.boolean().optional().default(false),
   /** @deprecated legacy single tool call for old UI */
   action: ToolCallSchema.optional().nullable(),

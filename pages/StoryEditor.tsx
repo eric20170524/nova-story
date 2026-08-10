@@ -1,6 +1,26 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Wand2, RefreshCw, Plus, FileText, PanelRight, X, Trash2, Clapperboard, ArrowUp, ArrowDown, Users, Sparkles, BookOpen, Grid, Undo2, Redo2, ShieldAlert, Bot } from 'lucide-react';
+import {
+  Save,
+  Wand2,
+  RefreshCw,
+  Plus,
+  FileText,
+  Trash2,
+  Clapperboard,
+  ArrowUp,
+  ArrowDown,
+  Users,
+  Sparkles,
+  BookOpen,
+  Undo2,
+  Redo2,
+  ShieldAlert,
+  Bot,
+  ChevronDown,
+  Film,
+} from 'lucide-react';
 import SimpleMDE from 'react-simplemde-editor';
 import { api } from '../services/api';
 import { Chapter } from '../types';
@@ -20,173 +40,273 @@ export const StoryEditor: React.FC = () => {
   const [content, setContent, undo, redo, canUndo, canRedo, setContentWithoutHistory] = useUndo('');
   const [summary, setSummary] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [breakdownLoading, setBreakdownLoading] = useState(false);
-  const [consistencyIssues, setConsistencyIssues] = useState<
-    Array<{ severity: string; location: string; description: string }> | null
-  >(null);
-  
-  // Cinematic Grid State
-  const [gridPrompt, setGridPrompt] = useState<string | null>(null);
-  const [gridLoading, setGridLoading] = useState(false);
-  const [showGridModal, setShowGridModal] = useState(false);
-  
-  // Analysis State
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [extractedCharacters, setExtractedCharacters] = useState<any[]>([]);
-  const [analysisResult, setAnalysisResult] = useState<{ new_entities: string[], updates: string[] } | null>(null);
-  
-  const [showRightPanel, setShowRightPanel] = useState(false);
-  const [activeTab, setActiveTab] = useState<'characters' | 'analysis' | 'writing'>('characters');
+  const [showAiMenu, setShowAiMenu] = useState(false);
+  const aiMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const aiMenuPanelRef = useRef<HTMLDivElement>(null);
+  const [aiMenuPos, setAiMenuPos] = useState<{ top: number; right: number; maxHeight: number } | null>(null);
+
+  // Keep latest selection/content for async agent reload without stale closures
+  const selectedChapterRef = useRef(selectedChapter);
+  const contentRef = useRef(content);
+  useEffect(() => {
+    selectedChapterRef.current = selectedChapter;
+  }, [selectedChapter]);
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+
+  const loadChapters = useCallback(
+    async (opts?: { syncEditorIfClean?: boolean }) => {
+      if (!projectId) return;
+      try {
+        const data = await api.getChapters(Number(projectId));
+        if (Array.isArray(data) && data.length > 0) {
+          const sorted = data.sort((a, b) => a.index - b.index);
+          setChapters(sorted);
+
+          const savedChapterId = localStorage.getItem(
+            `director_project_${projectId}_chapter`
+          );
+          const targetChapter =
+            sorted.find((c) => c.id === savedChapterId) || sorted[0];
+
+          const current = selectedChapterRef.current;
+          if (!current) {
+            setSelectedChapter(targetChapter);
+            return;
+          }
+
+          const freshSelected =
+            sorted.find((c) => c.id === current.id) || targetChapter;
+          const prevContent = current.content || '';
+          const localContent = contentRef.current;
+
+          setSelectedChapter(freshSelected);
+
+          // Pull server body only when editor is not dirty vs last known chapter content
+          if (
+            opts?.syncEditorIfClean &&
+            freshSelected.id === current.id &&
+            localContent === prevContent &&
+            (freshSelected.content || '') !== localContent
+          ) {
+            setContentWithoutHistory(freshSelected.content || '');
+          }
+        } else {
+          setChapters([]);
+        }
+      } catch (err) {
+        console.error('[StoryEditor] Could not load chapters', err);
+        showToast(
+          t('story.failed_load_chapters', 'Failed to load chapters'),
+          'error'
+        );
+      }
+    },
+    [projectId, setContentWithoutHistory, showToast, t]
+  );
 
   useEffect(() => {
-    console.log(`[StoryEditor] Mounted. ProjectId: ${projectId}`);
     if (projectId) loadChapters();
-  }, [projectId]);
+  }, [projectId, loadChapters]);
 
   useEffect(() => {
     const onAgent = () => {
-      if (projectId) loadChapters();
+      if (projectId) loadChapters({ syncEditorIfClean: true });
     };
     window.addEventListener('novastory-agent-data-changed', onAgent);
     return () => window.removeEventListener('novastory-agent-data-changed', onAgent);
-  }, [projectId]);
+  }, [projectId, loadChapters]);
 
   useEffect(() => {
     if (selectedChapter) {
-      console.log(`[StoryEditor] Chapter selected: ${selectedChapter.id} - ${selectedChapter.title}`);
       setContentWithoutHistory(selectedChapter.content || '');
       setSummary(selectedChapter.summary || '');
-      setExtractedCharacters([]);
-      setAnalysisResult(null);
-      setConsistencyIssues(null);
       
       if (projectId) {
-          localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapter.id);
-          agentCtx?.setActiveChapterId(selectedChapter.id);
+        localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapter.id);
+        agentCtx?.setActiveChapterId(selectedChapter.id);
       }
     } else {
-      console.log(`[StoryEditor] No chapter selected.`);
       setContentWithoutHistory('');
       setSummary('');
     }
   }, [selectedChapter?.id, projectId]);
 
-  const loadChapters = async () => {
-    if (!projectId) {
-      console.warn("[StoryEditor] loadChapters called without projectId");
+  // Register apply bridge once; read latest setters/t via refs to avoid effect churn
+  const applyBridgeRef = useRef({
+    setContent,
+    setContentWithoutHistory,
+    showToast,
+    t,
+  });
+  applyBridgeRef.current = {
+    setContent,
+    setContentWithoutHistory,
+    showToast,
+    t,
+  };
+
+  useEffect(() => {
+    const register = agentCtx?.registerApplyHandler;
+    if (!register) return;
+
+    register((newContent, opts) => {
+      const bridge = applyBridgeRef.current;
+      // alreadyPersisted: executor wrote DB; reset undo baseline to avoid re-saving stale text
+      if (opts?.alreadyPersisted) {
+        bridge.setContentWithoutHistory(newContent);
+        setSelectedChapter((prev) => {
+          if (!prev) return prev;
+          setChapters((chs) =>
+            chs.map((c) =>
+              c.id === prev.id ? { ...c, content: newContent } : c
+            )
+          );
+          return { ...prev, content: newContent };
+        });
+        bridge.showToast(
+          bridge.t('story.synced_from_agent', '改写已写入并同步到编辑器'),
+          'success'
+        );
+      } else {
+        bridge.setContent(newContent);
+        bridge.showToast(
+          bridge.t('story.applied_to_editor', '已应用到编辑器，请保存'),
+          'success'
+        );
+      }
+    });
+
+    return () => {
+      register(null);
+    };
+    // Only re-bind when provider identity changes (mount / project layout)
+  }, [agentCtx?.registerApplyHandler]);
+
+  const updateAiMenuPosition = useCallback(() => {
+    const btn = aiMenuBtnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const gap = 8;
+    const top = rect.bottom + gap;
+    const right = Math.max(8, window.innerWidth - rect.right);
+    const maxHeight = Math.max(160, window.innerHeight - top - 16);
+    setAiMenuPos({ top, right, maxHeight });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!showAiMenu) {
+      setAiMenuPos(null);
       return;
     }
-    console.log(`[StoryEditor] Loading chapters for project ${projectId}...`);
-    try {
-      const data = await api.getChapters(Number(projectId));
-      console.log(`[StoryEditor] Chapters loaded:`, data);
-      if (Array.isArray(data) && data.length > 0) {
-        const sorted = data.sort((a, b) => a.index - b.index);
-        setChapters(sorted);
-        
-        // Try to recover last selected chapter from localStorage, otherwise first
-        const savedChapterId = localStorage.getItem(`director_project_${projectId}_chapter`);
-        const targetChapter = sorted.find(c => c.id === savedChapterId) || sorted[0];
-        
-        if (!selectedChapter || selectedChapter.id !== targetChapter.id) {
-             setSelectedChapter(targetChapter);
-        }
-      } else {
-        console.log(`[StoryEditor] No chapters found for project ${projectId}.`);
-        setChapters([]);
-      }
-    } catch (err) {
-      console.error("[StoryEditor] Could not load chapters", err);
-      showToast(t("story.failed_load_chapters", "Failed to load chapters"), 'error');
-    }
-  };
+    updateAiMenuPosition();
+    const onReposition = () => updateAiMenuPosition();
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [showAiMenu, updateAiMenuPosition]);
+
+  useEffect(() => {
+    if (!showAiMenu) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowAiMenu(false);
+    };
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (aiMenuBtnRef.current?.contains(target)) return;
+      if (aiMenuPanelRef.current?.contains(target)) return;
+      setShowAiMenu(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    // capture so CodeMirror doesn't swallow outside clicks
+    document.addEventListener('mousedown', handlePointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handlePointerDown, true);
+    };
+  }, [showAiMenu]);
 
   const handleCreateChapter = async () => {
     if (!projectId) return;
-    const newTitle = `Chapter ${chapters.length + 1}`;
+    const newIndex = chapters.length > 0 ? Math.max(...chapters.map(c => c.index)) + 1 : 1;
+    const title = `${t('story.new_chapter_prefix', 'Chapter')} ${newIndex}`;
     try {
       const newChapter = await api.createChapter({
-        id: crypto.randomUUID(), 
+        id: crypto.randomUUID(),
         project_id: Number(projectId),
-        title: newTitle,
-        index: chapters.length,
-        content: ''
+        title,
+        content: '',
+        index: newIndex
       });
-      setChapters([...chapters, newChapter]);
+      const updated = [...chapters, newChapter];
+      setChapters(updated);
       setSelectedChapter(newChapter);
-      showToast(t("story.chapter_created", "Chapter created"), 'success');
-    } catch (e) {
-      console.error("[StoryEditor] Create chapter failed", e);
-      showToast(t("story.failed_create_chapter", "Failed to create chapter"), 'error');
+      showToast(t('story.chapter_created', 'Chapter created'), 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(t('story.failed_create_chapter', 'Failed to create chapter'), 'error');
     }
   };
 
   const handleDeleteChapter = async (e: React.MouseEvent, chapterId: string) => {
-      e.stopPropagation(); // Prevent selection
-      if (!confirm("Are you sure you want to delete this chapter? This action cannot be undone.")) return;
-      
-      try {
-          await api.deleteChapter(chapterId);
-          const newChapters = chapters.filter(c => c.id !== chapterId);
-          setChapters(newChapters);
-          
-          if (selectedChapter?.id === chapterId) {
-              setSelectedChapter(newChapters.length > 0 ? newChapters[0] : null);
-          }
-          showToast(t("story.chapter_deleted", "Chapter deleted"), 'success');
-      } catch (e) {
-          console.error("Delete failed", e);
-          showToast(t("story.failed_delete_chapter", "Failed to delete chapter."), 'error');
+    e.stopPropagation();
+    if (!confirm(t('story.confirm_delete_chapter', 'Are you sure you want to delete this chapter?'))) return;
+    
+    try {
+      await api.deleteChapter(chapterId);
+      const remaining = chapters.filter(c => c.id !== chapterId);
+      setChapters(remaining);
+      if (selectedChapter?.id === chapterId) {
+        setSelectedChapter(remaining.length > 0 ? remaining[0] : null);
       }
+      showToast(t('story.chapter_deleted', 'Chapter deleted'), 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(t('story.failed_delete_chapter', 'Failed to delete chapter'), 'error');
+    }
   };
 
   const handleMoveChapter = async (e: React.MouseEvent, chapter: Chapter, direction: 'up' | 'down') => {
-      e.stopPropagation();
-      const currentIndex = chapters.findIndex(c => c.id === chapter.id);
-      if (currentIndex === -1) return;
-      
-      const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-      
-      // Bounds check
-      if (newIndex < 0 || newIndex >= chapters.length) return;
-      
-      const targetIndex = newIndex; 
-      
-      // Optimistic UI update
-      const newChapters = [...chapters];
-      const [movedChapter] = newChapters.splice(currentIndex, 1);
-      newChapters.splice(targetIndex, 0, movedChapter);
-      
-      // Re-assign local indices for display
-      const updatedChapters = newChapters.map((c, i) => ({ ...c, index: i }));
-      setChapters(updatedChapters);
-
-      try {
-          await api.moveChapter(chapter.id, targetIndex);
-      } catch (e) {
-          console.error("Move failed", e);
-          showToast(t("story.failed_move_chapter", "Failed to move chapter"), 'error');
-          loadChapters();
-      }
+    e.stopPropagation();
+    const currentIndex = chapters.findIndex(c => c.id === chapter.id);
+    if (currentIndex < 0) return;
+    
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= chapters.length) return;
+    
+    const targetChapter = chapters[targetIndex];
+    try {
+      await api.moveChapter(chapter.id, targetChapter.index);
+      await loadChapters();
+      showToast(t('story.chapter_reordered', 'Chapter order updated'), 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(t('story.failed_move_chapter', 'Failed to move chapter'), 'error');
+    }
   };
 
-  const handleSave = async () => {
-    if (!selectedChapter) return;
-    console.log(`[StoryEditor] Saving chapter ${selectedChapter.id}...`);
+  const handleSave = async (opts?: { silent?: boolean }): Promise<boolean> => {
+    if (!selectedChapter) return false;
     try {
-      await api.updateChapter(selectedChapter.id, {
-        ...selectedChapter,
+      const updated = await api.updateChapter(selectedChapter.id, {
+        title: selectedChapter.title,
         content,
-        summary,
+        summary
       });
-      console.log(`[StoryEditor] Chapter saved.`);
-      const updated = { ...selectedChapter, content, summary };
       setSelectedChapter(updated);
-      setChapters(chapters.map(c => c.id === selectedChapter.id ? updated : c));
-      showToast(t("story.saved", "Saved"), 'success');
-    } catch (e) {
-      console.error("[StoryEditor] Save failed", e);
-      showToast(t("story.failed_save", "Failed to save"), 'error');
+      setChapters(chapters.map(c => c.id === updated.id ? updated : c));
+      if (!opts?.silent) {
+        showToast(t('story.saved', 'Saved successfully'), 'success');
+      }
+      return true;
+    } catch (err) {
+      console.error(err);
+      showToast(t('story.failed_save', 'Failed to save'), 'error');
+      return false;
     }
   };
 
@@ -194,162 +314,46 @@ export const StoryEditor: React.FC = () => {
     if (!selectedChapter || !projectId) return;
     setAiLoading(true);
     try {
-      const prompt =
-        "Continue the story naturally from the current text. Respect chapter summary and do not spoil the next chapter.";
+      const prompt = summary
+        ? `Continue writing based on summary: ${summary}`
+        : "Continue the story naturally from the current text. Respect chapter summary and do not spoil the next chapter.";
       const res = await api.draftText(content, prompt, {
         project_id: Number(projectId),
         chapter_id: selectedChapter.id,
         target_word_count: 800,
       });
-      if (res && res.content) {
-        const next = (content ? content + "\n\n" : "") + res.content;
-        setContent(next);
-        if (res.condensed) {
-          setSelectedChapter({
-            ...selectedChapter,
-            condensed_content: res.condensed,
-          });
-        }
-        showToast(t('story.ai_draft_success'), 'success');
-      }
-    } catch (e) {
-      showToast(t('story.ai_draft_fail'), 'error');
-      console.error(e);
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const handleConsistencyCheck = async () => {
-    if (!projectId) return;
-    setIsAnalyzing(true);
-    try {
-      const res = await api.checkConsistency(Number(projectId));
-      setConsistencyIssues(res.issues || []);
-      setActiveTab('writing');
-      showToast(t('story.consistency_done', 'Consistency check complete'), 'success');
-    } catch (e) {
-      console.error(e);
-      showToast(t('story.consistency_fail', 'Consistency check failed'), 'error');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleChapterImpact = async () => {
-    if (!projectId || !selectedChapter) return;
-    await handleSave();
-    setIsAnalyzing(true);
-    try {
-      await api.applyChapterImpact(Number(projectId), selectedChapter.id, true);
-      showToast(t('story.impact_done', 'World state updated from chapter'), 'success');
-    } catch (e) {
-      console.error(e);
-      showToast(t('story.impact_fail', 'Impact analysis failed'), 'error');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleSkill = async (
-    skill: 'CINEMATIC_REWRITE' | 'ADD_CONFLICT' | 'REVERSE_PLOT'
-  ) => {
-    if (!projectId || !selectedChapter) return;
-    await handleSave();
-    setAiLoading(true);
-    try {
-      const res = await api.runWritingSkill({
-        project_id: Number(projectId),
-        chapter_id: selectedChapter.id,
-        skill,
-        technique: skill === 'CINEMATIC_REWRITE' ? 'sensory' : undefined,
-        conflictType: skill === 'ADD_CONFLICT' ? 'variable_intrusion' : undefined,
-        intensity: 'high',
-        reversalType: skill === 'REVERSE_PLOT' ? 'motive_switch' : undefined,
-        instructions: t('story.skill_default_instr', 'Improve drama and immersion'),
-        apply: false,
-      });
       if (res?.content) {
-        setContent(res.content);
-        showToast(t('story.skill_done', 'Rewrite ready — save when satisfied'), 'success');
+        setContent(content ? `${content}\n\n${res.content}` : res.content);
+        showToast(t('story.draft_ready', 'Draft generated'), 'success');
       }
-    } catch (e) {
-      console.error(e);
-      showToast(t('story.skill_fail', 'Skill rewrite failed'), 'error');
+    } catch (err) {
+      console.error(err);
+      showToast(t('story.draft_failed', 'Draft generation failed'), 'error');
     } finally {
       setAiLoading(false);
     }
   };
 
-  const handleGenerateGrid = async () => {
-    if (!content.trim()) return;
-    setGridLoading(true);
-    try {
-        const res = await api.generateStoryboardGrid(content);
-        if (res && res.prompt) {
-            setGridPrompt(res.prompt);
-            setShowGridModal(true);
-            showToast(t('story.grid_prompt_success'), 'success');
-        } else {
-            showToast(t('story.grid_prompt_fail'), 'error');
-        }
-    } catch (e) {
-        console.error(e);
-        showToast(t('story.grid_prompt_fail'), 'error');
-    } finally {
-        setGridLoading(false);
+  const handleTriggerAgentAction = async (promptText: string) => {
+    setShowAiMenu(false);
+    if (selectedChapter) {
+      const ok = await handleSave({ silent: true });
+      if (!ok) return;
+    }
+    if (agentCtx) {
+      agentCtx.sendPrompt(promptText);
     }
   };
 
-  const handleGenerateTimeline = async () => {
-      if (!selectedChapter) return;
-      
-      await handleSave();
-      
-      setBreakdownLoading(true);
-      try {
-          await api.generateTimeline(selectedChapter.id);
-          showToast(t("story.timeline_generated", "Timeline generated. Switching to Director Mode..."), 'success');
-          setTimeout(() => navigate(`/project/${projectId}/director`), 1000);
-      } catch (e) {
-          console.error(e);
-          showToast(t('director.error_timeline'), 'error');
-      } finally {
-          setBreakdownLoading(false);
-      }
-  };
-
-  const handleAnalyzeCharacters = async () => {
-    if (!selectedChapter) return;
-    setIsAnalyzing(true);
-    try {
-      const res = await api.extractCharacters(selectedChapter.id);
-      setExtractedCharacters(res);
-      showToast(t('story.analysis_complete'), 'success');
-    } catch (e) {
-      console.error(e);
-      showToast(t("story.analysis_failed", "Analysis failed"), 'error');
-    } finally {
-      setIsAnalyzing(false);
+  /** Soft entry: open Director only — timeline generation stays on the director page */
+  const handleOpenDirector = async () => {
+    if (!projectId) return;
+    if (selectedChapter) {
+      await handleSave({ silent: true });
     }
+    navigate(`/project/${projectId}/director`);
   };
 
-  const handleDeepAnalysis = async () => {
-    if (!selectedChapter || !content.trim()) return;
-    setIsAnalyzing(true);
-    try {
-        const res = await api.analyzeText(content);
-        setAnalysisResult(res);
-        showToast(t("story.analysis_complete"), 'success');
-    } catch (e) {
-        console.error(e);
-        showToast(t("story.analysis_failed", "Analysis failed"), 'error');
-    } finally {
-        setIsAnalyzing(false);
-    }
-  };
-
-  // Editor Options Configuration
   const editorOptions = useMemo(() => ({
     spellChecker: false,
     status: false,
@@ -362,53 +366,58 @@ export const StoryEditor: React.FC = () => {
   return (
     <div className="flex h-full bg-slate-950">
       {/* Chapter Sidebar */}
-      <div className="w-16 lg:w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all">
+      <div className="w-16 lg:w-60 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all">
         <div className="p-4 border-b border-slate-800 flex justify-between items-center h-14">
-          <h3 className="font-semibold text-slate-300 hidden lg:block">{t('story.chapters')}</h3>
-          <button onClick={handleCreateChapter} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white mx-auto lg:mx-0">
+          <h3 className="font-semibold text-slate-300 hidden lg:block text-sm">{t('story.chapters')}</h3>
+          <button
+            onClick={handleCreateChapter}
+            className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white mx-auto lg:mx-0 transition-colors"
+            title={t('story.new_chapter', '新建章节')}
+          >
             <Plus size={18} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {chapters.map((chapter, index) => (
             <div
               key={chapter.id}
               onClick={() => setSelectedChapter(chapter)}
-              className={`group flex items-center justify-between px-3 py-2 rounded-md cursor-pointer text-sm transition-colors ${selectedChapter?.id === chapter.id 
-                  ? 'bg-indigo-600/20 text-indigo-300' 
+              className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer text-xs sm:text-sm transition-colors ${
+                selectedChapter?.id === chapter.id 
+                  ? 'bg-indigo-600/20 text-indigo-300 font-medium' 
                   : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
               }`}
               title={chapter.title}
             >
               <div className="flex items-center gap-2 overflow-hidden flex-1">
-                  <FileText size={18} className="flex-shrink-0" />
-                  <span className="truncate hidden lg:block">{chapter.title}</span>
+                <FileText size={16} className="flex-shrink-0" />
+                <span className="truncate hidden lg:block">{chapter.title}</span>
               </div>
               
               <div className="hidden lg:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    onClick={(e) => handleMoveChapter(e, chapter, 'up')}
-                    disabled={index === 0}
-                    className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
-                    title="Move Up"
-                  >
-                      <ArrowUp size={12} />
-                  </button>
-                  <button 
-                    onClick={(e) => handleMoveChapter(e, chapter, 'down')}
-                    disabled={index === chapters.length - 1}
-                    className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
-                    title="Move Down"
-                  >
-                      <ArrowDown size={12} />
-                  </button>
-                  <button 
-                    onClick={(e) => handleDeleteChapter(e, chapter.id)}
-                    className="p-1 text-slate-500 hover:text-red-400 rounded transition-colors"
-                    title="Delete Chapter"
-                  >
-                      <Trash2 size={12} />
-                  </button>
+                <button 
+                  onClick={(e) => handleMoveChapter(e, chapter, 'up')}
+                  disabled={index === 0}
+                  className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
+                  title="Move Up"
+                >
+                  <ArrowUp size={12} />
+                </button>
+                <button 
+                  onClick={(e) => handleMoveChapter(e, chapter, 'down')}
+                  disabled={index === chapters.length - 1}
+                  className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
+                  title="Move Down"
+                >
+                  <ArrowDown size={12} />
+                </button>
+                <button 
+                  onClick={(e) => handleDeleteChapter(e, chapter.id)}
+                  className="p-1 text-slate-500 hover:text-red-400 rounded transition-colors"
+                  title="Delete Chapter"
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
             </div>
           ))}
@@ -418,9 +427,10 @@ export const StoryEditor: React.FC = () => {
         </div>
       </div>
 
-      {/* Editor Area */}
+      {/* Main Full-Width Editor Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-3 sm:px-4 lg:px-6 bg-slate-925 gap-2">
+        {/* Editor Top Bar — z-20 so bar chrome stays above editor; menu itself portals to body */}
+        <div className="relative z-20 h-14 border-b border-slate-800 flex items-center justify-between px-3 sm:px-6 bg-slate-900/90 backdrop-blur gap-3 flex-shrink-0">
           <input
             type="text"
             className="bg-transparent border-none text-white font-medium focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate"
@@ -428,12 +438,13 @@ export const StoryEditor: React.FC = () => {
             onChange={(e) => selectedChapter && setSelectedChapter({...selectedChapter, title: e.target.value})}
             placeholder={t('story.chapter_title_placeholder')}
           />
-          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               type="button"
               onClick={undo}
               disabled={!canUndo}
-              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30"
+              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition-colors"
               title={t('story.undo', 'Undo')}
             >
               <Undo2 size={16} />
@@ -442,367 +453,265 @@ export const StoryEditor: React.FC = () => {
               type="button"
               onClick={redo}
               disabled={!canRedo}
-              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30"
+              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition-colors"
               title={t('story.redo', 'Redo')}
             >
               <Redo2 size={16} />
             </button>
-            <button 
-              onClick={() => navigate(`/project/${projectId}/director`)}
-              className="hidden md:flex items-center gap-1 px-3 py-1.5 text-slate-400 hover:text-indigo-400 text-sm transition-colors mr-1"
-              title="Go to Director Mode"
+
+            {/* Smart AI Actions Dropdown — portal+fixed so CodeMirror cannot cover it */}
+            <div className="relative">
+              <button
+                ref={aiMenuBtnRef}
+                type="button"
+                aria-expanded={showAiMenu}
+                aria-haspopup="menu"
+                onClick={() => setShowAiMenu((v) => !v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-medium transition-colors ${
+                  showAiMenu
+                    ? 'bg-indigo-600/40 text-indigo-200 border-indigo-400/50'
+                    : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border-indigo-500/30'
+                }`}
+                title={t('story.smart_ai_tools', '智能创作工具')}
+              >
+                <Sparkles size={14} className="text-indigo-400" />
+                <span className="hidden md:inline">{t('story.smart_ai_tools', '智能创作')}</span>
+                <ChevronDown
+                  size={13}
+                  className={`text-indigo-400 transition-transform duration-150 ${
+                    showAiMenu ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {showAiMenu &&
+                aiMenuPos &&
+                createPortal(
+                  <div
+                    ref={aiMenuPanelRef}
+                    role="menu"
+                    style={{
+                      position: 'fixed',
+                      top: aiMenuPos.top,
+                      right: aiMenuPos.right,
+                      maxHeight: aiMenuPos.maxHeight,
+                      zIndex: 200,
+                    }}
+                    className="w-64 overflow-y-auto overscroll-contain bg-slate-900 border border-slate-700 rounded-xl shadow-2xl shadow-black/50 py-1.5 text-xs custom-scrollbar animate-in fade-in zoom-in-95 duration-150 origin-top-right"
+                  >
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      {t('story.ai_extraction_analysis', '分析与抽取')}
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_extract_chars',
+                            '请提取并分析当前章节出现的所有角色与性格特征'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <Users size={14} className="text-indigo-400 flex-shrink-0" />
+                      <span>{t('story.analyze_characters', '提取本章角色')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_analyze_plot',
+                            '请分析当前章节的剧情推进要点与新实体'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <Sparkles size={14} className="text-sky-400 flex-shrink-0" />
+                      <span>{t('story.analyze_impact', '剧情深度分析')}</span>
+                    </button>
+
+                    <div className="h-px bg-slate-800 my-1" />
+
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      {t('story.skills', '写作技能')}
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_cinematic',
+                            '请对当前章节进行电影化视听与感官改写，增强沉浸感'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <Film size={14} className="text-purple-400 flex-shrink-0" />
+                      <span>{t('story.skill_cinematic', '电影化视听改写')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_add_conflict',
+                            '请为当前章节注入戏剧冲突与突发危机'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <Wand2 size={14} className="text-amber-400 flex-shrink-0" />
+                      <span>{t('story.skill_conflict', '注入剧情冲突')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_reverse_plot',
+                            '请为当前章节结尾设计一个意料之外的情节反转'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <RefreshCw size={14} className="text-rose-400 flex-shrink-0" />
+                      <span>{t('story.skill_reversal', '设计情节反转')}</span>
+                    </button>
+
+                    <div className="h-px bg-slate-800 my-1" />
+
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                      {t('story.world_consistency', '世界观与体检')}
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_consistency',
+                            '请对全书所有章节进行逻辑一致性与设定漏洞体检'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <ShieldAlert size={14} className="text-amber-400 flex-shrink-0" />
+                      <span>{t('story.consistency_btn', '全书逻辑体检')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() =>
+                        handleTriggerAgentAction(
+                          t(
+                            'agent.prompt_impact',
+                            '本章已定稿，请提取新增角色与世界观术语并更新到设定库'
+                          )
+                        )
+                      }
+                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                    >
+                      <BookOpen size={14} className="text-emerald-400 flex-shrink-0" />
+                      <span>{t('story.impact_btn', '定稿：更新世界观')}</span>
+                    </button>
+                  </div>,
+                  document.body
+                )}
+            </div>
+
+            {/* Soft link to Director (generate shots only in director workspace) */}
+            <button
+              type="button"
+              onClick={handleOpenDirector}
+              disabled={!projectId}
+              className="p-1.5 text-slate-500 hover:text-slate-300 rounded-lg hover:bg-slate-800/80 transition-colors disabled:opacity-30"
+              title={t('story.open_director', '打开导演分镜工作台')}
             >
-               <Clapperboard size={16} />
-               <span>{t("story.to_storyboard", "To Storyboard")}</span>
+              <Clapperboard size={16} />
             </button>
+
+            {/* Open Global Agent OS */}
             <button
               type="button"
               onClick={() => agentCtx?.setOpen(true)}
-              className="hidden sm:flex items-center gap-1 px-2 py-1.5 text-indigo-400 hover:text-indigo-300 text-xs"
-              title={t('agent.title_os')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-400 hover:text-indigo-300 bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-800/40 rounded-lg text-xs font-medium transition-colors"
+              title={t('agent.open_panel', '打开 Agent OS')}
             >
-              <Bot size={16} />
+              <Bot size={15} />
+              <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
             </button>
 
+            {/* Save Button */}
             <button 
               onClick={handleSave}
-              className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs sm:text-sm transition-colors"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs sm:text-sm font-medium transition-colors shadow-md shadow-indigo-600/20"
             >
               <Save size={14} /> 
-              <span className="hidden sm:inline">{t('story.save')}</span>
-            </button>
-            
-            <button 
-              onClick={() => setShowRightPanel(!showRightPanel)}
-              className="lg:hidden p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg"
-            >
-               <PanelRight size={18} />
+              <span>{t('story.save')}</span>
             </button>
           </div>
         </div>
 
+        {/* Outline / Summary Bar */}
         {selectedChapter && (
-          <div className="px-3 sm:px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80">
-            <label className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">
-              {t('story.chapter_summary', 'Chapter outline / summary')}
-            </label>
+          <div className="px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+                {t('story.chapter_summary', '本章剧情大纲 / 梗概 (Summary)')}
+              </label>
+            </div>
             <textarea
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
               rows={2}
-              placeholder={t('story.summary_placeholder', 'Key events, conflict, ending hook…')}
-              className="mt-1 w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 resize-none"
+              placeholder={t('story.summary_placeholder', '核心冲突、情节走向、结尾悬念…')}
+              className="mt-1 w-full bg-slate-900/90 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 resize-none transition-colors"
             />
           </div>
         )}
         
+        {/* Editor Body */}
         <div className="flex-1 relative group/editor overflow-hidden flex flex-col">
           {selectedChapter ? (
-              <SimpleMDE
-                key={selectedChapter.id}
-                value={content}
-                onChange={(val) => setContent(val)}
-                options={editorOptions}
-                className="h-full"
-              />
+            <SimpleMDE
+              key={selectedChapter.id}
+              value={content}
+              onChange={(val) => setContent(val)}
+              options={editorOptions}
+              className="h-full custom-simplemde"
+            />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-500">
-                {t('story.no_chapters')}
+            <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+              {t('story.no_chapters')}
             </div>
           )}
           
-          {/* AI Floating Toolbar */}
-          <div className="absolute bottom-4 right-4 lg:bottom-8 lg:right-8 flex flex-col gap-3 transition-opacity opacity-70 hover:opacity-100 z-10">
-             <button
+          {/* AI Floating Quick Action Toolbar */}
+          <div className="absolute bottom-6 right-8 flex items-center gap-3 z-10">
+            <button
               onClick={handleAIDraft}
               disabled={aiLoading}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 sm:p-3 rounded-full shadow-lg shadow-indigo-600/30 transition-transform hover:scale-105 disabled:opacity-50 flex items-center justify-center gap-2"
-              title={t('story.ai_continue')}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-full shadow-xl shadow-indigo-600/40 transition-transform hover:scale-105 disabled:opacity-50 flex items-center gap-2 text-xs font-medium"
+              title={t('story.ai_continue', '沉浸续写')}
             >
-              {aiLoading ? <RefreshCw className="animate-spin" size={18} /> : <Wand2 size={18} />}
+              {aiLoading ? <RefreshCw className="animate-spin" size={15} /> : <Wand2 size={15} />}
+              <span>{t('story.ai_continue', '沉浸续写')}</span>
             </button>
           </div>
         </div>
       </div>
-      
-      {/* Right Tools Pane */}
-      <div className={`
-        fixed inset-y-0 right-0 w-80 bg-slate-900 border-l border-slate-800 shadow-2xl z-50 transform transition-transform duration-300 flex flex-col
-        lg:static lg:translate-x-0 lg:shadow-none lg:w-80 lg:block
-        ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}
-      `}>
-         {/* ... Right panel content same as before ... */}
-         <div className="p-4 border-b border-slate-800 flex justify-between items-center lg:hidden">
-            <h4 className="font-semibold text-white">{t('story.assistant_title')}</h4>
-            <button onClick={() => setShowRightPanel(false)} className="text-slate-400 hover:text-white">
-              <X size={20} />
-            </button>
-         </div>
-
-         <div className="flex border-b border-slate-800">
-            <button
-              onClick={() => setActiveTab('characters')}
-              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                activeTab === 'characters' 
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/30' 
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <Users size={16} />
-              <span className="hidden sm:inline">{t('story.tab_characters')}</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('analysis')}
-              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                activeTab === 'analysis' 
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/30' 
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <Sparkles size={16} />
-              <span className="hidden sm:inline">{t('story.tab_analysis')}</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('writing')}
-              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                activeTab === 'writing' 
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/30' 
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <ShieldAlert size={16} />
-              <span className="hidden sm:inline">{t('story.tab_writing', 'Writing')}</span>
-            </button>
-         </div>
-
-         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700 mb-6">
-                <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-2">
-                    <BookOpen size={12} />
-                    {t('story.context_awareness')}
-                </h5>
-                <p className="text-xs text-slate-400">{t('story.context_desc', { count: chapters.length })}</p>
-            </div>
-
-            {activeTab === 'characters' && (
-                <div className="space-y-4 animate-in fade-in slide-in-from-left-4 duration-200">
-                    <button 
-                        onClick={handleAnalyzeCharacters}
-                        disabled={isAnalyzing}
-                        className="w-full py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 text-xs rounded transition-colors flex justify-center items-center gap-2"
-                    >
-                        {isAnalyzing ? <RefreshCw className="animate-spin" size={14} /> : <Users size={14} />}
-                        {t('story.analyze_characters')}
-                    </button>
-
-                    {extractedCharacters.length > 0 ? (
-                        <div className="space-y-3">
-                            {extractedCharacters.map((char: any, i) => (
-                                <div key={i} className="bg-slate-800/30 p-3 rounded border border-slate-800 hover:border-slate-700 transition-colors">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <span className="font-semibold text-indigo-300 text-sm">{char.name}</span>
-                                        <span className="text-[10px] uppercase bg-slate-800 px-1.5 py-0.5 rounded text-slate-500">{char.role}</span>
-                                    </div>
-                                    <p className="text-xs text-slate-400 line-clamp-2">{char.description}</p>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="text-center text-slate-600 text-xs py-8">
-                            {t('story.no_chars_extracted')}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {activeTab === 'analysis' && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-200">
-                    <button 
-                        onClick={handleDeepAnalysis}
-                        disabled={isAnalyzing}
-                        className="w-full py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 text-xs rounded transition-colors flex justify-center items-center gap-2"
-                    >
-                        {isAnalyzing ? <RefreshCw className="animate-spin" size={14} /> : <Sparkles size={14} />}
-                        {t('story.analyze_impact')}
-                    </button>
-
-                    {analysisResult ? (
-                        <div className="space-y-6">
-                            <div>
-                                <h5 className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">{t('story.new_entities')}</h5>
-                                {analysisResult.new_entities.length > 0 ? (
-                                    <div className="flex flex-wrap gap-2">
-                                        {analysisResult.new_entities.map((entity, i) => (
-                                            <span key={i} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-300">
-                                                {entity}
-                                            </span>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <p className="text-xs text-slate-500 italic">{t('story.no_new_entities')}</p>
-                                )}
-                            </div>
-
-                            <div>
-                                <h5 className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">{t('story.plot_progression')}</h5>
-                                {analysisResult.updates.length > 0 ? (
-                                    <ul className="space-y-2">
-                                        {analysisResult.updates.map((update, i) => (
-                                            <li key={i} className="text-xs text-slate-300 flex gap-2">
-                                                <span className="text-indigo-500 mt-0.5">•</span>
-                                                <span>{update}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                ) : (
-                                    <p className="text-xs text-slate-500 italic">{t('story.no_plot_updates')}</p>
-                                )}
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="text-center text-slate-600 text-xs py-8">
-                            {t('story.analyze_prompt')}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {activeTab === 'writing' && (
-              <div className="space-y-3 animate-in fade-in duration-200">
-                <button
-                  type="button"
-                  onClick={() => agentCtx?.setOpen(true)}
-                  className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs rounded flex justify-center items-center gap-2"
-                >
-                  <Bot size={14} />
-                  {t('agent.open_panel', 'Open Agent OS')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConsistencyCheck}
-                  disabled={isAnalyzing}
-                  className="w-full py-2 bg-amber-600/10 hover:bg-amber-600/20 text-amber-200 border border-amber-500/30 text-xs rounded flex justify-center items-center gap-2"
-                >
-                  {isAnalyzing ? <RefreshCw className="animate-spin" size={14} /> : <ShieldAlert size={14} />}
-                  {t('story.consistency_btn', 'Full consistency check')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleChapterImpact}
-                  disabled={isAnalyzing || !selectedChapter}
-                  className="w-full py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-200 border border-emerald-500/30 text-xs rounded flex justify-center items-center gap-2"
-                >
-                  {t('story.impact_btn', 'Apply chapter → world update')}
-                </button>
-                <div className="pt-2 border-t border-slate-800 space-y-2">
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wide">
-                    {t('story.skills', 'Writing skills')}
-                  </p>
-                  {(
-                    [
-                      ['CINEMATIC_REWRITE', t('story.skill_cinematic', 'Cinematic rewrite')],
-                      ['ADD_CONFLICT', t('story.skill_conflict', 'Add conflict')],
-                      ['REVERSE_PLOT', t('story.skill_reversal', 'Plot twist')],
-                    ] as const
-                  ).map(([skill, label]) => (
-                    <button
-                      key={skill}
-                      type="button"
-                      disabled={aiLoading || !selectedChapter}
-                      onClick={() => handleSkill(skill)}
-                      className="w-full py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 disabled:opacity-50"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {consistencyIssues && (
-                  <div className="space-y-2 pt-2">
-                    <h5 className="text-xs font-bold text-slate-500 uppercase">
-                      {t('story.issues', 'Issues')} ({consistencyIssues.length})
-                    </h5>
-                    {consistencyIssues.length === 0 ? (
-                      <p className="text-xs text-slate-500 italic">
-                        {t('story.no_issues', 'No major issues found')}
-                      </p>
-                    ) : (
-                      consistencyIssues.map((issue, i) => (
-                        <div
-                          key={i}
-                          className="text-xs p-2 rounded border border-slate-800 bg-slate-800/40"
-                        >
-                          <span
-                            className={`font-bold mr-1 ${
-                              issue.severity === 'HIGH'
-                                ? 'text-red-400'
-                                : issue.severity === 'MEDIUM'
-                                  ? 'text-amber-400'
-                                  : 'text-slate-400'
-                            }`}
-                          >
-                            {issue.severity}
-                          </span>
-                          <span className="text-slate-500">{issue.location}</span>
-                          <p className="text-slate-300 mt-1">{issue.description}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-         </div>
-      </div>
-
-      {showRightPanel && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={() => setShowRightPanel(false)}
-        />
-      )}
-
-      {/* Cinematic Grid Modal */}
-      {showGridModal && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
-                <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900 rounded-t-xl">
-                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                        <Grid size={20} className="text-purple-400" />
-                        {t('story.grid_modal_title')}
-                    </h3>
-                    <button onClick={() => setShowGridModal(false)} className="text-slate-400 hover:text-white transition-colors">
-                        <X size={24} />
-                    </button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-6 bg-slate-950/50 space-y-4">
-                    <div className="bg-purple-950/40 border border-purple-800/60 rounded-lg p-3 text-xs text-purple-300 font-medium">
-                        {t('story.grid_tool_notice')}
-                    </div>
-                    <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed selection:bg-purple-500/30">
-                        {gridPrompt}
-                    </div>
-                </div>
-                <div className="p-4 border-t border-slate-800 flex justify-end gap-3 bg-slate-900 rounded-b-xl">
-                    <button 
-                        onClick={() => setShowGridModal(false)}
-                        className="px-4 py-2 text-slate-400 hover:text-white text-sm font-medium transition-colors"
-                    >
-                        {t('story.close')}
-                    </button>
-                    <button 
-                        onClick={() => {
-                            navigator.clipboard.writeText(gridPrompt || "");
-                            showToast(t('story.copied'), 'success');
-                        }}
-                        className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-purple-600/20"
-                    >
-                        <FileText size={16} />
-                        {t('story.copy_prompt')}
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -1,17 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Video, BookOpen, Settings, X, Sliders, Bot, Zap, PlayCircle, Square } from 'lucide-react';
+import { Loader2, Video, BookOpen, Settings, X, Sliders, Zap, PlayCircle, Square } from 'lucide-react';
 import { Scene, AssetMode } from '../../types';
 import { formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
-import { AgentAssistant } from '../AgentAssistant';
 
 export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
 
 interface DirectorRightPanelProps {
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
-  activeTab: 'control' | 'agent';
-  setActiveTab: (tab: 'control' | 'agent') => void;
   selectedStyle: string;
   setSelectedStyle: (style: string) => void;
   styleStrength?: number;
@@ -26,25 +23,16 @@ interface DirectorRightPanelProps {
   showComicViewer: boolean;
   setShowComicViewer: (show: boolean) => void;
   timeline: Scene[];
-  projectId: string | undefined;
-  selectedChapterId: string;
-  onRefreshTimeline: () => void;
   isBatchGenerating?: boolean;
   onBatchGenerate?: () => void;
   onStopBatchGenerate?: () => void;
   projectModelType?: string;
-  /** Project nsfw_mode from settings */
-  projectNsfwMode?: ProjectNsfwMode;
-  /** Effective NSFW after resolve(system, project) */
   effectiveNsfw?: boolean;
-  systemNsfw?: boolean;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   showRightPanel,
   setShowRightPanel,
-  activeTab,
-  setActiveTab,
   selectedStyle,
   setSelectedStyle,
   styleStrength = 1.0,
@@ -59,16 +47,11 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   showComicViewer,
   setShowComicViewer,
   timeline,
-  projectId,
-  selectedChapterId,
-  onRefreshTimeline,
-  isBatchGenerating,
   onBatchGenerate,
   onStopBatchGenerate,
+  isBatchGenerating,
   projectModelType = 'pony',
-  projectNsfwMode = 'inherit',
-  effectiveNsfw = false,
-  systemNsfw = false
+  effectiveNsfw = false
 }) => {
   const { t } = useLanguage();
   const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
@@ -95,215 +78,156 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
         lg:static lg:translate-x-0 lg:shadow-none lg:w-80 lg:flex lg:flex-col
         ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}
       `}>
-         {/* Mobile Header */}
-         <div className="flex justify-between items-center lg:hidden p-4 border-b border-slate-800">
-             <h4 className="font-semibold text-white">{t('director.production_controls')}</h4>
-             <button onClick={() => setShowRightPanel(false)} className="text-slate-400 hover:text-white">
+         {/* Header */}
+         <div className="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-900">
+             <h4 className="font-semibold text-white text-sm flex items-center gap-2">
+               <Sliders size={16} className="text-indigo-400" />
+               {t('director.production_controls', '分镜出图控制')}
+             </h4>
+             <button onClick={() => setShowRightPanel(false)} className="text-slate-400 hover:text-white lg:hidden">
                <X size={20} />
              </button>
          </div>
 
-         {/* Tab Switcher */}
-         <div className="flex border-b border-slate-800 bg-slate-900">
-            <button
-              onClick={() => setActiveTab('control')}
-              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                activeTab === 'control' 
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/50' 
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <Sliders size={14} />
-              {t('director.controls')}
-            </button>
-            <button
-              onClick={() => setActiveTab('agent')}
-              className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                activeTab === 'agent' 
-                  ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800/50' 
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <Bot size={14} />
-              {t('director.assistant')}
-            </button>
-         </div>
+         {/* Panel Content */}
+         <div className="flex-1 overflow-y-auto p-4 gap-6 flex flex-col custom-scrollbar">
+            {/* Render Controls */}
+            <div className="space-y-4">
+               <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                 <Sliders size={14} />
+                 {t('director.production_settings')}
+               </h4>
 
-         {/* Tab Content */}
-         <div className="flex-1 overflow-hidden relative">
-            
-            {/* Control Tab */}
-            {activeTab === 'control' && (
-              <div className="h-full overflow-y-auto p-4 gap-6 flex flex-col">
-                {/* Render Controls */}
-                <div className="space-y-4">
-                   <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                     <Sliders size={14} />
-                     {t('director.production_settings')}
-                   </h4>
+               {/* Unified Project Generation Config & Policy Card */}
+               <div className="rounded-lg border bg-slate-950 p-3.5 space-y-2.5 border-slate-800">
+                 <div className="flex items-center justify-between gap-2">
+                   <span className="font-semibold tracking-wide uppercase text-[11px] text-indigo-400">
+                     {t('director.project_gen_config', 'Project render config')}
+                   </span>
+                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold flex-shrink-0 ${
+                     effectiveNsfw ? 'bg-rose-950 border border-rose-800 text-rose-300' : 'bg-emerald-950 border border-emerald-800 text-emerald-300'
+                   }`}>
+                     {effectiveNsfw
+                       ? t('director.nsfw_on_badge', 'NSFW ON')
+                       : t('director.sfw_badge', 'SFW')}
+                   </span>
+                 </div>
 
-                   {/* Unified Project Generation Config & Policy Card */}
-                   <div className="rounded-lg border bg-slate-950 p-3.5 space-y-2.5 border-slate-800">
-                     <div className="flex items-center justify-between">
-                       <span className="font-semibold tracking-wide uppercase text-[11px] text-indigo-400">
-                         项目出图配置（全局统一）
-                       </span>
-                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                         effectiveNsfw ? 'bg-rose-950 border border-rose-800 text-rose-300' : 'bg-emerald-950 border border-emerald-800 text-emerald-300'
-                       }`}>
-                         {effectiveNsfw ? 'NSFW 开启' : 'SFW 安全'}
-                       </span>
-                     </div>
-
-                     <div className="space-y-1.5 text-xs">
-                       <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80">
-                         <span className="text-slate-400">默认画风:</span>
-                         <span className="text-slate-200 font-medium truncate max-w-[150px]">{activeStyleLabel}</span>
-                       </div>
-
-                       <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80">
-                         <span className="text-slate-400">模型预设:</span>
-                         <span className="text-indigo-300 font-semibold">
-                           {projectModelType === 'sd15' ? 'SD 1.5 Draft' : 'Pony XL'}
-                         </span>
-                       </div>
-                     </div>
+                 <div className="space-y-1.5 text-xs">
+                   <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80 gap-2">
+                     <span className="text-slate-400 flex-shrink-0">{t('director.default_style_label', 'Default style')}</span>
+                     <span className="text-slate-200 font-medium truncate max-w-[150px]">{activeStyleLabel}</span>
                    </div>
-                   
-                   <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
-                     <div>
-                       <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.asset_mode_label')}</label>
-                       <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
-                           <button
-                               onClick={() => setAssetMode('single_image')}
-                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'single_image' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                           >
-                               {t('director.asset_mode_single')}
-                           </button>
-                           <button
-                               onClick={() => setAssetMode('contact_sheet_3x3')}
-                               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'contact_sheet_3x3' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                           >
-                               {t('director.asset_mode_contact_sheet')}
-                           </button>
-                       </div>
-                       <p className="text-[11px] text-slate-400 mt-1.5">
-                         {assetMode === 'contact_sheet_3x3' ? t('director.contact_sheet_desc') : '每张分镜卡片生成 1 张单独的普通素材图片。'}
-                       </p>
-                     </div>
 
-                     {setStyleStrength && (
-                       <div>
-                         <div className="flex justify-between items-center mb-2">
-                            <label className="block text-xs font-medium text-slate-400 flex items-center gap-1">
-                               <Zap size={12} className="text-yellow-500" />
-                               画风权重 (Style Strength)
-                            </label>
-                            <span className="text-xs text-indigo-400 font-mono">{styleStrength.toFixed(1)}</span>
-                         </div>
-                         <input 
-                           type="range" 
-                           min="0.1" 
-                           max="2.0" 
-                           step="0.1" 
-                           value={styleStrength}
-                           onChange={(e) => setStyleStrength(parseFloat(e.target.value))}
-                           className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                         />
-                         <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                           <span>Subtle</span>
-                           <span>Balanced</span>
-                           <span>Strong</span>
-                         </div>
-                       </div>
+                   <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80 gap-2">
+                     <span className="text-slate-400 flex-shrink-0">{t('director.model_preset_label', 'Model preset')}</span>
+                     <span className="text-indigo-300 font-semibold">
+                       {projectModelType === 'sd15'
+                         ? t('director.model_sd15', 'SD 1.5 Draft')
+                         : t('director.model_pony', 'Pony XL')}
+                     </span>
+                   </div>
+                 </div>
+               </div>
+               
+               <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
+                 <div>
+                   <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.asset_mode_label')}</label>
+                   <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
+                       <button
+                           onClick={() => setAssetMode('single_image')}
+                           className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'single_image' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                           {t('director.mode_single_image', 'Single image')}
+                       </button>
+                       <button
+                           onClick={() => setAssetMode('continuous_motion')}
+                           className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'continuous_motion' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                           {t('director.mode_continuous_motion', 'Motion sequence')}
+                       </button>
+                   </div>
+                 </div>
+
+                 {/* Batch Generation Button */}
+                 {onBatchGenerate && (
+                   <div className="pt-2 border-t border-slate-700/50">
+                     {isBatchGenerating ? (
+                       <button
+                         onClick={onStopBatchGenerate}
+                         className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-rose-600/30 animate-pulse"
+                       >
+                         <Square size={14} className="fill-current" />
+                         <span>{t('director.stop_batch', 'Stop batch generation')}</span>
+                       </button>
+                     ) : (
+                       <button
+                         onClick={onBatchGenerate}
+                         disabled={timeline.length === 0}
+                         className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                       >
+                         <Zap size={14} className="fill-current" />
+                         <span>{t('director.generate_all', 'Generate all shots')}</span>
+                       </button>
                      )}
                    </div>
+                 )}
+               </div>
+            </div>
 
-                   {/* Action Buttons */}
-                   <div className="space-y-2">
-                        {isBatchGenerating ? (
-                            <button
-                                onClick={onStopBatchGenerate}
-                                className="w-full bg-red-600 hover:bg-red-500 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-colors shadow-lg shadow-red-900/30 animate-pulse"
-                            >
-                                <Square size={18} className="fill-current" />
-                                {t('director.stop_batch') || 'Stop Batch Generation'}
-                            </button>
-                        ) : (
-                            onBatchGenerate && (
-                                <button
-                                    onClick={onBatchGenerate}
-                                    disabled={timeline.length === 0}
-                                    className="w-full bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50 transition-colors"
-                                >
-                                    <PlayCircle size={18} />
-                                    {t('director.generate_all') || 'Generate All Assets'}
-                                </button>
-                            )
-                        )}
+            {/* Export & Production */}
+            <div className="space-y-4">
+               <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                 <Video size={14} />
+                 {t('director.export_production', 'Export & production')}
+               </h4>
+               
+               <div className="space-y-2">
+                  <button 
+                    onClick={onRenderVideo}
+                    disabled={renderingVideo || timeline.length === 0}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                     {renderingVideo ? <Loader2 className="animate-spin" size={14} /> : <PlayCircle size={14} />}
+                     {t('director.render_video')}
+                  </button>
 
-                        <button
-                            onClick={onRenderVideo}
-                            disabled={renderingVideo || timeline.length === 0}
-                            className="w-full bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50 disabled:bg-slate-800 transition-colors shadow-lg shadow-green-900/20"
-                            >
-                            {renderingVideo ? <Loader2 className="animate-spin" size={18} /> : <Video size={18} />}
-                            {t('director.render_video')}
-                        </button>
+                  <button 
+                    onClick={onGenerateComic}
+                    disabled={generatingComic || timeline.length === 0}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                     {generatingComic ? <Loader2 className="animate-spin" size={14} /> : <BookOpen size={14} />}
+                     {t('director.generate_comic')}
+                  </button>
+               </div>
 
-                        <button
-                            onClick={onGenerateComic}
-                            disabled={generatingComic || timeline.length === 0}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50 disabled:bg-slate-800 transition-colors shadow-lg shadow-indigo-900/20"
-                        >
-                            {generatingComic ? <Loader2 className="animate-spin" size={18} /> : <BookOpen size={18} />}
-                            {t('director.generate_comic')}
-                        </button>
-                   </div>
-                    
-                    {comicPages.length > 0 && !showComicViewer && (
-                        <button
-                            onClick={() => setShowComicViewer(true)}
-                            className="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 text-xs font-medium transition-colors"
-                        >
-                            {t('director.view_comic')}
-                        </button>
-                    )}
-                </div>
+               {comicPages.length > 0 && (
+                  <button 
+                     onClick={() => setShowComicViewer(true)}
+                     className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors"
+                  >
+                     <BookOpen size={14} />
+                     {t('director.view_comic')} ({comicPages.length}P)
+                  </button>
+               )}
+            </div>
 
-                {/* Stats / Info */}
-                <div className="flex-1">
-                   <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
-                     <Settings size={14} />
-                     {t('director.stats')}
-                   </h4>
-                   <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-slate-800/30 p-3 rounded border border-slate-800 text-center">
-                         <span className="block text-xl font-bold text-white">{timeline.length}</span>
-                         <span className="text-[10px] text-slate-500 uppercase">{t('director.stats_scenes')}</span>
-                      </div>
-                      <div className="bg-slate-800/30 p-3 rounded border border-slate-800 text-center">
-                         <span className="block text-xl font-bold text-white">
-                           {timeline.reduce((acc, curr) => acc + (typeof curr.duration === 'number' ? curr.duration : parseFloat(curr.duration || "0")), 0).toFixed(1)}s
-                         </span>
-                         <span className="text-[10px] text-slate-500 uppercase">{t('director.stats_duration')}</span>
-                      </div>
-                   </div>
-                </div>
-              </div>
-            )}
-
-            {/* Agent Tab */}
-            {activeTab === 'agent' && (
-              <div className="h-full absolute inset-0">
-                 <AgentAssistant 
-                    projectId={projectId} 
-                    chapterId={selectedChapterId} 
-                    onRefresh={onRefreshTimeline}
-                 />
-              </div>
-            )}
-
+            {/* Stats */}
+            <div className="space-y-4 mt-auto">
+               <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-800/30 p-3 rounded border border-slate-800 text-center">
+                     <span className="block text-xl font-bold text-white">{timeline.length}</span>
+                     <span className="text-[10px] text-slate-500 uppercase">{t('director.stats_scenes')}</span>
+                  </div>
+                  <div className="bg-slate-800/30 p-3 rounded border border-slate-800 text-center">
+                     <span className="block text-xl font-bold text-white">
+                       {timeline.reduce((acc, curr) => acc + (typeof curr.duration === 'number' ? curr.duration : parseFloat(curr.duration || "0")), 0).toFixed(1)}s
+                     </span>
+                     <span className="text-[10px] text-slate-500 uppercase">{t('director.stats_duration')}</span>
+                  </div>
+               </div>
+            </div>
          </div>
       </div>
 
