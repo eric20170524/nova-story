@@ -5,11 +5,27 @@ import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 import { resolveTierBFromSettings } from '../services/tier_b_adapters';
+import { VramService } from '../services/vram_service';
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async () => {
     // Never return raw API keys to the browser / LAN
     return SettingsManager.toPublicSettings();
+  });
+
+  /** Live GPU / Ollama / ComfyUI VRAM health for the top status badge */
+  app.get('/vram-status', async () => {
+    return VramService.getStatus();
+  });
+
+  /** One-click unload Ollama models to free VRAM for ComfyUI / Pony */
+  app.post('/vram/release-llm', async () => {
+    return VramService.releaseLlm();
+  });
+
+  /** Reset ComfyUI model + torch VRAM cache */
+  app.post('/vram/free-comfy', async () => {
+    return VramService.freeComfy();
   });
 
   /** Probe ComfyUI install for Tier B (IP-Adapter + ControlNet) readiness */

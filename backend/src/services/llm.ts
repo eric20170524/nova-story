@@ -55,15 +55,30 @@ export class LLMService {
         );
     }
 
-    static async generateStructuredWithRetry<T>(prompt: string, schema: z.ZodSchema<T>, token?: string): Promise<T | null> {
-        const maxRetries = 3;
+    static async generateStructuredWithRetry<T>(
+        prompt: string,
+        schema: z.ZodSchema<T>,
+        token?: string,
+        options?: {
+            maxRetries?: number;
+            temperature?: number;
+            maxTokens?: number;
+            systemInstruction?: string;
+        }
+    ): Promise<T | null> {
+        // Default 2 attempts (first + one retry). Route uses maxRetries: 2 as well.
+        const maxRetries = options?.maxRetries ?? 2;
         const provider = LLMService.getProvider(token);
 
         for (let i = 0; i < maxRetries; i++) {
             try {
-                return await provider.generateStructured(prompt, schema);
+                return await provider.generateStructured(prompt, schema, options?.systemInstruction, {
+                    temperature: options?.temperature,
+                    maxTokens: options?.maxTokens,
+                    systemInstruction: options?.systemInstruction,
+                });
             } catch (error) {
-                logger.warn(`LLM parsing failed on attempt ${i+1}: ${error}`);
+                logger.warn(`LLM parsing failed on attempt ${i + 1}: ${error}`);
                 if (i === maxRetries - 1) {
                     logger.error('Max retries reached for LLM structured output.');
                     return null;

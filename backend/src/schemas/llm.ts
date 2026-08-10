@@ -5,6 +5,25 @@ export const ContentAnalysisSchema = z.object({
   updates: z.array(z.string()).describe("List of key plot updates or events")
 });
 
+/** Dedicated chapter character + personality analysis (evidence from body text only). */
+export const CharacterTraitSchema = z.object({
+  trait: z.string().describe('Personality or behavioral trait'),
+  evidence: z.string().describe('Short quote or paraphrase from THIS chapter only'),
+  confidence: z.number().min(0).max(1).describe('0-1 confidence'),
+});
+
+export const ChapterCharacterAnalysisItemSchema = z.object({
+  name: z.string(),
+  roleInChapter: z.string().describe('Role in this chapter, e.g. protagonist / antagonist / witness'),
+  traits: z.array(CharacterTraitSchema).default([]),
+  motivation: z.string().optional().nullable().describe('Motivation shown in this chapter'),
+  relationships: z.array(z.string()).optional().default([]),
+});
+
+export const ChapterCharacterAnalysisSchema = z.object({
+  characters: z.array(ChapterCharacterAnalysisItemSchema).default([]),
+});
+
 export const TimelineShotSchema = z.object({
   id: z.number().int().optional().default(1),
   shot_type: z.string().optional().default("Medium Shot"),
@@ -56,6 +75,7 @@ export const CharacterEvolutionSchema = z.object({
 
 // Types
 export type ContentAnalysis = z.infer<typeof ContentAnalysisSchema>;
+export type ChapterCharacterAnalysis = z.infer<typeof ChapterCharacterAnalysisSchema>;
 export type TimelineShot = z.infer<typeof TimelineShotSchema>;
 export type TimelineResponse = z.infer<typeof TimelineResponseSchema>;
 export type VisualTags = z.infer<typeof VisualTagsSchema>;

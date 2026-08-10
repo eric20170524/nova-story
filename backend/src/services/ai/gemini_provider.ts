@@ -43,16 +43,29 @@ export class GeminiProvider implements AIProvider {
         }
     }
 
-    async generateStructured<T>(prompt: string, responseSchema: z.ZodSchema<T>, systemInstruction?: string): Promise<T> {
+    async generateStructured<T>(
+        prompt: string,
+        responseSchema: z.ZodSchema<T>,
+        systemInstruction?: string,
+        options?: { temperature?: number; maxTokens?: number; systemInstruction?: string }
+    ): Promise<T> {
         const schemaRef = z.toJSONSchema(responseSchema) as any;
+        const sys = options?.systemInstruction ?? systemInstruction;
 
         const config: any = {
             responseMimeType: "application/json",
             responseSchema: schemaRef,
         };
 
-        if (systemInstruction) {
-            config.systemInstruction = systemInstruction;
+        if (typeof options?.temperature === 'number') {
+            config.temperature = options.temperature;
+        }
+        if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
+            config.maxOutputTokens = options.maxTokens;
+        }
+
+        if (sys) {
+            config.systemInstruction = sys;
         }
 
         logger.info(`[Gemini Structured Prompt Input]: ${truncateLog(prompt)}`);

@@ -3,6 +3,17 @@ import test from 'node:test';
 
 process.env.DATABASE_URL = ':memory:';
 
+test('isFullChapterRewriteIntent detects rewrite vs append', async () => {
+  const { isFullChapterRewriteIntent } = await import('./agent_executor');
+  assert.equal(
+    isFullChapterRewriteIntent('正文中的 画面、动作指令等不像是小说写法，请重写'),
+    true
+  );
+  assert.equal(isFullChapterRewriteIntent('全文重写，更真实和性感些'), true);
+  assert.equal(isFullChapterRewriteIntent('继续写本章，加强张力'), false);
+  assert.equal(isFullChapterRewriteIntent('续写 300 字'), false);
+});
+
 test('AgentExecutor structure ops: rename, move, delete with project guard', async () => {
   const { db } = await import('../../db/database');
   const { AgentExecutor } = await import('./agent_executor');

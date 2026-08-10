@@ -24,9 +24,15 @@ class ApiService {
     const token = localStorage.getItem('access_token');
     
     const reqHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
         ...headers,
     };
+
+    // Only set JSON content-type when there is a body. Fastify rejects
+    // DELETE/GET with Content-Type: application/json and an empty body
+    // (FST_ERR_CTP_EMPTY_JSON_BODY → 400).
+    if (body !== undefined && body !== null) {
+        reqHeaders['Content-Type'] = 'application/json';
+    }
 
     if (token) {
         reqHeaders['Authorization'] = `Bearer ${token}`;
@@ -37,7 +43,7 @@ class ApiService {
       headers: reqHeaders,
     };
 
-    if (body) {
+    if (body !== undefined && body !== null) {
       config.body = JSON.stringify(body);
     }
 
@@ -338,7 +344,12 @@ class ApiService {
   }) => this.request<{ content: string; applied: boolean }>('/agent/skill', { method: 'POST', body });
 
   // Agentic OS
-  chatWithAgent = (message: string, context: any, history: any[]) =>
+  chatWithAgent = (
+    message: string,
+    context: any,
+    history: any[],
+    preferredOp?: string | null
+  ) =>
     this.request<{
       thought: string;
       response: string;
@@ -346,7 +357,16 @@ class ApiService {
       results?: any[];
       needs_confirmation?: boolean;
       action?: any;
-    }>('/assistant/chat', { method: 'POST', body: { message, context, history } });
+    }>('/assistant/chat', {
+      method: 'POST',
+      body: {
+        message,
+        context: preferredOp
+          ? { ...context, preferred_op: preferredOp }
+          : context,
+        history,
+      },
+    });
 
   executeAgentActions = (body: {
     project_id: number;
@@ -475,6 +495,58 @@ class ApiService {
   updateSettings = (settings: any) => this.request<any>('/settings/', { method: 'POST', body: settings });
   getLoras = () => this.request<{ lora_directory: string; exists: boolean; loras: string[] }>('/settings/loras');
   verifyLLMConnection = (config: any) => this.request<any>('/settings/verify-llm', { method: 'POST', body: config });
+
+  /** GPU / Ollama / ComfyUI VRAM health for the top status badge */
+  getVramStatus = () =>
+    this.request<{
+      level: 'good' | 'warning' | 'critical' | 'unknown';
+      percent: number | null;
+      used_bytes: number | null;
+      total_bytes: number | null;
+      free_bytes: number | null;
+      gpu_name: string | null;
+      ollama: {
+        online: boolean;
+        base_url: string;
+        used_bytes: number;
+        models: Array<{ name: string; size_vram: number; size: number; processor?: string }>;
+      };
+      comfyui: {
+        online: boolean;
+        base_url: string;
+        used_bytes: number | null;
+        total_bytes: number | null;
+        torch_used_bytes: number | null;
+      };
+      processes: Array<{ name: string; bytes: number; detail?: string }>;
+      summary: string;
+      summary_zh: string;
+      tip: string;
+      tip_zh: string;
+      source: string;
+      polled_at: string;
+    }>('/settings/vram-status');
+
+  /** One-click unload Ollama models from VRAM */
+  releaseLlmVram = () =>
+    this.request<{
+      ok: boolean;
+      message: string;
+      message_zh: string;
+      released_bytes?: number;
+      details?: string[];
+      status?: any;
+    }>('/settings/vram/release-llm', { method: 'POST' });
+
+  /** Reset ComfyUI model + torch VRAM cache */
+  freeComfyVram = () =>
+    this.request<{
+      ok: boolean;
+      message: string;
+      message_zh: string;
+      details?: string[];
+      status?: any;
+    }>('/settings/vram/free-comfy', { method: 'POST' });
 }
 
 export const api = new ApiService();

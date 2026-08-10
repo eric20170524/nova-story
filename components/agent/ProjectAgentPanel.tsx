@@ -6,6 +6,8 @@ import {
   Loader2,
   X,
   Sparkles,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -64,6 +66,64 @@ function syncAppliedEditorContent(
     }
   }
 }
+
+/** One-click copy for Agent OS bubbles / input. */
+const QuickCopyButton: React.FC<{
+  text: string;
+  className?: string;
+  label?: string;
+  onCopied?: () => void;
+}> = ({ text, className = '', label, onCopied }) => {
+  const { t } = useLanguage();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const value = (text || '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      onCopied?.();
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* fallback for older browsers / insecure context */
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setCopied(true);
+        onCopied?.();
+        window.setTimeout(() => setCopied(false), 1600);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  if (!(text || '').trim()) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`inline-flex items-center gap-1 p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-700/80 border border-transparent hover:border-slate-600 transition-colors ${className}`}
+      title={label || t('agent.copy', '复制')}
+      aria-label={label || t('agent.copy', '复制')}
+    >
+      {copied ? (
+        <Check size={13} className="text-emerald-400" />
+      ) : (
+        <Copy size={13} />
+      )}
+    </button>
+  );
+};
 
 export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
   projectId,
@@ -135,7 +195,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
   })();
 
   const handleSend = useCallback(
-    async (textToSend?: string) => {
+    async (textToSend?: string, preferredOp?: string | null) => {
       const text = (textToSend !== undefined ? textToSend : input).trim();
       if (!text || loading || executing) return;
 
@@ -158,7 +218,8 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             language,
             route: routeHint,
           },
-          history
+          history,
+          preferredOp
         );
 
         const actions: AgentAction[] = Array.isArray(response.actions)
@@ -280,7 +341,11 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
     }
   };
 
-  const getRouteSuggestions = () => {
+  const getRouteSuggestions = (): Array<{
+    label: string;
+    prompt: string;
+    preferredOp?: string;
+  }> => {
     switch (routeHint) {
       case 'story':
         return [
@@ -288,50 +353,57 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             label: t('agent.chip_extract_chars', '提取本章角色'),
             prompt: t(
               'agent.prompt_extract_chars',
-              '请提取并分析当前章节出现的所有角色与性格特征'
+              '提取本章出场角色与性格特征（只读分析，不写入角色库）'
             ),
+            preferredOp: 'ANALYZE_CHAPTER_CHARACTERS',
           },
           {
             label: t('agent.chip_analyze_plot', '剧情深度分析'),
             prompt: t(
               'agent.prompt_analyze_plot',
-              '请分析当前章节的剧情推进要点与新实体'
+              '分析当前章节的剧情推进要点与新实体'
             ),
+            preferredOp: 'ANALYZE_CHAPTER',
           },
           {
             label: t('agent.chip_cinematic', '电影化改写'),
             prompt: t(
               'agent.prompt_cinematic',
-              '请对当前章节进行电影化视听与感官改写，增强沉浸感'
+              '对当前章节进行电影化感官重写，改为小说叙述体'
             ),
+            preferredOp: 'CINEMATIC_REWRITE',
           },
           {
             label: t('agent.chip_add_conflict', '增加冲突'),
             prompt: t(
               'agent.prompt_add_conflict',
-              '请为当前章节注入戏剧冲突与突发危机'
+              '为当前章节注入戏剧冲突与突发危机'
             ),
+            preferredOp: 'ADD_CONFLICT',
           },
           {
             label: t('agent.chip_reverse_plot', '情节反转'),
             prompt: t(
               'agent.prompt_reverse_plot',
-              '请为当前章节结尾设计一个意料之外的情节反转'
+              '为当前章节结尾设计一个意料之外的情节反转'
             ),
+            preferredOp: 'REVERSE_PLOT',
           },
           {
             label: t('agent.chip_consistency', '全书逻辑体检'),
             prompt: t(
               'agent.prompt_consistency',
-              '请对全书所有章节进行逻辑一致性与设定漏洞体检'
+              '对全书所有章节进行逻辑一致性与设定漏洞体检'
             ),
+            preferredOp: 'RUN_CONSISTENCY_CHECK',
           },
           {
             label: t('agent.chip_impact', '定稿：更新世界观'),
             prompt: t(
               'agent.prompt_impact',
-              '本章已定稿，请提取新增角色与世界观术语并更新到设定库'
+              '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库'
             ),
+            preferredOp: 'APPLY_CHAPTER_IMPACT',
           },
         ];
       case 'director':
@@ -340,15 +412,17 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             label: t('agent.chip_gen_timeline', '生成本章分镜'),
             prompt: t(
               'agent.prompt_gen_timeline',
-              '请基于当前章节内容生成完整的分镜时间轴场景'
+              '基于当前章节内容生成完整的分镜时间轴场景'
             ),
+            preferredOp: 'GENERATE_TIMELINE',
           },
           {
             label: t('agent.chip_analyze_shots', '优化镜头提示词'),
             prompt: t(
               'agent.prompt_analyze_shots',
-              '请分析当前分镜的镜头景别、光影与画面构图提示词'
+              '分析当前分镜的镜头景别、光影与画面构图提示词'
             ),
+            preferredOp: 'ANSWER_QUESTION',
           },
         ];
       case 'characters':
@@ -357,8 +431,9 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             label: t('agent.chip_extract_unlisted', '提取未收录角色'),
             prompt: t(
               'agent.prompt_extract_unlisted',
-              '请扫描当前所有章节，找出尚未收录到角色列表的人物'
+              '从当前章正文提取角色与性格（只读预览）；定稿会将性格写入角色库'
             ),
+            preferredOp: 'ANALYZE_CHAPTER_CHARACTERS',
           },
           {
             label: t('agent.chip_check_relations', '梳理人物关系网'),
@@ -366,6 +441,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
               'agent.prompt_check_relations',
               '请梳理项目中各角色之间的阵营与人际关系'
             ),
+            preferredOp: 'ANSWER_QUESTION',
           },
         ];
       default:
@@ -432,18 +508,38 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             }`}
           >
             <div
-              className={`max-w-[92%] p-3 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
+              className={`group/msg relative max-w-[92%] p-3 pr-9 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
                 msg.role === 'user'
                   ? 'bg-indigo-600 text-white rounded-br-none'
                   : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
               } ${msg.error ? 'border-red-500 text-red-100 bg-red-900/20' : ''}`}
             >
               {msg.content}
+              <div
+                className={`absolute top-1.5 right-1.5 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity ${
+                  msg.role === 'user' ? 'text-indigo-100' : ''
+                }`}
+              >
+                <QuickCopyButton
+                  text={msg.content}
+                  className={
+                    msg.role === 'user'
+                      ? 'hover:bg-indigo-500/80 text-indigo-100 hover:text-white'
+                      : ''
+                  }
+                />
+              </div>
             </div>
             {msg.thought && (
-              <div className="max-w-[92%] text-xs text-slate-500 flex items-start gap-2 bg-slate-900/50 p-2 rounded border border-slate-800/50">
+              <div className="group/thought max-w-[92%] text-xs text-slate-500 flex items-start gap-2 bg-slate-900/50 p-2 pr-8 rounded border border-slate-800/50 relative">
                 <Brain size={12} className="mt-0.5 flex-shrink-0" />
-                <span className="italic">{msg.thought}</span>
+                <span className="italic flex-1 min-w-0">{msg.thought}</span>
+                <div className="absolute top-1 right-1 opacity-0 group-hover/thought:opacity-100 transition-opacity">
+                  <QuickCopyButton
+                    text={msg.thought}
+                    label={t('agent.copy_thought', '复制思考')}
+                  />
+                </div>
               </div>
             )}
             {msg.results && msg.results.length > 0 && (
@@ -488,24 +584,32 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
               'agent.placeholder',
               'e.g. Rename this chapter / continue writing…'
             )}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-4 pr-12 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-4 pr-20 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
             disabled={loading || executing}
           />
-          <button
-            type="button"
-            onClick={() => handleSend()}
-            disabled={loading || executing || !input.trim()}
-            className="absolute right-2 top-2 p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-indigo-600 rounded-md transition-all disabled:opacity-50"
-          >
-            <Send size={16} />
-          </button>
+          <div className="absolute right-2 top-2 flex items-center gap-1">
+            <QuickCopyButton
+              text={input}
+              label={t('agent.copy_input', '复制输入')}
+              className="bg-slate-800/80 border border-slate-700"
+            />
+            <button
+              type="button"
+              onClick={() => handleSend()}
+              disabled={loading || executing || !input.trim()}
+              className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-indigo-600 rounded-md transition-all disabled:opacity-50"
+              title={t('agent.send', '发送')}
+            >
+              <Send size={16} />
+            </button>
+          </div>
         </div>
         <div className="mt-2 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
           {suggestions.map((item, idx) => (
             <button
               key={idx}
               type="button"
-              onClick={() => handleSend(item.prompt)}
+              onClick={() => handleSend(item.prompt, item.preferredOp)}
               className="text-[10px] whitespace-nowrap px-2.5 py-1 bg-slate-800 hover:bg-indigo-900/40 hover:text-indigo-200 text-slate-400 rounded-full border border-slate-700 transition-colors"
             >
               {item.label}

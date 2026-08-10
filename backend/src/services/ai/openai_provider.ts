@@ -63,20 +63,28 @@ export class OpenAIProvider implements AIProvider {
         }
     }
 
-    async generateStructured<T>(prompt: string, responseSchema: z.ZodSchema<T>, systemInstruction?: string): Promise<T> {
+    async generateStructured<T>(
+        prompt: string,
+        responseSchema: z.ZodSchema<T>,
+        systemInstruction?: string,
+        options?: { temperature?: number; maxTokens?: number; systemInstruction?: string }
+    ): Promise<T> {
         try {
+            const sys = options?.systemInstruction ?? systemInstruction;
             const messages: any[] = [];
-            if (systemInstruction) {
-                messages.push({ role: 'system', content: systemInstruction });
+            if (sys) {
+                messages.push({ role: 'system', content: sys });
             }
             messages.push({ role: 'user', content: prompt });
 
             const schemaRef = z.toJSONSchema(responseSchema) as any;
+            const temperature =
+                typeof options?.temperature === 'number' ? options.temperature : 0.1;
 
             const request: any = {
                 model: this.model,
                 messages,
-                temperature: 0.1,
+                temperature,
                 response_format: this.isOllama
                     ? {
                         type: 'json_schema',
@@ -88,6 +96,10 @@ export class OpenAIProvider implements AIProvider {
                     }
                     : { type: 'json_object' }
             };
+
+            if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
+                request.max_tokens = options.maxTokens;
+            }
 
             if (this.isOllama) {
                 request.reasoning_effort = 'none';

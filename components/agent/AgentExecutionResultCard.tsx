@@ -62,6 +62,8 @@ const getOpTitle = (op: string, t: (k: string, f?: string) => string): string =>
       return t('agent.op_impact', '定稿世界观更新');
     case 'ANALYZE_CHAPTER':
       return t('agent.op_analyze', '分析章节');
+    case 'ANALYZE_CHAPTER_CHARACTERS':
+      return t('agent.op_analyze_chars', '本章角色与性格');
     case 'DRAFT_CONTENT':
       return t('agent.op_draft', '正文生成/续写');
     default:
@@ -88,6 +90,8 @@ const SingleResultCard: React.FC<{
     const impact = item.data || {};
     const characters: any[] = impact.newOrUpdatedCharacters || [];
     const glossary: any[] = impact.newOrUpdatedGlossary || [];
+    const personalityMerged = Boolean(impact.personalityMerged);
+    const visualTagsMerged = Boolean(impact.visualTagsMerged);
     const hasData = characters.length > 0 || glossary.length > 0;
 
     return (
@@ -107,11 +111,32 @@ const SingleResultCard: React.FC<{
         </div>
 
         {expanded && (
-          <div className="p-3 space-y-3">
+          <div className="p-3 space-y-3 max-h-[28rem] overflow-y-auto custom-scrollbar">
             {!hasData && (
               <p className="text-slate-400 italic text-center py-2">
                 {t('agent.no_impact_changes', '本章未检测到新增或变更的角色与世界观设定')}
               </p>
+            )}
+
+            {(personalityMerged || visualTagsMerged) && hasData && (
+              <div className="space-y-1">
+                {personalityMerged && (
+                  <p className="text-[10px] text-emerald-400/90 bg-emerald-950/40 border border-emerald-800/40 rounded-md px-2 py-1.5">
+                    {t(
+                      'agent.impact_personality_merged',
+                      '已将性格特征合并写入角色 description'
+                    )}
+                  </p>
+                )}
+                {visualTagsMerged && (
+                  <p className="text-[10px] text-sky-300/90 bg-sky-950/30 border border-sky-800/40 rounded-md px-2 py-1.5">
+                    {t(
+                      'agent.impact_visual_tags_merged',
+                      '已将视觉特征合并写入角色 visual_tags'
+                    )}
+                  </p>
+                )}
+              </div>
             )}
 
             {characters.length > 0 && (
@@ -121,26 +146,66 @@ const SingleResultCard: React.FC<{
                   <span>{t('agent.impact_characters', '角色演化 (Characters)')}</span>
                 </div>
                 <div className="grid gap-2">
-                  {characters.map((char, i) => (
-                    <div
-                      key={i}
-                      className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-1"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-indigo-300 text-xs">
-                          {char.name}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
-                          {char.role || 'supporting'}
-                        </span>
+                  {characters.map((char, i) => {
+                    const vtags =
+                      char.visual_tags && typeof char.visual_tags === 'object'
+                        ? Object.entries(char.visual_tags).filter(
+                            ([, v]) =>
+                              v != null &&
+                              typeof v !== 'object' &&
+                              String(v).trim()
+                          )
+                        : [];
+                    return (
+                      <div
+                        key={i}
+                        className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-indigo-300 text-xs">
+                            {char.name}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase shrink-0">
+                            {char.role || char.roleInChapter || 'supporting'}
+                          </span>
+                        </div>
+                        {char.description && (
+                          <p className="text-slate-400 text-[11px] leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar pr-0.5">
+                            {char.description}
+                          </p>
+                        )}
+                        {Array.isArray(char.traits) && char.traits.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {char.traits.slice(0, 8).map((tr: any, ti: number) => (
+                              <span
+                                key={ti}
+                                title={tr.evidence || ''}
+                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300 border border-violet-800/40"
+                              >
+                                {tr.trait}
+                                {typeof tr.confidence === 'number'
+                                  ? ` ${Math.round(tr.confidence * 100)}%`
+                                  : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {vtags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {vtags.slice(0, 10).map(([k, v]) => (
+                              <span
+                                key={String(k)}
+                                title={`${k}: ${v}`}
+                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-950/50 text-sky-300 border border-sky-800/40 max-w-full truncate"
+                              >
+                                <span className="opacity-70">{k}:</span> {String(v)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      {char.description && (
-                        <p className="text-slate-400 text-[11px] leading-relaxed">
-                          {char.description}
-                        </p>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -383,6 +448,83 @@ const SingleResultCard: React.FC<{
                 ))}
               </ul>
             </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 4b. ANALYZE_CHAPTER_CHARACTERS — personality + evidence (read-only)
+  if (item.op === 'ANALYZE_CHAPTER_CHARACTERS') {
+    const characters: Array<{
+      name: string;
+      roleInChapter?: string;
+      traits?: Array<{ trait: string; evidence: string; confidence?: number }>;
+      motivation?: string | null;
+      relationships?: string[];
+    }> = item.data?.characters || [];
+
+    return (
+      <div className="rounded-xl border border-violet-500/30 bg-violet-950/20 overflow-hidden text-xs">
+        <div className="p-3 bg-violet-950/40 border-b border-violet-500/20 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-violet-300 font-semibold">
+            <Users size={15} />
+            <span>{t('agent.char_analysis_title', '本章角色与性格（只读）')}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-700/50 bg-violet-900/40 text-violet-200">
+              {characters.length} {t('agent.chars_count', '角色')}
+            </span>
+          </div>
+          <span className="text-[10px] text-slate-500">
+            {t('agent.char_analysis_hint', '不写入角色库；入库请用「定稿」')}
+          </span>
+        </div>
+        <div className="p-3 space-y-3 max-h-80 overflow-y-auto custom-scrollbar">
+          {characters.length === 0 ? (
+            <p className="text-slate-500">{t('agent.char_analysis_empty', '未提取到角色')}</p>
+          ) : (
+            characters.map((ch, i) => (
+              <div
+                key={`${ch.name}-${i}`}
+                className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 space-y-1.5"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold text-slate-100">{ch.name}</span>
+                  {ch.roleInChapter && (
+                    <span className="text-[10px] text-violet-300/90 truncate">
+                      {ch.roleInChapter}
+                    </span>
+                  )}
+                </div>
+                {ch.motivation && (
+                  <p className="text-[11px] text-slate-400">
+                    <span className="text-slate-500">{t('agent.motivation', '动机')}：</span>
+                    {ch.motivation}
+                  </p>
+                )}
+                {(ch.traits || []).length > 0 && (
+                  <ul className="space-y-1.5">
+                    {(ch.traits || []).map((tr, j) => (
+                      <li key={j} className="text-[11px] leading-relaxed">
+                        <span className="text-violet-300 font-medium">{tr.trait}</span>
+                        {typeof tr.confidence === 'number' && (
+                          <span className="text-slate-600 ml-1">
+                            ({Math.round(tr.confidence * 100)}%)
+                          </span>
+                        )}
+                        <div className="text-slate-500 mt-0.5 pl-2 border-l border-slate-700">
+                          {tr.evidence}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {(ch.relationships || []).length > 0 && (
+                  <p className="text-[10px] text-slate-500">
+                    {t('agent.relationships', '关系')}：{(ch.relationships || []).join('、')}
+                  </p>
+                )}
+              </div>
+            ))
           )}
         </div>
       </div>

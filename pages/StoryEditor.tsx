@@ -56,7 +56,7 @@ export const StoryEditor: React.FC = () => {
   }, [content]);
 
   const loadChapters = useCallback(
-    async (opts?: { syncEditorIfClean?: boolean }) => {
+    async (opts?: { syncEditorIfClean?: boolean; forceSync?: boolean }) => {
       if (!projectId) return;
       try {
         const data = await api.getChapters(Number(projectId));
@@ -80,17 +80,20 @@ export const StoryEditor: React.FC = () => {
             sorted.find((c) => c.id === current.id) || targetChapter;
           const prevContent = current.content || '';
           const localContent = contentRef.current;
+          const serverContent = freshSelected.content || '';
 
           setSelectedChapter(freshSelected);
 
-          // Pull server body only when editor is not dirty vs last known chapter content
-          if (
-            opts?.syncEditorIfClean &&
+          // Agent rewrites always force-pull server body into the editor.
+          // Clean-only sync still avoids clobbering unsaved local typing.
+          const shouldPull =
             freshSelected.id === current.id &&
-            localContent === prevContent &&
-            (freshSelected.content || '') !== localContent
-          ) {
-            setContentWithoutHistory(freshSelected.content || '');
+            serverContent !== localContent &&
+            (opts?.forceSync ||
+              (opts?.syncEditorIfClean && localContent === prevContent));
+
+          if (shouldPull) {
+            setContentWithoutHistory(serverContent);
           }
         } else {
           setChapters([]);
@@ -112,7 +115,7 @@ export const StoryEditor: React.FC = () => {
 
   useEffect(() => {
     const onAgent = () => {
-      if (projectId) loadChapters({ syncEditorIfClean: true });
+      if (projectId) loadChapters({ forceSync: true });
     };
     window.addEventListener('novastory-agent-data-changed', onAgent);
     return () => window.removeEventListener('novastory-agent-data-changed', onAgent);
@@ -617,7 +620,7 @@ export const StoryEditor: React.FC = () => {
                         handleTriggerAgentAction(
                           t(
                             'agent.prompt_impact',
-                            '本章已定稿，请提取新增角色与世界观术语并更新到设定库'
+                            '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库'
                           )
                         )
                       }

@@ -162,10 +162,16 @@ export interface AssetGenerationResponse {
 }
 
 export interface StreamMessage {
-  status: 'processing' | 'completed' | 'failed';
+  type?: string;
+  status?: 'processing' | 'completed' | 'failed' | string;
   progress?: number;
   image_url?: string;
   error?: string;
+  phase?: string;
+  message?: string;
+  message_zh?: string;
+  skipped?: boolean;
+  data?: Record<string, unknown>;
 }
 
 export interface GenerationParams {

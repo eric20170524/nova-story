@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Settings, Globe, User, LogOut } from 'lucide-react';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { Home, Settings, Globe, User } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
+import { VramHealthBadge } from './VramHealthBadge';
 
 export const Layout: React.FC = () => {
   const navigate = useNavigate();
@@ -37,11 +38,20 @@ export const Layout: React.FC = () => {
         
         {/* Logo */}
         <div className="h-16 flex items-center justify-center border-b border-slate-800">
-          <button 
+          <button
              onClick={() => navigate('/')}
-             className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-colors"
+             className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-indigo-600/25 ring-1 ring-indigo-500/40 hover:ring-indigo-400/70 hover:scale-105 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+             title="NovaStory"
+             aria-label="NovaStory Home"
           >
-            <span className="font-bold text-white text-xl">N</span>
+            <img
+              src="/logo-192.png"
+              alt="NovaStory"
+              className="w-full h-full object-cover"
+              width={40}
+              height={40}
+              draggable={false}
+            />
           </button>
         </div>
 
@@ -123,7 +133,13 @@ export const Layout: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        <Outlet />
+        {/* Global hardware status strip (VRAM health + one-click release) — left so Agent OS panel won't cover it */}
+        <div className="h-11 flex-shrink-0 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm flex items-center justify-start px-3 sm:px-4 z-30">
+          <VramHealthBadge />
+        </div>
+        <div className="flex-1 min-h-0 overflow-hidden relative">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import { parseProjectSettings, serializeProjectSettings } from '../project_setti
 import { generateAndReplaceNarrativeTimeline } from '../timeline_generation_service';
 import {
   AgentActionSchema,
+  normalizeAgentAction,
   type AgentAction,
 } from '../../schemas/agent_os';
 import { WritingService } from './writing_service';
@@ -22,6 +23,18 @@ export type ExecuteContext = {
   language?: string | null;
   apply: boolean;
 };
+
+/**
+ * Detect full-chapter rewrite vs continue-writing for DRAFT_CONTENT.
+ * User rewrites (小说化 / 全文重写 / 去掉画面动作指令) must REPLACE body, not append.
+ */
+export function isFullChapterRewriteIntent(instructions: string): boolean {
+  const s = String(instructions || '');
+  if (!s.trim()) return false;
+  return /重写|全文|改写|整章|替换正文|不是剧本|非剧本|小说写法|小说体|去掉.*画面|不要.*画面|删除.*画面|动作指令|分镜格式|screenplay|rewrite|replace\s+(the\s+)?(whole|entire|full)|novel\s*prose|not\s+a\s+script/i.test(
+    s
+  );
+}
 
 async function assertChapterInProject(
   chapterId: string,
@@ -109,7 +122,9 @@ async function deleteChapterCascade(chapterId: string, projectId: number): Promi
 
 export class AgentExecutor {
   static parseAction(raw: unknown): AgentAction {
-    return AgentActionSchema.parse(raw);
+    // Accept nested/aliased LLM shapes at execute time too (confirm card path)
+    const normalized = normalizeAgentAction(raw) || raw;
+    return AgentActionSchema.parse(normalized);
   }
 
   static async executeAll(
@@ -124,8 +139,12 @@ export class AgentExecutor {
         results.push(result);
       } catch (e: any) {
         logger.error(`Agent execute failed: ${e}`);
+        const nestedOp =
+          raw && typeof raw === 'object' && (raw as any).op && typeof (raw as any).op === 'object'
+            ? (raw as any).op?.type || (raw as any).op?.op
+            : (raw as any)?.op;
         results.push({
-          op: (raw as any)?.op || 'unknown',
+          op: nestedOp || 'unknown',
           status: 'error',
           message: e?.message || String(e),
         });
@@ -204,29 +223,50 @@ export class AgentExecutor {
           return { op, status: 'error', message: 'No chapter id for draft' };
         }
         await assertChapterInProject(chapterId, ctx.projectId);
+
+        const replaceMode = isFullChapterRewriteIntent(action.instructions);
+        const rewriteInstructions = replaceMode
+          ? `${action.instructions}\n\n【强制格式】输出完整小说正文：禁止保留【场景】【画面】【动作指令】【视觉特效】等分镜/剧本标签；用连贯叙述与感官描写重写全章，不要只写续写片段。`
+          : action.instructions;
+
         const draft = await WritingService.generateChapterDraft({
           projectId: ctx.projectId,
           chapterId,
-          instructions: action.instructions,
-          targetWordCount: action.targetWordCount,
+          instructions: rewriteInstructions,
+          targetWordCount: action.targetWordCount || (replaceMode ? 1200 : undefined),
           includeExisting: true,
+          // Rewrite: treat existing body as source text to transform, not a tail to extend
+          mode: replaceMode ? 'rewrite' : 'append',
           // Metadata only when applying; previews must not pollute DB
           generateMetadata: false,
         });
+
+        // Final body that should appear in the editor / DB
+        let finalContent = draft.content;
         let condensed = draft.condensed;
+
         if (ctx.apply) {
-          const chapter = await db.get(
-            'SELECT content FROM chapter WHERE id = ?',
-            chapterId
-          );
-          const merged =
-            (chapter?.content ? String(chapter.content) + '\n\n' : '') +
-            draft.content;
-          await db.run(
-            'UPDATE chapter SET content = ? WHERE id = ?',
-            merged,
-            chapterId
-          );
+          if (replaceMode) {
+            finalContent = draft.content;
+            await db.run(
+              'UPDATE chapter SET content = ? WHERE id = ?',
+              finalContent,
+              chapterId
+            );
+          } else {
+            const chapter = await db.get(
+              'SELECT content FROM chapter WHERE id = ?',
+              chapterId
+            );
+            finalContent =
+              (chapter?.content ? String(chapter.content) + '\n\n' : '') +
+              draft.content;
+            await db.run(
+              'UPDATE chapter SET content = ? WHERE id = ?',
+              finalContent,
+              chapterId
+            );
+          }
           // Condensed must describe the full accepted chapter
           condensed =
             (await WritingService.regenerateCondensedFromChapter(
@@ -234,15 +274,21 @@ export class AgentExecutor {
               chapterId
             )) || condensed;
         }
+
         return {
           op,
           status: 'success',
           message: ctx.apply
-            ? 'Draft applied to chapter'
+            ? replaceMode
+              ? 'Chapter rewritten (replaced full body)'
+              : 'Draft applied to chapter (appended)'
             : 'Draft generated (not applied)',
           data: {
             chapterId,
-            content: draft.content,
+            // Always return the FULL chapter body for UI sync
+            content: finalContent,
+            fragment: replaceMode ? undefined : draft.content,
+            mode: replaceMode ? 'rewrite' : 'append',
             condensed,
             nextPlot: draft.nextPlot,
             applied: ctx.apply,
@@ -431,12 +477,22 @@ export class AgentExecutor {
           chapterId,
           ctx.apply
         );
+        const nChars = impact.newOrUpdatedCharacters?.length || 0;
+        const nTerms = impact.newOrUpdatedGlossary?.length || 0;
+        const notes: string[] = [];
+        if (impact.personalityMerged) {
+          notes.push('personality→description');
+        }
+        if (impact.visualTagsMerged) {
+          notes.push('appearance→visual_tags');
+        }
+        const noteStr = notes.length ? `; ${notes.join(', ')}` : '';
         return {
           op,
           status: 'success',
           message: ctx.apply
-            ? 'World state updated from chapter'
-            : 'Impact analyzed (not applied)',
+            ? `World state updated from chapter (${nChars} character(s), ${nTerms} term(s)${noteStr})`
+            : `Impact analyzed (not applied): ${nChars} character(s), ${nTerms} term(s)${noteStr}`,
           data: impact,
         };
       }
@@ -491,6 +547,28 @@ export class AgentExecutor {
           status: 'success',
           message: 'Analysis complete',
           data: analysis,
+        };
+      }
+
+      case 'ANALYZE_CHAPTER_CHARACTERS': {
+        const chapterId = action.chapterId || ctx.chapterId;
+        if (!chapterId) {
+          return { op, status: 'error', message: 'No chapter for character analysis' };
+        }
+        await assertChapterInProject(chapterId, ctx.projectId);
+        const analysis = await WritingService.analyzeChapterCharacters(
+          ctx.projectId,
+          chapterId
+        );
+        const n = analysis.characters?.length || 0;
+        return {
+          op,
+          status: 'success',
+          message:
+            n > 0
+              ? `Extracted ${n} character(s) with traits (read-only)`
+              : 'No characters extracted (empty or model failed)',
+          data: { chapterId, ...analysis, applied: false },
         };
       }
 

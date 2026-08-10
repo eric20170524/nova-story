@@ -8,6 +8,11 @@ export const AgentContextSchema = z.object({
   language: z.string().default('zh').optional().nullable(),
   /** Current app route hint, e.g. story | director | characters */
   route: z.string().optional().nullable(),
+  /**
+   * UI chip preferred intent — skips fragile free-form planning.
+   * Must match AgentRouteIntentSchema values when set.
+   */
+  preferred_op: z.string().optional().nullable(),
 });
 
 export const AgentRequestSchema = z.object({

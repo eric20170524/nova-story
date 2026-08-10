@@ -7,6 +7,11 @@ import { API_BASE_URL, CHARACTER_ROLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { PreviewableImage, resolveMediaUrl, useImagePreview, ZoomHint } from '../components/ImageLightbox';
+import {
+  clearVramSchedulerPhase,
+  emitVramSchedulerPhase,
+  handleGenerationStreamForVram,
+} from '../services/vram_scheduler_ui';
 
 const formatImageUrl = (url?: string | null) => resolveMediaUrl(url);
 
@@ -41,6 +46,9 @@ export const CharacterManager: React.FC = () => {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState('');
   const stopBatchRef = React.useRef(false);
+  /** Expanded description / visual-tag sections on cards (long text after finalize). */
+  const [expandedDescIds, setExpandedDescIds] = useState<Record<number, boolean>>({});
+  const [expandedTagsIds, setExpandedTagsIds] = useState<Record<number, boolean>>({});
   const { openPreview, lightbox: imageLightbox } = useImagePreview();
 
   const loadProjectSettings = () => {
@@ -96,12 +104,31 @@ export const CharacterManager: React.FC = () => {
         if (settled) return;
         settled = true;
         eventSource.close();
-        if (err) reject(err);
-        else resolve(url || '');
+        if (err) {
+          clearVramSchedulerPhase();
+          reject(err);
+        } else {
+          resolve(url || '');
+        }
       };
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          handleGenerationStreamForVram(data, taskId);
+          // Append handoff phase only when a batch progress line is already visible
+          if (data.type === 'vram_tuning') {
+            setBatchProgress((prev) =>
+              prev
+                ? `${prev.split(' · ')[0]} · ${t('vram.auto_tuning', '正在调优显存环境…')}`
+                : prev
+            );
+          } else if (data.type === 'vram_ready') {
+            setBatchProgress((prev) =>
+              prev
+                ? `${prev.split(' · ')[0]} · ${t('vram.auto_render', '启动生图渲染…')}`
+                : prev
+            );
+          }
           if (data.status === 'failed' || (data.type === 'complete' && data.status === 'failed')) {
             finish(new Error(data.error || 'Generation failed'));
           } else if (data.status === 'completed' || (data.type === 'complete' && data.image_url)) {
@@ -128,6 +155,76 @@ export const CharacterManager: React.FC = () => {
     }
   };
 
+  const VISUAL_TAG_META = new Set([
+    'assets',
+    'timeline_map',
+    'variants',
+    'base_model',
+    'model_type',
+    'avatar_url',
+    'turnaround_url',
+    'face_url',
+    'lora_path',
+    'lora_ready',
+    'lora_name',
+    'scene_modifiers',
+  ]);
+
+  /** Flatten base_model.tags + top-level strings for the simple key/value editor. */
+  const flatEditableVisualTags = (visualTags: any): Record<string, string> => {
+    if (!visualTags || typeof visualTags !== 'object') return {};
+    const out: Record<string, string> = {};
+    const base = visualTags.base_model?.tags;
+    if (base && typeof base === 'object') {
+      for (const [k, v] of Object.entries(base)) {
+        if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+      }
+    }
+    for (const [k, v] of Object.entries(visualTags)) {
+      if (VISUAL_TAG_META.has(k)) continue;
+      if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+    }
+    return out;
+  };
+
+  /** Write flat appearance tags without wiping assets / variants / model meta. */
+  const applyFlatVisualTags = (
+    existing: any,
+    flat: Record<string, string>
+  ): Record<string, any> => {
+    const full =
+      existing && typeof existing === 'object' ? { ...existing } : {};
+    const next: Record<string, any> = {
+      ...full,
+      timeline_map: full.timeline_map || {},
+      assets: full.assets || {},
+      model_type: full.model_type || 'pony',
+      base_model: {
+        ...(full.base_model || {}),
+        tags: { ...flat },
+      },
+    };
+    // Clear previous top-level string appearance keys, then re-apply flat
+    for (const k of Object.keys(next)) {
+      if (!VISUAL_TAG_META.has(k) && typeof next[k] === 'string') {
+        delete next[k];
+      }
+    }
+    Object.assign(next, flat);
+    if (Array.isArray(full.variants) && full.variants.length) {
+      next.variants = full.variants.map((v: any, i: number) => {
+        if (!v || typeof v !== 'object') return v;
+        if (v.id === 'v1_default' || i === 0) {
+          return { ...v, tags: { ...flat } };
+        }
+        return v;
+      });
+    } else {
+      next.variants = [{ id: 'v1_default', name: 'Default', tags: { ...flat } }];
+    }
+    return next;
+  };
+
   const openModal = (char?: Character) => {
     if (char) {
       setEditingChar({ ...char });
@@ -147,27 +244,43 @@ export const CharacterManager: React.FC = () => {
 
   const handleAddTag = () => {
     if (!tagKey || !tagValue) return;
-    setEditingChar(prev => ({
-      ...prev,
-      visual_tags: { ...prev.visual_tags, [tagKey]: tagValue }
-    }));
+    setEditingChar((prev) => {
+      const flat = {
+        ...flatEditableVisualTags(prev.visual_tags),
+        [tagKey]: tagValue,
+      };
+      return {
+        ...prev,
+        visual_tags: applyFlatVisualTags(prev.visual_tags, flat) as any,
+      };
+    });
     setTagKey('');
     setTagValue('');
   };
 
   const removeTag = (key: string) => {
-    const newTags = { ...editingChar.visual_tags };
-    delete newTags[key];
-    setEditingChar({ ...editingChar, visual_tags: newTags });
+    setEditingChar((prev) => {
+      const flat = { ...flatEditableVisualTags(prev.visual_tags) };
+      delete flat[key];
+      return {
+        ...prev,
+        visual_tags: applyFlatVisualTags(prev.visual_tags, flat) as any,
+      };
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      if (editingChar.id) {
-        await api.updateCharacter(editingChar.id, editingChar);
+      const flat = flatEditableVisualTags(editingChar.visual_tags);
+      const payload = {
+        ...editingChar,
+        visual_tags: applyFlatVisualTags(editingChar.visual_tags, flat),
+      };
+      if (payload.id) {
+        await api.updateCharacter(payload.id, payload);
       } else {
-        await api.createCharacter(editingChar);
+        await api.createCharacter(payload);
       }
       setShowModal(false);
       loadCharacters();
@@ -184,7 +297,11 @@ export const CharacterManager: React.FC = () => {
         loadCharacters();
         showToast(t("characters.deleted", "Character deleted"), 'success');
     } catch (e) {
-        showToast(t("characters.failed_delete", "Failed to delete character"), 'error');
+        const msg = e instanceof Error ? e.message : String(e);
+        showToast(
+          msg || t("characters.failed_delete", "Failed to delete character"),
+          'error'
+        );
     }
   };
 
@@ -297,6 +414,11 @@ export const CharacterManager: React.FC = () => {
     }
     setIsGenerating(true);
     setGeneratedImageUrl(null);
+    emitVramSchedulerPhase({
+      phase: 'vram_tuning',
+      message: 'Optimizing VRAM for image generation…',
+      message_zh: '正在调优显存环境…',
+    });
 
     try {
       // Trigger generation via asset API — attach project style/NSFW so policy stack applies
@@ -342,6 +464,7 @@ export const CharacterManager: React.FC = () => {
       setIsGenerating(false);
     } catch (e) {
       console.error(e);
+      clearVramSchedulerPhase();
       showToast(e instanceof Error ? e.message : "Generation failed", 'error');
       setIsGenerating(false);
     }
@@ -366,6 +489,11 @@ export const CharacterManager: React.FC = () => {
 
         // 1) Portrait
         setBatchProgress(`${i + 1}/${characters.length} ${char.name} · portrait…`);
+        emitVramSchedulerPhase({
+          phase: 'vram_tuning',
+          message: 'Optimizing VRAM for image generation…',
+          message_zh: '正在调优显存环境…',
+        });
         try {
           const portraitPrompt = await api.buildCharacterPrompt(
             char.id, mType, 'portrait', char.description, false
@@ -426,6 +554,7 @@ export const CharacterManager: React.FC = () => {
     } finally {
       setBatchRunning(false);
       setBatchProgress('');
+      clearVramSchedulerPhase();
     }
   };
 
@@ -642,7 +771,45 @@ export const CharacterManager: React.FC = () => {
                 </div>
               </div>
               
-              <p className="text-slate-400 text-sm mb-4 line-clamp-3 h-14">{char.description}</p>
+              {(() => {
+                const desc = String(char.description || '').trim();
+                const descExpanded = Boolean(expandedDescIds[char.id]);
+                const descLong =
+                  desc.length > 140 || desc.split(/\n/).length > 3;
+                return (
+                  <div className="mb-3">
+                    <p
+                      className={`text-slate-400 text-sm whitespace-pre-wrap break-words ${
+                        descExpanded
+                          ? 'max-h-64 overflow-y-auto custom-scrollbar pr-1'
+                          : 'line-clamp-3'
+                      }`}
+                    >
+                      {desc || (
+                        <span className="italic text-slate-600">
+                          {t('characters.no_description', '暂无描述')}
+                        </span>
+                      )}
+                    </p>
+                    {descLong && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedDescIds((prev) => ({
+                            ...prev,
+                            [char.id]: !prev[char.id],
+                          }))
+                        }
+                        className="mt-1 text-[11px] text-indigo-400 hover:text-indigo-300 font-medium"
+                      >
+                        {descExpanded
+                          ? t('characters.collapse', '收起')
+                          : t('characters.expand_full', '展开全文')}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Character Visual Assets Dual Preview (Front Portrait + Turnaround) */}
               <div className="mb-4">
@@ -796,20 +963,79 @@ export const CharacterManager: React.FC = () => {
               </div>
               
               <div className="border-t border-slate-800 pt-3">
-                <h4 className="text-xs font-semibold text-slate-500 mb-2">{t('characters.visual_tags')}</h4>
-                <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold text-slate-500">
+                    {t('characters.visual_tags')}
+                  </h4>
                   {(() => {
-                    const tags = char.visual_tags?.base_model?.tags || char.visual_tags || {};
-                    return Object.entries(tags).map(([k, v]) => {
-                      if (typeof v === 'object' && v !== null) return null; // Skip complex objects in summary
-                      return (
-                        <span key={k} className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300 border border-slate-700">
-                          <span className="text-indigo-400">{k}:</span> {String(v)}
-                        </span>
-                      );
-                    });
+                    const tags =
+                      char.visual_tags?.base_model?.tags || char.visual_tags || {};
+                    const count = Object.entries(tags).filter(
+                      ([, v]) => typeof v !== 'object' || v === null
+                    ).length;
+                    return count > 0 ? (
+                      <span className="text-[10px] text-slate-600 font-mono">
+                        {count}
+                      </span>
+                    ) : null;
                   })()}
                 </div>
+                <div
+                  className={`flex flex-wrap gap-2 ${
+                    expandedTagsIds[char.id]
+                      ? 'max-h-40 overflow-y-auto custom-scrollbar pr-0.5'
+                      : 'max-h-16 overflow-hidden'
+                  }`}
+                >
+                  {(() => {
+                    const tags =
+                      char.visual_tags?.base_model?.tags || char.visual_tags || {};
+                    const entries = Object.entries(tags).filter(
+                      ([, v]) => !(typeof v === 'object' && v !== null)
+                    );
+                    if (!entries.length) {
+                      return (
+                        <span className="text-[11px] text-slate-600 italic">
+                          {t('characters.no_visual_tags', '暂无视觉标签（定稿章节可自动提取）')}
+                        </span>
+                      );
+                    }
+                    return entries.map(([k, v]) => (
+                      <span
+                        key={k}
+                        className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300 border border-slate-700 max-w-full"
+                        title={`${k}: ${String(v)}`}
+                      >
+                        <span className="text-indigo-400">{k}:</span>{' '}
+                        <span className="break-all">{String(v)}</span>
+                      </span>
+                    ));
+                  })()}
+                </div>
+                {(() => {
+                  const tags =
+                    char.visual_tags?.base_model?.tags || char.visual_tags || {};
+                  const count = Object.entries(tags).filter(
+                    ([, v]) => !(typeof v === 'object' && v !== null)
+                  ).length;
+                  if (count <= 4) return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedTagsIds((prev) => ({
+                          ...prev,
+                          [char.id]: !prev[char.id],
+                        }))
+                      }
+                      className="mt-1.5 text-[11px] text-indigo-400 hover:text-indigo-300 font-medium"
+                    >
+                      {expandedTagsIds[char.id]
+                        ? t('characters.collapse', '收起')
+                        : t('characters.expand_tags', '展开全部标签')}
+                    </button>
+                  );
+                })()}
               </div>
             </div>
 
@@ -879,7 +1105,7 @@ export const CharacterManager: React.FC = () => {
               <div>
                  <label className="block text-sm text-slate-400 mb-1">{t('characters.desc')}</label>
                  <textarea 
-                    className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white h-24 text-sm sm:text-base"
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white min-h-[6rem] h-40 resize-y text-sm sm:text-base custom-scrollbar"
                     value={editingChar.description || ''}
                     onChange={e => setEditingChar({...editingChar, description: e.target.value})}
                  />
@@ -952,14 +1178,25 @@ export const CharacterManager: React.FC = () => {
                   <input placeholder={t('characters.val_placeholder')} className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-white" value={tagValue} onChange={e => setTagValue(e.target.value)} />
                   <button type="button" onClick={handleAddTag} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded text-white self-end sm:self-auto flex items-center justify-center gap-1"><Plus size={16} /><span className="sm:hidden text-xs">{t("characters.add_tag", "Add")}</span></button>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(editingChar.visual_tags || {}).map(([k, v]) => (
-                    <div key={k} className="flex items-center gap-2 px-3 py-1 bg-indigo-900/30 border border-indigo-500/30 rounded-full text-sm">
-                      <span className="text-indigo-300 font-mono">{k}:</span>
-                      <span className="text-slate-200 truncate max-w-[200px]">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                      <button type="button" onClick={() => removeTag(k)} className="hover:text-red-400"><X size={12} /></button>
-                    </div>
-                  ))}
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto custom-scrollbar">
+                  {Object.entries(flatEditableVisualTags(editingChar.visual_tags)).map(
+                    ([k, v]) => (
+                      <div
+                        key={k}
+                        className="flex items-center gap-2 px-3 py-1 bg-indigo-900/30 border border-indigo-500/30 rounded-full text-sm max-w-full"
+                      >
+                        <span className="text-indigo-300 font-mono shrink-0">{k}:</span>
+                        <span className="text-slate-200 break-all">{v}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeTag(k)}
+                          className="hover:text-red-400 shrink-0"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )
+                  )}
                 </div>
               </div>
 

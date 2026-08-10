@@ -16,6 +16,11 @@ import {
   getCharacterLoraName,
   shouldUsePortraitImg2ImgForScene
 } from '../services/character_appearance';
+import {
+  clearVramSchedulerPhase,
+  emitVramSchedulerPhase,
+  handleGenerationStreamForVram,
+} from '../services/vram_scheduler_ui';
 
 /** Match Chinese character names against English/pinyin mentions in visual_prompt */
 const CHARACTER_NAME_ALIASES: Record<string, string[]> = {
@@ -378,6 +383,12 @@ export const DirectorMode: React.FC = () => {
     }
 
     setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'generating' } : s));
+    // Plan 1 UI: show handoff immediately (backend confirms via SSE shortly)
+    emitVramSchedulerPhase({
+      phase: 'vram_tuning',
+      message: 'Optimizing VRAM for image generation…',
+      message_zh: '正在调优显存环境…',
+    });
 
     try {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
@@ -479,6 +490,7 @@ export const DirectorMode: React.FC = () => {
             
             evtSource.onmessage = (event) => {
               const data: StreamMessage = JSON.parse(event.data);
+              handleGenerationStreamForVram(data, taskId);
               
               if (data.status === 'completed' && data.image_url) {
                 setTimeline(prev => prev.map(s => {
@@ -544,6 +556,7 @@ export const DirectorMode: React.FC = () => {
             evtSource.onerror = () => {
               evtSource.close();
               activeEvtSourceRef.current = null;
+              clearVramSchedulerPhase();
               setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
               resolve(); 
             };
@@ -552,6 +565,7 @@ export const DirectorMode: React.FC = () => {
 
     } catch (e: any) {
       console.error(e);
+      clearVramSchedulerPhase();
       setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
       showToast(e.message || ("Generation failed for scene " + sceneId), 'error');
     }

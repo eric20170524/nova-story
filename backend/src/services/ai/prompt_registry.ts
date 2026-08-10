@@ -5,17 +5,55 @@
 
 export type PromptKey =
   | 'agent_core'
+  | 'agent_route'
   | 'agent_repair'
   | 'writing_chapter_gen'
   | 'writing_metadata_gen'
   | 'constraint_next_chapter'
   | 'analysis_impact'
+  | 'analysis_chapter_characters'
   | 'consistency_check'
   | 'skill_cinematic'
   | 'skill_conflict'
   | 'skill_reversal';
 
 export const DEFAULT_PROMPTS: Record<PromptKey, string> = {
+  /** Slim strict router for local 8B — no full bible, no action array. */
+  agent_route: `Route ONE user request to ONE intent. Output JSON only.
+
+Page: {{routeHint}}
+Active chapter: {{chapterTitle}} (id={{chapterId}})
+Recent chat:
+{{history}}
+
+User: {{userMessage}}
+
+intents (pick one):
+ANSWER_QUESTION | DRAFT_CONTENT | CINEMATIC_REWRITE | ADD_CONFLICT | REVERSE_PLOT |
+RUN_CONSISTENCY_CHECK | APPLY_CHAPTER_IMPACT | GENERATE_TIMELINE | ANALYZE_CHAPTER |
+ANALYZE_CHAPTER_CHARACTERS | QUERY_DATABASE | RENAME_CHAPTER | UPDATE_CHAPTER_SUMMARY |
+DELETE_CHAPTER | MOVE_CHAPTER | UPDATE_PROJECT_META | GET_CHARACTER | UPDATE_CHARACTER
+
+Rules:
+- Character list + personality from THIS chapter (preview only) → ANALYZE_CHAPTER_CHARACTERS (read-only)
+- Finalize: write characters (bio + personality into description) and glossary → APPLY_CHAPTER_IMPACT
+- Plot entities only → ANALYZE_CHAPTER
+- Full novel rewrite / remove 画面动作指令 → CINEMATIC_REWRITE or DRAFT_CONTENT
+- chapterScope: "current" if needs active chapter, else "none"
+- focus: short params only (rename title, etc.)`,
+
+  analysis_chapter_characters: `你是章节角色分析器。只根据【本章正文】提取出场角色与性格，禁止把角色库旧设定当成事实。
+
+章节: {{chapterTitle}}
+正文:
+{{content}}
+
+要求:
+- traits 必须带 evidence（来自正文的行为/对话/心理，可短引）
+- confidence 0~1
+- 未出场不要编造
+- 只输出 JSON，符合 schema`,
+
   agent_core: `You are the OS Kernel for NovaStory, a screenplay / short-drama writing system. You manage project "{{title}}".
 
 --- Current Context ---
@@ -53,13 +91,20 @@ Ops:
 6. Director: GENERATE_TIMELINE | ANALYZE_CHAPTER | GET_CHARACTER { name } | UPDATE_CHARACTER { name, description?, visual_tags? }
 7. Q&A: ANSWER_QUESTION { answer } | QUERY_DATABASE { query }
 
-Response schema:
+Response schema (CRITICAL — flat "op" string, NEVER nest op as object):
 {
   "thought": "brief reasoning",
   "response": "short user-facing explanation of what you plan (Chinese if user wrote Chinese)",
-  "actions": [ { "op": "...", ... } ]
+  "actions": [
+    { "op": "CINEMATIC_REWRITE", "technique": "sensory", "instructions": "..." },
+    { "op": "DRAFT_CONTENT", "instructions": "..." }
+  ]
 }
+WRONG (do not emit): { "op": { "type": "CINEMATIC_REWRITE", ... } }
+RIGHT: { "op": "CINEMATIC_REWRITE", "technique": "sensory", "instructions": "..." }
 
+For full-chapter rewrite / novel-prose rewrite / remove storyboard tags (画面/动作指令), prefer CINEMATIC_REWRITE (technique=sensory) OR a single DRAFT_CONTENT with instructions that clearly say 全文重写 (system will REPLACE the chapter body).
+Do NOT emit both CINEMATIC_REWRITE and DRAFT_CONTENT for the same rewrite — one is enough.
 If only answering a question, use a single ANSWER_QUESTION action and put the full answer in "answer" (also mirror a short summary in "response").
 Prefer multiple structure actions in one list when the user asks for several renames/moves.
 Language of "response"/"answer": match the user (default Simplified Chinese).`,
@@ -72,12 +117,15 @@ Error:
 Invalid output (truncated):
 {{invalidOutput}}
 
-Fix and return ONLY valid JSON:
-{ "thought": "...", "response": "...", "actions": [ ... ] }
+Fix and return ONLY valid JSON with FLAT op strings:
+{ "thought": "...", "response": "...", "actions": [ { "op": "CINEMATIC_REWRITE", "technique": "sensory", "instructions": "..." } ] }
+NEVER nest: { "op": { "type": "..." } }. Use { "op": "OP_NAME", ...fields }.
 Allowed ops: DRAFT_CONTENT, ANSWER_QUESTION, QUERY_DATABASE, UPDATE_CHAPTER_SUMMARY, RENAME_CHAPTER, DELETE_CHAPTER, MOVE_CHAPTER, UPDATE_PROJECT_META, CINEMATIC_REWRITE, ADD_CONFLICT, REVERSE_PLOT, RUN_CONSISTENCY_CHECK, APPLY_CHAPTER_IMPACT, GENERATE_TIMELINE, ANALYZE_CHAPTER, GET_CHARACTER, UPDATE_CHARACTER.
 No markdown fences.`,
 
-  writing_chapter_gen: `你是一位专业编剧/小说家，正在撰写当前章节正文。
+  writing_chapter_gen: `你是一位专业小说家，正在撰写当前章节正文（小说叙述，不是分镜脚本）。
+
+{{writingModeNote}}
 
 --- 世界观 ---
 书名/项目: {{title}}
@@ -101,11 +149,16 @@ No markdown fences.`,
 --- 当前目标 ---
 章节: {{chapterTitle}}
 章纲: {{chapterSummary}}
-已有正文(可续写):
+{{existingContentLabel}}:
 {{existingContent}}
 
 --- 剧情边界 (负向约束) ---
 {{nextChapterConstraint}}
+
+--- 写作要求 ---
+- 用小说/剧情叙述体：段落描写 + 对话，禁止输出【场景】【画面】【动作指令】【视觉特效】【观众】等分镜模板标签。
+- 强化感官（视听嗅触、温度、气味、皮肤/汗水/呼吸）与人物互动张力。
+- 只输出正文，不要标题说明、不要 markdown 代码块。
 
 --- 指令 ---
 {{instructions}}
@@ -130,11 +183,33 @@ No markdown fences.`,
 2. 可铺垫至爆发前一秒后戛然而止。
 3. 留下悬念。`,
 
-  analysis_impact: `你是世界观管理员。阅读章节后，只返回需要【新增或修改】的人物与术语 JSON（不要 markdown）:
+  analysis_impact: `你是世界观管理员。阅读章节后，返回需要【新增或修改】的人物与术语 JSON（不要 markdown）:
 {
-  "newOrUpdatedCharacters": [ { "name": "...", "role": "...", "description": "..." } ],
+  "newOrUpdatedCharacters": [
+    {
+      "name": "...",
+      "role": "main|supporting|minor",
+      "description": "...",
+      "visual_tags": {
+        "hair": "...",
+        "eyes": "...",
+        "skin_tone": "...",
+        "face_features": "...",
+        "build": "...",
+        "clothing": "...",
+        "accessories": "..."
+      }
+    }
+  ],
   "newOrUpdatedGlossary": [ { "term": "...", "category": "...", "definition": "..." } ]
 }
+
+规则:
+- 本章有重要表现的角色（含已在库中的主角/对手）若身份、立场、传记或外观需更新，都应返回，不要只返回全新名字
+- description 写简要身份/传记/本章定位（1-3 句）；细粒度性格由系统另行从正文合并，description 可略写性格
+- visual_tags：从正文提取可画外观，值用简洁英文图像标签（Danbooru 风格优先）；正文未写的键可省略；可额外加 tail/ears/markings/species 等
+- role: main / supporting / minor
+- 术语：能力体系、势力、专有名词等
 
 现有人物: {{characters}}
 现有术语: {{glossary}}

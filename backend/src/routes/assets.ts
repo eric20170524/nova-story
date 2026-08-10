@@ -10,6 +10,7 @@ import { SettingsManager } from '../core/settings_manager';
 import Redis from 'ioredis';
 import { AssetTaskStore } from '../services/task_store';
 import { createSceneVersion, ensureSceneVersionBaseline, syncActiveVersionAssets } from '../services/scene_versions';
+import { subscribeTaskProgress } from '../services/task_progress_bus';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -159,94 +160,162 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    let closed = false;
+    const endStream = () => {
+      if (closed) return;
+      closed = true;
+      try {
+        reply.raw.end();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const writeEvent = (payload: unknown) => {
+      if (closed) return;
+      try {
+        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      } catch {
+        /* ignore */
+      }
+    };
+
     reply.raw.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 
     // Initial check just in case it already finished
     const task = await AssetTaskStore.get(task_id);
     if (task?.status === 'completed' && task.image_url) {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: task.image_url })}\n\n`);
+        writeEvent({ type: 'complete', status: 'completed', image_url: task.image_url });
         if (redis) redis.disconnect();
-        reply.raw.end();
+        endStream();
         return;
     } else if (task?.status === 'failed' || task?.status === 'cancelled' || task?.status === 'interrupted') {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: task.error || 'Generation failed' })}\n\n`);
+        writeEvent({ type: 'complete', status: 'failed', error: task.error || 'Generation failed' });
         if (redis) redis.disconnect();
-        reply.raw.end();
+        endStream();
         return;
+    }
+
+    // Replay last known progress phase (e.g. client connected mid-handoff)
+    if (task?.progress_json) {
+      try {
+        const progress = JSON.parse(task.progress_json);
+        if (progress?.type) writeEvent(progress);
+      } catch {
+        /* ignore */
+      }
     }
 
     const scene = await db.get('SELECT * FROM scene WHERE task_id = ?', task_id);
     if (scene && scene.asset_status === 'completed' && scene.asset_url) {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: scene.asset_url })}\n\n`);
+        writeEvent({ type: 'complete', status: 'completed', image_url: scene.asset_url });
         if (redis) redis.disconnect();
-        reply.raw.end();
+        endStream();
         return;
     } else if (scene && scene.asset_status === 'failed') {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: 'Generation failed' })}\n\n`);
+        writeEvent({ type: 'complete', status: 'failed', error: 'Generation failed' });
         if (redis) redis.disconnect();
-        reply.raw.end();
+        endStream();
         return;
     }
+
+    // In-process bus: real-time VRAM handoff + progress without Redis
+    const unsubBus = subscribeTaskProgress(task_id, (payload) => {
+      writeEvent(payload);
+      if (
+        payload.type === 'complete'
+        || payload.status === 'completed'
+        || payload.status === 'failed'
+      ) {
+        if (redis) {
+          try {
+            redis.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }
+        endStream();
+      }
+    });
 
     if (redis) {
       redis.on('message', (chan, message) => {
           if (chan === channel) {
-              reply.raw.write(`data: ${message}\n\n`);
+              // Prefer bus when both fire; still accept Redis for multi-process setups
               try {
                   const dataDict = JSON.parse(message);
+                  writeEvent(dataDict);
                   if (dataDict.type === 'complete' || ['completed', 'failed'].includes(dataDict.status)) {
                       redis!.disconnect();
-                      reply.raw.end();
+                      endStream();
                   }
-              } catch (e) {}
+              } catch (e) {
+                  reply.raw.write(`data: ${message}\n\n`);
+              }
           }
       });
 
       redis.on('error', (err) => {
           logger.error(`Redis error in SSE: ${err}`);
       });
-    } else {
-        // Fallback polling if redis is unavailable (e.g. running locally without redis installed)
-        const pollInterval = setInterval(async () => {
-            const taskState = await AssetTaskStore.get(task_id);
-            if (taskState?.status === 'completed' && taskState.image_url) {
-                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: taskState.image_url })}\n\n`);
-                clearInterval(pollInterval);
-                reply.raw.end();
-                return;
-            } else if (
-              taskState?.status === 'failed'
-              || taskState?.status === 'cancelled'
-              || taskState?.status === 'interrupted'
-            ) {
-                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: taskState.error || 'Generation failed' })}\n\n`);
-                clearInterval(pollInterval);
-                reply.raw.end();
-                return;
-            }
-
-            const checkScene = await db.get('SELECT * FROM scene WHERE task_id = ?', task_id);
-            if (checkScene && checkScene.asset_status === 'completed' && checkScene.asset_url) {
-                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'completed', image_url: checkScene.asset_url })}\n\n`);
-                clearInterval(pollInterval);
-                reply.raw.end();
-            } else if (checkScene && checkScene.asset_status === 'failed') {
-                reply.raw.write(`data: ${JSON.stringify({ type: 'complete', status: 'failed', error: 'Generation failed' })}\n\n`);
-                clearInterval(pollInterval);
-                reply.raw.end();
-            } else {
-                reply.raw.write(`data: ${JSON.stringify({ type: 'progress', data: { status: 'Polling DB fallback' } })}\n\n`);
-            }
-        }, 3000);
-
-        reply.raw.on('close', () => {
-            clearInterval(pollInterval);
-        });
     }
+
+    // Poll fallback for completion + progress_json (covers process restart / missed bus events)
+    let lastProgressJson = task?.progress_json || '';
+    const pollInterval = setInterval(async () => {
+        if (closed) {
+          clearInterval(pollInterval);
+          return;
+        }
+        const taskState = await AssetTaskStore.get(task_id);
+        if (taskState?.progress_json && taskState.progress_json !== lastProgressJson) {
+          lastProgressJson = taskState.progress_json;
+          try {
+            writeEvent(JSON.parse(taskState.progress_json));
+          } catch {
+            /* ignore */
+          }
+        }
+        if (taskState?.status === 'completed' && taskState.image_url) {
+            writeEvent({ type: 'complete', status: 'completed', image_url: taskState.image_url });
+            clearInterval(pollInterval);
+            endStream();
+            return;
+        } else if (
+          taskState?.status === 'failed'
+          || taskState?.status === 'cancelled'
+          || taskState?.status === 'interrupted'
+        ) {
+            writeEvent({ type: 'complete', status: 'failed', error: taskState.error || 'Generation failed' });
+            clearInterval(pollInterval);
+            endStream();
+            return;
+        }
+
+        const checkScene = await db.get('SELECT * FROM scene WHERE task_id = ?', task_id);
+        if (checkScene && checkScene.asset_status === 'completed' && checkScene.asset_url) {
+            writeEvent({ type: 'complete', status: 'completed', image_url: checkScene.asset_url });
+            clearInterval(pollInterval);
+            endStream();
+        } else if (checkScene && checkScene.asset_status === 'failed') {
+            writeEvent({ type: 'complete', status: 'failed', error: 'Generation failed' });
+            clearInterval(pollInterval);
+            endStream();
+        }
+    }, 1500);
 
     reply.raw.on('close', () => {
         logger.info(`SSE Client disconnected: ${task_id}`);
-        if (redis) redis.disconnect();
+        closed = true;
+        clearInterval(pollInterval);
+        unsubBus();
+        if (redis) {
+          try {
+            redis.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }
     });
   });
 

@@ -41,6 +41,8 @@ const describeAction = (action: AgentAction, t: (k: string, f?: string) => strin
       return t('agent.op_timeline', 'Generate storyboard timeline');
     case 'ANALYZE_CHAPTER':
       return t('agent.op_analyze', 'Analyze chapter');
+    case 'ANALYZE_CHAPTER_CHARACTERS':
+      return t('agent.op_analyze_chars', 'Analyze chapter characters');
     case 'GET_CHARACTER':
       return `${t('agent.op_get_char', 'Get character')}: ${action.name}`;
     case 'UPDATE_CHARACTER':

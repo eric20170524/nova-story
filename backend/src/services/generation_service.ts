@@ -30,6 +30,10 @@ import {
 } from './tier_b_adapters';
 import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
+import {
+    createProgressPublisher,
+    runVramHandoffForImageGen,
+} from './generation_progress';
 
 // Re-export for tests and callers that imported from generation_service
 export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
@@ -593,21 +597,12 @@ export class GenerationService {
                         redis = null;
                     }
                 }
-                const publish = async (msgType: string, data: any) => {
-                    if (redis && redis.status === 'ready') {
-                        try {
-                            await redis.publish(
-                                `task_progress:${taskId}`,
-                                JSON.stringify({ type: msgType, data })
-                            );
-                        } catch {
-                            /* ignore */
-                        }
-                    }
-                    logger.info(`[Task ${taskId}] Progress: ${msgType}`);
-                };
+                const publish = createProgressPublisher(taskId, redis);
 
                 try {
+                    // Plan 1: free LLM VRAM before multi-panel ComfyUI work
+                    await runVramHandoffForImageGen(publish);
+
                     const finalPrompt =
                         workflowData?.prompt
                         || workflowData?.text
@@ -642,21 +637,11 @@ export class GenerationService {
                         });
                     }
                     await AssetTaskStore.completed(taskId, sceneId, assetUrl);
-                    if (redis && redis.status === 'ready') {
-                        try {
-                            await redis.publish(
-                                `task_progress:${taskId}`,
-                                JSON.stringify({
-                                    type: 'complete',
-                                    status: 'completed',
-                                    image_url: assetUrl,
-                                    panel_urls: result.panelUrls
-                                })
-                            );
-                        } catch {
-                            /* ignore */
-                        }
-                    }
+                    await publish('complete', {
+                        status: 'completed',
+                        image_url: assetUrl,
+                        panel_urls: result.panelUrls
+                    });
                     logger.info(`[Task ${taskId}] Turnaround composite completed: ${assetUrl}`);
                     return;
                 } catch (error: any) {
@@ -674,20 +659,10 @@ export class GenerationService {
                             /* ignore */
                         }
                     }
-                    if (redis && redis.status === 'ready') {
-                        try {
-                            await redis.publish(
-                                `task_progress:${taskId}`,
-                                JSON.stringify({
-                                    type: 'complete',
-                                    status: 'failed',
-                                    error: error?.message || String(error)
-                                })
-                            );
-                        } catch {
-                            /* ignore */
-                        }
-                    }
+                    await publish('complete', {
+                        status: 'failed',
+                        error: error?.message || String(error)
+                    });
                     return;
                 } finally {
                     if (redis) redis.disconnect();
@@ -714,15 +689,7 @@ export class GenerationService {
             }
         }
 
-        const progressHandler = async (msgType: string, data: any) => {
-            const channel = `task_progress:${taskId}`;
-            if (redis && redis.status === 'ready') {
-                try {
-                    await redis.publish(channel, JSON.stringify({ type: msgType, data }));
-                } catch(e) {}
-            }
-            logger.info(`[Task ${taskId}] Progress: ${msgType}`);
-        };
+        const progressHandler = createProgressPublisher(taskId, redis);
 
         try {
             const settings = SettingsManager.loadSettings();
@@ -804,6 +771,10 @@ export class GenerationService {
 
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
+
+                // Plan 1: auto VRAM handoff — unload Ollama before Pony/SDXL claims GPU
+                await runVramHandoffForImageGen(progressHandler);
+
                 const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
                 const comfyService = new ComfyUIService(baseUrl);
                 const isRunning = await comfyService.ensureRunning(
@@ -890,9 +861,10 @@ export class GenerationService {
 
             if (finalStatus === "completed") {
                 await AssetTaskStore.completed(taskId, sceneId, assetUrl!);
-                if (redis && redis.status === 'ready') {
-                    try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "completed", image_url: assetUrl })); } catch(e) {}
-                }
+                await progressHandler('complete', {
+                    status: 'completed',
+                    image_url: assetUrl
+                });
             } else {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
@@ -903,9 +875,10 @@ export class GenerationService {
                     asset_status: 'failed',
                     task_id: taskId
                 });
-                if (redis && redis.status === 'ready') {
-                    try { await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "failed", error: errMsg })); } catch(e) {}
-                }
+                await progressHandler('complete', {
+                    status: 'failed',
+                    error: errMsg
+                });
             }
 
         } catch (error: any) {
@@ -918,9 +891,10 @@ export class GenerationService {
                     asset_status: 'failed',
                     task_id: taskId
                 });
-                if (redis && redis.status === 'ready') {
-                    await redis.publish(`task_progress:${taskId}`, JSON.stringify({ type: "complete", status: "failed", error: error.message }));
-                }
+                await progressHandler('complete', {
+                    status: 'failed',
+                    error: error.message
+                });
             } catch (e) {}
         } finally {
             if (redis) redis.disconnect();
