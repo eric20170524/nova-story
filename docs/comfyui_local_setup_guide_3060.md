@@ -98,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
   A: 检查是否误传全镜 `character_ref` 且权重过高；关闭 NSFW 时尚在动作镜会剥离 alluring 类风格词；对比 `style_preset` 是否过「魅惑」。
 
 - **Q: Workflow template not found？**  
-  A: 确认 `backend/app/static/workflows/` 存在 `pony_xl_12gb.json` 或 `sd15_draft_12gb.json`，重启后端以重新 seed。
+  A: 确认 `backend/static/workflows/` 存在 `pony_xl_12gb.json` 或 `sd15_draft_12gb.json`，重启后端以重新 seed。可用环境变量 `NOVASTORY_STATIC_DIR` 覆盖静态根目录。
 
 - **Q: 库里还有旧 flux 工作流？**  
   A: Workflow 管理页禁用/删除即可；后端启动也会清理已下架的 bundled `flux_dev_*` 名。

@@ -112,6 +112,7 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     thought: 'Test',
     response: 'Assistant response',
     actions: [],
+    results: [],
     needs_confirmation: false,
     action: null
   });

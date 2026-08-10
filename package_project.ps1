@@ -26,7 +26,8 @@ $excludeDirs = @(
     '.agents',
     '.vscode',
     '.idea',
-    'backend\app\static\generated',
+    'backend\static\generated',
+    'backend\static\comics',
     'backend\app\data'
 )
 

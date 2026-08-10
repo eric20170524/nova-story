@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { settings } from '../core/config';
 import { logger } from '../core/logging';
+import { getWorkflowsDirectory } from '../core/paths';
 
 let dbInstance: Database | undefined;
 let dbInitialization: Promise<Database> | undefined;
@@ -383,7 +384,7 @@ export const runMigrations = async (database: Database) => {
 };
 
 const seedBundledWorkflows = async (database: Database) => {
-  const workflowDirectory = path.resolve(__dirname, '../../app/static/workflows');
+  const workflowDirectory = getWorkflowsDirectory();
   if (!fs.existsSync(workflowDirectory)) return;
 
   const workflowFiles = fs.readdirSync(workflowDirectory)

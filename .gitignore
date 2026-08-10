@@ -9,7 +9,6 @@ node_modules/
 *.next/
 *.venv/
 *.db
-/backend/app/static/generated/
 *dist/
 *release
 *logs/
@@ -19,10 +18,9 @@ node_modules/
 .env.local
 .env.*.local
 *.vscode/
-/backend/app/static/comics/
 **/__pycache__/
+**/.pytest_cache/
 *.pyc
-backend/static/generated
 *.txt
 frontend/local/
 **/scripts
@@ -30,3 +28,10 @@ frontend/local/
 backend/system_settings.json
 docs/短剧/qiongming.txt
 /local/
+# Local runtime (regenerate / machine-specific)
+backend/sql_app.db
+backend/logs/
+backend/dist/
+# On-disk static root (HTTP still served at /static/*)
+backend/static/generated/
+backend/static/comics/

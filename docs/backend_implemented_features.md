@@ -45,7 +45,7 @@
 - 内置工作流自动初始化；退役 bundled 工作流（如 `flux_dev_*`）启动时从库中清理
 - 时间线替换、coverage 提升、项目/章节删除使用事务
 - 旧数据库缺失级联约束时执行显式子记录清理
-- 配置目录、数据目录和静态目录可通过 `NOVASTORY_*_DIR` 独立挂载
+- 配置目录、数据目录和静态目录可通过 `NOVASTORY_*_DIR` 独立挂载（默认静态根：`backend/static/`，HTTP 前缀仍为 `/static/`）
 - **安全默认**：监听 `127.0.0.1`；CORS 限 localhost；`GET /settings` 脱敏（`has_api_key`，不回传密钥）
 
 ## 验证

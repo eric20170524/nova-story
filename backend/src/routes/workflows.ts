@@ -3,11 +3,11 @@ import { db } from '../db/database';
 import { WorkflowCreateSchema, WorkflowUpdateSchema } from '../schemas/workflow';
 import { z } from 'zod';
 import fs from 'fs';
-import path from 'path';
+import { getWorkflowsDirectory } from '../core/paths';
 
 export const workflowRoutes: FastifyPluginAsync = async (app) => {
   app.get('/files', async (request, reply) => {
-    const staticWorkflowsDir = path.join(__dirname, '../../app/static/workflows');
+    const staticWorkflowsDir = getWorkflowsDirectory();
     const diskFiles = fs.existsSync(staticWorkflowsDir)
       ? fs.readdirSync(staticWorkflowsDir).filter(f => f.endsWith('.json'))
       : [];

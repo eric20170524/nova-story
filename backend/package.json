@@ -1,20 +1,20 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "test": "tests"
-  },
+  "description": "NovaStory API server (Fastify + SQLite)",
+  "main": "dist/server.js",
   "scripts": {
-    "test": "tsx --test 'src/**/*.test.ts'",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','logs','.pytest_cache']) { try { fs.rmSync(p,{recursive:true,force:true}); console.log('removed',p); } catch {} }\""
   },
-  "keywords": [],
+  "keywords": [
+    "novastory"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
@@ -26,7 +26,6 @@
     "@fastify/swagger-ui": "^6.1.0",
     "@fastify/websocket": "^11.3.0",
     "@google/genai": "*",
-    "@google/generative-ai": "^0.24.1",
     "@types/pdfkit": "^0.17.6",
     "dotenv": "^17.4.2",
     "eventemitter3": "^5.0.4",
@@ -46,7 +45,6 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@types/ws": "^8.18.1",
-    "ts-node": "^10.9.2",
     "tsx": "^4.23.1",
     "typescript": "^5.8.2"
   }
