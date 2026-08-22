@@ -185,6 +185,20 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         throw new Error('Could not create project duplicate');
       }
 
+      const glossaryItems = await db.all(
+        'SELECT term, definition, category FROM glossary WHERE project_id = ?',
+        id
+      );
+      for (const item of glossaryItems) {
+        await db.run(
+          'INSERT INTO glossary (project_id, term, definition, category) VALUES (?, ?, ?, ?)',
+          newProjectId,
+          item.term,
+          item.definition ?? null,
+          item.category ?? null
+        );
+      }
+
       const chapterIdMap = new Map<string, string>();
       const chapters = await db.all(
         'SELECT * FROM chapter WHERE project_id = ? ORDER BY "index" ASC',
@@ -195,33 +209,53 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         chapterIdMap.set(chapter.id, newChapterId);
         await db.run(
           `INSERT INTO chapter
-            (id, project_id, "index", title, content, summary, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            (id, project_id, "index", title, content, summary, status, condensed_content)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           newChapterId,
           newProjectId,
           chapter.index,
           chapter.title,
           chapter.content ?? null,
           chapter.summary ?? null,
-          chapter.status || 'draft'
+          chapter.status || 'draft',
+          chapter.condensed_content ?? null
         );
       }
 
       const characters = await db.all(
-        'SELECT name, role, description, visual_tags FROM character WHERE project_id = ? ORDER BY id ASC',
+        'SELECT * FROM character WHERE project_id = ? ORDER BY id ASC',
         id
       );
       for (const character of characters) {
-        await db.run(
+        const charRes = await db.run(
           `INSERT INTO character
-            (project_id, name, role, description, visual_tags)
-           VALUES (?, ?, ?, ?, ?)`,
+            (project_id, name, role, description, visual_tags, active_version)
+           VALUES (?, ?, ?, ?, ?, ?)`,
           newProjectId,
           character.name,
           character.role ?? null,
           character.description ?? null,
-          character.visual_tags || '{}'
+          character.visual_tags || '{}',
+          character.active_version || 1
         );
+        const newCharId = charRes.lastID;
+        if (newCharId !== undefined) {
+          const charVersions = await db.all(
+            'SELECT * FROM character_version WHERE character_id = ? ORDER BY version ASC',
+            character.id
+          );
+          for (const cv of charVersions) {
+            await db.run(
+              `INSERT INTO character_version (character_id, version, label, description, visual_tags)
+               VALUES (?, ?, ?, ?, ?)`,
+              newCharId,
+              cv.version,
+              cv.label ?? null,
+              cv.description ?? null,
+              cv.visual_tags ?? null
+            );
+          }
+        }
       }
 
       let sceneCount = 0;
@@ -231,12 +265,12 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           sourceChapterId
         );
         for (const scene of scenes) {
-          await db.run(
+          const sceneRes = await db.run(
             `INSERT INTO scene (
               chapter_id, "index", visual_prompt, audio_prompt, dialogue,
               duration, shot_type, camera_movement, camera_angle,
-              negative_prompt, asset_status, asset_url, task_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              negative_prompt, shot_spec, asset_status, asset_url, task_id, active_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             newChapterId,
             scene.index,
             scene.visual_prompt ?? null,
@@ -247,11 +281,82 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
             scene.camera_movement ?? null,
             scene.camera_angle ?? null,
             scene.negative_prompt ?? null,
+            scene.shot_spec ?? null,
             scene.asset_status || 'idle',
             scene.asset_url ?? null,
-            scene.task_id ?? null
+            scene.task_id ?? null,
+            scene.active_version || 1
           );
+          const newSceneId = sceneRes.lastID;
           sceneCount += 1;
+
+          if (newSceneId !== undefined) {
+            const sceneVersions = await db.all(
+              'SELECT * FROM scene_version WHERE scene_id = ? ORDER BY version ASC',
+              scene.id
+            );
+            for (const sv of sceneVersions) {
+              await db.run(
+                `INSERT INTO scene_version (
+                  scene_id, version, label, visual_prompt, audio_prompt, dialogue,
+                  duration, shot_type, camera_movement, camera_angle, negative_prompt,
+                  asset_status, task_id, asset_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                newSceneId,
+                sv.version,
+                sv.label ?? null,
+                sv.visual_prompt ?? null,
+                sv.audio_prompt ?? null,
+                sv.dialogue ?? null,
+                sv.duration ?? 3,
+                sv.shot_type ?? null,
+                sv.camera_movement ?? null,
+                sv.camera_angle ?? null,
+                sv.negative_prompt ?? null,
+                sv.asset_status || 'idle',
+                sv.task_id ?? null,
+                sv.asset_url ?? null
+              );
+            }
+
+            const coverageGroups = await db.all(
+              'SELECT * FROM coverage_group WHERE source_scene_id = ? ORDER BY version ASC',
+              scene.id
+            );
+            for (const cg of coverageGroups) {
+              const cgRes = await db.run(
+                'INSERT INTO coverage_group (source_scene_id, version, status) VALUES (?, ?, ?)',
+                newSceneId,
+                cg.version ?? 1,
+                cg.status || 'completed'
+              );
+              const newCgId = cgRes.lastID;
+              if (newCgId !== undefined) {
+                const shots = await db.all(
+                  'SELECT * FROM coverage_shot WHERE coverage_group_id = ? ORDER BY slot ASC',
+                  cg.id
+                );
+                for (const shot of shots) {
+                  await db.run(
+                    `INSERT INTO coverage_shot (
+                      coverage_group_id, slot, shot_size, camera_angle, camera_movement,
+                      narrative_purpose, visual_prompt, asset_status, task_id, asset_url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    newCgId,
+                    shot.slot ?? 1,
+                    shot.shot_size ?? null,
+                    shot.camera_angle ?? null,
+                    shot.camera_movement ?? null,
+                    shot.narrative_purpose ?? null,
+                    shot.visual_prompt ?? null,
+                    shot.asset_status || 'idle',
+                    shot.task_id ?? null,
+                    shot.asset_url ?? null
+                  );
+                }
+              }
+            }
+          }
         }
       }
 
@@ -261,7 +366,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         counts: {
           chapters: chapters.length,
           characters: characters.length,
-          scenes: sceneCount
+          scenes: sceneCount,
+          glossary: glossaryItems.length
         }
       });
     } catch (error) {
@@ -484,8 +590,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
     let parsed;
     try {
-      const content = decodeTextFile(await file.toBuffer());
-      parsed = parseTextProject(content, file.filename);
+      parsed = parseTextProject(rawText, filename);
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Could not parse the selected file';
       return reply.status(400).send({ detail });
@@ -559,7 +664,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       params.push(user.id);
     }
 
-    sql += ` LIMIT ${limit} OFFSET ${skip}`;
+    sql += ' LIMIT ? OFFSET ?';
+    params.push(limit, skip);
 
     const rows = await db.all(sql, ...params);
     return rows;
@@ -784,13 +890,33 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         id
       );
       await db.run(
+        `DELETE FROM scene_version
+         WHERE scene_id IN (
+           SELECT scene.id
+           FROM scene
+           INNER JOIN chapter ON chapter.id = scene.chapter_id
+           WHERE chapter.project_id = ?
+         )`,
+        id
+      );
+      await db.run(
         `DELETE FROM scene
          WHERE chapter_id IN (
            SELECT id FROM chapter WHERE project_id = ?
          )`,
         id
       );
+      await db.run(
+        `DELETE FROM character_version
+         WHERE character_id IN (
+           SELECT character.id
+           FROM character
+           WHERE character.project_id = ?
+         )`,
+        id
+      );
       await db.run('DELETE FROM character WHERE project_id = ?', id);
+      await db.run('DELETE FROM glossary WHERE project_id = ?', id);
       await db.run('DELETE FROM chapter WHERE project_id = ?', id);
       await db.run('DELETE FROM project WHERE id = ?', id);
       await db.exec('COMMIT');

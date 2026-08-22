@@ -438,7 +438,15 @@ export const StoryEditor: React.FC = () => {
             type="text"
             className="bg-transparent border-none text-white font-medium focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate"
             value={selectedChapter?.title || ''}
-            onChange={(e) => selectedChapter && setSelectedChapter({...selectedChapter, title: e.target.value})}
+            onChange={(e) => {
+              const newTitle = e.target.value;
+              if (selectedChapter) {
+                setSelectedChapter({ ...selectedChapter, title: newTitle });
+                setChapters((prev) =>
+                  prev.map((c) => (c.id === selectedChapter.id ? { ...c, title: newTitle } : c))
+                );
+              }
+            }}
             placeholder={t('story.chapter_title_placeholder')}
           />
 

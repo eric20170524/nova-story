@@ -138,10 +138,23 @@ export class ComfyUIService {
 
             return new Promise((resolve) => {
                 let checkHistoryInterval: any = null;
+                let isFinished = false;
 
-                const finish = async () => {
+                const finish = async (customResult?: { status: string; message: string }) => {
+                    if (isFinished) return;
+                    isFinished = true;
                     if (checkHistoryInterval) clearInterval(checkHistoryInterval);
-                    ws!.close();
+                    try {
+                        ws?.removeAllListeners();
+                        ws?.close();
+                    } catch {
+                        /* ignore */
+                    }
+
+                    if (customResult) {
+                        resolve(customResult);
+                        return;
+                    }
 
                     if (generatedImages.length === 0 && promptId) {
                         try {
@@ -168,6 +181,11 @@ export class ComfyUIService {
                     resolve({ status: "completed", images: generatedImages, prompt_id: promptId || undefined });
                 };
 
+                ws!.on('error', (err) => {
+                    logger.error(`ComfyUI WebSocket streaming error: ${err}`);
+                    finish({ status: "error", message: `WebSocket error: ${err}` });
+                });
+
                 ws!.on('message', async (data: any) => {
                     try {
                         const message = JSON.parse(data.toString());
@@ -184,7 +202,7 @@ export class ComfyUIService {
                             } else {
                                 logger.info("ComfyUI Execution Finished (Logic)");
                                 if (!msgData.prompt_id || msgData.prompt_id === promptId) {
-                                    setTimeout(finish, 500);
+                                    setTimeout(() => finish(), 500);
                                 }
                             }
                         } else if (msgType === "executed" && msgData.prompt_id === promptId) {
@@ -206,16 +224,12 @@ export class ComfyUIService {
                             if (!msgData.prompt_id || msgData.prompt_id === promptId) {
                                 const errStr = `ComfyUI Error [${msgData.node_type}]: ${msgData.exception_message}`;
                                 logger.error(errStr);
-                                if (checkHistoryInterval) clearInterval(checkHistoryInterval);
-                                ws!.close();
-                                resolve({ status: "error", message: errStr });
+                                finish({ status: "error", message: errStr });
                             }
                         } else if (msgType === "execution_interrupted") {
                             if (!msgData.prompt_id || msgData.prompt_id === promptId) {
                                 logger.info("ComfyUI Execution Interrupted");
-                                if (checkHistoryInterval) clearInterval(checkHistoryInterval);
-                                ws!.close();
-                                resolve({ status: "error", message: "Generation interrupted" });
+                                finish({ status: "error", message: "Generation interrupted" });
                             }
                         }
                     } catch (e) {

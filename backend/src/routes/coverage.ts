@@ -4,6 +4,7 @@ import { db } from '../db/database';
 import { LLMService } from '../services/llm';
 import { SettingsManager } from '../core/settings_manager';
 import { parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
+import { syncActiveVersionFromScene } from '../services/scene_versions';
 
 const serializeGroup = async (group: any) => ({
   ...group,
@@ -140,6 +141,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       candidate.visual_prompt || null,
       candidate.source_scene_id
     );
+    await syncActiveVersionFromScene(candidate.source_scene_id);
     const scene = await db.get(
       'SELECT * FROM scene WHERE id = ?',
       candidate.source_scene_id

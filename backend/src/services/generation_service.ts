@@ -848,7 +848,7 @@ export class GenerationService {
                     logger.info(`[Task ${taskId}] Using remote image URL: ${assetUrl}`);
                 }
 
-                if (finalStatus === "completed") {
+                if (finalStatus === "completed" && sceneId < 90_000_000) {
                     await db.run('UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?', "completed", assetUrl, taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {
@@ -869,12 +869,14 @@ export class GenerationService {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
                 await AssetTaskStore.failed(taskId, sceneId, errMsg);
-                await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
-                await ensureSceneVersionBaseline(sceneId);
-                await syncActiveVersionAssets(sceneId, {
-                    asset_status: 'failed',
-                    task_id: taskId
-                });
+                if (sceneId < 90_000_000) {
+                    await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
+                    await ensureSceneVersionBaseline(sceneId);
+                    await syncActiveVersionAssets(sceneId, {
+                        asset_status: 'failed',
+                        task_id: taskId
+                    });
+                }
                 await progressHandler('complete', {
                     status: 'failed',
                     error: errMsg
@@ -885,12 +887,14 @@ export class GenerationService {
             logger.error(`[Task ${taskId}] Unexpected error in async service: ${error.message}`);
             await AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
-                await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
-                await ensureSceneVersionBaseline(sceneId);
-                await syncActiveVersionAssets(sceneId, {
-                    asset_status: 'failed',
-                    task_id: taskId
-                });
+                if (sceneId < 90_000_000) {
+                    await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
+                    await ensureSceneVersionBaseline(sceneId);
+                    await syncActiveVersionAssets(sceneId, {
+                        asset_status: 'failed',
+                        task_id: taskId
+                    });
+                }
                 await progressHandler('complete', {
                     status: 'failed',
                     error: error.message

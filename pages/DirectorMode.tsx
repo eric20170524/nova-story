@@ -22,21 +22,20 @@ import {
   handleGenerationStreamForVram,
 } from '../services/vram_scheduler_ui';
 
-/** Match Chinese character names against English/pinyin mentions in visual_prompt */
-const CHARACTER_NAME_ALIASES: Record<string, string[]> = {
-  陆嘉静: ['lu jiajing', 'lujiajing', 'jiajing', 'lu jia jing'],
-  裴雨涵: ['pei yuhan', 'peiyuhan', 'yuhan', 'pei yu han'],
-  南宫雪: ['nangong xue', 'nangongxue', 'nangong', 'xue'],
-};
-
-const isCharacterMentionedInPrompt = (prompt: string, charName: string): boolean => {
+const isCharacterMentionedInPrompt = (prompt: string, char: any): boolean => {
+  const charName = char?.name || '';
   if (!charName || !prompt) return false;
   const lower = prompt.toLowerCase();
   if (lower.includes(charName.toLowerCase())) return true;
   const compact = lower.replace(/[\s_\-]/g, '');
   if (compact.includes(charName.toLowerCase().replace(/[\s_\-]/g, ''))) return true;
-  const aliases = CHARACTER_NAME_ALIASES[charName] || [];
-  return aliases.some((alias) => lower.includes(alias) || compact.includes(alias.replace(/[\s_\-]/g, '')));
+  const aliases: string[] = Array.isArray(char?.visual_tags?.aliases)
+    ? char.visual_tags.aliases
+    : (Array.isArray(char?.aliases) ? char.aliases : []);
+  return aliases.some((alias: string) => {
+    const a = alias.toLowerCase();
+    return lower.includes(a) || compact.includes(a.replace(/[\s_\-]/g, ''));
+  });
 };
 
 export const DirectorMode: React.FC = () => {
@@ -92,6 +91,15 @@ export const DirectorMode: React.FC = () => {
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
   const stopBatchRef = React.useRef<boolean>(false);
   const activeEvtSourceRef = React.useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (activeEvtSourceRef.current) {
+        activeEvtSourceRef.current.close();
+        activeEvtSourceRef.current = null;
+      }
+    };
+  }, []);
 
   // Persist settings
   useEffect(() => {
@@ -350,7 +358,7 @@ export const DirectorMode: React.FC = () => {
     );
     const promptForMention = `${scene.visual_prompt || ''} ${finalPrompt}`;
     let mentionedChars = projectCharacters.filter((char) =>
-      isCharacterMentionedInPrompt(promptForMention, char.name)
+      isCharacterMentionedInPrompt(promptForMention, char)
     );
     // Solo project cast: still inject the only character when the shot text omits the name
     if (mentionedChars.length === 0 && projectCharacters.length === 1) {

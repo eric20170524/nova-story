@@ -464,10 +464,17 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     return serializeCharacter(updatedChar);
   });
 
+  const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+
   app.post('/upload-image', async (request, reply) => {
     const data = await request.file();
     if (!data) {
         return reply.status(400).send({ detail: 'No file uploaded' });
+    }
+
+    const ext = (path.extname(data.filename) || '.png').toLowerCase();
+    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+      return reply.status(400).send({ detail: `Invalid file extension '${ext}'. Allowed: .png, .jpg, .jpeg, .webp` });
     }
 
     const staticDir = getGeneratedDirectory();
@@ -475,12 +482,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       fs.mkdirSync(staticDir, { recursive: true });
     }
 
-    const ext = path.extname(data.filename) || '.png';
     const filename = `upload_${crypto.randomUUID().substring(0, 10)}${ext}`;
     const filepath = path.join(staticDir, filename);
 
     const buffer = await data.toBuffer();
-    fs.writeFileSync(filepath, buffer);
+    await fs.promises.writeFile(filepath, buffer);
 
     return { url: `/static/generated/${filename}` };
   });
@@ -506,8 +512,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     for await (const part of parts) {
       if (part.type === 'file') {
+        ext = (path.extname(part.filename) || '.png').toLowerCase();
+        if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+          return reply.status(400).send({ detail: `Invalid file extension '${ext}'. Allowed: .png, .jpg, .jpeg, .webp` });
+        }
         buffer = await part.toBuffer();
-        ext = path.extname(part.filename) || '.png';
       } else {
         if (part.fieldname === 'asset_type') {
           assetType = part.value as string;
@@ -519,9 +528,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ detail: 'Missing file or asset_type' });
     }
 
+    if (!['avatar', 'turnaround', 'face'].includes(assetType)) {
+      return reply.status(400).send({ detail: `Invalid asset_type '${assetType}'. Allowed: avatar, turnaround, face` });
+    }
+
     const filename = `upload_${assetType}_${id}_${crypto.randomUUID().substring(0, 8)}${ext}`;
     const filepath = path.join(staticDir, filename);
-    fs.writeFileSync(filepath, buffer);
+    await fs.promises.writeFile(filepath, buffer);
 
     const assetUrl = `/static/generated/${filename}`;
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});

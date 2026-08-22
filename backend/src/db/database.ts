@@ -361,21 +361,21 @@ export const runMigrations = async (database: Database) => {
   `);
 
   for (const migration of migrations) {
-    const applied = await database.get(
-      'SELECT version FROM schema_migration WHERE version = ?',
-      migration.version
-    );
-    if (applied) continue;
-
     await database.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
-      await migration.up(database);
-      await database.run(
-        'INSERT INTO schema_migration (version) VALUES (?)',
+      const applied = await database.get(
+        'SELECT version FROM schema_migration WHERE version = ?',
         migration.version
       );
+      if (!applied) {
+        await migration.up(database);
+        await database.run(
+          'INSERT OR IGNORE INTO schema_migration (version) VALUES (?)',
+          migration.version
+        );
+        logger.info(`Applied database migration ${migration.version}`);
+      }
       await database.exec('COMMIT');
-      logger.info(`Applied database migration ${migration.version}`);
     } catch (error) {
       await database.exec('ROLLBACK');
       throw error;
@@ -439,7 +439,8 @@ export const initDb = async () => {
     });
 
     await database.exec('PRAGMA foreign_keys = ON;');
-    await database.exec('PRAGMA busy_timeout = 5000;');
+    await database.exec('PRAGMA journal_mode = WAL;');
+    await database.exec('PRAGMA busy_timeout = 10000;');
     await runMigrations(database);
     await seedBundledWorkflows(database);
     dbInstance = database;

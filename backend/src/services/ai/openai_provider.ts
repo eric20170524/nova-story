@@ -111,13 +111,18 @@ export class OpenAIProvider implements AIProvider {
             const content = response.choices[0]?.message?.content || '';
             logger.info(`[OpenAI Structured Output Raw]: ${truncateLog(content)}`);
 
-            const cleanText = content
-                .trim()
-                .replace(/^```(?:json)?\s*/i, '')
-                .replace(/\s*```$/, '')
-                .trim();
+            const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+            const codeBlockMatch = withoutThink.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+            let jsonString = (codeBlockMatch && codeBlockMatch[1]) ? codeBlockMatch[1].trim() : withoutThink;
 
-            const parsed = JSON.parse(cleanText);
+            if (!codeBlockMatch) {
+                const objectMatch = jsonString.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+                if (objectMatch && objectMatch[0]) {
+                    jsonString = objectMatch[0].trim();
+                }
+            }
+
+            const parsed = JSON.parse(jsonString);
 
             let targetParsed = parsed;
             const fieldKeys = Object.keys(schemaRef?.properties || {});

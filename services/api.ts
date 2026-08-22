@@ -174,30 +174,34 @@ class ApiService {
   exportProject = (id: number) => this.request<ProjectExport>(`/projects/${id}/export`);
   updateProject = (id: number, data: any) => this.request<any>(`/projects/${id}`, { method: 'PUT', body: data });
   deleteProject = (id: number) => this.request(`/projects/${id}`, { method: 'DELETE' });
+  private async requestFormData<T>(endpoint: string, formData: FormData): Promise<T> {
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) {
+      let errDetail = `API Error ${response.status}`;
+      try {
+        const errJson = await response.json();
+        if (errJson.detail) {
+          errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        }
+      } catch (_) {}
+      throw new Error(errDetail);
+    }
+    return await response.json();
+  }
+
   importProject = (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-    
-    // Get Token for direct fetch
-    const token = localStorage.getItem('access_token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    return fetch(`${API_BASE_URL}/projects/import`, {
-        method: 'POST',
-        headers: headers,
-        body: formData,
-    }).then(async (response) => {
-        if (!response.ok) {
-            let detail = `API Error ${response.status}`;
-            try {
-                const payload = await response.json();
-                if (typeof payload?.detail === 'string') detail = payload.detail;
-            } catch (_) {}
-            throw new Error(detail);
-        }
-        return await response.json();
-    });
+    return this.requestFormData<any>('/projects/import', formData);
   };
 
   /** Probe local ComfyUI for Tier B dual-ref readiness (IP-Adapter + ControlNet) */
@@ -255,39 +259,17 @@ class ApiService {
   cropCharacterFace = (characterId: number) => this.request<any>(`/characters/${characterId}/crop-face`, { method: 'POST' });
   trainCharacterLora = (characterId: number) => this.request<any>(`/characters/${characterId}/train-lora`, { method: 'POST' });
 
-  uploadCharacterAsset = async (characterId: number, assetType: 'avatar' | 'turnaround' | 'face', file: File) => {
+  uploadCharacterAsset = (characterId: number, assetType: 'avatar' | 'turnaround' | 'face', file: File) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('asset_type', assetType);
-
-    const token = localStorage.getItem('access_token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const response = await fetch(`${API_BASE_URL}/characters/${characterId}/upload-asset`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-    if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
-    return await response.json();
+    return this.requestFormData<any>(`/characters/${characterId}/upload-asset`, formData);
   };
 
-  uploadCharacterImage = async (file: File) => {
+  uploadCharacterImage = (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-
-    const token = localStorage.getItem('access_token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const response = await fetch(`${API_BASE_URL}/characters/upload-image`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-    if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
-    return await response.json();
+    return this.requestFormData<{ url: string }>('/characters/upload-image', formData);
   };
 
   // Chapters
