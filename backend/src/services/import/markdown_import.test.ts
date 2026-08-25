@@ -95,6 +95,55 @@ test('preserves unknown chapter subsections instead of silently dropping them', 
   ]);
 });
 
+test('keeps chapter preamble before an explicit content section', () => {
+  const parsed = parseMarkdownNovel(
+    [
+      '# 测试小说',
+      '',
+      '## 第一章：开始',
+      '',
+      '这一段在结构化小节之前，也不能被丢弃。',
+      '',
+      '### 章节概要',
+      '概要',
+      '',
+      '### 正文',
+      '正式正文。',
+    ].join('\n'),
+    'test.md'
+  );
+
+  assert.equal(
+    parsed.chapters[0]!.content,
+    '这一段在结构化小节之前，也不能被丢弃。\n\n正式正文。'
+  );
+});
+
+test('preserves non-chapter h2 sections even when they appear after chapters', () => {
+  const parsed = parseMarkdownNovel(
+    [
+      '# 测试小说',
+      '',
+      '## 第一章：开始',
+      '',
+      '正文。',
+      '',
+      '## 附加说明',
+      '',
+      '这是章后补充资料。',
+    ].join('\n'),
+    'test.md'
+  );
+
+  assert.deepEqual(parsed.unmappedSections, [
+    {
+      heading: '附加说明',
+      content: '这是章后补充资料。',
+      scope: 'project',
+    },
+  ]);
+});
+
 test('falls back to a single chapter when Markdown has no chapter headings', () => {
   const parsed = parseMarkdownNovel(
     '# 单篇故事\n\n只有一段正文。',
