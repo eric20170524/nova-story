@@ -20,20 +20,27 @@ const collectTests = async (directory: string): Promise<string[]> => {
   return files;
 };
 
-const tests = (await collectTests(path.resolve('src'))).sort();
-if (tests.length === 0) {
-  throw new Error('No backend test files were found');
-}
+const main = async () => {
+  const tests = (await collectTests(path.resolve('src'))).sort();
+  if (tests.length === 0) {
+    throw new Error('No backend test files were found');
+  }
 
-const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
-const child = spawn(command, ['--test', ...tests], {
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
+  const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
+  const child = spawn(command, ['--test', ...tests], {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? 1));
+  });
+
+  process.exitCode = exitCode;
+};
+
+void main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });
-
-const exitCode = await new Promise<number>((resolve, reject) => {
-  child.once('error', reject);
-  child.once('exit', (code) => resolve(code ?? 1));
-});
-
-process.exitCode = exitCode;
