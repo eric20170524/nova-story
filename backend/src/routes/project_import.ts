@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   parseProjectImportFile,
   ProjectImportInputError,
+  type ParsedProjectImportFile,
 } from '../services/import/import_file';
 import { buildProjectImportPreview } from '../services/import/import_preview';
 import { importNovelDraft } from '../services/import/project_import';
@@ -56,7 +57,7 @@ export const projectImportRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    let parsed;
+    let parsed: ParsedProjectImportFile;
     try {
       const buffer = await file.toBuffer();
       parsed = parseProjectImportFile(buffer, file.filename || '');
