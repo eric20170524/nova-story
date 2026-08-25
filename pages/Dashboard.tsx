@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Plus, Search, Folder, Clock, Trash2, Upload, Download, LoaderCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import {
+  previewProjectImport,
+  type ProjectImportPreview,
+} from '../services/project_import';
 import { Project } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -17,6 +21,9 @@ export const Dashboard: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [newProject, setNewProject] = useState({ title: '', description: '' });
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ProjectImportPreview | null>(null);
+  const [previewingImport, setPreviewingImport] = useState(false);
+  const [importingProject, setImportingProject] = useState(false);
   const [exportingProjectId, setExportingProjectId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -55,23 +62,55 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const resetImportDialog = () => {
+    setImportFile(null);
+    setImportPreview(null);
+    setPreviewingImport(false);
+    setImportingProject(false);
+  };
+
+  const closeImportDialog = () => {
+    setShowImportModal(false);
+    resetImportDialog();
+  };
+
   const handleImportProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!importFile) return;
-    try {
-        const imported = await api.importProject(importFile);
-        setProjects([...projects, imported]);
-        setShowImportModal(false);
-        setImportFile(null);
-        showToast(t('dashboard.imported'), 'success');
-    } catch (error) {
+
+    if (!importPreview) {
+      setPreviewingImport(true);
+      try {
+        const preview = await previewProjectImport(importFile);
+        setImportPreview(preview);
+      } catch (error) {
         const message = error instanceof Error
           ? error.message
-          : 'Failed to import project. Please check the file format.';
+          : t('dashboard.import_preview_failed', '无法解析导入文件。');
         showToast(message, 'error');
         console.error(error);
+      } finally {
+        setPreviewingImport(false);
+      }
+      return;
     }
-  }
+
+    setImportingProject(true);
+    try {
+      const imported = await api.importProject(importFile);
+      setProjects([...projects, imported]);
+      closeImportDialog();
+      showToast(t('dashboard.imported'), 'success');
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'Failed to import project. Please check the file format.';
+      showToast(message, 'error');
+      console.error(error);
+    } finally {
+      setImportingProject(false);
+    }
+  };
 
   const handleDelete = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
@@ -119,6 +158,13 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const importGenre = importPreview && typeof importPreview.project.settings.genre === 'string'
+    ? importPreview.project.settings.genre
+    : '';
+  const importStoryTags = importPreview && Array.isArray(importPreview.project.settings.story_tags)
+    ? importPreview.project.settings.story_tags.filter((tag): tag is string => typeof tag === 'string')
+    : [];
+
   return (
     <div className="flex-1 overflow-y-auto bg-slate-950 p-4 sm:p-8 lg:p-12">
       <div className="max-w-7xl mx-auto">
@@ -129,7 +175,10 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="flex gap-3 w-full sm:w-auto">
             <button
-                onClick={() => setShowImportModal(true)}
+                onClick={() => {
+                  resetImportDialog();
+                  setShowImportModal(true);
+                }}
                 className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 sm:px-5 py-2.5 rounded-lg transition-all shadow-lg font-medium text-sm sm:text-base"
             >
                 <Upload size={18} />
@@ -274,9 +323,12 @@ export const Dashboard: React.FC = () => {
       {/* Import Modal */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-xl sm:text-2xl font-bold text-white mb-6">{t('dashboard.import_modal_title')}</h2>
-            <form onSubmit={handleImportProject} className="space-y-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">{t('dashboard.import_modal_title')}</h2>
+            <p className="text-sm text-slate-500 mb-6">
+              {t('dashboard.import_preview_hint', '先解析文档结构并检查预览，确认后才会创建新项目。')}
+            </p>
+            <form onSubmit={handleImportProject} className="space-y-5">
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">{t('dashboard.field_path')}</label>
                 <div className="relative">
@@ -284,28 +336,151 @@ export const Dashboard: React.FC = () => {
                       type="file"
                       accept=".txt,text/plain,.md,.markdown,text/markdown,.json,application/json,.novastory.json"
                       required
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 text-sm"
+                      disabled={previewingImport || importingProject}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 text-sm disabled:opacity-60"
                       onChange={(e) => {
                           if (e.target.files && e.target.files.length > 0) {
                               setImportFile(e.target.files[0]);
+                              setImportPreview(null);
                           }
                       }}
                     />
                 </div>
               </div>
-              <div className="flex justify-end gap-3 mt-6">
+
+              {importPreview && (
+                <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4 sm:p-5">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <h3 className="text-lg font-semibold text-slate-100">{importPreview.project.title}</h3>
+                      <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-300">
+                        {importPreview.source.format.toUpperCase()}
+                      </span>
+                      <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
+                        {importPreview.mode === 'novastory-project'
+                          ? t('dashboard.import_full_project', '完整项目备份')
+                          : t('dashboard.import_novel_manuscript', '小说文稿')}
+                      </span>
+                    </div>
+                    {importPreview.project.description && (
+                      <p className="text-sm text-slate-400 line-clamp-3">{importPreview.project.description}</p>
+                    )}
+                  </div>
+
+                  {(importGenre || importStoryTags.length > 0) && (
+                    <div className="flex flex-wrap gap-2">
+                      {importGenre && (
+                        <span className="rounded-md bg-slate-900 border border-slate-800 px-2 py-1 text-xs text-slate-300">
+                          {t('project_settings.genre', '题材')}: {importGenre}
+                        </span>
+                      )}
+                      {importStoryTags.map((tag) => (
+                        <span key={tag} className="rounded-md bg-slate-900 border border-slate-800 px-2 py-1 text-xs text-slate-400">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      [t('dashboard.import_chapters', '章节'), importPreview.counts.chapters],
+                      [t('dashboard.import_summaries', '章节概要'), importPreview.counts.chapter_summaries],
+                      [t('dashboard.import_contents', '正文'), importPreview.counts.chapter_contents],
+                      [t('dashboard.import_characters', '人物'), importPreview.counts.characters],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-lg bg-slate-900 border border-slate-800 px-3 py-2">
+                        <div className="text-xs text-slate-500">{label}</div>
+                        <div className="text-lg font-semibold text-slate-200">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {importPreview.mode === 'novastory-project' && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="text-xs text-slate-500">Scenes <span className="text-slate-300">{importPreview.counts.scenes}</span></div>
+                      <div className="text-xs text-slate-500">Coverage <span className="text-slate-300">{importPreview.counts.coverage_groups}</span></div>
+                      <div className="text-xs text-slate-500">Shots <span className="text-slate-300">{importPreview.counts.coverage_shots}</span></div>
+                    </div>
+                  )}
+
+                  {importPreview.chapters.length > 0 && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">
+                        {t('dashboard.import_chapter_preview', '章节预览')}
+                      </div>
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        {importPreview.chapters.slice(0, 12).map((chapter) => (
+                          <div key={`${chapter.index}-${chapter.title}`} className="flex items-center justify-between gap-3 rounded-md bg-slate-900 px-3 py-2 text-sm">
+                            <span className="truncate text-slate-300">{chapter.index}. {chapter.title}</span>
+                            <div className="flex shrink-0 gap-1.5 text-[11px]">
+                              {chapter.summary && (
+                                <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">
+                                  {t('dashboard.import_has_summary', '概要')}
+                                </span>
+                              )}
+                              <span className={`rounded px-1.5 py-0.5 ${chapter.has_content ? 'bg-indigo-500/10 text-indigo-300' : 'bg-red-500/10 text-red-300'}`}>
+                                {chapter.has_content
+                                  ? t('dashboard.import_has_content', '正文')
+                                  : t('dashboard.import_missing_content', '缺正文')}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {importPreview.chapters.length > 12 && (
+                        <div className="mt-2 text-xs text-slate-500">
+                          {t('dashboard.import_more_chapters', '另有 {count} 个章节', {
+                            count: importPreview.chapters.length - 12,
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {importPreview.warnings.length > 0 && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                      <div className="text-xs font-medium text-amber-300 mb-1">
+                        {t('dashboard.import_warnings', '解析警告')}
+                      </div>
+                      {importPreview.warnings.map((warning, index) => (
+                        <div key={`${warning}-${index}`} className="text-xs text-amber-200/80">• {warning}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {importPreview.unmapped_sections.length > 0 && (
+                    <div className="text-xs text-slate-500">
+                      {t('dashboard.import_unmapped', '有 {count} 个未映射小节将作为导入元信息保留。', {
+                        count: importPreview.unmapped_sections.length,
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-between gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowImportModal(false)}
-                  className="px-4 py-2 text-slate-300 hover:text-white text-sm"
+                  onClick={closeImportDialog}
+                  disabled={previewingImport || importingProject}
+                  className="px-4 py-2 text-slate-300 hover:text-white text-sm disabled:opacity-50"
                 >
                   {t('dashboard.cancel')}
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium text-sm"
+                  disabled={!importFile || previewingImport || importingProject}
+                  className="min-w-32 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-400 text-white rounded-lg font-medium text-sm flex items-center justify-center gap-2"
                 >
-                  {t('dashboard.import')}
+                  {(previewingImport || importingProject) && <LoaderCircle size={16} className="animate-spin" />}
+                  {previewingImport
+                    ? t('dashboard.import_previewing', '正在解析…')
+                    : importingProject
+                      ? t('dashboard.import_importing', '正在导入…')
+                      : importPreview
+                        ? t('dashboard.import_confirm', '确认导入')
+                        : t('dashboard.import_preview', '解析预览')}
                 </button>
               </div>
             </form>
