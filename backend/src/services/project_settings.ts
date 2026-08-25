@@ -21,6 +21,20 @@ export interface ProjectSettings {
   style?: string;
   main_plot?: string;
   character_relations?: string;
+  story_tags?: string[];
+  pov?: string;
+  tone?: string;
+  /** Source-explicit metadata that does not yet have a first-class Story Bible field. */
+  import_metadata?: Record<string, unknown>;
+  /** Traceability / warnings retained from deterministic document import. */
+  import_info?: {
+    source?: {
+      filename?: string;
+      format?: string;
+    };
+    warnings?: string[];
+    unmapped_sections?: unknown[];
+  };
   /** Optional prompt template overrides keyed by PromptKey */
   agent_prompts_override?: Record<string, string>;
   [key: string]: unknown;
