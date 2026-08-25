@@ -201,10 +201,7 @@ export const parseMarkdownNovel = (
   const h1 = lines.find((line) => /^#\s+\S/.test(line));
   const title = unwrapTitle(h1?.replace(/^#\s+/, '') || fallbackTitle).slice(0, 255);
   const h2Sections = collectSections(lines, 2);
-  const firstChapterPosition = h2Sections.findIndex((section) => isChapterHeading(section.heading));
-  const projectSections = firstChapterPosition >= 0
-    ? h2Sections.slice(0, firstChapterPosition)
-    : h2Sections.filter((section) => !isChapterHeading(section.heading));
+  const projectSections = h2Sections.filter((section) => !isChapterHeading(section.heading));
   const chapterSections = h2Sections.filter((section) => isChapterHeading(section.heading));
   const unmappedSections: NovelImportUnmappedSection[] = [];
   const warnings: string[] = [];
