@@ -6,7 +6,7 @@
 ## 当前状态
 
 分支：`feature/novel-document-import`  
-Draft PR：`#7 WIP: novel document import and preview`
+PR：`#7 WIP: novel document import, preview, and canonical commit`
 
 当前已经打通两阶段小说文档导入主链路：
 
@@ -31,11 +31,26 @@ Markdown
   → Chapter.summary
   → Chapter.content
   → Story Bible settings
+  → Project Settings 可编辑
+  → Layered Context
+  → AI 写作
 ```
 
 已使用《失声的梦核游乐园》实际上传文档结构做规则验证：识别 10/10 章，第一章“章节概要 / 正文”边界正确，题材可拆分为 `genre + story_tags`。
 
-> 验证边界：仓库当前没有 GitHub Actions status checks。本分支已经补充 parser / preview / commit / DB persistence 自动化测试代码，但当前工具环境无法执行仓库依赖，因此不能把“测试已编写”表述为“npm check 已实际运行通过”。合入前仍必须在正常开发环境执行本文末尾的验证命令。
+### 自动验证状态
+
+已新增 GitHub Actions CI，并在最新功能提交上完整通过：
+
+- [x] 根目录前端 TypeScript typecheck
+- [x] Backend TypeScript typecheck
+- [x] Backend 全量 test suite
+- [x] Production build
+
+CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
+
+1. backend test script 依赖 shell glob，在 Linux 上无法发现测试；已改为跨平台递归发现，并交给 Node test runner 保持测试文件隔离。
+2. `character_versions.test.ts` / `scene_versions.test.ts` 把 `project_id=1` 当作天然存在，开启 FK 后 fixture 不自洽；已改为测试自己创建/清理父 Project/Chapter，未关闭数据库外键。
 
 ---
 
@@ -67,6 +82,7 @@ Markdown
 - **原子写入**：Project / Chapter / Character / Glossary 同一事务成功或回滚。
 - **错误边界正确**：输入/解析错误返回 4xx；DB/persistence 错误不能伪装成“文件格式错误”。
 - **不引入无必要状态**：Preview 不增加缓存表、preview token、临时文件生命周期。
+- **上下文预算受控**：POV / Tone / Story tags 单独进入 Story Bible，不污染 `style`，并设置固定字符预算。
 
 ---
 
@@ -152,11 +168,11 @@ Markdown
   - [ ] 后续让 legacy route 委托 canonical service，删除重复 inline JSON restore
   - [ ] 完成迁移后考虑 deprecate legacy endpoint
 
+> legacy endpoint 收敛是代码清理项，不阻塞当前 Dashboard / canonical API 功能合入。
+
 ---
 
-# P0：测试
-
-## 已编写
+# P0：测试与 CI
 
 - [x] Markdown parser 单元测试
 - [x] 《失声的梦核游乐园》10 章结构 regression fixture
@@ -181,14 +197,12 @@ Markdown
 - [x] Commit unsupported file → 415
 - [x] Canonical JSON commit → Chapter / Scene / Coverage restore test
 - [x] 实际上传文档人工结构规则检查：10/10 章
-
-## 尚需实际执行
-
-- [ ] `cd backend && npm run check`
-- [ ] 根目录 `npm run typecheck`
-- [ ] 根目录 `npm run build`
-- [ ] 现有 `text_import.test.ts` 实际运行无回归
-- [ ] 现有 export/import roundtrip test 实际运行无回归
+- [x] 现有 `text_import.test.ts` 在完整 backend suite 中通过
+- [x] Backend 完整 test suite 通过
+- [x] 根目录 `npm run typecheck` 通过
+- [x] Backend typecheck 通过
+- [x] 根目录 production build 通过
+- [x] GitHub Actions CI 建立并绿灯
 
 ---
 
@@ -226,9 +240,9 @@ Markdown
 
 ---
 
-# P1：Story Bible 映射
+# P1：Story Bible 映射与消费
 
-## 已支持保存
+## 保存
 
 - [x] genre
 - [x] style
@@ -242,22 +256,37 @@ Markdown
 - [x] 不为未知字段增加数据库 column
 - [x] `ProjectSettings` 保持 future-key 兼容
 
+## Project Settings UI
+
+- [x] genre 可查看/编辑
+- [x] style 可查看/编辑
+- [x] story_tags 可查看/编辑
+- [x] pov 可查看/编辑
+- [x] tone 可查看/编辑
+- [x] main_plot 可查看/编辑
+- [x] character_relations 可查看/编辑
+- [x] 保存时继续保留未知 settings key
+
 ## AI Context 接入
 
-现有 `LayeredContext` 已消费：
+`LayeredContext / ProjectBible` 已消费：
 
 - [x] genre
 - [x] style
 - [x] main_plot
 - [x] character_relations
+- [x] pov
+- [x] tone
+- [x] story_tags
 
-新增 metadata 当前已保存、但还未进入写作上下文：
+约束：
 
-- [ ] pov
-- [ ] tone
-- [ ] story_tags
-
-实现原则：扩展 `ProjectBible / worldBible` schema，单独表示 POV / Tone / Tags；**不要**把它们粗暴拼进 `style`。
+- [x] POV / Tone / Story tags 单独表达，不拼进 style
+- [x] story tags 最多注入前 8 个
+- [x] tags 行固定字符预算
+- [x] POV 固定字符预算
+- [x] Tone 固定字符预算
+- [x] DB → WritingService bundle → Layered Context 集成测试
 
 ---
 
@@ -270,7 +299,7 @@ Markdown
 - [ ] 恢复 active_version 时验证对应 version 存在
 - [ ] 增加 v1 → v2 compatibility tests
 
-> 该部分不是当前“附加小说文档 → 新小说项目”的阻塞项。
+> 该部分不是当前“小说文档 → 新小说项目”的阻塞项。
 
 ---
 
@@ -333,6 +362,8 @@ Markdown / TXT
   → ProjectImportService
   → SQLite Transaction
   → Project + Chapters + summary + content + Story Bible
+  → Project Settings
+  → Layered Context
 ```
 
 `.novastory.json` 则走：
@@ -346,13 +377,16 @@ NovaStory JSON
   → Project + Chapter + Character + Scene + Coverage
 ```
 
-## 合入前必须完成
+## 合入检查
 
-1. `cd backend && npm run check`
-2. 根目录 `npm run typecheck`
-3. 根目录 `npm run build`
-4. 现有 TXT / export-import roundtrip 测试无回归
-5. 新增 Markdown / Preview / Commit tests 全部通过
-6. 静态检查 PR diff 只包含 import 相关变更
+- [x] Backend typecheck
+- [x] Backend 全量 tests
+- [x] Frontend/root typecheck
+- [x] Production build
+- [x] Markdown / Preview / Commit 回归测试
+- [x] TXT 既有测试无回归
+- [x] JSON Director restore 回归测试
+- [x] CI 绿灯
+- [x] 主产品链路使用 canonical preview + commit
 
-完成以上验证后，再将 Draft PR 标记 Ready for Review。
+当前剩余项均属于后续清理/扩展：legacy endpoint 去重、native backup v2、已有项目附加资料、DOCX/EPUB。
