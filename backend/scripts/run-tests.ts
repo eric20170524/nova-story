@@ -27,7 +27,7 @@ const main = async () => {
   }
 
   const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
-  const child = spawn(command, ['--test', ...tests], {
+  const child = spawn(command, ['--test', '--test-force-exit', ...tests], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
