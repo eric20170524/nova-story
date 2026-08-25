@@ -6,7 +6,7 @@
 ## 当前状态
 
 分支：`feature/novel-document-import`  
-PR：`#7 WIP: novel document import, preview, and canonical commit`
+PR：`#7 feat: structured novel document import with preview`（Ready for review）
 
 当前已经打通两阶段小说文档导入主链路：
 
@@ -33,14 +33,15 @@ Markdown
   → Story Bible settings
   → Project Settings 可编辑
   → Layered Context
-  → AI 写作
+  → 稳定创作约束 + 章节记忆
+  → AI 写作 / 技能重写
 ```
 
 已使用《失声的梦核游乐园》实际上传文档结构做规则验证：识别 10/10 章，第一章“章节概要 / 正文”边界正确，题材可拆分为 `genre + story_tags`。
 
 ### 自动验证状态
 
-已新增 GitHub Actions CI，并在最新功能提交上完整通过：
+已新增 GitHub Actions CI，并在当前 Ready-for-review head 上完整通过：**CI #20 — success**。
 
 - [x] 根目录前端 TypeScript typecheck
 - [x] Backend TypeScript typecheck
@@ -83,6 +84,7 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 - **错误边界正确**：输入/解析错误返回 4xx；DB/persistence 错误不能伪装成“文件格式错误”。
 - **不引入无必要状态**：Preview 不增加缓存表、preview token、临时文件生命周期。
 - **上下文预算受控**：POV / Tone / Story tags 单独进入 Story Bible，不污染 `style`，并设置固定字符预算。
+- **稳定约束优先**：创作约束必须与动态章节记忆并存，不能因存在前文章节而被 fallback 逻辑绕过。
 
 ---
 
@@ -203,6 +205,7 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 - [x] Backend typecheck 通过
 - [x] 根目录 production build 通过
 - [x] GitHub Actions CI 建立并绿灯
+- [x] 有历史章节记忆时，最终生成 prompt 仍包含 POV / Tone / Story tags
 
 ---
 
@@ -286,7 +289,10 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 - [x] tags 行固定字符预算
 - [x] POV 固定字符预算
 - [x] Tone 固定字符预算
+- [x] `buildCreativeConstraints()` 作为统一格式化入口
 - [x] DB → WritingService bundle → Layered Context 集成测试
+- [x] 主章节生成始终注入稳定创作约束，即使已有动态章节记忆
+- [x] CINEMATIC_REWRITE / ADD_CONFLICT / REVERSE_PLOT 技能路径复用同一创作约束
 
 ---
 
@@ -364,6 +370,8 @@ Markdown / TXT
   → Project + Chapters + summary + content + Story Bible
   → Project Settings
   → Layered Context
+  → 稳定创作约束 + 动态章节记忆
+  → AI 写作 / 技能重写
 ```
 
 `.novastory.json` 则走：
@@ -386,7 +394,9 @@ NovaStory JSON
 - [x] Markdown / Preview / Commit 回归测试
 - [x] TXT 既有测试无回归
 - [x] JSON Director restore 回归测试
-- [x] CI 绿灯
+- [x] Story Bible → final writing prompt 回归测试
+- [x] CI #20 绿灯
 - [x] 主产品链路使用 canonical preview + commit
+- [x] PR 已切换为 Ready for review
 
 当前剩余项均属于后续清理/扩展：legacy endpoint 去重、native backup v2、已有项目附加资料、DOCX/EPUB。
