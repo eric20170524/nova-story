@@ -1,7 +1,5 @@
 import path from 'path';
-import { decodeTextFile, parseTextProject } from '../text_import';
-import { parseMarkdownNovel } from './markdown_import';
-import { draftFromTextProject } from './project_import';
+import { parseProjectImportFile } from './import_file';
 import type { NovelImportDraft, NovelImportUnmappedSection } from './types';
 
 export type ProjectImportPreviewFormat = 'text' | 'markdown' | 'json';
@@ -38,16 +36,6 @@ export interface ProjectImportPreview {
   };
   warnings: string[];
   unmapped_sections: NovelImportUnmappedSection[];
-}
-
-export class ProjectImportInputError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: 400 | 415 = 400
-  ) {
-    super(message);
-    this.name = 'ProjectImportInputError';
-  }
 }
 
 const normalizeSettings = (value: unknown): Record<string, unknown> => {
@@ -122,7 +110,6 @@ const previewFromJson = (
   const rawCoverageShots = Array.isArray(directorData.coverage_shots)
     ? directorData.coverage_shots
     : [];
-  const rawGlossary = Array.isArray(jsonContent.glossary) ? jsonContent.glossary : [];
 
   const projectTitle = String(
     jsonContent.project?.title
@@ -147,6 +134,9 @@ const previewFromJson = (
   if (chapters.length === 0) {
     warnings.push('The JSON project contains no chapters');
   }
+  if (Array.isArray(jsonContent.glossary) && jsonContent.glossary.length > 0) {
+    warnings.push('Glossary entries in generic JSON are not restored by the current NovaStory backup format');
+  }
 
   return {
     source: {
@@ -165,7 +155,7 @@ const previewFromJson = (
       chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary?.trim())).length,
       chapter_contents: chapters.filter((chapter) => chapter.has_content).length,
       characters: rawCharacters.length,
-      glossary: rawGlossary.length,
+      glossary: 0,
       scenes: rawScenes.length,
       coverage_groups: rawCoverageGroups.length,
       coverage_shots: rawCoverageShots.length,
@@ -179,58 +169,8 @@ export const buildProjectImportPreview = (
   data: Uint8Array,
   filename = ''
 ): ProjectImportPreview => {
-  const ext = path.extname(filename).toLowerCase();
-  const isMarkdownFile = ext === '.md' || ext === '.markdown';
-  const isJsonFile = ext === '.json' || filename.toLowerCase().endsWith('.novastory.json');
-
-  if (ext !== '.txt' && !isMarkdownFile && !isJsonFile) {
-    throw new ProjectImportInputError(
-      'Only .txt, .md / .markdown, or .json / .novastory.json files can be imported',
-      415
-    );
-  }
-
-  let rawText: string;
-  try {
-    rawText = decodeTextFile(data);
-  } catch (error) {
-    throw new ProjectImportInputError(
-      error instanceof Error ? error.message : 'Could not decode the selected file'
-    );
-  }
-
-  let jsonContent: Record<string, any> | null = null;
-  if (isJsonFile || rawText.trim().startsWith('{')) {
-    try {
-      const parsed = JSON.parse(rawText);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        jsonContent = parsed as Record<string, any>;
-      } else if (isJsonFile) {
-        throw new Error('JSON root must be an object');
-      }
-    } catch (error) {
-      if (isJsonFile) {
-        throw new ProjectImportInputError(
-          error instanceof Error
-            ? `Could not parse the selected JSON file: ${error.message}`
-            : 'Could not parse the selected JSON file'
-        );
-      }
-    }
-  }
-
-  if (jsonContent) {
-    return previewFromJson(jsonContent, filename);
-  }
-
-  try {
-    const draft = isMarkdownFile
-      ? parseMarkdownNovel(rawText, filename)
-      : draftFromTextProject(parseTextProject(rawText, filename), filename);
-    return previewFromDraft(draft);
-  } catch (error) {
-    throw new ProjectImportInputError(
-      error instanceof Error ? error.message : 'Could not parse the selected file'
-    );
-  }
+  const parsed = parseProjectImportFile(data, filename);
+  return parsed.kind === 'novel-draft'
+    ? previewFromDraft(parsed.draft)
+    : previewFromJson(parsed.jsonContent, filename);
 };
