@@ -8,6 +8,7 @@ import {
   type ChapterCharacterAnalysis,
 } from '../../schemas/llm';
 import {
+  buildCreativeConstraints,
   buildLayeredContext,
   type ChapterRow,
   type ProjectBible,
@@ -640,8 +641,10 @@ export class WritingService {
       layered?.nextChapterSummary,
       bundle.overrides
     );
+    const creativeConstraints = buildCreativeConstraints(bundle.bible);
 
     const memoryPrompt = [
+      creativeConstraints ? `[创作约束]\n${creativeConstraints}` : '',
       layered?.oldSummaries ? `[较早梗概]\n${layered.oldSummaries}` : '',
       layered?.recentCondensed ? `[近期浓缩]\n${layered.recentCondensed}` : '',
       layered?.recentFullText ? `[紧邻前文]\n${layered.recentFullText}` : '',
@@ -673,11 +676,7 @@ export class WritingService {
         `Title: ${bundle.bible.title}`,
         bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
         bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
-        bundle.bible.story_tags?.length
-          ? `Story tags: ${head(bundle.bible.story_tags.join(', '), 160)}`
-          : '',
-        bundle.bible.pov ? `POV: ${head(bundle.bible.pov, 120)}` : '',
-        bundle.bible.tone ? `Tone: ${head(bundle.bible.tone, 120)}` : '',
+        creativeConstraints,
         bundle.bible.main_plot
           ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
           : '',
@@ -1052,9 +1051,18 @@ export class WritingService {
     const chapter = bundle.chapters.find((c) => c.id === options.chapterId);
     if (!chapter) throw new Error('Chapter not found');
 
+    const creativeConstraints = buildCreativeConstraints(bundle.bible);
     const contextSummary = head(
-      `Title: ${bundle.bible.title}\nGenre: ${bundle.bible.genre || ''}\nChapter: ${chapter.title}\nSummary: ${chapter.summary || ''}`,
-      500
+      [
+        `Title: ${bundle.bible.title}`,
+        `Genre: ${bundle.bible.genre || ''}`,
+        creativeConstraints,
+        `Chapter: ${chapter.title}`,
+        `Summary: ${chapter.summary || ''}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      700
     );
     const content = head(
       String(chapter.content || '(No content, write from summary)'),
