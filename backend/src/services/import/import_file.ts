@@ -1,7 +1,7 @@
 import path from 'path';
 import { decodeTextFile, parseTextProject } from '../text_import';
 import { parseMarkdownNovel } from './markdown_import';
-import { draftFromTextProject } from './project_import';
+import { draftFromTextProject } from './text_adapter';
 import type { NovelImportDraft } from './types';
 
 export class ProjectImportInputError extends Error {
