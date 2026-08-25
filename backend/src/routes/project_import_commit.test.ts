@@ -87,6 +87,110 @@ test('commits markdown through the canonical import route', async () => {
   await app.close();
 });
 
+test('restores chapters, scenes, coverage groups, and shots from NovaStory JSON', async () => {
+  process.env.DATABASE_URL = ':memory:';
+
+  const [
+    { default: Fastify },
+    { default: multipart },
+    { projectImportRoutes },
+    { db },
+  ] = await Promise.all([
+    import('fastify'),
+    import('@fastify/multipart'),
+    import('./project_import'),
+    import('../db/database'),
+  ]);
+
+  const app = Fastify();
+  await app.register(multipart);
+  await app.register(projectImportRoutes, { prefix: '/api/projects' });
+  await app.ready();
+
+  const backup = {
+    format: 'novastory-project',
+    version: 1,
+    project: {
+      title: 'JSON Restore',
+      description: 'restore test',
+      settings: { genre: 'fantasy' },
+    },
+    screenplay: {
+      chapters: [{
+        id: 'source-chapter',
+        index: 1,
+        title: 'Chapter 1',
+        content: 'Body',
+        summary: 'Summary',
+        status: 'draft',
+      }],
+    },
+    character_center: {
+      characters: [],
+    },
+    director: {
+      scenes: [{
+        id: 10,
+        chapter_id: 'source-chapter',
+        index: 1,
+        visual_prompt: 'Wide shot',
+        duration: 3,
+        shot_spec: { lens: '24mm' },
+      }],
+      coverage_groups: [{
+        id: 20,
+        source_scene_id: 10,
+        version: 1,
+        status: 'completed',
+      }],
+      coverage_shots: [{
+        id: 30,
+        coverage_group_id: 20,
+        slot: 1,
+        visual_prompt: 'High angle',
+      }],
+    },
+  };
+
+  const upload = await multipartPayload(
+    'restore.novastory.json',
+    JSON.stringify(backup),
+    'application/json'
+  );
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/projects/import/commit',
+    headers: upload.headers,
+    payload: upload.payload,
+  });
+
+  assert.equal(response.statusCode, 201, response.body);
+  const project = response.json();
+  assert.equal(project.title, 'JSON Restore');
+
+  const rows = await db.all(
+    `SELECT scene.id AS scene_id, coverage_group.id AS group_id, coverage_shot.id AS shot_id
+     FROM chapter
+     INNER JOIN scene ON scene.chapter_id = chapter.id
+     INNER JOIN coverage_group ON coverage_group.source_scene_id = scene.id
+     INNER JOIN coverage_shot ON coverage_shot.coverage_group_id = coverage_group.id
+     WHERE chapter.project_id = ?`,
+    project.id
+  );
+  assert.equal(rows.length, 1);
+
+  const scene = await db.get(
+    `SELECT scene.*
+     FROM scene
+     INNER JOIN chapter ON chapter.id = scene.chapter_id
+     WHERE chapter.project_id = ?`,
+    project.id
+  );
+  assert.deepEqual(JSON.parse(scene.shot_spec), { lens: '24mm' });
+
+  await app.close();
+});
+
 test('rejects bad input at 4xx before persistence starts', async () => {
   process.env.DATABASE_URL = ':memory:';
 
