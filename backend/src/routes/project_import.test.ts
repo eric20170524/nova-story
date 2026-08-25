@@ -64,6 +64,26 @@ test('previews a markdown import without touching the database', async () => {
   await app.close();
 });
 
+test('returns 400 for an empty markdown preview', async () => {
+  const app = Fastify();
+  await app.register(multipart);
+  await app.register(projectImportRoutes, { prefix: '/api/projects' });
+  await app.ready();
+
+  const multipartRequest = await buildMultipartRequest('empty.md', '', 'text/markdown');
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/projects/import/preview',
+    headers: multipartRequest.headers,
+    payload: multipartRequest.payload,
+  });
+
+  assert.equal(response.statusCode, 400, response.body);
+  assert.match(response.json().detail, /empty/i);
+
+  await app.close();
+});
+
 test('returns 415 for unsupported preview formats', async () => {
   const app = Fastify();
   await app.register(multipart);
