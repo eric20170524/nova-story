@@ -12,6 +12,13 @@ import {
 test('character versions: baseline, create, activate, sync', async () => {
   await initDb();
 
+  const projectId = Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-9));
+  await db.run(
+    `INSERT INTO project (id, title, settings, user_id)
+     VALUES (?, 'character-version-test', '{}', 'test')`,
+    projectId
+  );
+
   const tags = JSON.stringify({
     base_model: { tags: { hair: 'black', clothing: 'white dress' } },
     assets: { avatar_url: '/static/a.png', turnaround_url: '/static/t.png' },
@@ -20,7 +27,8 @@ test('character versions: baseline, create, activate, sync', async () => {
 
   const ins = await db.run(
     `INSERT INTO character (project_id, name, role, description, visual_tags)
-     VALUES (1, 'TestHero', 'main', 'desc A', ?)`,
+     VALUES (?, 'TestHero', 'main', 'desc A', ?)`,
+    projectId,
     tags
   );
   const charId = Number(ins.lastID);
@@ -60,4 +68,5 @@ test('character versions: baseline, create, activate, sync', async () => {
   assert.equal(tags1.assets?.avatar_url, '/static/a.png');
 
   await db.run('DELETE FROM character WHERE id = ?', charId);
+  await db.run('DELETE FROM project WHERE id = ?', projectId);
 });
