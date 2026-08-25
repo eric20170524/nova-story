@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildProjectImportPreview, ProjectImportInputError } from './import_preview';
+import { ProjectImportInputError } from './import_file';
+import { buildProjectImportPreview } from './import_preview';
 
 const MARKDOWN = [
   '# 失声的梦核游乐园',
