@@ -56,7 +56,7 @@ const normalizeSettings = (value: unknown): Record<string, unknown> => {
 };
 
 const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
-  const chapters = draft.chapters.map((chapter) => ({
+  const chapters: ProjectImportPreviewChapter[] = draft.chapters.map((chapter) => ({
     index: chapter.index,
     title: chapter.title,
     summary: chapter.summary,
@@ -96,18 +96,18 @@ const previewFromJson = (
   filename: string
 ): ProjectImportPreview => {
   const ext = path.extname(filename).toLowerCase();
-  const rawChapters = Array.isArray(jsonContent.screenplay?.chapters)
+  const rawChapters: any[] = Array.isArray(jsonContent.screenplay?.chapters)
     ? jsonContent.screenplay.chapters
     : (Array.isArray(jsonContent.chapters) ? jsonContent.chapters : []);
-  const rawCharacters = Array.isArray(jsonContent.character_center?.characters)
+  const rawCharacters: any[] = Array.isArray(jsonContent.character_center?.characters)
     ? jsonContent.character_center.characters
     : (Array.isArray(jsonContent.characters) ? jsonContent.characters : []);
-  const directorData = jsonContent.director || {};
-  const rawScenes = Array.isArray(directorData.scenes) ? directorData.scenes : [];
-  const rawCoverageGroups = Array.isArray(directorData.coverage_groups)
+  const directorData: Record<string, any> = jsonContent.director || {};
+  const rawScenes: any[] = Array.isArray(directorData.scenes) ? directorData.scenes : [];
+  const rawCoverageGroups: any[] = Array.isArray(directorData.coverage_groups)
     ? directorData.coverage_groups
     : [];
-  const rawCoverageShots = Array.isArray(directorData.coverage_shots)
+  const rawCoverageShots: any[] = Array.isArray(directorData.coverage_shots)
     ? directorData.coverage_shots
     : [];
 
@@ -122,7 +122,7 @@ const previewFromJson = (
     ?? null;
   const settings = normalizeSettings(jsonContent.project?.settings);
 
-  const chapters = rawChapters.map((chapter: any, index: number) => ({
+  const chapters: ProjectImportPreviewChapter[] = rawChapters.map((chapter, index) => ({
     index: Number(chapter?.index ?? index + 1),
     title: String(chapter?.title || `Chapter ${index + 1}`),
     summary: typeof chapter?.summary === 'string' ? chapter.summary : undefined,
