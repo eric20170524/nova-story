@@ -177,7 +177,7 @@ const parseChapterBody = (
   }
 
   const content = explicitContent !== undefined
-    ? trimBlock(explicitContent)
+    ? trimBlock([preamble, explicitContent].filter(Boolean).join('\n\n'))
     : trimBlock(fallbackContent.filter(Boolean).join('\n\n'));
 
   return { summary, content };
