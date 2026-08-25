@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import { decodeTextFile, parseTextProject } from '../services/text_import';
+import { parseMarkdownNovel } from '../services/import/markdown_import';
+import {
+  draftFromTextProject,
+  importNovelDraft,
+} from '../services/import/project_import';
 
 // Dummy implementation of current_user auth
 // Real implementation should parse JWT/headers as needed
@@ -386,15 +391,18 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (!file) {
-      return reply.status(400).send({ detail: 'Please select a text or JSON file to import' });
+      return reply.status(400).send({ detail: 'Please select a text, Markdown, or JSON file to import' });
     }
 
     const filename = file.filename || '';
     const ext = path.extname(filename).toLowerCase();
     const isJsonFile = ext === '.json' || filename.toLowerCase().endsWith('.novastory.json');
+    const isMarkdownFile = ext === '.md' || ext === '.markdown';
 
-    if (ext !== '.txt' && !isJsonFile) {
-      return reply.status(415).send({ detail: 'Only .txt or .json / .novastory.json files can be imported' });
+    if (ext !== '.txt' && !isMarkdownFile && !isJsonFile) {
+      return reply.status(415).send({
+        detail: 'Only .txt, .md / .markdown, or .json / .novastory.json files can be imported'
+      });
     }
 
     const buffer = await file.toBuffer();
@@ -588,60 +596,15 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    let parsed;
     try {
-      parsed = parseTextProject(rawText, filename);
+      const draft = isMarkdownFile
+        ? parseMarkdownNovel(rawText, filename)
+        : draftFromTextProject(parseTextProject(rawText, filename), filename);
+      const project = await importNovelDraft(draft, user.id);
+      return reply.status(201).send(project);
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Could not parse the selected file';
       return reply.status(400).send({ detail });
-    }
-
-    await db.exec('BEGIN IMMEDIATE TRANSACTION');
-    try {
-      const result = await db.run(
-        'INSERT INTO project (title, description, settings, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
-        parsed.title,
-        parsed.description || null,
-        '{}',
-        user.id
-      );
-
-      const projectId = result.lastID;
-      if (projectId === undefined) {
-        throw new Error('Could not create the imported project');
-      }
-
-      for (const [index, chapter] of parsed.chapters.entries()) {
-        await db.run(
-          'INSERT INTO chapter (id, project_id, "index", title, content, status) VALUES (?, ?, ?, ?, ?, ?)',
-          randomUUID(),
-          projectId,
-          index + 1,
-          chapter.title,
-          chapter.content,
-          'draft'
-        );
-      }
-
-      for (const character of parsed.characters) {
-        await db.run(
-          `INSERT INTO character (
-             project_id, name, role, description, visual_tags
-           ) VALUES (?, ?, ?, ?, ?)`,
-          projectId,
-          character.name,
-          character.role,
-          character.description,
-          '{}'
-        );
-      }
-
-      await db.exec('COMMIT');
-      const project = await db.get('SELECT * FROM project WHERE id = ?', projectId);
-      return reply.status(201).send(project);
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
     }
   });
 
