@@ -39,7 +39,7 @@ export interface ProjectImportPreview {
   }>;
 }
 
-export const previewProjectImport = async (file: File): Promise<ProjectImportPreview> => {
+const postImportFile = async <T>(endpoint: string, file: File): Promise<T> => {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -47,7 +47,7 @@ export const previewProjectImport = async (file: File): Promise<ProjectImportPre
   const token = localStorage.getItem('access_token');
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE_URL}/projects/import/preview`, {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: 'POST',
     headers,
     body: formData,
@@ -57,8 +57,9 @@ export const previewProjectImport = async (file: File): Promise<ProjectImportPre
     let detail = `API Error ${response.status}`;
     try {
       const body = await response.json();
-      if (body?.detail) {
-        detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      const candidate = body?.detail ?? body?.message ?? body?.error;
+      if (candidate) {
+        detail = typeof candidate === 'string' ? candidate : JSON.stringify(candidate);
       }
     } catch {
       // Preserve the generic HTTP error when the backend response is not JSON.
@@ -68,3 +69,9 @@ export const previewProjectImport = async (file: File): Promise<ProjectImportPre
 
   return response.json();
 };
+
+export const previewProjectImport = (file: File): Promise<ProjectImportPreview> =>
+  postImportFile<ProjectImportPreview>('/projects/import/preview', file);
+
+export const commitProjectImport = <T = any>(file: File): Promise<T> =>
+  postImportFile<T>('/projects/import/commit', file);
