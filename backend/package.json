@@ -4,7 +4,7 @@
   "description": "NovaStory API server (Fastify + SQLite)",
   "main": "dist/server.js",
   "scripts": {
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx scripts/run-tests.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "build": "tsc -p tsconfig.build.json",
