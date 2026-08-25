@@ -30,6 +30,9 @@ export type ProjectBible = {
   style?: string;
   main_plot?: string;
   character_relations?: string;
+  story_tags?: string[];
+  pov?: string;
+  tone?: string;
 };
 
 const tail = (text: string, max: number) =>
@@ -37,6 +40,18 @@ const tail = (text: string, max: number) =>
 
 const head = (text: string, max: number) =>
   text.length > max ? text.slice(0, max) + '...' : text;
+
+const compactStoryTags = (tags: string[] | undefined): string => {
+  if (!Array.isArray(tags)) return '';
+  return head(
+    tags
+      .map((tag) => String(tag || '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(', '),
+    160
+  );
+};
 
 export function buildProjectStructure(chapters: ChapterRow[]): string {
   if (!chapters.length) return '(no chapters)';
@@ -113,10 +128,14 @@ export function buildLayeredContext(options: {
     .join('; ');
 
   const b = options.bible;
+  const storyTags = compactStoryTags(b.story_tags);
   const worldBible = [
     `Title: ${b.title}`,
     b.genre ? `Genre: ${b.genre}` : '',
     b.style ? `Style: ${b.style}` : '',
+    storyTags ? `Story tags: ${storyTags}` : '',
+    b.pov ? `POV: ${head(b.pov, 120)}` : '',
+    b.tone ? `Tone: ${head(b.tone, 120)}` : '',
     b.main_plot ? `Main plot: ${head(b.main_plot, 400)}` : '',
     b.description ? `Description: ${head(b.description, 200)}` : '',
     b.character_relations
