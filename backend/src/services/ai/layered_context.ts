@@ -53,6 +53,21 @@ const compactStoryTags = (tags: string[] | undefined): string => {
   );
 };
 
+/**
+ * Stable, compact creative constraints that should accompany chapter memory.
+ * These values come from explicit project/import metadata, never AI inference.
+ */
+export function buildCreativeConstraints(bible: ProjectBible): string {
+  const storyTags = compactStoryTags(bible.story_tags);
+  return [
+    storyTags ? `Story tags: ${storyTags}` : '',
+    bible.pov ? `POV: ${head(bible.pov, 120)}` : '',
+    bible.tone ? `Tone: ${head(bible.tone, 120)}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function buildProjectStructure(chapters: ChapterRow[]): string {
   if (!chapters.length) return '(no chapters)';
   return chapters
@@ -128,14 +143,12 @@ export function buildLayeredContext(options: {
     .join('; ');
 
   const b = options.bible;
-  const storyTags = compactStoryTags(b.story_tags);
+  const creativeConstraints = buildCreativeConstraints(b);
   const worldBible = [
     `Title: ${b.title}`,
     b.genre ? `Genre: ${b.genre}` : '',
     b.style ? `Style: ${b.style}` : '',
-    storyTags ? `Story tags: ${storyTags}` : '',
-    b.pov ? `POV: ${head(b.pov, 120)}` : '',
-    b.tone ? `Tone: ${head(b.tone, 120)}` : '',
+    creativeConstraints,
     b.main_plot ? `Main plot: ${head(b.main_plot, 400)}` : '',
     b.description ? `Description: ${head(b.description, 200)}` : '',
     b.character_relations
