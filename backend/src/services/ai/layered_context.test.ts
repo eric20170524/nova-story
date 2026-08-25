@@ -44,7 +44,14 @@ test('buildLayeredContext layers memory and next-chapter summary', () => {
   const ctx = buildLayeredContext({
     chapters,
     activeChapterId: 'c1',
-    bible: { title: 'Test', genre: 'xianxia', main_plot: 'revenge' },
+    bible: {
+      title: 'Test',
+      genre: 'xianxia',
+      main_plot: 'revenge',
+      story_tags: ['梦核幻想', '小动物视角'],
+      pov: '第三人称限知',
+      tone: '治愈、轻微诡异',
+    },
     characters: [{ name: 'Hero', role: 'protagonist' }],
     glossary: [{ term: '灵根', definition: '天赋' }],
   });
@@ -55,7 +62,33 @@ test('buildLayeredContext layers memory and next-chapter summary', () => {
   assert.match(ctx!.worldBible, /Test/);
   assert.match(ctx!.worldBible, /Hero/);
   assert.match(ctx!.worldBible, /灵根/);
+  assert.match(ctx!.worldBible, /Story tags: 梦核幻想, 小动物视角/);
+  assert.match(ctx!.worldBible, /POV: 第三人称限知/);
+  assert.match(ctx!.worldBible, /Tone: 治愈、轻微诡异/);
   assert.match(ctx!.projectStructure, /Ch1/);
+});
+
+test('buildLayeredContext caps narrative metadata instead of expanding context indefinitely', () => {
+  const ctx = buildLayeredContext({
+    chapters: [{ id: 'x', title: 'X', index: 0 }],
+    activeChapterId: 'x',
+    bible: {
+      title: 'T',
+      story_tags: Array.from({ length: 20 }, (_, index) => `tag-${index}-${'x'.repeat(30)}`),
+      pov: 'P'.repeat(300),
+      tone: 'T'.repeat(300),
+    },
+    characters: [],
+    glossary: [],
+  });
+
+  assert.ok(ctx);
+  const tagLine = ctx!.worldBible.split('\n').find((line) => line.startsWith('Story tags:')) || '';
+  const povLine = ctx!.worldBible.split('\n').find((line) => line.startsWith('POV:')) || '';
+  const toneLine = ctx!.worldBible.split('\n').find((line) => line.startsWith('Tone:')) || '';
+  assert.ok(tagLine.length <= 'Story tags: '.length + 163);
+  assert.ok(povLine.length <= 'POV: '.length + 123);
+  assert.ok(toneLine.length <= 'Tone: '.length + 123);
 });
 
 test('buildLayeredContext returns null for unknown chapter', () => {
