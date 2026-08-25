@@ -529,6 +529,13 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
     projectId
   );
 
+  const storyTags = Array.isArray(settings.story_tags)
+    ? settings.story_tags
+        .filter((tag): tag is string => typeof tag === 'string' && Boolean(tag.trim()))
+        .map((tag) => tag.trim())
+        .slice(0, 8)
+    : undefined;
+
   const bible: ProjectBible = {
     title: project.title,
     description: project.description,
@@ -540,6 +547,9 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
       typeof settings.character_relations === 'string'
         ? settings.character_relations
         : undefined,
+    story_tags: storyTags,
+    pov: typeof settings.pov === 'string' ? settings.pov : undefined,
+    tone: typeof settings.tone === 'string' ? settings.tone : undefined,
   };
 
   const activeId = chapterId || chapters[0]?.id || null;
@@ -663,6 +673,11 @@ export class WritingService {
         `Title: ${bundle.bible.title}`,
         bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
         bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
+        bundle.bible.story_tags?.length
+          ? `Story tags: ${head(bundle.bible.story_tags.join(', '), 160)}`
+          : '',
+        bundle.bible.pov ? `POV: ${head(bundle.bible.pov, 120)}` : '',
+        bundle.bible.tone ? `Tone: ${head(bundle.bible.tone, 120)}` : '',
         bundle.bible.main_plot
           ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
           : '',
