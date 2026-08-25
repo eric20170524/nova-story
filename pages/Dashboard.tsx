@@ -3,6 +3,7 @@ import { Plus, Search, Folder, Clock, Trash2, Upload, Download, LoaderCircle } f
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import {
+  commitProjectImport,
   previewProjectImport,
   type ProjectImportPreview,
 } from '../services/project_import';
@@ -97,7 +98,7 @@ export const Dashboard: React.FC = () => {
 
     setImportingProject(true);
     try {
-      const imported = await api.importProject(importFile);
+      const imported = await commitProjectImport<Project>(importFile);
       setProjects([...projects, imported]);
       closeImportDialog();
       showToast(t('dashboard.imported'), 'success');
