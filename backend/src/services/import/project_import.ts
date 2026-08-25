@@ -28,6 +28,20 @@ export const draftFromTextProject = (
   warnings: [],
 });
 
+const buildPersistedSettings = (draft: NovelImportDraft) => {
+  const settings: Record<string, unknown> = {
+    ...(draft.project.settings || {}),
+  };
+
+  settings.import_info = {
+    source: draft.source,
+    warnings: draft.warnings,
+    unmapped_sections: draft.unmappedSections,
+  };
+
+  return settings;
+};
+
 export const importNovelDraft = async (
   draft: NovelImportDraft,
   userId: string
@@ -47,7 +61,7 @@ export const importNovelDraft = async (
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       draft.project.title,
       draft.project.description || null,
-      JSON.stringify(draft.project.settings || {}),
+      JSON.stringify(buildPersistedSettings(draft)),
       userId
     );
 
