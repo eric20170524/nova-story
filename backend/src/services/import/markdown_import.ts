@@ -228,10 +228,10 @@ export const parseMarkdownNovel = (
     });
   }
 
-  const chapters = chapterSections.map((section, index) => {
+  const chapters: NovelImportDraft['chapters'] = chapterSections.map((section, index) => {
     const parsedBody = parseChapterBody(section.heading, section.body, unmappedSections);
     if (!parsedBody.content) {
-      warnings.push(`Chapter "${section.heading}" has no正文 content`);
+      warnings.push(`Chapter "${section.heading}" has no body content`);
     }
     return {
       index: index + 1,
