@@ -1,6 +1,6 @@
+import { spawn } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const collectTests = async (directory: string): Promise<string[]> => {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -25,6 +25,15 @@ if (tests.length === 0) {
   throw new Error('No backend test files were found');
 }
 
-for (const testFile of tests) {
-  await import(pathToFileURL(testFile).href);
-}
+const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
+const child = spawn(command, ['--test', ...tests], {
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+});
+
+const exitCode = await new Promise<number>((resolve, reject) => {
+  child.once('error', reject);
+  child.once('exit', (code) => resolve(code ?? 1));
+});
+
+process.exitCode = exitCode;
