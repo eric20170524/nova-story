@@ -7,6 +7,7 @@ import {
   deleteProjectDocument,
   listProjectDocuments,
   previewProjectDocument,
+  updateProjectDocumentContext,
 } from '../services/project_documents';
 
 const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -17,6 +18,9 @@ const documentParamsSchema = z.object({
 const importQuerySchema = z.object({
   document_type: z.enum(PROJECT_DOCUMENT_TYPES),
   name: z.string().trim().min(1).max(255).optional(),
+});
+const contextBodySchema = z.object({
+  context_enabled: z.boolean(),
 });
 
 const sendInputError = (error: unknown, reply: any) => {
@@ -87,6 +91,16 @@ export const projectDocumentRoutes: FastifyPluginAsync = async (app) => {
         name: query.name,
       });
       return reply.status(201).send(document);
+    } catch (error) {
+      return sendInputError(error, reply);
+    }
+  });
+
+  app.patch('/:id/documents/:documentId', async (request, reply) => {
+    const { id, documentId } = documentParamsSchema.parse(request.params);
+    const body = contextBodySchema.parse(request.body);
+    try {
+      return await updateProjectDocumentContext(id, documentId, body.context_enabled);
     } catch (error) {
       return sendInputError(error, reply);
     }
