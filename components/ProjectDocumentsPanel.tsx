@@ -7,6 +7,7 @@ import {
   deleteProjectDocument,
   listProjectDocuments,
   previewProjectDocument,
+  updateProjectDocumentContext,
   type ProjectDocumentPreview,
   type ProjectDocumentSummary,
   type ProjectDocumentType,
@@ -23,6 +24,8 @@ const TYPES: Array<{ value: ProjectDocumentType; label: string }> = [
 const typeLabel = (value: ProjectDocumentType) =>
   TYPES.find((item) => item.value === value)?.label || value;
 
+const isContextEnabled = (value: number | boolean | undefined) => value === true || value === 1;
+
 export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
   const { t } = useLanguage();
   const { showToast } = useToast();
@@ -31,6 +34,7 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
   const [documents, setDocuments] = useState<ProjectDocumentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [contextBusyId, setContextBusyId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [documentType, setDocumentType] = useState<ProjectDocumentType>('reference');
   const [preview, setPreview] = useState<ProjectDocumentPreview | null>(null);
@@ -76,11 +80,37 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
       );
       setDocuments((current) => [created, ...current]);
       resetUpload();
-      showToast('附加资料已保存。', 'success');
+      showToast('附加资料已保存。默认不进入 AI 上下文。', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to add document', 'error');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleContextToggle = async (document: ProjectDocumentSummary) => {
+    if (contextBusyId !== null) return;
+    const enabled = !isContextEnabled(document.context_enabled);
+    setContextBusyId(document.id);
+    try {
+      const updated = await updateProjectDocumentContext(
+        numericProjectId,
+        document.id,
+        enabled
+      );
+      setDocuments((current) => current.map((item) => (
+        item.id === document.id ? updated : item
+      )));
+      showToast(
+        enabled
+          ? '该资料已启用 AI 上下文；写作时会按预算截取使用。'
+          : '该资料已退出 AI 上下文。',
+        'success'
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to update document context', 'error');
+    } finally {
+      setContextBusyId(null);
     }
   };
 
@@ -161,7 +191,7 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
                       {preview.heading_count > 0 && <span>{preview.heading_count} 个标题</span>}
                     </div>
                     <div className="mt-3 rounded bg-emerald-500/5 px-2 py-1.5 text-xs text-emerald-300/80">
-                      安全预览：不会修改章节正文，不会修改 Story Bible，当前不会自动注入 AI Context。
+                      安全预览：不会修改章节正文，不会修改 Story Bible；保存后 AI 上下文默认关闭。
                     </div>
                     {preview.duplicate_document && (
                       <div className="mt-2 rounded bg-amber-500/10 px-2 py-1.5 text-xs text-amber-300">
@@ -186,7 +216,10 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
 
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-medium text-slate-300">已添加资料</h3>
+                  <div>
+                    <h3 className="text-sm font-medium text-slate-300">已添加资料</h3>
+                    <p className="mt-0.5 text-[11px] text-slate-600">只有手动开启的资料才会按固定预算进入写作上下文。</p>
+                  </div>
                   <span className="text-xs text-slate-600">{documents.length}</span>
                 </div>
                 {loading ? (
@@ -198,25 +231,47 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
                     {documents.map((document) => {
                       let metadata: Record<string, unknown> = {};
                       try { metadata = document.metadata_json ? JSON.parse(document.metadata_json) : {}; } catch { metadata = {}; }
+                      const contextEnabled = isContextEnabled(document.context_enabled);
                       return (
-                        <div key={document.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-slate-200">{document.name}</div>
-                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                              <span>{typeLabel(document.document_type)}</span>
-                              <span>{document.source_format.toUpperCase()}</span>
-                              {typeof metadata.content_characters === 'number' && <span>{metadata.content_characters} 字符</span>}
+                        <div key={document.id} className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-200">{document.name}</div>
+                              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                                <span>{typeLabel(document.document_type)}</span>
+                                <span>{document.source_format.toUpperCase()}</span>
+                                {typeof metadata.content_characters === 'number' && <span>{metadata.content_characters} 字符</span>}
+                              </div>
+                              {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-600">{document.source_filename}</div>}
                             </div>
-                            {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-600">{document.source_filename}</div>}
+                            <button
+                              type="button"
+                              onClick={() => void handleDelete(document)}
+                              className="rounded p-1.5 text-slate-600 hover:bg-red-500/10 hover:text-red-400"
+                              aria-label="删除附加资料"
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleDelete(document)}
-                            className="rounded p-1.5 text-slate-600 hover:bg-red-500/10 hover:text-red-400"
-                            aria-label="删除附加资料"
-                          >
-                            <Trash2 size={15} />
-                          </button>
+
+                          <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-800 pt-2.5">
+                            <div>
+                              <div className="text-xs text-slate-400">AI 写作上下文</div>
+                              <div className="text-[11px] text-slate-600">开启后按类型优先级和总量预算截取。</div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={contextBusyId !== null}
+                              onClick={() => void handleContextToggle(document)}
+                              className={`min-w-20 rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                                contextEnabled
+                                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                  : 'border-slate-700 bg-slate-950 text-slate-500 hover:text-slate-300'
+                              }`}
+                            >
+                              {contextBusyId === document.id ? '更新中…' : contextEnabled ? '已开启' : '关闭'}
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
