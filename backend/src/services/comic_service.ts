@@ -362,6 +362,32 @@ export const generateProjectComic = async (projectId: number) => {
     });
   }
 
+  const renderedSceneCount = chapterResults.reduce(
+    (sum, chapter) => sum + chapter.total_scenes,
+    0
+  );
+  if (
+    chapters.length !== readiness.total_chapters
+    || renderedSceneCount !== readiness.total_scenes
+    || pages.length !== readiness.total_scenes
+  ) {
+    throw new ComicServiceError(
+      'Project comic structure changed during assembly; re-check readiness before retrying',
+      409,
+      {
+        readiness: {
+          total_chapters: readiness.total_chapters,
+          total_scenes: readiness.total_scenes,
+        },
+        rendered: {
+          total_chapters: chapters.length,
+          total_scenes: renderedSceneCount,
+          generated_pages: pages.length,
+        },
+      }
+    );
+  }
+
   const pdfFilename = `project_${safeFilenamePart(projectId)}_comic.pdf`;
   await writeComicPdf(pages, path.join(comicDirectory, pdfFilename));
 
