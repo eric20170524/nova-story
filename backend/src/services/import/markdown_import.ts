@@ -127,6 +127,38 @@ const parseCreationInfo = (body: string) => {
   return settings;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const mergeCreationSettings = (
+  target: Record<string, unknown>,
+  incoming: Record<string, unknown>
+) => {
+  for (const [key, value] of Object.entries(incoming)) {
+    if (key === 'story_tags' && Array.isArray(value)) {
+      const existing = Array.isArray(target.story_tags) ? target.story_tags : [];
+      target.story_tags = Array.from(new Set(
+        [...existing, ...value]
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+      ));
+      continue;
+    }
+
+    if (key === 'import_metadata' && isRecord(value)) {
+      target.import_metadata = {
+        ...(isRecord(target.import_metadata) ? target.import_metadata : {}),
+        ...value,
+      };
+      continue;
+    }
+
+    target[key] = value;
+  }
+};
+
 const isSummaryHeading = (heading: string) =>
   ['章节概要', '章节概述', '章节摘要', '概要', '摘要', 'summary'].includes(
     heading.trim().toLowerCase()
@@ -149,18 +181,18 @@ const parseChapterBody = (
 
   const firstH3Line = h3Sections[0]!.startLine;
   const preamble = trimBlock(lines.slice(0, firstH3Line).join('\n'));
-  let summary: string | undefined;
-  let explicitContent: string | undefined;
+  const summaries: string[] = [];
+  const explicitContents: string[] = [];
   const fallbackContent: string[] = preamble ? [preamble] : [];
 
   for (const section of h3Sections) {
     if (isSummaryHeading(section.heading)) {
-      if (!summary && section.body) summary = section.body;
+      if (section.body) summaries.push(section.body);
       continue;
     }
 
     if (isContentHeading(section.heading)) {
-      if (explicitContent === undefined) explicitContent = section.body;
+      if (section.body) explicitContents.push(section.body);
       continue;
     }
 
@@ -176,8 +208,9 @@ const parseChapterBody = (
     );
   }
 
-  const content = explicitContent !== undefined
-    ? trimBlock([preamble, explicitContent].filter(Boolean).join('\n\n'))
+  const summary = trimBlock(summaries.join('\n\n')) || undefined;
+  const content = explicitContents.length > 0
+    ? trimBlock([preamble, ...explicitContents].filter(Boolean).join('\n\n'))
     : trimBlock(fallbackContent.filter(Boolean).join('\n\n'));
 
   return { summary, content };
@@ -199,6 +232,7 @@ export const parseMarkdownNovel = (
   const lines = normalized.split('\n');
   const fallbackTitle = path.basename(filename, path.extname(filename)).trim() || 'Imported Project';
   const h1 = lines.find((line) => /^#\s+\S/.test(line));
+  const h1Index = h1 ? lines.indexOf(h1) : -1;
   const title = unwrapTitle(h1?.replace(/^#\s+/, '') || fallbackTitle).slice(0, 255);
   const h2Sections = collectSections(lines, 2);
   const projectSections = h2Sections.filter((section) => !isChapterHeading(section.heading));
@@ -208,16 +242,32 @@ export const parseMarkdownNovel = (
   let description = '';
   const settings: Record<string, unknown> = {};
 
+  if (chapterSections.length > 0) {
+    const firstH2Line = h2Sections[0]?.startLine ?? lines.length;
+    const projectPreamble = trimBlock(
+      lines.slice(h1Index >= 0 ? h1Index + 1 : 0, firstH2Line).join('\n')
+    );
+    if (projectPreamble) {
+      unmappedSections.push({
+        heading: 'Document preamble',
+        content: projectPreamble,
+        scope: 'project',
+      });
+    }
+  }
+
   for (const section of projectSections) {
     const heading = section.heading.trim().toLowerCase();
 
     if (['简介', '作品简介', '故事简介', '内容简介', 'description'].includes(heading)) {
-      if (!description) description = section.body;
+      if (section.body) {
+        description = trimBlock([description, section.body].filter(Boolean).join('\n\n'));
+      }
       continue;
     }
 
     if (['创作信息', '作品信息', '创作设定', '元信息', 'metadata'].includes(heading)) {
-      Object.assign(settings, parseCreationInfo(section.body));
+      mergeCreationSettings(settings, parseCreationInfo(section.body));
       continue;
     }
 
