@@ -1,6 +1,6 @@
-import path from 'path';
 import { randomUUID } from 'crypto';
 import { db } from '../../db/database';
+import type { NovaStoryJsonImportProject } from './novastory_json_model';
 
 const tableExists = async (tableName: string) => {
   const table = await db.get(
@@ -11,38 +11,9 @@ const tableExists = async (tableName: string) => {
 };
 
 export const restoreNovaStoryJsonProject = async (
-  jsonContent: Record<string, any>,
-  filename: string,
+  importProject: NovaStoryJsonImportProject,
   userId: string
 ) => {
-  const ext = path.extname(filename).toLowerCase();
-  const projectTitle = jsonContent.project?.title
-    || jsonContent.title
-    || path.basename(filename, ext)
-    || 'Imported Project';
-  const projectDescription = jsonContent.project?.description
-    ?? jsonContent.description
-    ?? null;
-  const rawSettings = jsonContent.project?.settings;
-  const projectSettings = typeof rawSettings === 'object'
-    ? JSON.stringify(rawSettings)
-    : (typeof rawSettings === 'string' ? rawSettings : '{}');
-
-  const rawChapters = Array.isArray(jsonContent.screenplay?.chapters)
-    ? jsonContent.screenplay.chapters
-    : (Array.isArray(jsonContent.chapters) ? jsonContent.chapters : []);
-  const rawCharacters = Array.isArray(jsonContent.character_center?.characters)
-    ? jsonContent.character_center.characters
-    : (Array.isArray(jsonContent.characters) ? jsonContent.characters : []);
-  const directorData = jsonContent.director || {};
-  const rawScenes = Array.isArray(directorData.scenes) ? directorData.scenes : [];
-  const rawCoverageGroups = Array.isArray(directorData.coverage_groups)
-    ? directorData.coverage_groups
-    : [];
-  const rawCoverageShots = Array.isArray(directorData.coverage_shots)
-    ? directorData.coverage_shots
-    : [];
-
   const availableTables = new Set(
     (
       await Promise.all(
@@ -62,9 +33,9 @@ export const restoreNovaStoryJsonProject = async (
       `INSERT INTO project
         (title, description, settings, user_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      projectTitle,
-      projectDescription,
-      projectSettings,
+      importProject.project.title,
+      importProject.project.description,
+      JSON.stringify(importProject.project.settings),
       userId
     );
 
@@ -74,10 +45,10 @@ export const restoreNovaStoryJsonProject = async (
     }
 
     const chapterIdMap = new Map<string, string>();
-    for (const [index, chapter] of rawChapters.entries()) {
+    for (const chapter of importProject.chapters) {
       const newChapterId = randomUUID();
-      if (chapter.id !== undefined && chapter.id !== null) {
-        chapterIdMap.set(String(chapter.id), newChapterId);
+      if (chapter.sourceId) {
+        chapterIdMap.set(chapter.sourceId, newChapterId);
       }
       await db.run(
         `INSERT INTO chapter
@@ -85,42 +56,38 @@ export const restoreNovaStoryJsonProject = async (
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         newChapterId,
         projectId,
-        chapter.index ?? index + 1,
-        chapter.title || `Chapter ${index + 1}`,
-        chapter.content ?? null,
-        chapter.summary ?? null,
-        chapter.status || 'draft'
+        chapter.index,
+        chapter.title,
+        chapter.content,
+        chapter.summary,
+        chapter.status
       );
     }
 
     if (availableTables.has('character')) {
-      for (const character of rawCharacters) {
-        const visualTagsStr = typeof character.visual_tags === 'object'
-          ? JSON.stringify(character.visual_tags)
-          : (character.visual_tags || '{}');
-
+      for (const character of importProject.characters) {
         await db.run(
           `INSERT INTO character
             (project_id, name, role, description, visual_tags)
            VALUES (?, ?, ?, ?, ?)`,
           projectId,
           character.name,
-          character.role ?? null,
-          character.description ?? null,
-          visualTagsStr
+          character.role,
+          character.description,
+          character.visualTags
         );
       }
     }
 
-    const sceneIdMap = new Map<number, number>();
-    if (availableTables.has('scene') && rawScenes.length > 0) {
-      for (const scene of rawScenes) {
-        const newChapterId = chapterIdMap.get(String(scene.chapter_id));
-        if (!newChapterId) continue;
-
-        const shotSpecStr = typeof scene.shot_spec === 'object'
-          ? JSON.stringify(scene.shot_spec)
-          : (scene.shot_spec || null);
+    const sceneIdMap = new Map<string, number>();
+    if (availableTables.has('scene')) {
+      for (const scene of importProject.scenes) {
+        const newChapterId = chapterIdMap.get(scene.sourceChapterId);
+        if (!newChapterId) {
+          throw new Error(
+            `Normalized scene still references missing chapter "${scene.sourceChapterId}"`
+          );
+        }
 
         const sceneResult = await db.run(
           `INSERT INTO scene (
@@ -129,51 +96,59 @@ export const restoreNovaStoryJsonProject = async (
             negative_prompt, shot_spec, asset_status, task_id, asset_url
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newChapterId,
-          scene.index ?? 1,
-          scene.visual_prompt ?? null,
-          scene.audio_prompt ?? null,
-          scene.dialogue ?? null,
-          scene.duration ?? 3,
-          scene.shot_type ?? null,
-          scene.camera_movement ?? null,
-          scene.camera_angle ?? null,
-          scene.negative_prompt ?? null,
-          shotSpecStr,
-          scene.asset_status || 'idle',
-          scene.task_id ?? null,
-          scene.asset_url ?? null
+          scene.index,
+          scene.visualPrompt,
+          scene.audioPrompt,
+          scene.dialogue,
+          scene.duration,
+          scene.shotType,
+          scene.cameraMovement,
+          scene.cameraAngle,
+          scene.negativePrompt,
+          scene.shotSpec,
+          scene.assetStatus,
+          scene.taskId,
+          scene.assetUrl
         );
 
-        if (scene.id !== undefined && scene.id !== null && sceneResult.lastID !== undefined) {
-          sceneIdMap.set(Number(scene.id), Number(sceneResult.lastID));
+        if (scene.sourceId && sceneResult.lastID !== undefined) {
+          sceneIdMap.set(scene.sourceId, Number(sceneResult.lastID));
         }
       }
     }
 
-    const groupIdMap = new Map<number, number>();
-    if (availableTables.has('coverage_group') && rawCoverageGroups.length > 0) {
-      for (const group of rawCoverageGroups) {
-        const newSceneId = sceneIdMap.get(Number(group.source_scene_id));
-        if (newSceneId === undefined) continue;
+    const groupIdMap = new Map<string, number>();
+    if (availableTables.has('coverage_group')) {
+      for (const group of importProject.coverageGroups) {
+        const newSceneId = sceneIdMap.get(group.sourceSceneId);
+        if (newSceneId === undefined) {
+          throw new Error(
+            `Normalized coverage group still references missing scene "${group.sourceSceneId}"`
+          );
+        }
 
         const groupResult = await db.run(
           `INSERT INTO coverage_group (source_scene_id, version, status)
            VALUES (?, ?, ?)`,
           newSceneId,
-          group.version ?? 1,
-          group.status || 'completed'
+          group.version,
+          group.status
         );
 
-        if (group.id !== undefined && group.id !== null && groupResult.lastID !== undefined) {
-          groupIdMap.set(Number(group.id), Number(groupResult.lastID));
+        if (group.sourceId && groupResult.lastID !== undefined) {
+          groupIdMap.set(group.sourceId, Number(groupResult.lastID));
         }
       }
     }
 
-    if (availableTables.has('coverage_shot') && rawCoverageShots.length > 0) {
-      for (const shot of rawCoverageShots) {
-        const newGroupId = groupIdMap.get(Number(shot.coverage_group_id));
-        if (newGroupId === undefined) continue;
+    if (availableTables.has('coverage_shot')) {
+      for (const shot of importProject.coverageShots) {
+        const newGroupId = groupIdMap.get(shot.sourceCoverageGroupId);
+        if (newGroupId === undefined) {
+          throw new Error(
+            `Normalized coverage shot still references missing group "${shot.sourceCoverageGroupId}"`
+          );
+        }
 
         await db.run(
           `INSERT INTO coverage_shot (
@@ -181,15 +156,15 @@ export const restoreNovaStoryJsonProject = async (
             narrative_purpose, visual_prompt, asset_status, task_id, asset_url
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newGroupId,
-          shot.slot ?? 1,
-          shot.shot_size ?? null,
-          shot.camera_angle ?? null,
-          shot.camera_movement ?? null,
-          shot.narrative_purpose ?? null,
-          shot.visual_prompt ?? null,
-          shot.asset_status || 'idle',
-          shot.task_id ?? null,
-          shot.asset_url ?? null
+          shot.slot,
+          shot.shotSize,
+          shot.cameraAngle,
+          shot.cameraMovement,
+          shot.narrativePurpose,
+          shot.visualPrompt,
+          shot.assetStatus,
+          shot.taskId,
+          shot.assetUrl
         );
       }
     }
