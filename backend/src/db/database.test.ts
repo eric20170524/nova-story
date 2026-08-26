@@ -46,7 +46,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
       'coverage_group',
       'coverage_shot',
       'workflow',
-      'schema_migration'
+      'schema_migration',
+      'project_document'
     ]) {
       assert.ok(tables.has(tableName), `legacy upgrade did not create ${tableName}`);
     }
@@ -69,11 +70,17 @@ test('upgrades a legacy main database schema idempotently', async () => {
       );
     }
 
+    const documentColumns = new Set(
+      (await legacyDatabase.all('PRAGMA table_info("project_document")'))
+        .map((column: any) => column.name)
+    );
+    assert.ok(documentColumns.has('context_enabled'));
+
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 007_agent_os_writing
-    assert.equal(migrationCount.count, 7);
+    // 001_core through 009_project_document_context
+    assert.equal(migrationCount.count, 9);
   } finally {
     await legacyDatabase.close();
   }

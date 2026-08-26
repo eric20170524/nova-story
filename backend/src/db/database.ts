@@ -221,7 +221,6 @@ const migrations: Migration[] = [
           ON scene_version(scene_id, version);
       `);
 
-      // Backfill v1 from existing scene rows (idempotent)
       const scenes = await database.all('SELECT * FROM scene');
       for (const scene of scenes as any[]) {
         const existing = await database.get(
@@ -349,6 +348,45 @@ const migrations: Migration[] = [
           ON glossary(project_id);
       `);
     }
+  },
+  {
+    version: '008_project_documents',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS project_document (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          document_type VARCHAR(50) NOT NULL,
+          source_filename VARCHAR(255),
+          source_format VARCHAR(20) NOT NULL,
+          mime_type VARCHAR(100),
+          content TEXT NOT NULL,
+          checksum VARCHAR(64) NOT NULL,
+          metadata_json TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, checksum),
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_project_document_project_type
+          ON project_document(project_id, document_type);
+        CREATE INDEX IF NOT EXISTS ix_project_document_project_created
+          ON project_document(project_id, created_at);
+      `);
+    }
+  },
+  {
+    version: '009_project_document_context',
+    up: async (database) => {
+      await ensureColumns(database, 'project_document', {
+        context_enabled: 'INTEGER NOT NULL DEFAULT 0'
+      });
+      await database.exec(`
+        CREATE INDEX IF NOT EXISTS ix_project_document_context
+          ON project_document(project_id, context_enabled, document_type);
+      `);
+    }
   }
 ];
 
@@ -393,8 +431,6 @@ const seedBundledWorkflows = async (database: Database) => {
     workflowFiles.map((filename) => path.basename(filename, '.json'))
   );
 
-  // FLUX.1-dev GGUF retired (2026-08): remove stale bundled rows so UI/API
-  // cannot select missing templates after files were deleted from disk.
   const retiredFluxNames = ['flux_dev_gguf_12gb', 'flux_dev_example'];
   for (const name of retiredFluxNames) {
     if (bundledNames.has(name)) continue;

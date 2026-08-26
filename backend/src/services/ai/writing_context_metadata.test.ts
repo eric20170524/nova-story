@@ -127,3 +127,86 @@ test('chapter generation keeps creative constraints even when prior-chapter memo
   assert.match(capturedPrompt, /\[紧邻前文\]/);
   assert.match(capturedPrompt, /前一章留下了清晰的连续剧情记忆/);
 });
+
+test('chapter generation injects only explicitly enabled supplemental documents', async () => {
+  process.env.DATABASE_URL = ':memory:';
+
+  const [{ db, initDb }, { WritingService }, { LLMService }] = await Promise.all([
+    import('../../db/database'),
+    import('./writing_service'),
+    import('../llm'),
+  ]);
+  await initDb();
+
+  const projectResult = await db.run(
+    `INSERT INTO project (title, description, settings, user_id)
+     VALUES (?, ?, ?, ?)`,
+    'Supplemental Context Test',
+    'desc',
+    JSON.stringify({ genre: '梦核幻想' }),
+    'local_admin'
+  );
+  const projectId = Number(projectResult.lastID);
+  const chapterId = `supplemental-active-${Date.now()}`;
+  await db.run(
+    `INSERT INTO chapter (id, project_id, "index", title, content, summary, status)
+     VALUES (?, ?, 1, ?, '', ?, 'draft')`,
+    chapterId,
+    projectId,
+    '第一章',
+    '探索规则'
+  );
+
+  await db.run(
+    `INSERT INTO project_document
+      (project_id, name, document_type, source_filename, source_format, content,
+       checksum, metadata_json, context_enabled)
+     VALUES (?, ?, 'worldbuilding', 'enabled.md', 'markdown', ?, ?, '{}', 1)`,
+    projectId,
+    '启用世界观',
+    '午夜后旋转木马会记录访客留下的声音。',
+    `enabled-${Date.now()}`
+  );
+  await db.run(
+    `INSERT INTO project_document
+      (project_id, name, document_type, source_filename, source_format, content,
+       checksum, metadata_json, context_enabled)
+     VALUES (?, ?, 'reference', 'disabled.md', 'markdown', ?, ?, '{}', 0)`,
+    projectId,
+    '关闭参考资料',
+    '这段关闭资料绝不能进入最终写作 Prompt。',
+    `disabled-${Date.now()}`
+  );
+
+  const bundle = await WritingService.loadBundleForAgent(projectId, chapterId);
+  assert.match(bundle.supplementalContext, /启用世界观/);
+  assert.match(bundle.supplementalContext, /旋转木马会记录访客留下的声音/);
+  assert.doesNotMatch(bundle.supplementalContext, /关闭参考资料/);
+  assert.ok(bundle.supplementalContext.length <= 1600);
+
+  let capturedPrompt = '';
+  const originalGetProvider = LLMService.getProvider;
+  (LLMService as any).getProvider = () => ({
+    generateText: async (prompt: string) => {
+      capturedPrompt = prompt;
+      return '生成正文';
+    },
+  });
+
+  try {
+    await WritingService.generateChapterDraft({
+      projectId,
+      chapterId,
+      instructions: '按既有规则继续写',
+      generateMetadata: false,
+    });
+  } finally {
+    (LLMService as any).getProvider = originalGetProvider;
+  }
+
+  assert.match(capturedPrompt, /\[补充资料\]/);
+  assert.match(capturedPrompt, /\[Worldbuilding · 启用世界观\]/);
+  assert.match(capturedPrompt, /午夜后旋转木马会记录访客留下的声音/);
+  assert.doesNotMatch(capturedPrompt, /关闭参考资料/);
+  assert.doesNotMatch(capturedPrompt, /这段关闭资料绝不能进入最终写作 Prompt/);
+});
