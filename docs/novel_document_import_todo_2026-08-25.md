@@ -8,7 +8,7 @@
 - 分支：`feature/novel-document-import`
 - PR：`#7 feat: structured novel document import with preview`
 - PR 状态：Ready for review
-- 功能代码验证：CI #25 全绿
+- 最终验证：CI #26 全绿
 - 合入建议：Squash merge
 
 主链路已经闭环：
@@ -180,7 +180,7 @@ Markdown
 - [x] Backend TypeScript typecheck
 - [x] Backend 全量 test suite
 - [x] Production build
-- [x] GitHub Actions CI
+- [x] GitHub Actions CI #26
 - [x] 跨平台测试发现，不依赖 shell glob
 - [x] character / scene version tests 自行创建父级 fixture
 - [x] 数据库外键保持开启
@@ -364,6 +364,7 @@ Legacy /projects/import
 - [x] Preview / Commit 回归测试
 - [x] Story Bible → final writing prompt 回归测试
 - [x] Typecheck / full backend tests / production build
+- [x] CI #26 全绿
 - [x] PR Ready for review
 
 当前非阻塞后续项：legacy endpoint deprecation、Native backup v2、已有项目附加资料、DOCX / EPUB。
