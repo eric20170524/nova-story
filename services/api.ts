@@ -249,7 +249,7 @@ class ApiService {
         method: 'POST', 
         body: { 
           model_type: modelType, 
-          gen_type: genType, 
+          gen_type: genType,
           custom_description: customDesc,
           use_ref_portrait: useRefPortrait ?? true,
           ref_image_url: refImageUrl
@@ -449,19 +449,32 @@ class ApiService {
       body: opts || {}
     });
 
-  generateComic = async (chapterId: string) => {
-    // Get Token for direct fetch
-    const token = localStorage.getItem('access_token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+  generateComic = (chapterId: string) =>
+    this.request<any>(`/comics/${chapterId}/generate`, { method: 'POST' });
 
-    const res = await fetch(`${API_BASE_URL}/comics/${chapterId}/generate`, {
-        method: 'POST',
-        headers: headers,
-    });
-    if (!res.ok) throw new Error('Failed to generate comic');
-    return res.json();
-  };
+  getProjectComicStatus = (projectId: number) =>
+    this.request<{
+      project_id: number;
+      title: string;
+      ready: boolean;
+      total_chapters: number;
+      ready_chapters: number;
+      total_scenes: number;
+      ready_scenes: number;
+      chapters: Array<{
+        chapter_id: string;
+        index: number;
+        title: string;
+        total_scenes: number;
+        ready_scenes: number;
+        missing_scene_ids: number[];
+        ready: boolean;
+        blocker: 'no_scenes' | 'missing_assets' | null;
+      }>;
+    }>(`/comics/project/${projectId}/status`);
+
+  generateProjectComic = (projectId: number) =>
+    this.request<any>(`/comics/project/${projectId}/generate`, { method: 'POST' });
 
   renderVideo = async (timeline: any[], projectId: number): Promise<{ video_url: string }> => {
     // Mock implementation for demo
