@@ -190,3 +190,43 @@ test('project comic status blocks incomplete books and generates one strict full
 
   await app.close();
 });
+
+test('project comic readiness marks chapters without timelines as no_scenes', async () => {
+  const [
+    { default: Fastify },
+    { db },
+    { comicRoutes }
+  ] = await Promise.all([
+    import('fastify'),
+    import('../db/database'),
+    import('./comics')
+  ]);
+
+  const project = await db.run("INSERT INTO project (title) VALUES ('Missing Timeline')");
+  const projectId = Number(project.lastID);
+  await db.run(
+    `INSERT INTO chapter (id, project_id, "index", title, content)
+     VALUES ('no-timeline-chapter', ?, 1, '第一章', '正文')`,
+    projectId
+  );
+
+  const app = Fastify();
+  await app.register(comicRoutes, { prefix: '/api/comics' });
+  await app.ready();
+
+  const response = await app.inject({
+    method: 'GET',
+    url: `/api/comics/project/${projectId}/status`,
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  const body = response.json();
+  assert.equal(body.ready, false);
+  assert.equal(body.total_chapters, 1);
+  assert.equal(body.ready_chapters, 0);
+  assert.equal(body.total_scenes, 0);
+  assert.equal(body.chapters[0].ready, false);
+  assert.equal(body.chapters[0].blocker, 'no_scenes');
+  assert.deepEqual(body.chapters[0].missing_scene_ids, []);
+
+  await app.close();
+});
