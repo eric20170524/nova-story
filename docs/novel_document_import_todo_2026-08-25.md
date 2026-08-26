@@ -8,7 +8,7 @@
 - 分支：`feature/novel-document-import`
 - PR：`#7 feat: structured novel document import with preview`
 - PR 状态：Ready for review
-- 自动验证：PR checks 全绿
+- 自动验证：以 PR checks 为准
 - 合入建议：Squash merge
 
 主链路已经闭环：
