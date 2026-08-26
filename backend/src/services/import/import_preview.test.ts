@@ -47,7 +47,7 @@ test('builds a non-persistent markdown preview', () => {
   ]);
 });
 
-test('previews NovaStory JSON without flattening director data into a novel draft', () => {
+test('previews the same restorable NovaStory JSON graph used by commit', () => {
   const preview = buildProjectImportPreview(
     Buffer.from(JSON.stringify({
       format: 'novastory-project',
@@ -57,15 +57,24 @@ test('previews NovaStory JSON without flattening director data into a novel draf
         settings: { genre: 'fantasy' },
       },
       screenplay: {
-        chapters: [{ index: 1, title: 'Chapter 1', content: 'Body', summary: 'Summary' }],
+        chapters: [{
+          id: 'chapter-1',
+          index: 1,
+          title: 'Chapter 1',
+          content: 'Body',
+          summary: 'Summary',
+        }],
       },
       character_center: {
         characters: [{ name: 'A' }],
       },
       director: {
-        scenes: [{ id: 1 }],
-        coverage_groups: [{ id: 1 }],
-        coverage_shots: [{ id: 1 }, { id: 2 }],
+        scenes: [{ id: 10, chapter_id: 'chapter-1' }],
+        coverage_groups: [{ id: 20, source_scene_id: 10 }],
+        coverage_shots: [
+          { id: 30, coverage_group_id: 20 },
+          { id: 31, coverage_group_id: 20 },
+        ],
       },
     }), 'utf8'),
     'project.novastory.json'
@@ -79,6 +88,80 @@ test('previews NovaStory JSON without flattening director data into a novel draf
   assert.equal(preview.counts.scenes, 1);
   assert.equal(preview.counts.coverage_groups, 1);
   assert.equal(preview.counts.coverage_shots, 2);
+  assert.deepEqual(preview.warnings, []);
+});
+
+test('native JSON preview excludes orphan director nodes and explains why', () => {
+  const preview = buildProjectImportPreview(
+    Buffer.from(JSON.stringify({
+      format: 'novastory-project',
+      project: { title: 'Orphan Test', settings: [] },
+      screenplay: {
+        chapters: [{ id: 'chapter-1', title: 'Chapter 1' }],
+      },
+      director: {
+        scenes: [
+          { id: 10, chapter_id: 'chapter-1' },
+          { id: 11, chapter_id: 'missing-chapter' },
+        ],
+        coverage_groups: [
+          { id: 20, source_scene_id: 10 },
+          { id: 21, source_scene_id: 11 },
+        ],
+        coverage_shots: [
+          { coverage_group_id: 20 },
+          { coverage_group_id: 21 },
+        ],
+      },
+    }), 'utf8'),
+    'orphan.novastory.json'
+  );
+
+  assert.equal(preview.counts.scenes, 1);
+  assert.equal(preview.counts.coverage_groups, 1);
+  assert.equal(preview.counts.coverage_shots, 1);
+  assert.deepEqual(preview.project.settings, {});
+  assert.ok(preview.warnings.some((warning) => /settings/i.test(warning)));
+  assert.ok(preview.warnings.some((warning) => /missing chapter/i.test(warning)));
+  assert.ok(preview.warnings.some((warning) => /missing scene/i.test(warning)));
+  assert.ok(preview.warnings.some((warning) => /missing coverage group/i.test(warning)));
+});
+
+test('rejects duplicate native JSON ids before persistence', () => {
+  assert.throws(
+    () => buildProjectImportPreview(
+      Buffer.from(JSON.stringify({
+        format: 'novastory-project',
+        project: { title: 'Duplicate IDs' },
+        screenplay: {
+          chapters: [
+            { id: 'same', title: 'One' },
+            { id: 'same', title: 'Two' },
+          ],
+        },
+      })),
+      'duplicate.novastory.json'
+    ),
+    (error: unknown) => (
+      error instanceof ProjectImportInputError
+      && error.statusCode === 400
+      && /Duplicate chapter id/.test(error.message)
+    )
+  );
+});
+
+test('rejects arbitrary JSON objects that are not project exports', () => {
+  assert.throws(
+    () => buildProjectImportPreview(
+      Buffer.from(JSON.stringify({ unrelated: true })),
+      'unrelated.json'
+    ),
+    (error: unknown) => (
+      error instanceof ProjectImportInputError
+      && error.statusCode === 400
+      && /does not look like/.test(error.message)
+    )
+  );
 });
 
 test('rejects unsupported file extensions before parsing', () => {
