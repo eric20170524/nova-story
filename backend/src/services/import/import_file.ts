@@ -53,7 +53,7 @@ export const parseProjectImportFile = (
   }
 
   if (isJsonFile || rawText.trim().startsWith('{')) {
-    let parsedJson: unknown;
+    let parsedJson: unknown = undefined;
     try {
       parsedJson = JSON.parse(rawText);
     } catch (error) {
