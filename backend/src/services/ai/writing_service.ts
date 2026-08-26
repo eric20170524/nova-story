@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { parseProjectSettings } from '../project_settings';
+import { loadEnabledProjectDocumentContext } from '../project_documents';
 import { LLMService } from '../llm';
 import {
   ChapterCharacterAnalysisSchema,
@@ -28,6 +29,8 @@ const BUDGET = {
   characterDesc: 80,
   glossaryList: 20,
   glossaryDef: 60,
+  supplementalDocuments: 1600,
+  skillContext: 1800,
   existingContent: 1500,
   skillContent: 3500,
   chapterSummary: 300,
@@ -530,6 +533,11 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
     projectId
   );
 
+  const supplementalContext = await loadEnabledProjectDocumentContext(
+    projectId,
+    BUDGET.supplementalDocuments
+  );
+
   const storyTags = Array.isArray(settings.story_tags)
     ? settings.story_tags
         .filter((tag): tag is string => typeof tag === 'string' && Boolean(tag.trim()))
@@ -573,6 +581,7 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
     chapters,
     characters,
     glossary,
+    supplementalContext,
     bible,
     activeId,
     layered,
@@ -645,6 +654,7 @@ export class WritingService {
 
     const memoryPrompt = [
       creativeConstraints ? `[创作约束]\n${creativeConstraints}` : '',
+      bundle.supplementalContext ? `[补充资料]\n${bundle.supplementalContext}` : '',
       layered?.oldSummaries ? `[较早梗概]\n${layered.oldSummaries}` : '',
       layered?.recentCondensed ? `[近期浓缩]\n${layered.recentCondensed}` : '',
       layered?.recentFullText ? `[紧邻前文]\n${layered.recentFullText}` : '',
@@ -1057,12 +1067,13 @@ export class WritingService {
         `Title: ${bundle.bible.title}`,
         `Genre: ${bundle.bible.genre || ''}`,
         creativeConstraints,
+        bundle.supplementalContext ? `[补充资料]\n${bundle.supplementalContext}` : '',
         `Chapter: ${chapter.title}`,
         `Summary: ${chapter.summary || ''}`,
       ]
         .filter(Boolean)
         .join('\n'),
-      700
+      BUDGET.skillContext
     );
     const content = head(
       String(chapter.content || '(No content, write from summary)'),
