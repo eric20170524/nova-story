@@ -156,3 +156,79 @@ test('falls back to a single chapter when Markdown has no chapter headings', () 
   assert.equal(parsed.chapters[0]!.content, '只有一段正文。');
   assert.equal(parsed.warnings.length, 1);
 });
+
+test('combines repeated summary and content sections without losing text', () => {
+  const parsed = parseMarkdownNovel(
+    [
+      '# 重复结构测试',
+      '',
+      '## 第一章：分段正文',
+      '',
+      '### 章节概要',
+      '概要一。',
+      '',
+      '### 章节概要',
+      '概要二。',
+      '',
+      '### 正文',
+      '正文一。',
+      '',
+      '### 正文',
+      '正文二。',
+    ].join('\n'),
+    'repeated.md'
+  );
+
+  assert.equal(parsed.chapters[0]!.summary, '概要一。\n\n概要二。');
+  assert.equal(parsed.chapters[0]!.content, '正文一。\n\n正文二。');
+});
+
+test('preserves unheaded project preamble before the first h2 section', () => {
+  const parsed = parseMarkdownNovel(
+    [
+      '# 前言测试',
+      '',
+      '作者：测试作者',
+      '版本：初稿',
+      '',
+      '## 第一章：开始',
+      '',
+      '正文。',
+    ].join('\n'),
+    'preamble.md'
+  );
+
+  assert.deepEqual(parsed.unmappedSections, [
+    {
+      heading: 'Document preamble',
+      content: '作者：测试作者\n版本：初稿',
+      scope: 'project',
+    },
+  ]);
+});
+
+test('merges repeated creation-info sections instead of replacing metadata', () => {
+  const parsed = parseMarkdownNovel(
+    [
+      '# 元信息测试',
+      '',
+      '## 创作信息',
+      '- 题材：幻想 / 治愈',
+      '- 目标读者：全年龄',
+      '',
+      '## 作品信息',
+      '- 题材：治愈 / 探索',
+      '- 创作阶段：初稿',
+      '',
+      '## 第一章：开始',
+      '正文。',
+    ].join('\n'),
+    'metadata.md'
+  );
+
+  assert.deepEqual(parsed.project.settings.story_tags, ['幻想', '治愈', '探索']);
+  assert.deepEqual(parsed.project.settings.import_metadata, {
+    目标读者: '全年龄',
+    创作阶段: '初稿',
+  });
+});
