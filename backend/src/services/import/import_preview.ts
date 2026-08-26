@@ -1,5 +1,5 @@
-import path from 'path';
 import { parseProjectImportFile } from './import_file';
+import type { NovaStoryJsonImportProject } from './novastory_json_model';
 import type { NovelImportDraft, NovelImportUnmappedSection } from './types';
 
 export type ProjectImportPreviewFormat = 'text' | 'markdown' | 'json';
@@ -38,28 +38,17 @@ export interface ProjectImportPreview {
   unmapped_sections: NovelImportUnmappedSection[];
 }
 
-const normalizeSettings = (value: unknown): Record<string, unknown> => {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return { ...(value as Record<string, unknown>) };
-  }
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Preview should not fail because an old project stored malformed settings.
-    }
-  }
-  return {};
+const previewSummary = (value: string | null | undefined): string | undefined => {
+  const summary = value?.trim();
+  if (!summary) return undefined;
+  return summary.length > 400 ? `${summary.slice(0, 400)}…` : summary;
 };
 
 const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
   const chapters: ProjectImportPreviewChapter[] = draft.chapters.map((chapter) => ({
     index: chapter.index,
     title: chapter.title,
-    summary: chapter.summary,
+    summary: previewSummary(chapter.summary),
     has_content: Boolean(chapter.content.trim()),
     content_characters: chapter.content.length,
   }));
@@ -78,7 +67,7 @@ const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
     chapters,
     counts: {
       chapters: chapters.length,
-      chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary?.trim())).length,
+      chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary)).length,
       chapter_contents: chapters.filter((chapter) => chapter.has_content).length,
       characters: draft.characters.length,
       glossary: draft.glossary.length,
@@ -92,75 +81,36 @@ const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
 };
 
 const previewFromJson = (
-  jsonContent: Record<string, any>,
-  filename: string
+  project: NovaStoryJsonImportProject
 ): ProjectImportPreview => {
-  const ext = path.extname(filename).toLowerCase();
-  const rawChapters: any[] = Array.isArray(jsonContent.screenplay?.chapters)
-    ? jsonContent.screenplay.chapters
-    : (Array.isArray(jsonContent.chapters) ? jsonContent.chapters : []);
-  const rawCharacters: any[] = Array.isArray(jsonContent.character_center?.characters)
-    ? jsonContent.character_center.characters
-    : (Array.isArray(jsonContent.characters) ? jsonContent.characters : []);
-  const directorData: Record<string, any> = jsonContent.director || {};
-  const rawScenes: any[] = Array.isArray(directorData.scenes) ? directorData.scenes : [];
-  const rawCoverageGroups: any[] = Array.isArray(directorData.coverage_groups)
-    ? directorData.coverage_groups
-    : [];
-  const rawCoverageShots: any[] = Array.isArray(directorData.coverage_shots)
-    ? directorData.coverage_shots
-    : [];
-
-  const projectTitle = String(
-    jsonContent.project?.title
-      || jsonContent.title
-      || path.basename(filename, ext)
-      || 'Imported Project'
-  );
-  const projectDescription = jsonContent.project?.description
-    ?? jsonContent.description
-    ?? null;
-  const settings = normalizeSettings(jsonContent.project?.settings);
-
-  const chapters: ProjectImportPreviewChapter[] = rawChapters.map((chapter, index) => ({
-    index: Number(chapter?.index ?? index + 1),
-    title: String(chapter?.title || `Chapter ${index + 1}`),
-    summary: typeof chapter?.summary === 'string' ? chapter.summary : undefined,
-    has_content: typeof chapter?.content === 'string' && chapter.content.trim().length > 0,
-    content_characters: typeof chapter?.content === 'string' ? chapter.content.length : 0,
+  const chapters: ProjectImportPreviewChapter[] = project.chapters.map((chapter) => ({
+    index: chapter.index,
+    title: chapter.title,
+    summary: previewSummary(chapter.summary),
+    has_content: Boolean(chapter.content?.trim()),
+    content_characters: chapter.content?.length || 0,
   }));
 
-  const warnings: string[] = [];
-  if (chapters.length === 0) {
-    warnings.push('The JSON project contains no chapters');
-  }
-  if (Array.isArray(jsonContent.glossary) && jsonContent.glossary.length > 0) {
-    warnings.push('Glossary entries in generic JSON are not restored by the current NovaStory backup format');
-  }
-
   return {
-    source: {
-      filename,
-      format: 'json',
-    },
+    source: { ...project.source },
     mode: 'novastory-project',
     project: {
-      title: projectTitle,
-      description: typeof projectDescription === 'string' ? projectDescription : null,
-      settings,
+      title: project.project.title,
+      description: project.project.description,
+      settings: { ...project.project.settings },
     },
     chapters,
     counts: {
       chapters: chapters.length,
-      chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary?.trim())).length,
+      chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary)).length,
       chapter_contents: chapters.filter((chapter) => chapter.has_content).length,
-      characters: rawCharacters.length,
+      characters: project.characters.length,
       glossary: 0,
-      scenes: rawScenes.length,
-      coverage_groups: rawCoverageGroups.length,
-      coverage_shots: rawCoverageShots.length,
+      scenes: project.scenes.length,
+      coverage_groups: project.coverageGroups.length,
+      coverage_shots: project.coverageShots.length,
     },
-    warnings,
+    warnings: [...project.warnings],
     unmapped_sections: [],
   };
 };
@@ -172,5 +122,5 @@ export const buildProjectImportPreview = (
   const parsed = parseProjectImportFile(data, filename);
   return parsed.kind === 'novel-draft'
     ? previewFromDraft(parsed.draft)
-    : previewFromJson(parsed.jsonContent, filename);
+    : previewFromJson(parsed.project);
 };
