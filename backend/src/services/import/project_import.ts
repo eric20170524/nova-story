@@ -109,5 +109,5 @@ export const commitProjectImportFile = async (
 
   return parsed.kind === 'novel-draft'
     ? importNovelDraft(parsed.draft, userId)
-    : restoreNovaStoryJsonProject(parsed.jsonContent, filename, userId);
+    : restoreNovaStoryJsonProject(parsed.project, userId);
 };
