@@ -5,97 +5,73 @@
 
 ## 当前状态
 
-分支：`feature/novel-document-import`  
-PR：`#7 feat: structured novel document import with preview`（Ready for review）
+- 分支：`feature/novel-document-import`
+- PR：`#7 feat: structured novel document import with preview`
+- PR 状态：Ready for review
+- 功能代码验证：CI #25 全绿
+- 合入建议：Squash merge
 
-当前已经打通两阶段小说文档导入主链路：
+主链路已经闭环：
 
 ```text
-选择文件
+选择 TXT / Markdown / NovaStory JSON
   → POST /api/projects/import/preview
   → Canonical File Parser
   → NovelImportDraft / NovaStory Project
   → 用户检查预览
   → POST /api/projects/import/commit
-  → Transaction
+  → commitProjectImportFile()
+  → SQLite Transaction
   → 新 Project
 ```
 
-Markdown 文稿链路：
+legacy 兼容链路也已收敛：
+
+```text
+POST /api/projects/import
+  → commitProjectImportFile()
+  → 与 canonical commit 相同的 parser / persistence strategy
+```
+
+Markdown 小说进入写作系统后的链路：
 
 ```text
 Markdown
   → NovelImportDraft
-  → ProjectImportService
-  → Project
-  → Chapter.summary
-  → Chapter.content
+  → Project + Chapter.summary + Chapter.content
   → Story Bible settings
   → Project Settings 可编辑
   → Layered Context
-  → 稳定创作约束 + 章节记忆
+  → 稳定创作约束 + 动态章节记忆
   → AI 写作 / 技能重写
 ```
 
-已使用《失声的梦核游乐园》实际上传文档结构做规则验证：识别 10/10 章，第一章“章节概要 / 正文”边界正确，题材可拆分为 `genre + story_tags`。
-
-### 自动验证状态
-
-已新增 GitHub Actions CI，并在当前 Ready-for-review head 上完整通过：**CI #20 — success**。
-
-- [x] 根目录前端 TypeScript typecheck
-- [x] Backend TypeScript typecheck
-- [x] Backend 全量 test suite
-- [x] Production build
-
-CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
-
-1. backend test script 依赖 shell glob，在 Linux 上无法发现测试；已改为跨平台递归发现，并交给 Node test runner 保持测试文件隔离。
-2. `character_versions.test.ts` / `scene_versions.test.ts` 把 `project_id=1` 当作天然存在，开启 FK 后 fixture 不自洽；已改为测试自己创建/清理父 Project/Chapter，未关闭数据库外键。
-
----
-
-## 目标
-
-在不重构现有 Project / Chapter / Character / Glossary / Story Bible 数据模型的前提下，把现有“TXT / NovaStory JSON 导入新项目”升级为统一、可预览的小说文档导入链路。
-
-核心原则：
-
-- 小说文稿先解析成统一 `NovelImportDraft`。
-- Preview 与 Commit 必须共享同一套 parser，避免规则漂移。
-- Preview 不写数据库、不创建临时 token、不保存临时文件。
-- Commit 重新解析同一个 File 后原子落库。
-- `.novastory.json` 是原生项目备份/恢复路径，不强行压成 manuscript Draft。
-- Importer 只提取源文档明确提供的信息，不用 AI 猜人物、设定或世界观。
-
-> 语义校正：当前 NovaStory backup format 并不导出完整 character/scene version history，因此本轮 JSON service 的目标是“保持既有项目恢复语义与 Chapter / Character / Scene / Coverage 数据”，不宣称完整 lossless version-history restore。完整版本历史备份应独立升级 export format。
+已使用《失声的梦核游乐园》实际文档结构验证：识别 10/10 章；“章节概要 / 正文”边界正确；题材可保留为 `genre + story_tags`；不会根据模糊描述擅自创建人物。
 
 ---
 
 ## 设计原则
 
-- **架构收敛**：格式 parser、preview、persistence 分层。
-- **单一解析源**：Preview / Commit 共用 `parseProjectImportFile()`。
-- **纯解析层**：file parser / Markdown parser / TXT adapter 不依赖数据库模块。
-- **确定性导入**：只保存 source fact，不做 AI inference。
-- **最大化复用现有模型**：优先复用 `project.description`、`project.settings`、`chapter.summary`、`chapter.content`、`character`、`glossary`。
-- **信息不丢失**：无法映射的小节进入 `import_info.unmapped_sections`。
-- **原子写入**：Project / Chapter / Character / Glossary 同一事务成功或回滚。
-- **错误边界正确**：输入/解析错误返回 4xx；DB/persistence 错误不能伪装成“文件格式错误”。
-- **不引入无必要状态**：Preview 不增加缓存表、preview token、临时文件生命周期。
-- **上下文预算受控**：POV / Tone / Story tags 单独进入 Story Bible，不污染 `style`，并设置固定字符预算。
-- **稳定约束优先**：创作约束必须与动态章节记忆并存，不能因存在前文章节而被 fallback 逻辑绕过。
+- **统一入口**：Preview 与 Commit 共用 `parseProjectImportFile()`；所有提交路径共用 `commitProjectImportFile()`。
+- **纯解析层**：Markdown / TXT / JSON 文件解析不依赖数据库。
+- **确定性导入**：只提取源文档明确提供的信息，不用 AI 猜人物或世界观。
+- **信息不丢失**：无法映射的小节进入 `settings.import_info.unmapped_sections`。
+- **最大化复用现有模型**：使用 Project / Chapter / Character / Glossary / Story Bible，不新增独立 Novel 表。
+- **原子写入**：Project、Chapter、Character、Glossary 或 Native Restore 在事务中完成。
+- **正确错误边界**：输入与解析问题返回 4xx；数据库故障保持 5xx，不伪装成文件格式错误。
+- **上下文预算受控**：POV、Tone、Story tags 独立表达并设置固定字符预算，不污染 `style`。
+- **稳定约束优先**：创作约束始终与章节记忆并存，不能被 fallback 逻辑绕过。
 
 ---
 
-# P0：后端核心闭环
+# P0：Canonical import 核心闭环
 
 ## Canonical model
 
-- [x] 新增统一导入模型 `NovelImportDraft`
+- [x] `NovelImportDraft`
   - [x] source：filename / format
   - [x] project：title / description / settings
-  - [x] chapters：index / title / summary / content
+  - [x] chapters：index / title / summary / content / status
   - [x] characters
   - [x] glossary
   - [x] unmappedSections
@@ -103,109 +79,111 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 
 ## TXT
 
-- [x] 保持现有 `text_import.ts` 解析行为，降低回归面
-- [x] 增加纯函数 `text_adapter.ts`
+- [x] 保持既有 `text_import.ts` 行为
 - [x] TXT → `NovelImportDraft`
-- [x] 不改变已有中文 / 英文章标题识别规则
+- [x] 中文 / 英文章标题识别无回归
+- [x] 无结构 TXT 降级为单章
 
 ## Markdown
 
-- [x] 支持 `.md` / `.markdown`
+- [x] `.md` / `.markdown`
 - [x] `# 作品名` → `project.title`
 - [x] `## 简介` → `project.description`
 - [x] `## 创作信息` → Story Bible / import metadata
-- [x] `题材：...` → `settings.genre`
-- [x] 题材同时拆分 → `settings.story_tags[]`
-- [x] `## 第 N 章 ...` → Chapter
+- [x] `题材` → `genre + story_tags[]`
+- [x] style / main_plot / character_relations / pov / tone
+- [x] `## 第 N 章` → Chapter
 - [x] `### 章节概要` → `chapter.summary`
 - [x] `### 正文` → `chapter.content`
-- [x] `章节概要 / 正文` heading 本身不进入正文
+- [x] 结构 heading 不进入正文
+- [x] 章节正文前置段落不丢失
+- [x] 章节之后的非章节 `##` 资料不丢失
 - [x] 未识别 project / chapter 小节保留
-- [x] 第一段正文位于 `### 正文` 前时不丢失
-- [x] 章节之后出现非章节 `##` 信息时不丢失
-- [x] 无章节标题 Markdown 降级为单章并 warning
+- [x] 无章节标题时降级为单章并 warning
 - [x] 不自动创建文档未明确给出的人物
 
 ## Canonical file parser
 
-- [x] 新增 `import_file.ts`
-- [x] Preview / Commit 共用 `parseProjectImportFile()`
-- [x] 支持 `.txt`
-- [x] 支持 `.md`
-- [x] 支持 `.markdown`
-- [x] 支持 `.json`
-- [x] 支持 `.novastory.json`
+- [x] `parseProjectImportFile()`
+- [x] `.txt`
+- [x] `.md`
+- [x] `.markdown`
+- [x] `.json`
+- [x] `.novastory.json`
 - [x] unsupported extension → 415
 - [x] decode / malformed input → 400
-- [x] parser 层不依赖 DB
+- [x] parser 层无数据库依赖
 
-## Persistence
+## Persistence / commit orchestration
 
-- [x] `ProjectImportService`
-  - [x] Project / Chapter / Character / Glossary 统一创建
-  - [x] `chapter.summary` 正确落库
-  - [x] Story Bible settings 正确落库
-  - [x] source / warnings / unmappedSections → `settings.import_info`
-  - [x] SQLite transaction
-  - [x] 失败 rollback
+- [x] `importNovelDraft()`
+- [x] `restoreNovaStoryJsonProject()`
+- [x] `commitProjectImportFile()` 统一选择持久化策略
+- [x] Project / Chapter / Character / Glossary 创建
+- [x] `chapter.summary` 正确落库
+- [x] Story Bible settings 正确落库
+- [x] source / warnings / unmappedSections → `settings.import_info`
+- [x] SQLite transaction
+- [x] 失败 rollback
 
-- [x] 抽离 `novastory_json_import.ts`
-  - [x] 保留项目 title / description / settings
-  - [x] 保留 chapters
-  - [x] 保留 characters / visual tags
-  - [x] 保留 scenes / shot spec
-  - [x] 保留 coverage groups
-  - [x] 保留 coverage shots
-  - [ ] 完整 character/scene version-history backup/restore（独立任务，不属于本轮 manuscript import）
+## Native NovaStory JSON v1 restore
 
-## Route 收敛
+- [x] project title / description / settings
+- [x] chapters
+- [x] characters / visual tags
+- [x] scenes / shot spec
+- [x] coverage groups
+- [x] coverage shots
+- [ ] 完整 character / scene version-history restore（P1.5）
 
-- [x] 新增 canonical `POST /api/projects/import/preview`
-- [x] 新增 canonical `POST /api/projects/import/commit`
+---
+
+# P0：Route 收敛
+
+- [x] `POST /api/projects/import/preview`
+- [x] `POST /api/projects/import/commit`
+- [x] Dashboard 主链路使用 Preview + Commit
 - [x] input/parser error 与 persistence error 分离
-- [x] Dashboard 主链路改用 canonical preview + commit
-- [~] legacy `POST /api/projects/import`
-  - [x] 保持 TXT / Markdown 向后兼容
-  - [x] 原有 JSON restore 行为暂不破坏
-  - [ ] 后续让 legacy route 委托 canonical service，删除重复 inline JSON restore
-  - [ ] 完成迁移后考虑 deprecate legacy endpoint
-
-> legacy endpoint 收敛是代码清理项，不阻塞当前 Dashboard / canonical API 功能合入。
+- [x] legacy `POST /api/projects/import` 保持向后兼容
+- [x] legacy TXT / Markdown 委托 `commitProjectImportFile()`
+- [x] legacy NovaStory JSON 委托 `commitProjectImportFile()`
+- [x] 删除 legacy route 内重复的 inline JSON restore
+- [x] canonical 与 legacy 共享同一 parser / persistence strategy
+- [ ] 后续版本正式标记 legacy endpoint deprecated
 
 ---
 
 # P0：测试与 CI
 
+## Import 测试
+
 - [x] Markdown parser 单元测试
-- [x] 《失声的梦核游乐园》10 章结构 regression fixture
-  - [x] title
-  - [x] description
-  - [x] chapters.length = 10
-  - [x] chapter title
-  - [x] chapter.summary
-  - [x] chapter.content
-  - [x] content 不含结构 heading
-  - [x] genre
-  - [x] story_tags
-  - [x] characters.length = 0
+- [x] 《失声的梦核游乐园》10 章 regression fixture
 - [x] unknown chapter section preservation
 - [x] trailing project section preservation
 - [x] chapter preamble preservation
 - [x] single-chapter fallback
-- [x] Preview HTTP test
+- [x] Preview 不写数据库
 - [x] Preview empty file → 400
 - [x] Preview unsupported file → 415
-- [x] Commit Markdown → DB persistence test
-- [x] Commit unsupported file → 415
-- [x] Canonical JSON commit → Chapter / Scene / Coverage restore test
-- [x] 实际上传文档人工结构规则检查：10/10 章
-- [x] 现有 `text_import.test.ts` 在完整 backend suite 中通过
-- [x] Backend 完整 test suite 通过
-- [x] 根目录 `npm run typecheck` 通过
-- [x] Backend typecheck 通过
-- [x] 根目录 production build 通过
-- [x] GitHub Actions CI 建立并绿灯
-- [x] 有历史章节记忆时，最终生成 prompt 仍包含 POV / Tone / Story tags
+- [x] Canonical Markdown Commit → DB
+- [x] Canonical unsupported file → 415
+- [x] Canonical JSON → Chapter / Scene / Coverage
+- [x] legacy Markdown → DB
+- [x] legacy JSON → Chapter / Scene / Coverage
+- [x] legacy unsupported file 使用 canonical 415
+- [x] TXT 既有测试无回归
+
+## 全量质量门禁
+
+- [x] Root/frontend TypeScript typecheck
+- [x] Backend TypeScript typecheck
+- [x] Backend 全量 test suite
+- [x] Production build
+- [x] GitHub Actions CI
+- [x] 跨平台测试发现，不依赖 shell glob
+- [x] character / scene version tests 自行创建父级 fixture
+- [x] 数据库外键保持开启
 
 ---
 
@@ -213,39 +191,34 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 
 ## Backend
 
-- [x] `POST /api/projects/import/preview`
 - [x] 只解析，不写数据库
 - [x] 无 preview token / temp file / cache table
 - [x] 返回 source + mode
 - [x] 返回 project title / description / settings
-- [x] 返回章节标题列表
-- [x] 返回 chapter summary/content 可用状态
+- [x] 返回章节标题、summary/content 状态
 - [x] 返回章节 / 概要 / 正文 / 人物数量
-- [x] 返回 JSON 项目的 scene / coverage / shot 数量
+- [x] 返回 JSON scene / coverage / shot 数量
 - [x] 返回 warnings
 - [x] 返回 unmappedSections
 
 ## Dashboard
 
-- [x] 选择文件
-- [x] 第一步：解析预览
-- [x] 展示作品名
-- [x] 展示格式与 manuscript / backup 类型
-- [x] 展示简介
+- [x] 文件选择
+- [x] 解析预览
+- [x] 展示作品名、格式、类型、简介
 - [x] 展示 genre / story tags
-- [x] 展示章节 / 概要 / 正文 / 人物计数
+- [x] 展示章节、概要、正文、人物计数
 - [x] 展示前 12 个章节结构
-- [x] 展示 warning
-- [x] 展示未映射小节数量
-- [x] 文件变化自动清空旧 preview
-- [x] 第二步：用户确认后 Commit
-- [x] commit 成功后创建新项目并关闭弹窗
+- [x] 展示 warnings / 未映射小节
+- [x] 文件变化清空旧 preview
+- [x] 用户确认后 Commit
+- [x] 成功后创建项目并关闭弹窗
 
 ---
 
-# P1：Story Bible 映射与消费
+# P1：Story Bible 映射、编辑与消费
 
-## 保存
+## 保存与编辑
 
 - [x] genre
 - [x] style
@@ -256,77 +229,73 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 - [x] tone
 - [x] import_metadata
 - [x] import_info
-- [x] 不为未知字段增加数据库 column
-- [x] `ProjectSettings` 保持 future-key 兼容
+- [x] Project Settings 可查看 / 编辑上述核心字段
+- [x] 保存时保留未知 settings key
+- [x] 不为 metadata 增加数据库 column
 
-## Project Settings UI
+## AI Context
 
-- [x] genre 可查看/编辑
-- [x] style 可查看/编辑
-- [x] story_tags 可查看/编辑
-- [x] pov 可查看/编辑
-- [x] tone 可查看/编辑
-- [x] main_plot 可查看/编辑
-- [x] character_relations 可查看/编辑
-- [x] 保存时继续保留未知 settings key
-
-## AI Context 接入
-
-`LayeredContext / ProjectBible` 已消费：
-
-- [x] genre
-- [x] style
-- [x] main_plot
-- [x] character_relations
-- [x] pov
-- [x] tone
-- [x] story_tags
-
-约束：
-
-- [x] POV / Tone / Story tags 单独表达，不拼进 style
-- [x] story tags 最多注入前 8 个
-- [x] tags 行固定字符预算
-- [x] POV 固定字符预算
-- [x] Tone 固定字符预算
-- [x] `buildCreativeConstraints()` 作为统一格式化入口
-- [x] DB → WritingService bundle → Layered Context 集成测试
-- [x] 主章节生成始终注入稳定创作约束，即使已有动态章节记忆
-- [x] CINEMATIC_REWRITE / ADD_CONFLICT / REVERSE_PLOT 技能路径复用同一创作约束
+- [x] genre / style / main_plot / character_relations
+- [x] story_tags / pov / tone
+- [x] POV / Tone / Story tags 不拼入 style
+- [x] Story tags 最多前 8 个
+- [x] Tags / POV / Tone 固定字符预算
+- [x] `buildCreativeConstraints()` 统一格式化
+- [x] DB → WritingService → Layered Context 集成测试
+- [x] 有前文章节记忆时，最终生成 prompt 仍包含稳定创作约束
+- [x] CINEMATIC_REWRITE / ADD_CONFLICT / REVERSE_PLOT 复用同一创作约束
 
 ---
 
-# P1.5：Native backup fidelity（独立于小说文稿导入）
+# P1.5：Native backup fidelity
 
-- [ ] 评估 `.novastory.json` format v2
+该部分独立于“小说文稿 → 新项目”，不阻塞当前 PR。
+
+- [ ] 设计 `.novastory.json` format v2
 - [ ] 导出 / 恢复 `chapter.condensed_content`
 - [ ] 导出 / 恢复 `character_version`
 - [ ] 导出 / 恢复 `scene_version`
-- [ ] 恢复 active_version 时验证对应 version 存在
-- [ ] 增加 v1 → v2 compatibility tests
-
-> 该部分不是当前“小说文档 → 新小说项目”的阻塞项。
+- [ ] active_version 必须引用实际存在的 version
+- [ ] v1 → v2 compatibility tests
 
 ---
 
 # P2：附加文档 / 已有项目扩展
 
-- [ ] 设计“添加到已有小说”模式
-- [ ] 评估新增 `project_document`
+## 产品模式
+
+- [ ] 设计“添加到已有小说”流程
+- [ ] Preview 中明确目标项目与写入影响
+- [ ] 区分 primary manuscript 与 supplemental document
+- [ ] 默认不自动覆盖现有正文 / Story Bible
+
+## 数据模型评估
+
+- [ ] 评估 `project_document`
   - [ ] primary_manuscript
   - [ ] outline
   - [ ] worldbuilding
   - [ ] character_notes
   - [ ] reference
   - [ ] other
-- [ ] 设计冲突策略
-  - [ ] append
-  - [ ] replace
-  - [ ] merge
-  - [ ] preview-only
-- [ ] 文档级 checksum / duplicate detection
-- [ ] 接入 Layered Context 时按文档类型选择性注入
+- [ ] 文档 checksum / duplicate detection
+- [ ] source filename / mime / import time / metadata
+
+## 冲突策略
+
+- [ ] append
+- [ ] replace
+- [ ] merge
+- [ ] preview-only
+- [ ] 字段级 source fact 与 existing value 对比
+- [ ] 不允许静默覆盖
+
+## AI Context
+
+- [ ] 按 document type 选择性注入
+- [ ] 单文档和总量预算
 - [ ] 避免所有附加资料无差别塞入 prompt
+- [ ] 明确 source fact 与 AI inference 边界
 
 ---
 
@@ -334,39 +303,36 @@ CI 在建设过程中也暴露并修复了仓库既有的两个基础问题：
 
 - [ ] DOCX
 - [ ] EPUB
-- [ ] PDF 暂不作为小说工程主文稿导入；未来若支持，定位为 reference document
+- [ ] PDF 暂不作为小说工程主文稿；未来定位为 reference document
 
 ---
 
 # 明确不做
 
-本轮不引入：
+当前主链不引入：
 
 - 向量数据库 / RAG
 - PDF OCR
 - AI 自动脑补人物
 - AI 自动补全世界观
-- 独立 Novel 数据表体系
+- 独立 Novel 表体系
 - 为每个 metadata 增加数据库字段
 - Preview 临时数据库表
 - Preview token / server-side temp-file session
-- 一次性完成已有项目复杂自动 merge
+- 未经确认的已有项目自动 merge
 
 ---
 
 # 当前完成定义
 
-功能实现层面，以下主链已经成立：
-
 ```text
-Markdown / TXT
+TXT / Markdown
   → Preview
   → Canonical Parser
   → NovelImportDraft
-  → 用户确认
   → Commit
+  → commitProjectImportFile()
   → ProjectImportService
-  → SQLite Transaction
   → Project + Chapters + summary + content + Story Bible
   → Project Settings
   → Layered Context
@@ -374,29 +340,30 @@ Markdown / TXT
   → AI 写作 / 技能重写
 ```
 
-`.novastory.json` 则走：
-
 ```text
 NovaStory JSON
-  → Preview existing project structure
-  → 用户确认
-  → Canonical Commit
+  → Preview
+  → Canonical Parser
+  → Commit
+  → commitProjectImportFile()
   → NovaStory JSON Restore Service
   → Project + Chapter + Character + Scene + Coverage
 ```
 
+```text
+Legacy /projects/import
+  → commitProjectImportFile()
+  → 与 canonical commit 完全相同的解析和持久化链路
+```
+
 ## 合入检查
 
-- [x] Backend typecheck
-- [x] Backend 全量 tests
-- [x] Frontend/root typecheck
-- [x] Production build
-- [x] Markdown / Preview / Commit 回归测试
-- [x] TXT 既有测试无回归
-- [x] JSON Director restore 回归测试
+- [x] 功能实现完成
+- [x] Canonical / legacy route 收敛
+- [x] Markdown / TXT / JSON 回归测试
+- [x] Preview / Commit 回归测试
 - [x] Story Bible → final writing prompt 回归测试
-- [x] CI #20 绿灯
-- [x] 主产品链路使用 canonical preview + commit
-- [x] PR 已切换为 Ready for review
+- [x] Typecheck / full backend tests / production build
+- [x] PR Ready for review
 
-当前剩余项均属于后续清理/扩展：legacy endpoint 去重、native backup v2、已有项目附加资料、DOCX/EPUB。
+当前非阻塞后续项：legacy endpoint deprecation、Native backup v2、已有项目附加资料、DOCX / EPUB。
