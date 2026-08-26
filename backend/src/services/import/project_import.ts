@@ -105,7 +105,7 @@ export const commitProjectImportFile = async (
   filename: string,
   userId: string
 ) => {
-  const parsed = parseProjectImportFile(data, filename);
+  const parsed = await parseProjectImportFile(data, filename);
 
   return parsed.kind === 'novel-draft'
     ? importNovelDraft(parsed.draft, userId)
