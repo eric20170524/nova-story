@@ -349,6 +349,33 @@ const migrations: Migration[] = [
           ON glossary(project_id);
       `);
     }
+  },
+  {
+    version: '008_project_documents',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS project_document (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          document_type VARCHAR(50) NOT NULL,
+          source_filename VARCHAR(255),
+          source_format VARCHAR(20) NOT NULL,
+          mime_type VARCHAR(100),
+          content TEXT NOT NULL,
+          checksum VARCHAR(64) NOT NULL,
+          metadata_json TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, checksum),
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_project_document_project_type
+          ON project_document(project_id, document_type);
+        CREATE INDEX IF NOT EXISTS ix_project_document_project_created
+          ON project_document(project_id, created_at);
+      `);
+    }
   }
 ];
 
