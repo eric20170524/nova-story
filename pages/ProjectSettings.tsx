@@ -34,6 +34,9 @@ export const ProjectSettings: React.FC = () => {
   const [nsfwMode, setNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [genre, setGenre] = useState('');
   const [storyStyle, setStoryStyle] = useState('');
+  const [storyTagsText, setStoryTagsText] = useState('');
+  const [pov, setPov] = useState('');
+  const [tone, setTone] = useState('');
   const [mainPlot, setMainPlot] = useState('');
   const [characterRelations, setCharacterRelations] = useState('');
   const [glossary, setGlossary] = useState<
@@ -112,6 +115,15 @@ export const ProjectSettings: React.FC = () => {
           }
           setGenre(typeof settingsObj.genre === 'string' ? settingsObj.genre : '');
           setStoryStyle(typeof settingsObj.style === 'string' ? settingsObj.style : '');
+          setStoryTagsText(
+            Array.isArray(settingsObj.story_tags)
+              ? settingsObj.story_tags
+                  .filter((tag: unknown): tag is string => typeof tag === 'string')
+                  .join(', ')
+              : ''
+          );
+          setPov(typeof settingsObj.pov === 'string' ? settingsObj.pov : '');
+          setTone(typeof settingsObj.tone === 'string' ? settingsObj.tone : '');
           setMainPlot(typeof settingsObj.main_plot === 'string' ? settingsObj.main_plot : '');
           setCharacterRelations(
             typeof settingsObj.character_relations === 'string'
@@ -164,6 +176,13 @@ export const ProjectSettings: React.FC = () => {
           }
         }
 
+        const storyTags = Array.from(new Set(
+          storyTagsText
+            .split(/[，,、/／|]+/)
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+        )).slice(0, 20);
+
         // Merge so API-only keys (and any future fields) are not wiped on save
         const settingsJson = JSON.stringify({
             ...settingsBase,
@@ -173,6 +192,9 @@ export const ProjectSettings: React.FC = () => {
             nsfw_mode: nsfwMode,
             genre,
             style: storyStyle,
+            story_tags: storyTags,
+            pov,
+            tone,
             main_plot: mainPlot,
             character_relations: characterRelations,
             ...(agent_prompts_override
@@ -386,6 +408,44 @@ export const ProjectSettings: React.FC = () => {
                             value={storyStyle}
                             onChange={(e) => setStoryStyle(e.target.value)}
                             placeholder="cinematic, webnovel…"
+                        />
+                    </div>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                        {t('project_settings.story_tags', 'Story tags')}
+                    </label>
+                    <input
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        value={storyTagsText}
+                        onChange={(e) => setStoryTagsText(e.target.value)}
+                        placeholder="梦核幻想, 小动物视角, 治愈系探索"
+                    />
+                    <p className="text-xs text-slate-600 mt-1">
+                        {t('project_settings.story_tags_desc', 'Separate tags with commas, slashes, or 、. Up to 20 are stored; writing context uses the first 8 within a fixed budget.')}
+                    </p>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.pov', 'Point of view (POV)')}
+                        </label>
+                        <input
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            value={pov}
+                            onChange={(e) => setPov(e.target.value)}
+                            placeholder="第三人称限知 / 第一人称…"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.tone', 'Tone')}
+                        </label>
+                        <input
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            value={tone}
+                            onChange={(e) => setTone(e.target.value)}
+                            placeholder="温柔、轻微诡异…"
                         />
                     </div>
                 </div>

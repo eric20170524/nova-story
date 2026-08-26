@@ -10,6 +10,7 @@ import { ZodError } from 'zod';
 import { getStaticDirectory } from './core/paths';
 import { db } from './db/database';
 import { projectRoutes } from './routes/projects';
+import { projectImportRoutes } from './routes/project_import';
 import { settingsRoutes } from './routes/settings';
 import { workflowRoutes } from './routes/workflows';
 import { characterRoutes } from './routes/characters';
@@ -105,6 +106,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   });
   app.get('/openapi.json', async () => app.swagger());
 
+  await app.register(projectImportRoutes, { prefix: '/api/projects' });
   await app.register(projectRoutes, { prefix: '/api/projects' });
   await app.register(chapterRoutes, { prefix: '/api/chapters' });
   await app.register(settingsRoutes, { prefix: '/api/settings' });

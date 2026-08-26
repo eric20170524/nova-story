@@ -30,6 +30,9 @@ export type ProjectBible = {
   style?: string;
   main_plot?: string;
   character_relations?: string;
+  story_tags?: string[];
+  pov?: string;
+  tone?: string;
 };
 
 const tail = (text: string, max: number) =>
@@ -37,6 +40,33 @@ const tail = (text: string, max: number) =>
 
 const head = (text: string, max: number) =>
   text.length > max ? text.slice(0, max) + '...' : text;
+
+const compactStoryTags = (tags: string[] | undefined): string => {
+  if (!Array.isArray(tags)) return '';
+  return head(
+    tags
+      .map((tag) => String(tag || '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(', '),
+    160
+  );
+};
+
+/**
+ * Stable, compact creative constraints that should accompany chapter memory.
+ * These values come from explicit project/import metadata, never AI inference.
+ */
+export function buildCreativeConstraints(bible: ProjectBible): string {
+  const storyTags = compactStoryTags(bible.story_tags);
+  return [
+    storyTags ? `Story tags: ${storyTags}` : '',
+    bible.pov ? `POV: ${head(bible.pov, 120)}` : '',
+    bible.tone ? `Tone: ${head(bible.tone, 120)}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
 
 export function buildProjectStructure(chapters: ChapterRow[]): string {
   if (!chapters.length) return '(no chapters)';
@@ -113,10 +143,12 @@ export function buildLayeredContext(options: {
     .join('; ');
 
   const b = options.bible;
+  const creativeConstraints = buildCreativeConstraints(b);
   const worldBible = [
     `Title: ${b.title}`,
     b.genre ? `Genre: ${b.genre}` : '',
     b.style ? `Style: ${b.style}` : '',
+    creativeConstraints,
     b.main_plot ? `Main plot: ${head(b.main_plot, 400)}` : '',
     b.description ? `Description: ${head(b.description, 200)}` : '',
     b.character_relations

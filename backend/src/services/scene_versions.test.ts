@@ -12,10 +12,19 @@ import {
 test('scene versions: baseline, create, activate, sync text', async () => {
   await initDb();
 
-  const chapterId = 'test-ver-ch-' + Date.now();
+  const projectId = Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-9));
   await db.run(
-    `INSERT INTO chapter (id, project_id, "index", title, content) VALUES (?, 1, 99, 'ver-test', 'x')`,
-    chapterId
+    `INSERT INTO project (id, title, settings, user_id)
+     VALUES (?, 'scene-version-test', '{}', 'test')`,
+    projectId
+  );
+
+  const chapterId = 'test-ver-ch-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+  await db.run(
+    `INSERT INTO chapter (id, project_id, "index", title, content)
+     VALUES (?, ?, 99, 'ver-test', 'x')`,
+    chapterId,
+    projectId
   );
   const ins = await db.run(
     `INSERT INTO scene (chapter_id, "index", visual_prompt, dialogue, asset_status, asset_url)
@@ -51,4 +60,5 @@ test('scene versions: baseline, create, activate, sync text', async () => {
 
   await db.run('DELETE FROM scene WHERE id = ?', sceneId);
   await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+  await db.run('DELETE FROM project WHERE id = ?', projectId);
 });

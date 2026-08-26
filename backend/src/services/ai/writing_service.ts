@@ -8,6 +8,7 @@ import {
   type ChapterCharacterAnalysis,
 } from '../../schemas/llm';
 import {
+  buildCreativeConstraints,
   buildLayeredContext,
   type ChapterRow,
   type ProjectBible,
@@ -529,6 +530,13 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
     projectId
   );
 
+  const storyTags = Array.isArray(settings.story_tags)
+    ? settings.story_tags
+        .filter((tag): tag is string => typeof tag === 'string' && Boolean(tag.trim()))
+        .map((tag) => tag.trim())
+        .slice(0, 8)
+    : undefined;
+
   const bible: ProjectBible = {
     title: project.title,
     description: project.description,
@@ -540,6 +548,9 @@ async function loadWritingBundle(projectId: number, chapterId?: string | null) {
       typeof settings.character_relations === 'string'
         ? settings.character_relations
         : undefined,
+    story_tags: storyTags,
+    pov: typeof settings.pov === 'string' ? settings.pov : undefined,
+    tone: typeof settings.tone === 'string' ? settings.tone : undefined,
   };
 
   const activeId = chapterId || chapters[0]?.id || null;
@@ -630,8 +641,10 @@ export class WritingService {
       layered?.nextChapterSummary,
       bundle.overrides
     );
+    const creativeConstraints = buildCreativeConstraints(bundle.bible);
 
     const memoryPrompt = [
+      creativeConstraints ? `[创作约束]\n${creativeConstraints}` : '',
       layered?.oldSummaries ? `[较早梗概]\n${layered.oldSummaries}` : '',
       layered?.recentCondensed ? `[近期浓缩]\n${layered.recentCondensed}` : '',
       layered?.recentFullText ? `[紧邻前文]\n${layered.recentFullText}` : '',
@@ -663,6 +676,7 @@ export class WritingService {
         `Title: ${bundle.bible.title}`,
         bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
         bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
+        creativeConstraints,
         bundle.bible.main_plot
           ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
           : '',
@@ -1037,9 +1051,18 @@ export class WritingService {
     const chapter = bundle.chapters.find((c) => c.id === options.chapterId);
     if (!chapter) throw new Error('Chapter not found');
 
+    const creativeConstraints = buildCreativeConstraints(bundle.bible);
     const contextSummary = head(
-      `Title: ${bundle.bible.title}\nGenre: ${bundle.bible.genre || ''}\nChapter: ${chapter.title}\nSummary: ${chapter.summary || ''}`,
-      500
+      [
+        `Title: ${bundle.bible.title}`,
+        `Genre: ${bundle.bible.genre || ''}`,
+        creativeConstraints,
+        `Chapter: ${chapter.title}`,
+        `Summary: ${chapter.summary || ''}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      700
     );
     const content = head(
       String(chapter.content || '(No content, write from summary)'),
