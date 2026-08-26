@@ -11,7 +11,7 @@ const multipartPayload = async (filename: string, content: string, type: string)
   };
 };
 
-test('supplemental document preview, commit, duplicate detection, list, and delete are non-destructive', async () => {
+test('supplemental document lifecycle is non-destructive and context is explicit opt-in', async () => {
   process.env.DATABASE_URL = ':memory:';
 
   const [
@@ -19,11 +19,13 @@ test('supplemental document preview, commit, duplicate detection, list, and dele
     { default: multipart },
     { projectDocumentRoutes },
     { db, initDb },
+    { loadEnabledProjectDocumentContext },
   ] = await Promise.all([
     import('fastify'),
     import('@fastify/multipart'),
     import('./project_documents'),
     import('../db/database'),
+    import('../services/project_documents'),
   ]);
 
   await initDb();
@@ -94,7 +96,9 @@ test('supplemental document preview, commit, duplicate detection, list, and dele
   assert.equal(document.document_type, 'worldbuilding');
   assert.equal(document.source_filename, '世界观.md');
   assert.equal(document.source_format, 'markdown');
+  assert.equal(Number(document.context_enabled), 0);
   assert.match(document.checksum, /^[a-f0-9]{64}$/);
+  assert.equal(await loadEnabledProjectDocumentContext(projectId), '');
 
   const chapterAfter = await db.get('SELECT * FROM chapter WHERE id = ?', 'existing-chapter');
   assert.equal(chapterAfter.content, '不可被附加资料修改的正文。');
@@ -102,6 +106,29 @@ test('supplemental document preview, commit, duplicate detection, list, and dele
 
   const projectAfter = await db.get('SELECT settings FROM project WHERE id = ?', projectId);
   assert.deepEqual(JSON.parse(projectAfter.settings), { genre: 'fantasy', tone: 'warm' });
+
+  const enabled = await app.inject({
+    method: 'PATCH',
+    url: `/api/projects/${projectId}/documents/${document.id}`,
+    headers: { 'content-type': 'application/json' },
+    payload: JSON.stringify({ context_enabled: true }),
+  });
+  assert.equal(enabled.statusCode, 200, enabled.body);
+  assert.equal(Number(enabled.json().context_enabled), 1);
+  const enabledContext = await loadEnabledProjectDocumentContext(projectId);
+  assert.match(enabledContext, /\[Worldbuilding · 世界观补充\]/);
+  assert.match(enabledContext, /午夜后旋转木马会记录访客留下的声音/);
+  assert.ok(enabledContext.length <= 1600);
+
+  const disabled = await app.inject({
+    method: 'PATCH',
+    url: `/api/projects/${projectId}/documents/${document.id}`,
+    headers: { 'content-type': 'application/json' },
+    payload: JSON.stringify({ context_enabled: false }),
+  });
+  assert.equal(disabled.statusCode, 200, disabled.body);
+  assert.equal(Number(disabled.json().context_enabled), 0);
+  assert.equal(await loadEnabledProjectDocumentContext(projectId), '');
 
   const duplicatePreviewUpload = await multipartPayload('copy.md', markdown, 'text/markdown');
   const duplicatePreview = await app.inject({
@@ -129,21 +156,23 @@ test('supplemental document preview, commit, duplicate detection, list, and dele
   assert.equal(listed.statusCode, 200, listed.body);
   assert.equal(listed.json().length, 1);
   assert.equal(listed.json()[0].id, document.id);
+  assert.ok(!Object.prototype.hasOwnProperty.call(listed.json()[0], 'content'));
 
   const deleted = await app.inject({
     method: 'DELETE',
     url: `/api/projects/${projectId}/documents/${document.id}`,
   });
   assert.equal(deleted.statusCode, 200, deleted.body);
+  assert.ok(!Object.prototype.hasOwnProperty.call(deleted.json(), 'content'));
 
   const afterDelete = await db.get('SELECT COUNT(*) AS count FROM project_document WHERE project_id = ?', projectId);
   assert.equal(Number(afterDelete.count), 0);
 
   const migration = await db.get(
     'SELECT version FROM schema_migration WHERE version = ?',
-    '008_project_documents'
+    '009_project_document_context'
   );
-  assert.equal(migration.version, '008_project_documents');
+  assert.equal(migration.version, '009_project_document_context');
 
   await app.close();
 });
@@ -159,4 +188,33 @@ test('supplemental documents reject unsupported formats', async () => {
       && error.statusCode === 415
     )
   );
+});
+
+test('supplemental AI context applies per-document and total character budgets', async () => {
+  const { buildProjectDocumentContext } = await import('../services/project_documents');
+  const context = buildProjectDocumentContext([
+    {
+      id: 1,
+      name: 'Long Outline',
+      document_type: 'outline',
+      content: 'A'.repeat(3000),
+    },
+    {
+      id: 2,
+      name: 'Long World',
+      document_type: 'worldbuilding',
+      content: 'B'.repeat(3000),
+    },
+    {
+      id: 3,
+      name: 'Long Ref',
+      document_type: 'reference',
+      content: 'C'.repeat(3000),
+    },
+  ], 1000);
+
+  assert.ok(context.length <= 1000);
+  assert.match(context, /Long Outline/);
+  assert.ok((context.match(/A/g) || []).length <= 700);
+  assert.ok((context.match(/B/g) || []).length <= 600);
 });
