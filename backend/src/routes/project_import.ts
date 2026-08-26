@@ -20,13 +20,13 @@ export const projectImportRoutes: FastifyPluginAsync = async (app) => {
 
     if (!file) {
       return reply.status(400).send({
-        detail: 'Please select a text, Markdown, or JSON file to preview',
+        detail: 'Please select a text, Markdown, DOCX, or JSON file to preview',
       });
     }
 
     try {
       const buffer = await file.toBuffer();
-      return buildProjectImportPreview(buffer, file.filename || '');
+      return await buildProjectImportPreview(buffer, file.filename || '');
     } catch (error) {
       if (error instanceof ProjectImportInputError) {
         return reply.status(error.statusCode).send({ detail: error.message });
@@ -48,7 +48,7 @@ export const projectImportRoutes: FastifyPluginAsync = async (app) => {
 
     if (!file) {
       return reply.status(400).send({
-        detail: 'Please select a text, Markdown, or JSON file to import',
+        detail: 'Please select a text, Markdown, DOCX, or JSON file to import',
       });
     }
 
