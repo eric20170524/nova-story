@@ -81,7 +81,9 @@
 | | `GET /assets/status/{task_id}` | 获取任务状态 |
 | | `GET /assets/stream/{task_id}` | SSE 任务进度 |
 | | `POST /assets/cancel` | 中断 ComfyUI 当前任务 |
-| Comics | `POST /comics/{chapter_id}/generate` | 生成带字幕漫画页和 PDF |
+| Comics | `POST /comics/{chapter_id}/generate` | 生成单章带字幕漫画页和 PDF；保留兼容的部分页语义 |
+| | `GET /comics/project/{project_id}/status` | 检查整本漫画 readiness，列出缺 Timeline / 缺图章节和 Scene |
+| | `POST /comics/project/{project_id}/generate` | 严格按章节/Scene 顺序生成整本漫画 PDF；任一正式 Scene 缺图则 409 |
 | Workflows | `GET /workflows/files` | 内置工作流文件列表 |
 | | `GET /workflows/` | 工作流列表 |
 | | `POST /workflows/` | 创建工作流 |
@@ -182,3 +184,45 @@ POST /api/scenes/coverage/99/promote
   "position": "after"
 }
 ```
+
+### 整本漫画 PDF
+
+自动化时先做 readiness 检查：
+
+```http
+GET /api/comics/project/12/status
+```
+
+只有返回：
+
+```json
+{
+  "ready": true,
+  "total_chapters": 10,
+  "ready_chapters": 10,
+  "total_scenes": 86,
+  "ready_scenes": 86
+}
+```
+
+才进入严格整本生成：
+
+```http
+POST /api/comics/project/12/generate
+```
+
+成功完成必须同时满足：
+
+```text
+status == completed
+generated_count == total_scenes
+pdf_url 非空
+```
+
+页面顺序固定为：
+
+```text
+Chapter.index ASC → Scene.index ASC
+```
+
+如果某章没有 Timeline，或任何正式 Scene 没有 `asset_url`，接口返回 HTTP 409，并在 `details.chapters[]` 中给出 `blocker` 和 `missing_scene_ids`。不会生成并宣称一个漏页的“完整 PDF”。
