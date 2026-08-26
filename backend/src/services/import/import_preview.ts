@@ -2,7 +2,7 @@ import { parseProjectImportFile } from './import_file';
 import type { NovaStoryJsonImportProject } from './novastory_json_model';
 import type { NovelImportDraft, NovelImportUnmappedSection } from './types';
 
-export type ProjectImportPreviewFormat = 'text' | 'markdown' | 'json';
+export type ProjectImportPreviewFormat = 'text' | 'markdown' | 'docx' | 'json';
 
 export interface ProjectImportPreviewChapter {
   index: number;
@@ -115,11 +115,11 @@ const previewFromJson = (
   };
 };
 
-export const buildProjectImportPreview = (
+export const buildProjectImportPreview = async (
   data: Uint8Array,
   filename = ''
-): ProjectImportPreview => {
-  const parsed = parseProjectImportFile(data, filename);
+): Promise<ProjectImportPreview> => {
+  const parsed = await parseProjectImportFile(data, filename);
   return parsed.kind === 'novel-draft'
     ? previewFromDraft(parsed.draft)
     : previewFromJson(parsed.project);
