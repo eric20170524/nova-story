@@ -70,11 +70,17 @@ test('upgrades a legacy main database schema idempotently', async () => {
       );
     }
 
+    const documentColumns = new Set(
+      (await legacyDatabase.all('PRAGMA table_info("project_document")'))
+        .map((column: any) => column.name)
+    );
+    assert.ok(documentColumns.has('context_enabled'));
+
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 008_project_documents
-    assert.equal(migrationCount.count, 8);
+    // 001_core through 009_project_document_context
+    assert.equal(migrationCount.count, 9);
   } finally {
     await legacyDatabase.close();
   }
