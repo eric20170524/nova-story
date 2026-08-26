@@ -1,63 +1,73 @@
 ---
 name: novel-to-comic
-description: 在 NovaStory 小说项目已经导入后，从项目校验、正文创作/定稿、人物与世界观收敛、正式分镜、场景生图一直执行到逐章生成漫画页和 PDF。支持页面操作与 REST API 两条路径，并允许从任意中间状态恢复。
-version: 1.0
+description: 在 NovaStory 小说项目已经导入后，从项目校验、正文创作/定稿、人物与世界观收敛、正式分镜、场景生图一直执行到严格生成整本漫画 PDF。支持页面操作与 REST API 两条路径，并允许从任意中间状态恢复。
+version: 1.1
 ---
 
-# NovaStory：已导入小说 → 漫画 Skill
+# NovaStory：已导入小说 → 整本漫画 Skill
 
 ## 1. 使用场景
 
-当 NovaStory 中已经存在一个小说 Project，并且用户希望继续完成以下任一目标时使用本 Skill：
+当 NovaStory 中已经存在一个小说 Project，用户希望继续完成以下任一目标时使用本 Skill：
 
 - 检查导入后的小说是否具备继续创作条件；
 - 续写、改写、完善或定稿章节；
 - 收敛 Story Bible、角色和术语；
 - 为已定稿章节生成正式叙事分镜；
-- 生成角色视觉资产和场景图片；
-- 逐章生成漫画页与 PDF；
-- 从上述任意中间状态继续，而不是从头重做。
+- 生成角色视觉资产和 Scene 图片；
+- 生成单章漫画用于审阅；
+- 在全项目就绪后生成一个完整的 Project-level 漫画 PDF；
+- 从任意中间状态继续，而不是从头重做。
 
 本 Skill **不负责导入小说**。项目导入由现有 Import Preview / Commit 流程负责。
 
 ---
 
-# 2. 当前系统真实边界
+# 2. 最终完成定义
 
-## 2.1 当前完成定义
+NovaStory 当前同时提供章节级与项目级漫画接口：
 
-NovaStory 当前漫画接口是**章节级**：
+```http
+POST /api/comics/{chapter_id}/generate
+GET  /api/comics/project/{project_id}/status
+POST /api/comics/project/{project_id}/generate
+```
+
+最终完成定义是：
+
+```text
+Project
+  → 所有 Chapter 正文定稿
+  → 已定稿内容的人物/术语状态同步
+  → 主要角色视觉定义稳定
+  → 所有 Chapter 有正式 narrative Timeline
+  → 所有正式 Scene 都有可用 asset_url
+  → Project comic readiness == true
+  → 生成一个完整 Project-level PDF
+  → generated_count == total_scenes
+```
+
+### 章节 PDF 的定位
+
+单章接口：
 
 ```http
 POST /api/comics/{chapter_id}/generate
 ```
 
-因此本 Skill 的默认完成定义是：
+适合中途审阅、返工和逐章交付，但**不是整本完成的硬前置**。
+
+Project-level 生成会直接从当前数据库中的 Chapter → Scene → asset_url 重新渲染整本漫画，按：
 
 ```text
-Project 中所有目标章节
-  → 正文定稿
-  → 角色/术语状态同步
-  → 正式 Timeline
-  → 所有正式 Scene 生图完成
-  → 每章生成 Comic pages + chapter PDF
+Chapter.index ASC → Scene.index ASC
 ```
 
-当所有目标章节均完成上述流程，视为“小说 → 漫画”工作流完成。
-
-### 当前缺口
-
-NovaStory 当前没有：
-
-```text
-Project → 一次性合并所有章节 → 单个全书漫画 PDF
-```
-
-如果用户要求“整本一个 PDF”，先完成每章 PDF，再把“项目级漫画合并”报告为独立缺失能力；不要声称当前系统已经支持。
+组装，不依赖先前生成过的 chapter PDF。
 
 ---
 
-## 2.2 Agent OS 能力边界
+# 3. Agent OS 能力边界
 
 Agent OS 当前可编排：
 
@@ -72,46 +82,43 @@ Agent OS 当前可编排：
 - `ANALYZE_CHAPTER_CHARACTERS`
 - Project / Chapter / Character 元数据操作
 
-但 Agent OS Action Schema 当前**没有**：
+Agent OS Action Schema 当前没有：
 
 - `GENERATE_ASSET`
 - `GENERATE_COMIC`
+- `GENERATE_PROJECT_COMIC`
 
 因此：
 
 ```text
 小说创作 / 定稿 / Timeline
-  → 可以优先 Agent OS 或 REST API
+  → 优先 Agent OS 或 REST API
 
-场景生图 / 漫画输出
-  → 使用 Director 页面或直接 REST API
+Scene 生图 / 单章漫画 / 整本漫画
+  → Director 页面或直接 REST API
 ```
 
-不要让 Agent 假装已经执行了不存在的生图/漫画 Agent action。
+不要让 Agent 声称执行了不存在的 Agent action。
 
 ---
 
-# 3. 工作模式
-
-Skill 必须支持两种模式，并允许混用。
+# 4. 工作模式
 
 ## A. 页面模式（默认推荐）
-
-适合人工审稿和视觉确认。
-
-页面：
 
 ```text
 /project/{PROJECT_ID}/story       小说编辑
 /project/{PROJECT_ID}/characters  角色管理
-/project/{PROJECT_ID}/director    导演 / 分镜 / 生图 / 漫画
-/project/{PROJECT_ID}/settings    项目设置 / Story Bible
-/settings                         系统 LLM / ComfyUI 设置
+/project/{PROJECT_ID}/director    分镜 / 生图 / 单章漫画 / 整本漫画
+/project/{PROJECT_ID}/settings    Story Bible / 项目设置
+/settings                         LLM / ComfyUI 设置
 ```
+
+适合人工审稿、角色视觉选择和分镜/图片确认。
 
 ## B. API 模式
 
-默认基础地址：
+基础地址：
 
 ```text
 http://127.0.0.1:3000/api
@@ -123,113 +130,130 @@ Swagger：
 http://127.0.0.1:3000/docs/
 ```
 
-API 自动化时，始终先读当前状态，再决定是否执行写操作。
-
----
-
-# 4. 核心执行原则
-
-1. **先检查，再生成。** 不因为 Skill 被调用就重新生成已经合格的正文、Timeline 或图片。
-2. **逐章状态推进。** 不要求整本小说一次全部重做。
-3. **正文优先于视觉。** Chapter 未定稿时不要进入正式分镜和批量生图。
-4. **Preview / dry-run 优先。** AI 改写优先 `apply=false`；接受后再写入。
-5. **Timeline 是正式视觉边界。** Timeline 已存在时，API 自动化不得无条件重新生成，因为生成接口会替换当前正式分镜。
-6. **场景图必须完整。** 漫画接口会跳过没有 `asset_url` 的 Scene；完整漫画验收不能只看 HTTP 200。
-7. **人物一致性优先。** 主要角色在批量场景生图前应至少具有明确 description / visual tags；推荐具有 portrait 或 turnaround 资产。
-8. **漫画字幕来源是 Scene.dialogue。** 需要对白/旁白的漫画，在生成 PDF 前先检查 Scene dialogue。
-9. **附加资料默认不是强制上下文。** 只有用户显式开启 `context_enabled` 的资料才参与写作。
-10. **不静默覆盖。** 项目 settings、Chapter content、Scene Timeline、版本资产均应先读取现状。
-
----
-
-# 5. 状态机
-
-将每个目标章节视为以下状态：
+API 自动化必须遵循：
 
 ```text
-S0 PROJECT_READY
-  ↓
-S1 CHAPTER_READY
-  ↓
-S2 CHAPTER_FINALIZED
-  ↓
-S3 WORLD_SYNCED
-  ↓
-S4 CHARACTER_VISUAL_READY
-  ↓
-S5 TIMELINE_READY
-  ↓
-S6 IMAGES_READY
-  ↓
-S7 COMIC_READY
+READ CURRENT STATE
+  → CHECK PRECONDITION
+  → ACTION
+  → VERIFY
+  → REPAIR IF NEEDED
+  → NEXT
 ```
 
-Project 完成条件：
-
-```text
-所有目标 Chapter == S7
-```
-
-执行 Skill 时先识别当前状态，从最近的未完成状态继续。
+不要把工作流实现成无条件重跑所有生成接口的线性脚本。
 
 ---
 
-# 6. Phase 0 — 环境与 Project Preflight
+# 5. 核心原则
 
-## 6.1 检查 Project 和 Chapters
+1. **已有合格成果就跳过。** 不重复生成已经满意的正文、Timeline 或图片。
+2. **正文先于视觉。** Chapter 未定稿时不进入正式批量视觉生产。
+3. **AI 写操作先 Preview。** Draft / Skill 优先 `apply=false`，确认后才写入。
+4. **Timeline 是视觉源数据。** 已有 Timeline 时，不无条件重新生成，因为 `/timeline/generate` 会替换正式分镜。
+5. **人物一致性优先。** 主要角色批量生图前应有稳定 description / visual tags，推荐 portrait / turnaround。
+6. **漫画字幕来自 `Scene.dialogue`。** 需要字幕时先验收 dialogue。
+7. **Scene 图片是漫画硬前置。** 整本漫画严格要求所有正式 Scene 都有 `asset_url`。
+8. **整本导出必须先 readiness。** 不直接盲调 Project generate。
+9. **不接受漏页“成功”。** 最终必须 `generated_count == total_scenes`。
+10. **附加资料显式启用。** 只有 `context_enabled = 1` 的资料参与 WritingService。
+11. **不静默覆盖 settings。** 更新 Story Bible 时保留未知 settings key。
+12. **失败从最近阶段恢复。** 不因一张图失败而重做整本小说。
 
-API：
+---
+
+# 6. 状态机
+
+每个 Chapter：
+
+```text
+C0 CHAPTER_READY
+  ↓
+C1 CHAPTER_FINALIZED
+  ↓
+C2 WORLD_SYNCED
+  ↓
+C3 TIMELINE_READY
+  ↓
+C4 IMAGES_READY
+```
+
+Project 全局：
+
+```text
+P0 PROJECT_READY
+  ↓
+P1 CHARACTER_VISUAL_READY
+  ↓
+P2 ALL_CHAPTERS_IMAGES_READY
+  ↓
+P3 PROJECT_COMIC_READY
+```
+
+可选中间产物：
+
+```text
+C4 IMAGES_READY
+  → OPTIONAL CHAPTER_COMIC_PDF
+```
+
+真正完成条件：
+
+```text
+Project == P3 PROJECT_COMIC_READY
+```
+
+---
+
+# 7. Phase 0 — Project / 环境 Preflight
+
+## 7.1 Project 与 Chapter
 
 ```http
 GET /api/projects/{PROJECT_ID}
 GET /api/chapters/?project_id={PROJECT_ID}
 ```
 
-必须确认：
+确认：
 
 - Project 存在；
-- 至少一个目标 Chapter；
-- Chapter 顺序正确；
-- Chapter title 可识别；
-- 导入内容没有明显为空的目标章节。
+- 至少一个 Chapter；
+- Chapter.index 顺序合理；
+- title 可识别；
+- 不存在误导入的空章节。
 
-不要因为 `status == draft` 就认定正文没写完；导入项目可能正文已经完整，只是状态尚未更新。
+不要仅因 `status == draft` 就判定正文没完成；导入项目可能内容已完整但状态仍是 draft。
 
----
-
-## 6.2 检查 LLM
+## 7.2 LLM
 
 页面：
 
 ```text
-Settings → LLM 配置 → 验证连接
+Settings → LLM → 验证连接
 ```
 
-API：
+API 自动化：
+
+```http
+GET /api/settings/
+```
+
+取返回中的公开 `llm` 配置，再：
 
 ```http
 POST /api/settings/verify-llm
+Content-Type: application/json
+
+{
+  "llm": { ...GET /settings/ 返回的 llm 公共配置... }
+}
 ```
 
-如果服务端已经保存密钥，可以使用当前配置进行验证。
+服务端会复用已经保存的密钥；不要要求浏览器读取明文 API Key。
 
-LLM 不可用时：
+LLM 不可用时可以人工编辑已有正文，但不要进入 AI Draft / Skill / 自动 Timeline。
 
-- 可以继续人工编辑已有正文；
-- 不进入 AI Draft / Skill / 自动 Timeline；
-- 报告阻塞原因。
-
----
-
-## 6.3 检查图像生成环境
-
-页面：
-
-```text
-Settings → ComfyUI / 本地生成配置
-```
-
-API：
+## 7.3 图像环境
 
 ```http
 GET /api/settings/vram-status
@@ -239,24 +263,22 @@ GET /api/workflows/
 
 说明：
 
-- Tier B（IP-Adapter / ControlNet）不是生成漫画的硬前置；
-- Pony XL 是当前默认成片路径；
+- Tier B 不是漫画硬前置；
+- Pony XL 是默认成片路径；
 - SD1.5 更适合草稿；
-- 没有可用工作流/ComfyUI 时，可以完成小说和 Timeline，但不能完成 Scene 生图与漫画。
+- 无 ComfyUI / 无可用 Workflow 时可完成小说与 Timeline，但无法完成 Scene 生图和最终漫画。
 
 ---
 
-# 7. Phase 1 — Story Bible 与附加资料校验
+# 8. Phase 1 — Story Bible / 附加资料
 
-## 页面
-
-进入：
+页面：
 
 ```text
 Project → Settings
 ```
 
-检查：
+检查已有：
 
 - genre
 - style
@@ -266,102 +288,63 @@ Project → Settings
 - main_plot
 - character_relations
 - glossary
-- 默认视觉风格
+- default_style
 - default_model_type
 
-不要为了“字段齐全”凭空编造信息。
+缺失字段允许为空，不为了“字段齐全”自动脑补。
 
-如果导入文档没有提供某项，允许为空。
-
----
-
-## 附加资料
-
-页面可使用“附加资料”抽屉：
-
-- outline
-- worldbuilding
-- character_notes
-- reference
-- other
-
-只有显式开启 AI Context 的资料进入 WritingService。
-
-API：
+附加资料：
 
 ```http
 GET /api/projects/{PROJECT_ID}/documents
+```
+
+只有确认与当前创作相关时才开启：
+
+```http
 PATCH /api/projects/{PROJECT_ID}/documents/{DOCUMENT_ID}
-Content-Type: application/json
 
 {
   "context_enabled": true
 }
 ```
 
-启用资料之前确认它与当前项目相关。
-
 ---
 
-# 8. Phase 2 — 逐章正文创作与定稿
+# 9. Phase 2 — 逐章创作
 
-对 Chapter 按 `index ASC` 循环。
+按 `Chapter.index ASC` 循环。
 
-## 8.1 先判断是否真的需要写
-
-读取：
-
-```http
-GET /api/chapters/?project_id={PROJECT_ID}
-```
+## 9.1 判断是否需要继续写
 
 如果 Chapter 已经：
 
 - 正文完整；
 - summary 与正文一致；
-- 没有用户要求继续扩写；
+- 用户没有要求扩写；
 
-则不要自动续写，直接进入质量检查。
+则不要自动续写，直接进入一致性/定稿检查。
 
----
-
-## 8.2 页面创作
-
-进入：
+## 9.2 页面
 
 ```text
 Project → Story
 ```
 
-选择目标章节。
+可：
 
-可用操作：
-
-- 编辑 Chapter title；
-- 编辑 Chapter summary；
-- 编辑 Markdown 正文；
-- AI Draft / 续写；
+- 编辑 title / summary / Markdown 正文；
+- AI Draft；
 - Agent OS；
-- 写作技能；
+- 写作 Skill；
 - 保存。
 
-页面 AI Draft 会结合：
+## 9.3 API Draft
 
-- 当前正文；
-- Chapter summary；
-- 前文章节记忆；
-- Story Bible；
-- 显式启用的附加资料。
-
----
-
-## 8.3 API 续写
-
-先生成预览：
+先 Preview：
 
 ```http
 POST /api/agent/draft
-Content-Type: application/json
 
 {
   "project_id": PROJECT_ID,
@@ -372,125 +355,38 @@ Content-Type: application/json
 }
 ```
 
-`apply=false` 时先检查返回 `content`。
+确认接受后：
 
-确认接受后有两种方式：
+- 可 `PATCH /api/chapters/{CHAPTER_ID}` 写入最终正文；或
+- 对真正的“续写追加”再次调用 `apply=true`。
 
-### 方式 A：明确保存最终正文
+注意：`/agent/draft apply=true` 是追加语义，不是整章替换语义。
 
-```http
-PATCH /api/chapters/{CHAPTER_ID}
+## 9.4 写作 Skill
 
-{
-  "content": "FINAL_CONTENT",
-  "summary": "FINAL_SUMMARY"
-}
-```
-
-### 方式 B：直接 append
-
-```http
-POST /api/agent/draft
-
-{
-  "project_id": PROJECT_ID,
-  "chapter_id": "CHAPTER_ID",
-  "instructions": "继续完成本章",
-  "apply": true
-}
-```
-
-注意：`/agent/draft apply=true` 是**续写/追加**语义，不用于整章替换。
-
----
-
-## 8.4 写作技能
-
-当正文存在明确问题时才用技能，不要机械地每章全部跑一次。
-
-### 电影化重写
+只在有明确问题时调用，不要机械地每章全部跑。
 
 ```http
 POST /api/agent/skill
-
-{
-  "project_id": PROJECT_ID,
-  "chapter_id": "CHAPTER_ID",
-  "skill": "CINEMATIC_REWRITE",
-  "technique": "sensory",
-  "instructions": "增强动作可视性、环境反馈和节奏",
-  "apply": false
-}
 ```
 
-`technique`：
+支持：
 
-- `montage`
-- `close_up`
-- `sensory`
-
-### 增加冲突
-
-```json
-{
-  "project_id": PROJECT_ID,
-  "chapter_id": "CHAPTER_ID",
-  "skill": "ADD_CONFLICT",
-  "conflictType": "extreme_pressure",
-  "intensity": "high",
-  "apply": false
-}
+```text
+CINEMATIC_REWRITE
+ADD_CONFLICT
+REVERSE_PLOT
 ```
 
-### 剧情反转
+先 `apply=false`；满意后才 `apply=true`。
 
-```json
-{
-  "project_id": PROJECT_ID,
-  "chapter_id": "CHAPTER_ID",
-  "skill": "REVERSE_PLOT",
-  "reversalType": "motive_switch",
-  "apply": false
-}
-```
-
-技能输出满意后再 `apply=true`。
-
-注意：`/agent/skill apply=true` 会用技能输出更新 Chapter content，因此必须先预览。
+`/agent/skill apply=true` 会替换 Chapter content，必须先预览。
 
 ---
 
-## 8.5 Agent OS 路径
+# 10. Phase 3 — 一致性与定稿
 
-页面：
-
-```text
-顶部 Agent OS
-```
-
-推荐自然语言任务：
-
-```text
-检查当前章是否已经达到可定稿状态；先指出问题，不要写入。
-```
-
-```text
-把当前章增强成更适合后续视觉分镜的小说正文，先给预览，不要直接入库。
-```
-
-```text
-检查当前章人物和设定变化；只有我确认定稿后才写入角色库和术语表。
-```
-
-Agent OS 的 mutating actions 有确认机制。不要绕过确认去执行 DELETE / rewrite 等高影响操作。
-
----
-
-# 9. Phase 3 — 一致性检查与章节定稿
-
-## 9.1 全书一致性检查
-
-API：
+## 10.1 一致性
 
 ```http
 POST /api/agent/consistency
@@ -500,40 +396,22 @@ POST /api/agent/consistency
 }
 ```
 
-返回：
+处理：
 
-```text
-issues[]
-  severity
-  location
-  description
-```
+- critical / 明确逻辑冲突 → 修对应 Chapter；
+- warning → 判断是否影响连续性；
+- 风格偏好不能自动当逻辑错误改正文。
 
-页面也可以通过 Story / Agent OS 发起一致性检查。
+推荐在：
 
-处理原则：
+- 每完成若干章；
+- 全书视觉化前；
 
-- critical / 明确逻辑冲突：进入对应 Chapter 修复；
-- warning：判断是否影响剧情连续性；
-- 纯风格偏好不能自动当逻辑错误修改正文。
+至少各执行一次。
 
-推荐：
+## 10.2 Chapter 定稿
 
-- 每完成若干章跑一次；
-- 全书视觉化前必须再跑一次。
-
----
-
-## 9.2 定稿 Chapter
-
-确认：
-
-- 正文存在；
-- summary 与正文一致；
-- 核心人物行为没有明显冲突；
-- 后续章节约束未被破坏。
-
-然后：
+确认正文与 summary 已接受后：
 
 ```http
 PATCH /api/chapters/{CHAPTER_ID}
@@ -543,13 +421,13 @@ PATCH /api/chapters/{CHAPTER_ID}
 }
 ```
 
-`completed` 是流程标记，不代替内容质量检查。
+`completed` 只是流程标志，不代替质量验收。
 
 ---
 
-# 10. Phase 4 — 同步角色、术语和世界状态
+# 11. Phase 4 — 同步角色 / 术语 / 世界状态
 
-章节定稿后执行：
+Chapter 定稿后：
 
 ```http
 POST /api/agent/impact
@@ -561,107 +439,86 @@ POST /api/agent/impact
 }
 ```
 
-它会分析并更新：
+更新可能包括：
 
-- new / updated characters；
+- characters；
 - personality / motivation；
 - visual tags；
 - glossary。
 
-如果只是预检：
+正文未定稿时不要 `apply=true`。
 
-```json
-{
-  "apply": false
-}
-```
-
-### 规则
-
-- **正文未定稿时不要 apply=true**；
-- 角色/术语变化应来源于已接受的 Chapter 内容；
-- 每个已定稿 Chapter 至少执行一次 impact 或人工确认“本章没有需要同步的世界变化”。
+若本章确实没有世界状态变化，可人工确认后跳过写入。
 
 ---
 
-# 11. Phase 5 — 角色视觉准备
+# 12. Phase 5 — 角色视觉准备
 
-在大规模 Scene 生图之前，进入：
+页面优先：
 
 ```text
 Project → Characters
 ```
 
-## 最低条件
-
-主要角色至少应有：
+主要角色最低应有：
 
 - name；
 - description；
-- visual_tags（如果正文/Impact 能提供）。
+- 能从正文明确得到时的 visual_tags。
 
-## 推荐条件
-
-主要角色建议至少生成：
+推荐再准备：
 
 1. portrait；
 2. turnaround；
 3. 必要时 face crop；
-4. 只有真实需要时再登记/训练 LoRA。
+4. 只有确有需求时才登记/训练 LoRA。
 
-页面 Character Manager 当前比直接 REST 更适合完成角色资产生成，因为它会：
+Character Manager 页面优先于裸 REST，因为页面已经封装：
 
-- 读取 Project 默认 style / model / NSFW policy；
-- 构建 character prompt；
-- 处理 portrait / turnaround；
-- 处理参考图；
-- 处理 VRAM handoff 和 SSE 任务状态。
+- Project style / model / NSFW policy；
+- prompt 构建；
+- portrait / turnaround；
+- 参考图；
+- VRAM handoff；
+- SSE 状态。
 
-### API 辅助
+辅助 API：
 
 ```http
-GET /api/characters/?project_id={PROJECT_ID}
+GET  /api/characters/?project_id={PROJECT_ID}
 POST /api/characters/{CHARACTER_ID}/build-prompt
 POST /api/characters/{CHARACTER_ID}/crop-face
 POST /api/characters/{CHARACTER_ID}/upload-asset
-GET /api/characters/{CHARACTER_ID}/versions
+GET  /api/characters/{CHARACTER_ID}/versions
 ```
 
-角色视觉不是漫画接口的硬性数据库前置，但缺乏稳定角色定义会明显降低跨 Scene 人物一致性。
+角色视觉不是漫画接口的数据库硬前置，但对跨 Scene 一致性非常重要。
 
 ---
 
-# 12. Phase 6 — 逐章生成正式 Timeline
+# 13. Phase 6 — 正式 Timeline
 
-只有定稿 Chapter 才进入此阶段。
+只对已定稿 Chapter 执行。
 
 ## 页面
 
 ```text
-Project → Director
+Project → Director → 选择 Chapter → Generate Timeline
 ```
 
-选择 Chapter → Generate Timeline / 自动分镜。
-
-Story 页面进入 Director 时不会自动生成 Timeline；真正生成发生在 Director 页面。
-
----
+Story 页面跳到 Director 不会自动生成 Timeline。
 
 ## API
 
-先检查是否已有 Timeline：
+先读：
 
 ```http
 GET /api/timeline/{CHAPTER_ID}
 ```
 
-如果 `timeline.length > 0`：
+已有 `timeline.length > 0` 时默认保留，先检查是否仍匹配最终正文。
 
-- 默认保留；
-- 先检查已有 Scene 是否已经符合当前定稿正文；
-- 只有确认需要重做时才调用 generate。
-
-生成：
+确认需要重做才：
 
 ```http
 POST /api/timeline/generate
@@ -672,206 +529,140 @@ POST /api/timeline/generate
 }
 ```
 
-当前 Chapter-level 正式模式是 `narrative`。
+Chapter-level 正式模式使用 `narrative`。
 
-不要使用：
+不要使用已经弃用的 Chapter-level：
 
-- `cinematic_grid`
-- `nine_shot_coverage`
-
-作为 Chapter-level Timeline mode；它们已经被弃用。
-
----
+```text
+cinematic_grid
+nine_shot_coverage
+```
 
 ## Timeline 验收
 
-每个 Scene 至少检查：
+每个 Scene 至少确认：
 
-- `index`
-- `visual_prompt`
-- `dialogue`（如果漫画要显示对白/旁白）
-- `shot_type`
-- `camera_angle`
-- `camera_movement`
-- `negative_prompt`（如有）
+- index；
+- visual_prompt；
+- dialogue；
+- shot_type；
+- camera_angle；
+- camera_movement；
+- negative_prompt（如有）。
 
-修改 Scene：
+修改：
 
 ```http
 PUT /api/timeline/scene/{SCENE_ID}
 ```
 
-例如：
-
-```json
-{
-  "visual_prompt": "...",
-  "dialogue": "...",
-  "shot_type": "Medium Shot",
-  "camera_angle": "Eye-level",
-  "camera_movement": "Static"
-}
-```
-
 ---
 
-# 13. Phase 7 — 可选 Coverage 优化
+# 14. Phase 7 — 可选 Coverage
 
-Coverage 是单 Scene 的 9 镜头候选，不是 Chapter Timeline 的替代品。
+Coverage 是单 Scene 的 9 个镜头候选，不替代正式 Timeline。
 
-只在以下情况使用：
+适合：
 
 - 关键戏构图不满意；
-- 需要更多镜头语言候选；
-- 当前 Scene 难以直接生图；
-- 想把一个关键 Scene 扩展成多个正式镜头。
-
-生成：
+- 需要更多镜头语言；
+- Scene 难以直接生图；
+- 需要把关键 Scene 扩展为多个正式镜头。
 
 ```http
 POST /api/scenes/{SCENE_ID}/coverage
-```
-
-得到 9 个 candidate shots。
-
-应用到源 Scene：
-
-```http
+GET  /api/scenes/{SCENE_ID}/coverage
 POST /api/scenes/coverage/{SHOT_ID}/apply
+POST /api/scenes/coverage/{SHOT_ID}/promote
 ```
 
-提升成正式 Scene：
+promote body：
 
-```http
-POST /api/scenes/coverage/{SHOT_ID}/promote
-
+```json
 {
-  "position": "after"
+  "position": "before | after | replace"
 }
 ```
 
-`position`：
-
-- `before`
-- `after`
-- `replace`
-
-Coverage 完成后重新读取正式 Timeline，后续只对正式 `scene` 表中的 Scene 生图。
+Coverage 后重新读取正式 Timeline；后续只对正式 `scene` 表中的 Scene 生图。
 
 ---
 
-# 14. Phase 8 — Scene 生图
+# 15. Phase 8 — Scene 生图
 
 ## 页面模式（推荐）
-
-进入：
 
 ```text
 Project → Director → 分镜出图控制
 ```
 
-推荐：
+漫画目标推荐：
 
-- Asset mode：`Single image`（漫画目标）；
+- Asset mode：Single image；
 - 确认 Project render config；
-- 检查风格、model preset、SFW/NSFW policy；
-- 使用 `Generate all shots` 顺序批量生图。
+- 检查 style / model preset / SFW-NSFW policy；
+- `Generate all shots` 顺序批量生成。
 
-批量生成是顺序执行，适合有限 VRAM 环境。
+单 Scene 不满意时只重做该 Scene 或创建 Scene Version。
 
-如果只是修某一 Scene，使用单镜头生成或新建 Scene Version，不要整章全部重跑。
+## API
 
----
-
-## API 模式
-
-先取得 Workflow：
+先：
 
 ```http
 GET /api/workflows/
 ```
 
-对每个正式 Scene：
+再逐 Scene：
 
 ```http
 POST /api/assets/generate
-
-{
-  "scene_id": SCENE_ID,
-  "mode": "standard",
-  "workflow": {
-    "prompt": "FINAL_SCENE_PROMPT",
-    "model_type": "pony",
-    "style_preset": "PROJECT_STYLE",
-    "gen_type": "scene",
-    "shot_type": "SCENE_SHOT_TYPE",
-    "reference_tier": "A",
-    "project_settings": {
-      "nsfw_mode": "off"
-    }
-  },
-  "generation_params": {
-    "steps": 28,
-    "cfg": 6.5,
-    "sampler_name": "euler_ancestral",
-    "scheduler": "normal"
-  }
-}
 ```
 
-实际 workflow / generation_params 以项目当前工作流和设置为准；不要无条件硬编码示例参数。
-
-响应：
-
-```json
-{
-  "task_id": "...",
-  "status": "processing"
-}
-```
+使用当前项目实际 workflow；不要无条件复制示例生成参数。
 
 监控：
 
 ```http
 GET /api/assets/status/{TASK_ID}
-```
-
-或：
-
-```http
 GET /api/assets/stream/{TASK_ID}
 ```
 
-SSE 完成条件：
+单 Scene 进入图片完成态至少要求：
 
 ```text
-status == completed
-AND image_url != null
+asset_url exists
+```
+
+页面正常生成时通常同时会有：
+
+```text
+asset_status == completed
 ```
 
 ---
 
-# 15. Scene 图片验收与修复循环
+# 16. Phase 9 — 图片验收 / 修复循环
 
-对每个 Scene：
+对每个正式 Scene：
 
 ```text
-IF asset_status == completed AND asset_url exists
-    → 进入下一 Scene
+IF asset_url exists AND image accepted
+    → next scene
 ELSE
-    → 修复
+    → repair
 ```
 
 修复顺序：
 
-1. 检查 `visual_prompt`；
-2. 检查人物描述/visual tags；
-3. 检查 shot type 是否与构图需求冲突；
-4. 检查 Project style / model；
-5. 需要 A/B 时创建 Scene Version；
-6. 重新生成。
+1. visual_prompt；
+2. 人物 description / visual_tags；
+3. shot_type / camera；
+4. Project style / model；
+5. 必要时 Scene Version；
+6. 只重试失败 Scene。
 
-Scene Version API：
+版本 API：
 
 ```http
 GET  /api/timeline/scene/{SCENE_ID}/versions
@@ -879,267 +670,381 @@ POST /api/timeline/scene/{SCENE_ID}/versions
 POST /api/timeline/scene/{SCENE_ID}/versions/{VERSION}/activate
 ```
 
-不要为了修一张图覆盖已经满意的旧版本。
+不要为修一张图覆盖已经满意的旧版本。
 
 ---
 
-# 16. Phase 9 — 漫画生成
+# 17. Phase 10 — 可选单章漫画审阅
 
-## 16.1 硬前置
+当某章所有正式 Scene 图片都已接受，可生成单章 PDF：
 
-生成漫画前必须检查正式 Timeline：
-
-```http
-GET /api/timeline/{CHAPTER_ID}
-```
-
-完整漫画要求：
+页面：
 
 ```text
-每个正式 Scene 都有 asset_url
+Project → Director → Export & production → 生成本章漫画
 ```
 
-因为漫画接口只处理有 `asset_url` 的 Scene。
-
-另外检查：
-
-```text
-Scene.dialogue
-```
-
-漫画页字幕直接取自 `scene.dialogue`。
-
-如果需要字幕但 dialogue 为空，先更新 Scene。
-
----
-
-## 16.2 页面
-
-```text
-Project → Director
-  → Export & production
-  → Generate Comic
-```
-
-生成完成后：
-
-```text
-View Comic
-  → 翻页检查
-  → Download PDF
-```
-
----
-
-## 16.3 API
+API：
 
 ```http
 POST /api/comics/{CHAPTER_ID}/generate
 ```
 
-成功响应核心字段：
+当前章节接口保留兼容语义：可能跳过无 `asset_url` 或渲染失败的 Scene，因此完整审阅仍必须检查：
+
+```text
+generated_count == total_scenes
+pages.length == total_scenes
+pdf_url exists
+```
+
+不满足则回 Phase 8/9 修复。
+
+单章 PDF 是审阅产物；Project-level 最终 PDF 不依赖它。
+
+---
+
+# 18. Phase 11 — Project Comic Readiness
+
+这是整本漫画生成前的**硬门禁**。
+
+页面点击“生成整本漫画 PDF”时会先自动检查。
+
+API 自动化必须先：
+
+```http
+GET /api/comics/project/{PROJECT_ID}/status
+```
+
+核心响应：
+
+```json
+{
+  "project_id": 12,
+  "ready": false,
+  "total_chapters": 10,
+  "ready_chapters": 9,
+  "total_scenes": 86,
+  "ready_scenes": 84,
+  "chapters": [
+    {
+      "chapter_id": "...",
+      "index": 10,
+      "title": "第十章",
+      "total_scenes": 8,
+      "ready_scenes": 6,
+      "missing_scene_ids": [81, 82],
+      "ready": false,
+      "blocker": "missing_assets"
+    }
+  ]
+}
+```
+
+`blocker`：
+
+- `no_scenes`：该章没有正式 Timeline；
+- `missing_assets`：存在正式 Scene 无 `asset_url`；
+- `null`：该章就绪。
+
+只有：
+
+```text
+ready == true
+AND ready_chapters == total_chapters
+AND ready_scenes == total_scenes
+```
+
+才进入整本生成。
+
+注意：Project-level endpoint 当前严格覆盖**项目内所有 Chapter**。如果项目中保留了不准备出版的草稿 Chapter，它也会阻塞整本 readiness；应先明确项目结构，而不是让接口静默跳过。
+
+---
+
+# 19. Phase 12 — 生成整本漫画 PDF
+
+## 页面
+
+```text
+Project → Director
+  → Export & production
+  → 生成整本漫画 PDF
+```
+
+行为：
+
+1. 先读取 Project readiness；
+2. 不就绪时只提示缺 Timeline / 缺图数量，不生成；
+3. 就绪后严格组装；
+4. 成功后直接打开 Project PDF。
+
+## API
+
+```http
+POST /api/comics/project/{PROJECT_ID}/generate
+```
+
+如果 readiness 不满足：
+
+```text
+HTTP 409
+```
+
+并返回结构化 `details`，不得当作可忽略 warning。
+
+成功响应核心：
 
 ```json
 {
   "status": "completed",
-  "chapter_id": "...",
-  "total_scenes": 12,
-  "generated_count": 12,
+  "project_id": 12,
+  "total_chapters": 10,
+  "total_scenes": 86,
+  "generated_count": 86,
+  "chapters": [
+    {
+      "chapter_id": "...",
+      "index": 1,
+      "title": "第一章",
+      "total_scenes": 9,
+      "page_count": 9
+    }
+  ],
   "pages": [
     {
+      "chapter_id": "...",
       "scene_id": 1,
       "url": "/static/comics/comic_scene_1.jpg"
     }
   ],
-  "pdf_url": "/static/comics/chapter_xxx_comic.pdf"
+  "pdf_url": "/static/comics/project_12_comic.pdf"
 }
 ```
 
-### 完整验收条件
+### 严格最终验收
 
-不要只检查 `status == completed`。
-
-必须检查：
+必须同时满足：
 
 ```text
+status == completed
 generated_count == total_scenes
-AND pages.length == total_scenes
-AND pdf_url exists
+sum(chapters.page_count) == total_scenes
+pages.length == total_scenes
+pdf_url exists
 ```
 
-如果：
+页面顺序必须保持：
 
 ```text
-generated_count < total_scenes
+Chapter.index ASC → Scene.index ASC
 ```
 
-说明至少一个 Scene 没有可用图片或漫画页渲染失败。
-
-回到 Phase 8 修复缺失 Scene，再重新生成该章漫画。
+如果任一 Scene 在渲染过程中失败，整本生成失败，不把部分页面包装成“完整 PDF”。
 
 ---
 
-# 17. Phase 10 — 全 Project 循环
-
-对 Chapters：
+# 20. 全 Project 编排伪代码
 
 ```pseudo
-chapters = GET /chapters/?project_id=PROJECT_ID
+project = GET /projects/{PROJECT_ID}
+chapters = GET /chapters/?project_id={PROJECT_ID}
 sort chapters by index
 
+preflight(project)
+validate_story_bible_and_context()
+
 for chapter in chapters:
-    if chapter is outside user target scope:
-        continue
+    if chapter content is not accepted:
+        draft_or_edit_with_preview()
 
-    ensure chapter finalized
-    ensure impact/world sync done
-    ensure main characters visually ready
-    ensure timeline exists and matches final content
-    ensure all formal scenes have image assets
-    generate chapter comic
-    verify generated_count == total_scenes
-    record pdf_url
+    run_consistency_when_needed()
+    finalize_chapter()
+    sync_chapter_impact_or_explicitly_confirm_no_delta()
+
+prepare_main_character_visuals()
+
+for chapter in chapters:
+    timeline = GET /timeline/{chapter.id}
+    if timeline missing:
+        generate narrative timeline
+    else:
+        validate existing timeline against final chapter
+
+    refine key scenes with coverage only when needed
+
+    for scene in formal timeline:
+        if scene image is missing or rejected:
+            generate / repair only that scene
+
+    optional generate chapter comic for review
+
+readiness = GET /comics/project/{PROJECT_ID}/status
+
+if readiness.ready != true:
+    repair readiness blockers
+    repeat status check
+
+book = POST /comics/project/{PROJECT_ID}/generate
+
+assert book.status == completed
+assert book.generated_count == book.total_scenes
+assert book.pages.length == book.total_scenes
+assert book.pdf_url exists
 ```
-
-最终输出 manifest：
-
-```text
-Project: {title}
-
-Chapter 1
-- chapter_id
-- scenes
-- generated_pages
-- pdf_url
-
-Chapter 2
-- ...
-```
-
-当前系统没有 Project-level PDF merge；manifest 中保留每章 `pdf_url`。
 
 ---
 
-# 18. 页面优先 vs API 优先选择规则
+# 21. 页面优先 vs API 优先
 
 | 阶段 | 默认路径 | 原因 |
 |---|---|---|
-| Story Bible | 页面 | 防止覆盖未知 settings key |
+| Story Bible | 页面 | 防止意外覆盖 settings |
 | 附加资料 | 页面 | 用户明确控制 AI Context |
-| 正文人工修改 | 页面 | 最适合审稿 |
-| AI Draft / Skill | API 或 Agent OS | 可 dry-run / 可编排 |
-| 一致性检查 | API / Agent OS | 结构化 issues |
-| Chapter Impact | API / Agent OS | 明确 apply 边界 |
-| Character visual | 页面优先 | 当前 UI 已封装 prompt/ref/VRAM 流程 |
-| Timeline | 页面或 API | 两者语义清晰 |
+| 正文人工审稿 | 页面 | 编辑体验最好 |
+| AI Draft / Skill | API / Agent OS | 可 Preview、可编排 |
+| 一致性 | API / Agent OS | 结构化 issues |
+| Chapter Impact | API / Agent OS | apply 边界清楚 |
+| Character visual | 页面优先 | 已封装 prompt/ref/VRAM |
+| Timeline | 页面或 API | 两者语义明确 |
 | Coverage | 页面/API | 按关键 Scene 使用 |
-| Scene 生图 | Director 页面优先 | 已封装 Project style、人物参考、SSE、VRAM |
-| 漫画 | 页面或 API | Chapter-level endpoint 明确 |
+| Scene 生图 | Director 页面优先 | 已封装 style/ref/SSE/VRAM |
+| 单章漫画 | 页面或 API | 用于中途审阅 |
+| Project readiness | API / 页面按钮自动检查 | 明确最终 blocker |
+| 整本漫画 | Director 页面或 API | 严格 Project-level endpoint |
 
 ---
 
-# 19. 不允许的快捷方式
+# 22. 禁止的快捷方式
 
 不要：
 
 - 导入完成后直接跳过正文验收到 Timeline；
 - 每章无条件调用 AI 续写；
 - 每章无条件执行所有写作 Skill；
-- Chapter 未定稿时 `APPLY_CHAPTER_IMPACT`；
-- Timeline 已存在时无条件重新生成；
-- 使用已弃用 Chapter-level `nine_shot_coverage`；
-- Scene 缺图时仍把漫画接口返回的部分页面当“完整漫画”；
+- Chapter 未定稿时 `APPLY_CHAPTER_IMPACT apply=true`；
+- 已有合格 Timeline 时无条件重新生成；
+- 使用弃用的 Chapter-level `nine_shot_coverage`；
+- Scene 缺图时把单章部分页面当完整漫画；
+- 不做 readiness 就直接反复调用整本 generate；
+- 收到整本 409 后忽略 blocker；
 - 为了人物一致性强制所有 Scene 使用单人物 IP-Adapter；
-- 把 Agent OS 当成支持 `GENERATE_ASSET` / `GENERATE_COMIC`；
-- 在未读取当前 Project settings 的情况下 PUT 一个全新的 settings JSON 覆盖已有配置。
+- 把 Agent OS 当成支持生图或漫画 action；
+- 在未读取 Project settings 的情况下 PUT 全新 settings 覆盖已有配置；
+- 把旧 chapter PDF 当成 Project-level source of truth。
 
 ---
 
-# 20. 失败恢复
+# 23. 失败恢复
 
 ## LLM 失败
 
 - 保留现有 Chapter；
-- 不修改正文；
-- 修复 `/api/settings/verify-llm` 后从当前章继续。
+- 不写正文；
+- 修复 LLM 配置后从当前章继续。
 
 ## Timeline 失败
 
-- 现有 Timeline 若仍存在，不先删除；
+- 已有 Timeline 不先删除；
 - 检查 Chapter content；
-- 再执行 generate。
+- 再决定是否 generate。
 
-## 生图失败
+## Scene 生图失败
 
 - 读取 `/api/assets/status/{task_id}`；
 - 必要时 `/api/assets/cancel`；
 - 修改该 Scene 或新建版本；
 - 只重试失败 Scene。
 
-## Comic 生成失败
+## 单章 Comic 失败
 
-- `No scenes found` → 回 Phase 6；
-- `No scenes have generated images` → 回 Phase 8；
-- `generated_count < total_scenes` → 找出无图 Scene，再补图；
-- PDF 有页但字幕错误 → 修 `scene.dialogue` 后重新生成漫画。
+- `No scenes found` → 回 Timeline；
+- `No scenes have generated images` → 回 Scene 生图；
+- `generated_count < total_scenes` → 修缺图/渲染失败 Scene。
+
+## Project readiness 不通过
+
+读取：
+
+```http
+GET /api/comics/project/{PROJECT_ID}/status
+```
+
+逐章根据 blocker 修：
+
+```text
+no_scenes      → Phase 6
+missing_assets → Phase 8/9
+```
+
+不要重做已经 ready 的 Chapter。
+
+## Project generate 失败
+
+- HTTP 409 → readiness 在检查后发生变化，重新 status 并修 blocker；
+- HTTP 500 / 指定 scene_id → 修该 Scene 的图片源，再重试整本；
+- PDF 可生成但内容过期 → 检查正式 Scene / active version 是否已切到正确版本，再重建。
 
 ---
 
-# 21. Skill 最终报告模板
-
-完成后报告：
+# 24. 最终报告模板
 
 ```markdown
-## NovaStory 创作完成报告
+## NovaStory 整本漫画创作完成报告
 
 Project: <title> (#<project_id>)
 
 ### 小说
-- 目标章节：N
-- 已定稿：N
-- 一致性检查：通过 / 尚有 X 项
-- 角色同步：完成 / 部分完成
+- Chapters: N
+- 已定稿: N/N
+- 一致性检查: 通过 / 剩余 X 项
+- 角色/术语同步: 完成 / 明确无需变化
 
 ### 角色视觉
-- 主要角色：N
-- portrait/turnaround 就绪：N/N
+- 主要角色: N
+- 稳定视觉定义: N/N
+- portrait/turnaround: 按需完成
 
 ### 分镜
-- 已生成 Timeline：N/N chapters
-- Scene 总数：N
+- narrative Timeline: N/N chapters
+- Scene 总数: N
 
 ### 生图
-- Scene 图片完成：N/N
-- 失败/待重试：0
+- Scene asset_url: N/N
+- 待重试: 0
 
-### 漫画
-- Chapter PDF：N/N
-- 每章 generated_count == total_scenes：是/否
-- PDF URLs:
-  - Chapter 1: ...
-  - Chapter 2: ...
+### 可选单章漫画
+- 已生成 Chapter PDF: N/N 或按需生成
 
-### 当前系统缺口
-- Project-level 全书 PDF merge：未实现（如用户需要）
+### 整本漫画
+- readiness: ready
+- total_chapters: N
+- total_scenes: N
+- generated_count: N
+- generated_count == total_scenes: yes
+- Project PDF: /static/comics/project_<id>_comic.pdf
 ```
 
 ---
 
-# 22. 最终 Definition of Done
+# 25. 最终 Definition of Done
 
-只有同时满足以下条件，才能宣布“该目标范围已完成漫画创作”：
+只有同时满足以下条件，才能宣布“小说 → 整本漫画”完成：
 
 - [ ] Project / Chapter 数据可读取；
-- [ ] 目标 Chapter 正文已接受并定稿；
-- [ ] 全书/目标范围不存在未处理的关键一致性问题；
-- [ ] 已定稿 Chapter 的角色/术语变化已同步或人工确认无需同步；
-- [ ] 主要角色具备稳定视觉定义；
-- [ ] 每个目标 Chapter 有正式 narrative Timeline；
-- [ ] 每个正式 Scene 均有成功 `asset_url`；
-- [ ] 需要字幕的 Scene 已有正确 dialogue；
-- [ ] 每个目标 Chapter 的 Comic API 成功；
-- [ ] 每章 `generated_count == total_scenes`；
-- [ ] 每章 `pdf_url` 可访问；
-- [ ] 最终报告记录所有 Chapter PDF。
+- [ ] 所有正式 Chapter 正文已接受并定稿；
+- [ ] 没有未处理的关键一致性问题；
+- [ ] 已定稿内容的角色/术语变化已同步或明确确认无需同步；
+- [ ] 主要角色具有稳定视觉定义；
+- [ ] 每个 Chapter 都有正式 narrative Timeline；
+- [ ] 每个正式 Scene 均有已接受的 `asset_url`；
+- [ ] 需要字幕的 Scene 有正确 dialogue；
+- [ ] `GET /comics/project/{PROJECT_ID}/status` 返回 `ready == true`；
+- [ ] `ready_chapters == total_chapters`；
+- [ ] `ready_scenes == total_scenes`；
+- [ ] Project Comic API 成功；
+- [ ] `generated_count == total_scenes`；
+- [ ] `pages.length == total_scenes`；
+- [ ] Project `pdf_url` 可访问；
+- [ ] 最终报告记录整本 PDF。
 
-如果任何一项不满足，不要把工作流标记为 completed；从对应 Phase 继续修复。
+任一条件不满足，不要把工作流标记为 completed；从对应 Phase 恢复执行。
