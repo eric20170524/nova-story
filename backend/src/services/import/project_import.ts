@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../db/database';
+import { parseProjectImportFile } from './import_file';
+import { restoreNovaStoryJsonProject } from './novastory_json_import';
 import type { NovelImportDraft } from './types';
 
 export { draftFromTextProject } from './text_adapter';
@@ -91,4 +93,21 @@ export const importNovelDraft = async (
     await db.exec('ROLLBACK');
     throw error;
   }
+};
+
+/**
+ * Canonical commit entry for every supported project-import file.
+ * Parsing is deterministic and side-effect free; only the selected persistence
+ * strategy performs database writes.
+ */
+export const commitProjectImportFile = async (
+  data: Uint8Array,
+  filename: string,
+  userId: string
+) => {
+  const parsed = parseProjectImportFile(data, filename);
+
+  return parsed.kind === 'novel-draft'
+    ? importNovelDraft(parsed.draft, userId)
+    : restoreNovaStoryJsonProject(parsed.jsonContent, filename, userId);
 };
