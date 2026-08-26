@@ -7,8 +7,8 @@
 
 - 分支：`feature/novel-document-import`
 - PR：`#7 feat: structured novel document import with preview`
-- PR 状态：合入前最终验证中；验证通过后恢复 Ready for review
-- 自动验证：以 PR checks 为准
+- PR 状态：Ready for review
+- 自动验证：PR checks 全绿
 - 合入建议：Squash merge
 
 新小说项目主链路已经闭环：
@@ -400,7 +400,7 @@ Legacy /projects/import
 - [x] Native Preview / Commit graph parity
 - [x] Story Bible → final writing prompt 回归测试
 - [x] Typecheck / full backend tests / production build
-- [ ] 当前文档头 PR checks 全绿
-- [ ] PR 恢复 Ready for review
+- [x] 当前文档头 PR checks 全绿
+- [x] PR Ready for review
 
 当前非阻塞后续项：legacy endpoint deprecation、Native backup v2、已有项目附加资料、DOCX / EPUB。
