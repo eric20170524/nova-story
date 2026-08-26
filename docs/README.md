@@ -6,6 +6,7 @@
 
 | 你想… | 文档 |
 | --- | --- |
+| 从已导入小说一路创作到漫画 | [novel-to-comic Skill](../skills/novel-to-comic/SKILL.md) |
 | 在 3060 上装 ComfyUI / 模型 | [comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md) |
 | 选型 Pony vs SD1.5、为何不用 FLUX | [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md) |
 | 角色参考 / IP-Adapter / ControlNet 何时生效 | [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md) |
@@ -19,6 +20,7 @@
 
 | 文档 | 状态 | 说明 |
 | --- | --- | --- |
+| `skills/novel-to-comic/SKILL.md` | ✅ 现行 | 已导入小说 → 定稿 → 人物 → 分镜 → 生图 → 逐章漫画 PDF 的可恢复编排 Skill |
 | `comfyui_local_setup_guide_3060.md` | ✅ 现行 | 安装与对接 |
 | `local_image_generation_deployment_cn.md` | ✅ 现行 | 双轨策略与退役说明 |
 | `local_image_reference_policy_cn.md` | ✅ 现行 | 档位 A/B 与 IP 门禁（v4 踩坑后修订） |
