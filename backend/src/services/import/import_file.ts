@@ -1,6 +1,10 @@
 import path from 'path';
 import { decodeTextFile, parseTextProject } from '../text_import';
 import { parseMarkdownNovel } from './markdown_import';
+import {
+  normalizeNovaStoryJsonProject,
+  type NovaStoryJsonImportProject,
+} from './novastory_json_model';
 import { draftFromTextProject } from './text_adapter';
 import type { NovelImportDraft } from './types';
 
@@ -21,7 +25,7 @@ export type ParsedProjectImportFile =
     }
   | {
       kind: 'novastory-project';
-      jsonContent: Record<string, any>;
+      project: NovaStoryJsonImportProject;
     };
 
 export const parseProjectImportFile = (
@@ -49,17 +53,9 @@ export const parseProjectImportFile = (
   }
 
   if (isJsonFile || rawText.trim().startsWith('{')) {
+    let parsedJson: unknown;
     try {
-      const parsed = JSON.parse(rawText);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return {
-          kind: 'novastory-project',
-          jsonContent: parsed as Record<string, any>,
-        };
-      }
-      if (isJsonFile) {
-        throw new Error('JSON root must be an object');
-      }
+      parsedJson = JSON.parse(rawText);
     } catch (error) {
       if (isJsonFile) {
         throw new ProjectImportInputError(
@@ -68,6 +64,30 @@ export const parseProjectImportFile = (
             : 'Could not parse the selected JSON file'
         );
       }
+    }
+
+    if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
+      try {
+        return {
+          kind: 'novastory-project',
+          project: normalizeNovaStoryJsonProject(
+            parsedJson as Record<string, any>,
+            filename
+          ),
+        };
+      } catch (error) {
+        if (isJsonFile) {
+          throw new ProjectImportInputError(
+            error instanceof Error
+              ? `Could not import the selected JSON project: ${error.message}`
+              : 'Could not import the selected JSON project'
+          );
+        }
+        // A .txt file that happens to start with "{" remains a text manuscript
+        // unless it has a recognizable, valid project-export shape.
+      }
+    } else if (isJsonFile && parsedJson !== undefined) {
+      throw new ProjectImportInputError('Could not import the selected JSON project: JSON root must be an object');
     }
   }
 
