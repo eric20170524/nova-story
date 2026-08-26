@@ -1,4 +1,4 @@
-export type NovelImportSourceFormat = 'text' | 'markdown';
+export type NovelImportSourceFormat = 'text' | 'markdown' | 'docx';
 
 export type NovelImportCharacterRole = 'Protagonist' | 'Antagonist' | 'Supporting';
 
