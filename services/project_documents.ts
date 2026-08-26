@@ -17,6 +17,7 @@ export interface ProjectDocumentSummary {
   mime_type?: string | null;
   checksum: string;
   metadata_json?: string | null;
+  context_enabled: number | boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -102,6 +103,17 @@ export const createProjectDocument = (
   name?: string
 ): Promise<ProjectDocumentSummary> =>
   upload<ProjectDocumentSummary>(projectId, file, documentType, false, name);
+
+export const updateProjectDocumentContext = (
+  projectId: number,
+  documentId: number,
+  enabled: boolean
+): Promise<ProjectDocumentSummary> =>
+  request<ProjectDocumentSummary>(`/projects/${projectId}/documents/${documentId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context_enabled: enabled }),
+  });
 
 export const deleteProjectDocument = (
   projectId: number,
