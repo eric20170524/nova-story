@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Video, BookOpen, Settings, X, Sliders, Zap, PlayCircle, Square } from 'lucide-react';
+import { Loader2, Video, BookOpen, Settings, X, Sliders, Zap, PlayCircle, Square, Library } from 'lucide-react';
 import { Scene, AssetMode } from '../../types';
 import { formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
@@ -19,6 +19,9 @@ interface DirectorRightPanelProps {
   onRenderVideo: () => void;
   generatingComic: boolean;
   onGenerateComic: () => void;
+  generatingProjectComic?: boolean;
+  onGenerateProjectComic?: () => void;
+  projectChapterCount?: number;
   comicPages: any[];
   showComicViewer: boolean;
   setShowComicViewer: (show: boolean) => void;
@@ -43,6 +46,9 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   onRenderVideo,
   generatingComic,
   onGenerateComic,
+  generatingProjectComic = false,
+  onGenerateProjectComic,
+  projectChapterCount = 0,
   comicPages,
   showComicViewer,
   setShowComicViewer,
@@ -198,8 +204,26 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                     className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                      {generatingComic ? <Loader2 className="animate-spin" size={14} /> : <BookOpen size={14} />}
-                     {t('director.generate_comic')}
+                     {t('director.generate_comic', '生成本章漫画')}
                   </button>
+
+                  {onGenerateProjectComic && (
+                    <button
+                      onClick={onGenerateProjectComic}
+                      disabled={generatingProjectComic || projectChapterCount === 0}
+                      className="w-full py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="严格模式：所有章节必须已有分镜，且每个正式 Scene 都必须有图片"
+                    >
+                      {generatingProjectComic ? <Loader2 className="animate-spin" size={14} /> : <Library size={14} />}
+                      {t('director.generate_project_comic', '生成整本漫画 PDF')} ({projectChapterCount})
+                    </button>
+                  )}
+
+                  {onGenerateProjectComic && (
+                    <p className="px-1 text-[10px] leading-relaxed text-slate-600">
+                      {t('director.project_comic_strict_hint', '整本导出采用严格模式：任一章节缺少分镜或任一 Scene 缺图时不会生成不完整 PDF。')}
+                    </p>
+                  )}
                </div>
 
                {comicPages.length > 0 && (
