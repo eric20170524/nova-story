@@ -25,8 +25,8 @@ const MARKDOWN = [
   '耳朵敏锐地抖了抖。',
 ].join('\n');
 
-test('builds a non-persistent markdown preview', () => {
-  const preview = buildProjectImportPreview(
+test('builds a non-persistent markdown preview', async () => {
+  const preview = await buildProjectImportPreview(
     Buffer.from(MARKDOWN, 'utf8'),
     '失声的梦核游乐园.md'
   );
@@ -47,8 +47,8 @@ test('builds a non-persistent markdown preview', () => {
   ]);
 });
 
-test('previews the same restorable NovaStory JSON graph used by commit', () => {
-  const preview = buildProjectImportPreview(
+test('previews the same restorable NovaStory JSON graph used by commit', async () => {
+  const preview = await buildProjectImportPreview(
     Buffer.from(JSON.stringify({
       format: 'novastory-project',
       project: {
@@ -91,8 +91,8 @@ test('previews the same restorable NovaStory JSON graph used by commit', () => {
   assert.deepEqual(preview.warnings, []);
 });
 
-test('native JSON preview excludes orphan director nodes and explains why', () => {
-  const preview = buildProjectImportPreview(
+test('native JSON preview excludes orphan director nodes and explains why', async () => {
+  const preview = await buildProjectImportPreview(
     Buffer.from(JSON.stringify({
       format: 'novastory-project',
       project: { title: 'Orphan Test', settings: [] },
@@ -127,9 +127,9 @@ test('native JSON preview excludes orphan director nodes and explains why', () =
   assert.ok(preview.warnings.some((warning) => /missing coverage group/i.test(warning)));
 });
 
-test('rejects duplicate native JSON ids before persistence', () => {
-  assert.throws(
-    () => buildProjectImportPreview(
+test('rejects duplicate native JSON ids before persistence', async () => {
+  await assert.rejects(
+    buildProjectImportPreview(
       Buffer.from(JSON.stringify({
         format: 'novastory-project',
         project: { title: 'Duplicate IDs' },
@@ -150,9 +150,9 @@ test('rejects duplicate native JSON ids before persistence', () => {
   );
 });
 
-test('rejects arbitrary JSON objects that are not project exports', () => {
-  assert.throws(
-    () => buildProjectImportPreview(
+test('rejects arbitrary JSON objects that are not project exports', async () => {
+  await assert.rejects(
+    buildProjectImportPreview(
       Buffer.from(JSON.stringify({ unrelated: true })),
       'unrelated.json'
     ),
@@ -164,9 +164,9 @@ test('rejects arbitrary JSON objects that are not project exports', () => {
   );
 });
 
-test('rejects unsupported file extensions before parsing', () => {
-  assert.throws(
-    () => buildProjectImportPreview(Buffer.from('x'), 'novel.pdf'),
+test('rejects unsupported file extensions before parsing', async () => {
+  await assert.rejects(
+    buildProjectImportPreview(Buffer.from('x'), 'novel.pdf'),
     (error: unknown) => (
       error instanceof ProjectImportInputError
       && error.statusCode === 415
