@@ -47,9 +47,9 @@ test('generates rasterized subtitle pages and a PDF from local scene images', as
   );
   await db.run(
     `INSERT INTO scene (
-       chapter_id, "index", visual_prompt, dialogue, asset_status, asset_url
+       chapter_id, "index", visual_prompt, dialogue, narration, asset_status, asset_url
      ) VALUES (
-       'comic-chapter', 1, 'A blue room', '角色：出发。', 'completed',
+       'comic-chapter', 1, 'A blue room', '角色：出发。', '我终于找到了出口。', 'completed',
        '/static/generated/scene.png'
      )`
   );
@@ -157,6 +157,8 @@ test('project comic status blocks incomplete books and generates one strict full
   assert.equal(readyStatus.statusCode, 200, readyStatus.body);
   assert.equal(readyStatus.json().ready, true);
   assert.equal(readyStatus.json().ready_chapters, 2);
+  assert.equal(readyStatus.json().text_ready_scenes, 2);
+  assert.equal(readyStatus.json().chapters[0].text_ready, true);
 
   const generated = await app.inject({
     method: 'POST',
@@ -227,6 +229,50 @@ test('project comic readiness marks chapters without timelines as no_scenes', as
   assert.equal(body.chapters[0].ready, false);
   assert.equal(body.chapters[0].blocker, 'no_scenes');
   assert.deepEqual(body.chapters[0].missing_scene_ids, []);
+
+  await app.close();
+});
+
+test('comic readiness blocks image-only scenes without narration or dialogue', async () => {
+  const [{ default: Fastify }, { db }, { comicRoutes }] = await Promise.all([
+    import('fastify'),
+    import('../db/database'),
+    import('./comics')
+  ]);
+  const staticDirectory = process.env.NOVASTORY_STATIC_DIR!;
+  const generatedDirectory = path.join(staticDirectory, 'generated');
+  await createImage(path.join(generatedDirectory, 'silent.png'), '#0f172a');
+
+  const project = await db.run("INSERT INTO project (title) VALUES ('Silent Book')");
+  const projectId = Number(project.lastID);
+  await db.run(
+    `INSERT INTO chapter (id, project_id, "index", title, content)
+     VALUES ('silent-chapter', ?, 1, '无字章节', '正文')`,
+    projectId
+  );
+  const scene = await db.run(
+    `INSERT INTO scene (chapter_id, "index", visual_prompt, asset_status, asset_url)
+     VALUES ('silent-chapter', 1, 'Silent image', 'completed', '/static/generated/silent.png')`
+  );
+
+  const app = Fastify();
+  await app.register(comicRoutes, { prefix: '/api/comics' });
+  await app.ready();
+
+  const status = await app.inject({
+    method: 'GET',
+    url: `/api/comics/project/${projectId}/status`
+  });
+  const body = status.json();
+  assert.equal(body.ready, false);
+  assert.equal(body.chapters[0].blocker, 'missing_text');
+  assert.deepEqual(body.chapters[0].missing_text_scene_ids, [Number(scene.lastID)]);
+
+  const generated = await app.inject({
+    method: 'POST',
+    url: '/api/comics/silent-chapter/generate'
+  });
+  assert.equal(generated.statusCode, 409, generated.body);
 
   await app.close();
 });

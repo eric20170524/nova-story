@@ -49,6 +49,15 @@ export interface PromptEnhancement {
   negativeExtra: string;
 }
 
+export type PromptSubjectType =
+  | 'female_human'
+  | 'male_human'
+  | 'human'
+  | 'nonhuman'
+  | 'mixed'
+  | 'environment'
+  | 'unknown';
+
 export interface LoraResolveInput {
   modelFamily: ImageModelFamily;
   nsfwEnabled: boolean;
@@ -208,21 +217,97 @@ const STYLE_NARRATIVE_STRIP_RE =
 
 export type StyleShotMode = 'portrait' | 'action' | 'aftermath' | 'environment' | 'general';
 
+const NONHUMAN_SUBJECT_RE =
+  /\b(animal|creature|furry|furred|quadruped|paw|paws|paw pads?|whiskers?|muzzle|snout|beak|hooves?|tail|kitten|cat|puppy|dog|fox|rabbit|bunny|wolf|bear|otter|hamster|mouse|deer|bird)\b/i;
+const FEMALE_HUMAN_RE =
+  /\b(1girl|2girls|3girls|girl|girls|woman|women|female|goddess|princess|swordswoman|heroine|lady|ladies)\b/i;
+const MALE_HUMAN_RE =
+  /\b(1boy|2boys|3boys|boy|boys|man|men|male|prince|swordsman|hero|gentleman)\b/i;
+const ENVIRONMENT_RE =
+  /\b(extreme long shot|establishing shot|wide shot|long shot|panoramic|landscape|environment|overview|cityscape|plaza|square|amusement park|theme park|corridor|hallway|ticket booth|palace|hall|room|street|forest|mountains?|cloud sea)\b/i;
+const ENVIRONMENT_SHOT_RE =
+  /\b(extreme long shot|establishing shot|wide shot|long shot|panoramic|landscape|overview|aerial shot|overhead shot|bird'?s[- ]eye)\b/i;
+const HUMAN_IDENTITY_CLAUSE_RE =
+  /beautiful .*woman|chinese beauty|japanese anime beauty|east asian (?:facial|face)|delicate feminine face|soft jawline|pretty face|refined facial features|long flowing hair|fairy elegance|\b(?:1girl|2girls|3girls|female|woman|women|girl|girls)\b/i;
+const HUMAN_IDENTITY_NEGATIVE_RE =
+  /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
+
+/** Infer subject semantics without inventing a gender or species. */
+export const inferPromptSubjectType = (
+  existingPrompt: string,
+  explicitSubjectType?: string | null
+): PromptSubjectType => {
+  const explicit = String(explicitSubjectType || '').toLowerCase().trim();
+  if (/mixed|multi-species|human[ _-]*(?:and|with)[ _-]*(?:animal|creature)/.test(explicit)) return 'mixed';
+  if (/animal|nonhuman|non-human|creature|furry|quadruped/.test(explicit)) return 'nonhuman';
+  if (/environment|landscape|location|scenery/.test(explicit)) return 'environment';
+  if (/female|woman|girl/.test(explicit)) return 'female_human';
+  if (/male|man|boy/.test(explicit)) return 'male_human';
+  if (/human|person|people/.test(explicit)) return 'human';
+
+  const prompt = String(existingPrompt || '');
+  if (NONHUMAN_SUBJECT_RE.test(prompt)) return 'nonhuman';
+  if (FEMALE_HUMAN_RE.test(prompt)) return 'female_human';
+  if (MALE_HUMAN_RE.test(prompt)) return 'male_human';
+  if (ENVIRONMENT_RE.test(prompt)) return 'environment';
+  return 'unknown';
+};
+
+/** Remove legacy human-portrait clauses when structured scene data says otherwise. */
+export const sanitizePromptForSubject = (
+  prompt: string,
+  subjectType?: string | null
+): string => {
+  const inferred = inferPromptSubjectType(prompt, subjectType);
+  if (inferred !== 'nonhuman' && inferred !== 'environment') return String(prompt || '');
+  return String(prompt || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !HUMAN_IDENTITY_CLAUSE_RE.test(part))
+    .join(', ');
+};
+
+/** Human identity negatives can indirectly force an animal/environment prompt female. */
+export const sanitizeNegativePromptForSubject = (
+  prompt: string,
+  subjectType?: string | null
+): string => {
+  const explicit = String(subjectType || '').toLowerCase();
+  if (!/animal|nonhuman|non-human|creature|furry|quadruped|environment|landscape|location|scenery/.test(explicit)) {
+    return String(prompt || '');
+  }
+  return String(prompt || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !HUMAN_IDENTITY_NEGATIVE_RE.test(part))
+    .join(', ');
+};
+
 /**
  * Infer how aggressively style boosters may inject beauty/portrait language.
  * Does not require wardrobe_state fields — pure prompt heuristics.
  */
 export const inferStyleShotMode = (
   existingPrompt: string,
-  opts?: { genType?: string | null; shotType?: string | null }
+  opts?: { genType?: string | null; shotType?: string | null; subjectType?: string | null }
 ): StyleShotMode => {
   const p = String(existingPrompt || '');
   const gen = String(opts?.genType || '').toLowerCase();
   const shot = String(opts?.shotType || '').toLowerCase();
 
+  const subjectType = inferPromptSubjectType(p, opts?.subjectType);
+
+  // A wide/establishing camera instruction is a composition contract even when
+  // a character is present. Previously any detected animal/human prevented the
+  // shot from entering environment mode, so Pony received no small-subject or
+  // anti-portrait guidance and routinely turned wide shots into portraits.
+  if (ENVIRONMENT_SHOT_RE.test(shot)) {
+    return 'environment';
+  }
+
   if (
-    /\bextreme long shot\b|\bestablishing\b|\bcloud sea\b|\bempty (palace|hall|room)\b/i.test(p)
-    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|portrait|goddess|immortal|martial/i.test(p)
+    (ENVIRONMENT_RE.test(`${shot} ${p}`) || /\bempty (palace|hall|room|plaza|street)\b/i.test(p))
+    && (subjectType === 'environment' || subjectType === 'unknown')
   ) {
     return 'environment';
   }
@@ -526,6 +611,62 @@ const joinUniqueCsv = (parts: string[]): string =>
     .filter((part, index, arr) => arr.findIndex((x) => x.toLowerCase() === part.toLowerCase()) === index)
     .join(', ');
 
+/** Split a comma-separated CLIP prompt into trimmed tokens (keeps weighted phrases intact). */
+export const splitCsvPromptTokens = (text: string): string[] =>
+  String(text || '')
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+const QUALITY_TOKEN_RE =
+  /^(score_\d+(?:_up)?|source_anime|source_cartoon|masterpiece|best quality)$/i;
+
+export const isQualityPromptToken = (token: string): boolean => {
+  const bare = String(token || '')
+    .replace(/^\(+/, '')
+    .replace(/\)+:[\d.]+$/, '')
+    .replace(/\)+$/, '')
+    .trim();
+  return QUALITY_TOKEN_RE.test(bare);
+};
+
+/**
+ * Final Pony/SD positive order: scene → shared framing → quality.
+ * Template tokens like `cinematic shot` stay in framing; `score_*` / `source_anime` go last once.
+ */
+export const mergeClipPositivePrompt = (parts: {
+  scene: string;
+  framing?: string;
+  templateText?: string;
+  quality?: string;
+}): string => {
+  const sceneTokens = splitCsvPromptTokens(parts.scene);
+  const framingTokens: string[] = [];
+  const qualityTokens: string[] = [];
+
+  const pushClassified = (token: string) => {
+    if (isQualityPromptToken(token)) qualityTokens.push(token);
+    else framingTokens.push(token);
+  };
+
+  for (const token of splitCsvPromptTokens(parts.framing || '')) pushClassified(token);
+  for (const token of splitCsvPromptTokens(parts.templateText || '')) pushClassified(token);
+  for (const token of splitCsvPromptTokens(parts.quality || '')) {
+    // Explicit quality bag — force quality section even if misclassified.
+    qualityTokens.push(token);
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of [...sceneTokens, ...framingTokens, ...qualityTokens]) {
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out.join(', ');
+};
+
 /**
  * Build positive/negative prompt boosters for model + NSFW mode + optional style preset.
  * Style must not override narrative clothing state or combat composition.
@@ -540,6 +681,10 @@ export const buildPromptEnhancement = (options: {
   /** Optional hints for style shot mode (gen_type / shot_type) */
   genType?: string | null;
   shotType?: string | null;
+  /** Structured shot_intent from scene.shot_spec (insert / establish / …). */
+  shotIntent?: string | null;
+  subjectType?: string | null;
+  styleStrength?: number | null;
 }): PromptEnhancement => {
   const {
     modelFamily,
@@ -548,17 +693,69 @@ export const buildPromptEnhancement = (options: {
     loadedLoras = [],
     existingPrompt = '',
     genType = null,
-    shotType = null
+    shotType = null,
+    shotIntent = null,
+    subjectType = null,
+    styleStrength = null
   } = options;
   const lower = existingPrompt.toLowerCase();
   const prefixParts: string[] = [];
   const suffixParts: string[] = [];
   const negativeParts: string[] = [];
 
-  const shotMode = inferStyleShotMode(existingPrompt, { genType, shotType });
+  const intent = String(shotIntent || '').toLowerCase().trim();
+  const shotMode = inferStyleShotMode(existingPrompt, { genType, shotType, subjectType });
   const isActionLike = shotMode === 'action' || shotMode === 'aftermath';
-  const isPortraitLike = shotMode === 'portrait';
-  const isEnvironment = shotMode === 'environment';
+  const isPortraitLike = shotMode === 'portrait' || intent === 'reaction';
+  const isInsertShot =
+    intent === 'insert'
+    || /\b(insert shot|detail shot|macro shot|object close-up|prop close-up)\b/i.test(
+      String(shotType || '')
+    );
+  // Insert must never inherit environment-dominant framing even if the prompt mentions a park.
+  const isEnvironment =
+    !isInsertShot
+    && (intent === 'establish' || intent === 'wide-action' || intent === 'overhead-map' || shotMode === 'environment');
+  const isNarrativeScene = String(genType || '').toLowerCase() === 'scene';
+  const inferredSubject = inferPromptSubjectType(existingPrompt, subjectType);
+  const isExplicitFemale = inferredSubject === 'female_human';
+
+  // Shot intent wins over location vocabulary. Composition cues belong in the
+  // CLIP *suffix* (after the scene action) so they do not steal the front window.
+  if (isNarrativeScene && isInsertShot) {
+    suffixParts.push(
+      '(narrative insert shot:1.35), extreme detail of the specified prop or body part only, story environment still recognizable, no full face'
+    );
+    negativeParts.push(
+      'animal portrait, full animal, full body character, face, eyes, looking at viewer, centered character, studio background, plain background'
+    );
+  } else if (isEnvironment) {
+    suffixParts.push(
+      'scenery, wide shot, establishing shot, (environment-dominant cinematic composition:1.4), (expansive detailed location:1.3), clear foreground middle ground and background'
+    );
+    if (inferredSubject !== 'environment' && inferredSubject !== 'unknown') {
+      suffixParts.push(
+        'animal far away, distant animal, (clearly visible small subject:1.3), subject occupies 15 to 20 percent of the frame, subject placed away from image center'
+      );
+    }
+    negativeParts.push(
+      'close-up, portrait, animal focus, solo focus, full-frame animal, face filling frame, oversized subject, centered character portrait, looking at viewer, studio background, plain background, simple background, shallow depth of field'
+    );
+  } else if (isNarrativeScene && isPortraitLike) {
+    suffixParts.push(
+      '(contextual narrative close-up:1.25), three-quarter or profile view, recognizable story location and props remain visible in the background'
+    );
+    negativeParts.push(
+      'front-facing studio portrait, centered ID photo, looking at viewer, plain background, simple background, isolated character'
+    );
+  } else if (isNarrativeScene) {
+    suffixParts.push(
+      '(narrative scene composition:1.25), subject visibly interacting with the specified prop, recognizable environment, full story action readable'
+    );
+    negativeParts.push(
+      'studio portrait, centered character portrait, looking at viewer, plain background, simple background, isolated character, face filling frame'
+    );
+  }
 
   // LoRA trigger tokens
   for (const slot of loadedLoras) {
@@ -568,11 +765,9 @@ export const buildPromptEnhancement = (options: {
   }
 
   // East-Asian feminine beauty: skip environment; lighten on action/aftermath so combat wins
-  const looksLikeMaleOnly =
-    /\b1boy\b|\b2boys\b|\bmen only\b/i.test(existingPrompt)
-    && !/\b1girl\b|\b2girls\b|\b3girls\b|woman|female/i.test(existingPrompt);
-
-  if (!looksLikeMaleOnly && !isEnvironment) {
+  // Never invent a female human subject. Beauty anchors are legal only when the
+  // prompt or structured request explicitly says the subject is female.
+  if (isExplicitFemale && !isEnvironment) {
     if (isActionLike) {
       // Identity only — no heavy beauty-portrait stack
       if (modelFamily === 'pony' || modelFamily === 'sd15') {
@@ -595,8 +790,8 @@ export const buildPromptEnhancement = (options: {
     } else if (!/(east asian|chinese|japanese|korean)/i.test(existingPrompt)) {
       suffixParts.push(EAST_ASIAN_FEMALE_BEAUTY_FLUX);
     }
+    negativeParts.push(EAST_ASIAN_FEMALE_NEGATIVE);
   }
-  negativeParts.push(EAST_ASIAN_FEMALE_NEGATIVE);
 
   if (modelFamily === 'pony') {
     if (nsfwEnabled) {
@@ -630,7 +825,7 @@ export const buildPromptEnhancement = (options: {
   } else if (modelFamily === 'sd15') {
     // Danbooru-style drafts: quality tags, no Pony score/rating system
     if (!/masterpiece|best quality/i.test(existingPrompt)) {
-      prefixParts.push('masterpiece, best quality');
+      suffixParts.push('masterpiece, best quality');
     }
     if (nsfwEnabled) {
       suffixParts.push('detailed skin');
@@ -675,7 +870,12 @@ export const buildPromptEnhancement = (options: {
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
     const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
     if (!already && boost) {
-      suffixParts.push(boost);
+      const strength = Number(styleStrength);
+      suffixParts.push(
+        Number.isFinite(strength) && strength > 0 && Math.abs(strength - 1) > 0.001
+          ? `(${boost}:${strength})`
+          : boost
+      );
     }
   } else if (
     /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠)/i.test(existingPrompt)
@@ -720,10 +920,11 @@ export const applyPromptEnhancement = (
   basePrompt: string,
   enhancement: PromptEnhancement
 ): string => {
-  const parts = [enhancement.prefix, basePrompt, enhancement.suffix]
-    .map((p) => p.trim())
-    .filter(Boolean);
-  return joinUniqueCsv(parts);
+  // Scene action first; shared framing / style / quality follow (CLIP front window).
+  return mergeClipPositivePrompt({
+    scene: basePrompt,
+    framing: joinUniqueCsv([enhancement.prefix, enhancement.suffix]),
+  });
 };
 
 /**
@@ -746,10 +947,29 @@ export const resolveGenerationPlan = (options: {
       : modelFamily === 'sd15'
         ? null
         : comfy.pony_lora;
-  const styleStrength =
+  const configuredStyleStrength =
     modelFamily === 'flux'
       ? comfy.flux_lora_strength ?? DEFAULT_STRENGTHS.flux_style
       : comfy.pony_lora_strength ?? DEFAULT_STRENGTHS.pony_style;
+  const shotMode = inferStyleShotMode(basePrompt, {
+    genType: workflowData?.gen_type ?? null,
+    shotType: workflowData?.shot_type ?? null,
+    subjectType: workflowData?.subject_type ?? null
+  });
+  // Detail/style LoRAs often amplify faces and fur. Keep them subtle on
+  // environment shots so the location and spatial layout remain dominant.
+  const isNarrativeScene = String(workflowData?.gen_type || '').toLowerCase() === 'scene';
+  const workflowShotIntent = String(
+    workflowData?.shot_intent || workflowData?.shot_spec?.shot_intent || ''
+  ).toLowerCase();
+  const isInsertShot =
+    workflowShotIntent === 'insert'
+    || /\b(insert shot|detail shot|macro shot|object close-up|prop close-up)\b/i.test(
+      String(workflowData?.shot_type || '')
+    );
+  const styleStrength = isNarrativeScene
+    ? Math.min(Number(configuredStyleStrength) || DEFAULT_STRENGTHS.pony_style, 0.35)
+    : configuredStyleStrength;
 
   const nsfwLora =
     modelFamily === 'flux'
@@ -764,7 +984,7 @@ export const resolveGenerationPlan = (options: {
   const stylePreset =
     workflowData?.style_preset || workflowData?.style || workflowData?.visual_style || null;
 
-  const loras = resolveLoraStack({
+  const resolvedLoras = resolveLoraStack({
     modelFamily,
     nsfwEnabled,
     installPath: comfy.install_path,
@@ -777,6 +997,11 @@ export const resolveGenerationPlan = (options: {
     stylePreset,
     allowRemoteUnverified: !comfy.install_path
   });
+  // Environment shots need spatial fidelity more than texture amplification.
+  // Skip style/detail LoRAs entirely here; character LoRAs remain available.
+  const loras = shotMode === 'environment' || isInsertShot
+    ? resolvedLoras.filter((slot) => slot.role !== 'style')
+    : resolvedLoras;
 
   const enhancement = buildPromptEnhancement({
     modelFamily,
@@ -785,34 +1010,43 @@ export const resolveGenerationPlan = (options: {
     loadedLoras: loras,
     existingPrompt: basePrompt,
     genType: workflowData?.gen_type ?? null,
-    shotType: workflowData?.shot_type ?? null
+    shotType: workflowData?.shot_type ?? null,
+    shotIntent: workflowData?.shot_intent || workflowData?.shot_spec?.shot_intent || null,
+    subjectType: workflowData?.subject_type ?? null,
+    styleStrength: workflowData?.style_strength ?? null
   });
 
   return { loras, enhancement };
 };
 
-/** LLM instructions appended when generating storyboard visual_prompts. */
+/**
+ * LLM instructions for storyboard beat contracts.
+ * Policy points at the server-side Pony compiler — do NOT ask for long English visual_prompt prose.
+ */
 export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string => {
   if (nsfwEnabled) {
     return `
-### Image Model Policy (NSFW mode ENABLED):
-- visual_prompt MUST be detailed English suitable for Pony XL / SDXL (final) or SD1.5 draft local models.
-- Prefer tag-friendly phrasing for character shots: subject count (1girl/2girls/3girls), hair, eyes, clothing state, pose, action, environment, lighting.
-- When the source text depicts intimacy or adult content, describe it with clear visual tags (clothing disheveled, body contact, expressions, magical aura) — do NOT euphemize into empty poetry and do NOT refuse.
-- Still avoid underage cues. All characters are adults.
-- For multi-person intimate scenes, prefer 2 subjects per shot when poses are complex; use 3girls only for simpler group framing.
-- Keep environment props concrete (jade mirror, silk bed, incense, flower petals, cloud sea palace).
-- Do NOT write Chinese inside visual_prompt; keep Chinese only in dialogue if needed.
+### Shot Contract Policy (NSFW mode ENABLED) — compiler fills final Pony tags:
+- Fill location, primary_action, key_props (≤2), shot_intent, subject_scale. Chinese OK in contract fields.
+- Set visual_prompt to "" (empty). Do NOT write a Detailed English scene description; the server compilePonyPrompt compiles tags.
+- When intimacy/adult content is in the source, encode it as concrete visible actions/props/clothing state in the contract — do not euphemize into empty poetry and do not refuse.
+- Prefer human subject locks from Character Visual Lock (1girl/2girls/3girls only when the lock already implies female humans). All characters are adults.
+- Keep props concrete (jade mirror, silk bed, incense, flower petals).
+- Across a chapter: insert+reaction ≤ 20%; establish+wide-action ≥ 35%.
 `;
   }
 
   return `
-### Image Model Policy (SFW / family-safe mode):
-- visual_prompt MUST be detailed English suitable for Pony XL / SDXL finals or SD1.5 draft previews.
-- Prefer tag-friendly phrasing: subject count, hair, eyes, full costume, pose, expression, environment, lighting.
-- Keep content safe-for-work: no nudity, no sexual acts, no explicit body focus. Intimate emotions → blush, averted gaze, close standing, hand-holding only if story requires.
-- Emphasize costume design, cinematic composition, and atmosphere (xianxia mist, palace, volumetric light).
-- Do NOT write Chinese inside visual_prompt; keep Chinese only in dialogue if needed.
+### Shot Contract Policy (SFW / family-safe) — compiler fills final Pony tags:
+- Fill location (paintable nouns only), primary_action (one visible verb), key_props (≤2), shot_intent, subject_scale, uniqueness_key.
+- Chinese is allowed in contract fields. Set visual_prompt to "" (empty).
+- Do NOT write a Detailed English scene description or long Pony prose; the server compilePonyPrompt compiles tags from the contract + Character Visual Lock.
+- Never invent species tags absent from the Visual Lock (no kitten / 1girl / wolf / fox / dog paraphrases).
+- Keep content safe-for-work: no nudity, no sexual acts. Intimate emotions → blush, averted gaze, hand-holding only if story requires.
+- shot_intent enum: establish | wide-action | medium-action | insert | reaction | overhead-map | payoff.
+- Use insert for paw/nose/ticket/map-button/music-box clues. Use establish/wide-action for geography.
+- Across a chapter: close-ups/insert+reaction ≤ 20%; establish+wide-action ≥ 35%; at least one insert when key props exist.
+- Adjacent uniqueness_key values must differ.
 `;
 };
 

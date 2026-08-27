@@ -2,6 +2,21 @@
 
 按主题浏览仓库文档。**本地生图默认栈（2026-08）为 Pony XL / SDXL 成片 + SD1.5 草稿；FLUX.1-dev GGUF 已退役。**
 
+## Vibe 合同（现行迭代入口）
+
+Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKILL.md)，只执行 [`0_TASKLIST.md`](./0_TASKLIST.md) 里的下一个 `[ ]`。当前 Sprint（0827 分镜 Prompt 编译器）Phase 0–3 已完成。
+
+| 合同 | 文档 |
+| --- | --- |
+| 任务与 AC | [0_TASKLIST.md](./0_TASKLIST.md) |
+| 产品范围 | [1_PRD.md](./1_PRD.md) |
+| 架构红线 | [2_ARCHITECTURE.md](./2_ARCHITECTURE.md) |
+| UI | [3_UI_RULES.md](./3_UI_RULES.md) |
+| 数据 / 迁移 | [4_BACKEND_DB.md](./4_BACKEND_DB.md) |
+| Agent 行为 | [5_AGENT_RULES.md](./5_AGENT_RULES.md) |
+| 分镜 Prompt 编译规范 | [best_practice_scene_visual_prompt.md](./best_practice_scene_visual_prompt.md) |
+| 本 Sprint 问题原点 | [questionlist/0827.md](../questionlist/0827.md) |
+
 ## 快速入口
 
 | 你想… | 文档 |
@@ -20,6 +35,9 @@
 
 | 文档 | 状态 | 说明 |
 | --- | --- | --- |
+| `0_TASKLIST.md` … `5_AGENT_RULES.md` | ✅ 现行 | Vibe 合同；当前 Sprint = 0827 分镜 Prompt 编译器 |
+| `best_practice_scene_visual_prompt.md` | ✅ 现行 | 镜头契约 → Pony 词的唯一规则源 |
+| `skills/vibe-coder/SKILL.md` | ✅ 现行 | 已绑定本仓库合同路径，禁止用空模板覆盖 |
 | `skills/novel-to-comic/SKILL.md` | ✅ 现行 | 已导入小说 → 定稿 → 人物 → 分镜 → 生图 → readiness → 整本漫画 PDF 的可恢复编排 Skill |
 | `comfyui_local_setup_guide_3060.md` | ✅ 现行 | 安装与对接 |
 | `local_image_generation_deployment_cn.md` | ✅ 现行 | 双轨策略与退役说明 |

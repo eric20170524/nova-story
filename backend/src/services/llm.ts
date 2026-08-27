@@ -55,6 +55,55 @@ export class LLMService {
         );
     }
 
+    /** Always use the local Ollama-compatible endpoint, regardless of any cloud
+     * provider selected for other writing tasks. */
+    static getLocalProvider(): AIProvider {
+        const configured = SettingsManager.loadSettings().llm || {};
+        const configuredProvider = String(configured.provider || '').toLowerCase();
+        const isConfiguredLocal = ['ollama', 'local_llm'].includes(configuredProvider);
+        return new OpenAIProvider(
+            'ollama',
+            isConfiguredLocal && configured.model ? configured.model : DEFAULT_OLLAMA_MODEL,
+            isConfiguredLocal && configured.base_url ? configured.base_url : DEFAULT_OLLAMA_BASE_URL,
+            { isOllama: true }
+        );
+    }
+
+    static async generateStructuredLocallyWithRetry<T>(
+        prompt: string,
+        schema: z.ZodSchema<T>,
+        options?: {
+            maxRetries?: number;
+            temperature?: number;
+            maxTokens?: number;
+            systemInstruction?: string;
+        }
+    ): Promise<T | null> {
+        const maxRetries = options?.maxRetries ?? 2;
+        const provider = LLMService.getLocalProvider();
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                return await provider.generateStructured(
+                    prompt,
+                    schema,
+                    options?.systemInstruction,
+                    {
+                        temperature: options?.temperature,
+                        maxTokens: options?.maxTokens,
+                        systemInstruction: options?.systemInstruction,
+                    }
+                );
+            } catch (error) {
+                logger.warn(`Local LLM parsing failed on attempt ${i + 1}: ${error}`);
+                if (i === maxRetries - 1) {
+                    logger.error('Max retries reached for local structured output.');
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
     static async generateStructuredWithRetry<T>(
         prompt: string,
         schema: z.ZodSchema<T>,
@@ -136,14 +185,26 @@ export class LLMService {
                 ? (sentences[idx % sentences.length] ?? baseSentence)
                 : baseSentence;
             const hasDialog = sText.includes('：') || sText.includes(':') || sText.includes('“');
+            const intent =
+                idx === 0 ? 'establish'
+                  : idx === 6 ? 'insert'
+                    : idx === 5 ? 'reaction'
+                      : idx === 8 ? 'overhead-map'
+                        : 'wide-action';
             return {
                 id: idx + 1,
                 shot_type: spec[0],
                 camera_movement: spec[1],
                 camera_angle: spec[2],
-                visual_prompt: `Cinematic ${spec[0]}: ${sText}, anime masterpiece, highly detailed`,
+                shot_intent: intent,
+                location: 'shared scene location',
+                primary_action: 'same beat action from alternate angle',
+                key_props: [],
+                subject_scale: idx === 6 ? 'absent' : 'small-15-20',
+                visual_prompt: '',
                 audio_prompt: "Cinematic BGM",
                 dialogue: hasDialog ? sText : null,
+                narration: hasDialog ? null : sText,
                 duration: 3.0,
                 negative_prompt: null
             };
@@ -201,28 +262,12 @@ export class LLMService {
             return LLMService.generateNineShotFallback(content);
         }
 
-        logger.warn("LLM structured output failed for narrative timeline, generating fallback scenes from chapter content.");
-        const sentences = content.split(/[。！？\n]+/).map(s => s.trim()).filter(s => s);
-        const fallbackSentences = sentences.length > 0 ? sentences : [content.substring(0, 100)];
-
-        const shotTypes = ["Medium Shot", "Close-Up", "Long Shot", "Medium Shot"];
-        const movements = ["Static", "Pan", "Tracking", "Zoom In"];
-        const angles = ["Eye-level", "Low Angle", "High Angle", "Eye-level"];
-
-        return fallbackSentences.slice(0, 10).map((sentence, idx) => {
-            const hasDialog = sentence.includes('：') || sentence.includes(':') || sentence.includes('“');
-            return {
-                id: idx + 1,
-                shot_type: shotTypes[idx % shotTypes.length],
-                camera_movement: movements[idx % movements.length],
-                camera_angle: angles[idx % angles.length],
-                visual_prompt: `Cinematic shot: ${sentence}, anime masterpiece, highly detailed`,
-                audio_prompt: "Cinematic BGM",
-                dialogue: hasDialog ? sentence : null,
-                duration: 3.0,
-                negative_prompt: null
-            };
-        });
+        // Task 2.4: never stuff Chinese chapter sentences into visual_prompt.
+        // Fail closed — timeline_generation_service compiles only from validated contracts.
+        logger.error("LLM structured output failed for narrative timeline; refusing Chinese visual_prompt fallback.");
+        throw new Error(
+          'Timeline LLM failed to return structured shot contracts (location + primary_action). Refusing Chinese visual_prompt fallback.'
+        );
     }
 
     static async generateSceneCoverage(
@@ -252,30 +297,67 @@ export class LLMService {
         }
 
         logger.warn("LLM structured output for single-scene coverage failed or incomplete. Generating dedicated 9-candidate fallback.");
-        const nineSpecs = [
-            ["Extreme Long Shot", "Static", "Eye-level", "Establishing environment and spatial context"],
-            ["Long Shot", "Static", "Eye-level", "Full body silhouette and posture"],
-            ["Medium Long Shot", "Pan", "Eye-level", "Knees-up composition"],
-            ["Medium Shot", "Static", "Eye-level", "Waist-up main action beat"],
-            ["Medium Close-Up", "Zoom In", "Eye-level", "Chest-up emotion and reaction"],
-            ["Close-Up", "Static", "Eye-level", "Tight facial expression"],
-            ["Extreme Close-Up", "Static", "Eye-level", "Macro detail of eye, hand, or key prop"],
-            ["Medium Shot", "Static", "Low Angle", "Dramatic low-angle view"],
-            ["Long Shot", "Static", "High Angle", "High-angle overview of space"]
-        ];
+        return LLMService.buildCoverageFallbackFromSource(sceneData, dialogue);
+    }
 
-        return nineSpecs.map((spec, idx) => ({
+    /** Nine coverage variants that inherit the source beat contract (fail closed if missing). */
+    static buildCoverageFallbackFromSource(sceneData: any, dialogue: string = ''): any[] {
+        let spec: any = {};
+        try {
+            spec = typeof sceneData?.shot_spec === 'string'
+                ? JSON.parse(sceneData.shot_spec || '{}')
+                : (sceneData?.shot_spec || {});
+        } catch {
+            spec = {};
+        }
+        const location = String(spec?.location || sceneData?.location || '').trim();
+        const primary_action = String(
+            spec?.primary_action || sceneData?.primary_action || ''
+        ).trim();
+        if (location.length < 2 || primary_action.length < 2) {
+            throw new Error(
+                'Coverage fallback requires source shot_spec with location + primary_action'
+            );
+        }
+        const key_props = Array.isArray(spec?.key_props)
+            ? spec.key_props
+            : (Array.isArray(sceneData?.key_props) ? sceneData.key_props : []);
+        const primary_subject = spec?.primary_subject ?? sceneData?.primary_subject ?? null;
+        const visible_subjects = Array.isArray(spec?.visible_subjects)
+            ? spec.visible_subjects
+            : (Array.isArray(sceneData?.visible_subjects) ? sceneData.visible_subjects : []);
+
+        const nineSpecs = [
+            ["Extreme Long Shot", "Static", "Eye-level", "Establishing environment and spatial context", "establish"],
+            ["Long Shot", "Static", "Eye-level", "Full body silhouette and posture", "wide-action"],
+            ["Medium Long Shot", "Pan", "Eye-level", "Knees-up composition", "medium-action"],
+            ["Medium Shot", "Static", "Eye-level", "Waist-up main action beat", "medium-action"],
+            ["Medium Close-Up", "Zoom In", "Eye-level", "Chest-up emotion and reaction", "reaction"],
+            ["Close-Up", "Static", "Eye-level", "Tight facial expression", "reaction"],
+            ["Extreme Close-Up", "Static", "Eye-level", "Macro detail of eye, hand, or key prop", "insert"],
+            ["Medium Shot", "Static", "Low Angle", "Dramatic low-angle view", "medium-action"],
+            ["Long Shot", "Static", "High Angle", "High-angle overview of space", "overhead-map"],
+        ] as const;
+
+        return nineSpecs.map((row, idx) => ({
             slot: idx + 1,
-            shot_type: spec[0],
-            shot_size: spec[0],
-            camera_movement: spec[1],
-            camera_angle: spec[2],
-            narrative_purpose: spec[3],
-            visual_prompt: `(${spec[0]}, ${spec[2]}), ${rawPrompt}`,
-            audio_prompt: sceneData.audio_prompt || "Cinematic BGM",
-            dialogue: dialogue,
+            shot_type: row[0],
+            shot_size: row[0],
+            camera_movement: row[1],
+            camera_angle: row[2],
+            narrative_purpose: row[3],
+            shot_intent: row[4],
+            location,
+            primary_action,
+            primary_subject,
+            visible_subjects,
+            key_props,
+            // Empty — server compilePonyPrompt fills final tags.
+            visual_prompt: '',
+            audio_prompt: sceneData.audio_prompt || 'Cinematic BGM',
+            dialogue: dialogue || sceneData.dialogue || null,
             duration: sceneData.duration || 3.0,
-            negative_prompt: sceneData.negative_prompt || null
+            negative_prompt: null,
         }));
     }
 

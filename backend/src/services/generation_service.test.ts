@@ -5,7 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { GeminiProvider } from './ai/gemini_provider';
 import { Prompts } from './prompts';
-import { compileComfyWorkflow } from './generation_service';
+import {
+  compileComfyWorkflow,
+  mergeSceneGenerationContext,
+  selectSceneCharacterAppearance,
+  shouldSuppressAppearanceForDetailShot
+} from './generation_service';
 
 const ponyWorkflow = () => ({
   "3": {
@@ -77,7 +82,8 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
     { steps: 30, cfg: 6 },
     { advanced: { nsfw_enabled: false }, comfyui: {} }
   );
-  assert.match(safeWorkflow["6"].inputs.text, /score_9, Hero opens a door/);
+  assert.match(safeWorkflow["6"].inputs.text, /Hero opens a door[\s\S]*score_9/);
+  assert.doesNotMatch(safeWorkflow["6"].inputs.text, /^score_9\b/);
   assert.match(safeWorkflow["7"].inputs.text, /nsfw/);
   assert.equal(safeWorkflow["3"].inputs.steps, 30);
   assert.equal(safeWorkflow["5"].inputs.width, 1024);
@@ -103,6 +109,255 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
   assert.equal((loraEntry![1] as any).inputs.lora_name, 'detail.safetensors');
   assert.deepEqual(loraWorkflow["3"].inputs.model, [loraEntry![0], 0]);
   assert.doesNotMatch(loraWorkflow["7"].inputs.text, /explicit sexual content/);
+});
+
+test('real pony template keeps cinematic shot and places action before quality', async () => {
+  const workflow = {
+    ...ponyWorkflow(),
+    '6': {
+      ...ponyWorkflow()['6'],
+      inputs: {
+        text: 'score_9, score_8_up, score_7_up, source_anime, cinematic shot',
+        clip: ['4', 1],
+      },
+    },
+    gen_type: 'scene',
+    subject_type: 'nonhuman',
+    shot_type: 'Insert Shot',
+    shot_intent: 'insert',
+  };
+  const compiled = await compileComfyWorkflow(
+    workflow,
+    'paw presses music-note button on miniature park map',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  const text = String(compiled['6'].inputs.text);
+  const actionIdx = text.indexOf('paw presses music-note button');
+  const cinematicIdx = text.indexOf('cinematic shot');
+  const scoreIdx = text.indexOf('score_9');
+  assert.ok(actionIdx >= 0 && actionIdx < scoreIdx);
+  assert.ok(cinematicIdx >= 0);
+  assert.equal((text.match(/\bscore_9\b/g) || []).length, 1);
+  assert.equal((text.match(/\bsource_anime\b/g) || []).length, 1);
+  assert.doesNotMatch(text, /environment-dominant cinematic composition/i);
+});
+
+test('compiles the failed animal wide-shot case as landscape without female tags', async () => {
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      gen_type: 'scene',
+      subject_type: 'nonhuman',
+      shot_type: 'Wide Shot',
+      style_preset: 'xianxia_immortal'
+    },
+    'The animal walks along the welcome plaza, its paws on the marble floor.',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+
+  assert.equal(compiled['5'].inputs.width, 1024);
+  assert.equal(compiled['5'].inputs.height, 768);
+  assert.match(compiled['6'].inputs.text, /environment-dominant cinematic composition/i);
+  assert.match(compiled['6'].inputs.text, /clearly visible small subject|15 to 20 percent/i);
+  assert.match(compiled['7'].inputs.text, /close-up|face filling frame|oversized subject/i);
+  assert.doesNotMatch(compiled['6'].inputs.text, /beautiful East Asian woman|chinese beauty|\bfemale\b/i);
+  assert.doesNotMatch(compiled['7'].inputs.text, /western face|\bmale\b|\bman\b|\bboy\b/i);
+});
+
+test('compiles overhead story scenes as landscape and narrative close-ups with context guards', async () => {
+  const overhead = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      gen_type: 'scene',
+      subject_type: 'nonhuman',
+      shot_type: 'Overhead Shot'
+    },
+    'A tiny furry creature crosses the plaza toward a dark corridor.',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  assert.equal(overhead['5'].inputs.width, 1024);
+  assert.equal(overhead['5'].inputs.height, 768);
+  assert.match(overhead['6'].inputs.text, /environment-dominant|animal far away/i);
+
+  const closeup = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      gen_type: 'scene',
+      subject_type: 'nonhuman',
+      shot_type: 'Close-Up'
+    },
+    'A furry creature sniffs beside a blue soda machine.',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  assert.match(closeup['6'].inputs.text, /contextual narrative close-up|story location/i);
+  assert.match(closeup['7'].inputs.text, /front-facing studio portrait|isolated character/i);
+});
+
+test('restores the sole nonhuman character for generic animal scene prompts', () => {
+  const result = selectSceneCharacterAppearance(
+    [{
+      name: '主角小兽',
+      description: '一只警惕的毛茸小兽',
+      visual_tags: JSON.stringify({
+        base_model: {
+          tags: {
+            hair: 'short fluffy light beige and white fur',
+            face_features: 'cute muzzle, soft whiskers',
+            build: 'small agile furry animal, cute paws'
+          }
+        }
+      })
+    }],
+    'The animal leans over a wooden ticket booth and peers inside.',
+    { shotType: 'Medium Shot', chapterId: 'chapter-1' }
+  );
+
+  assert.equal(result.subjectType, 'nonhuman');
+  assert.equal(result.snippets.length, 1);
+  assert.match(result.snippets[0] || '', /light beige|whiskers|furry animal/i);
+});
+
+test('restores scene negative prompt for compact direct generation requests', () => {
+  const merged = mergeSceneGenerationContext(
+    { model_type: 'pony', style_preset: 'standard' },
+    {
+      visual_prompt: 'one small animal in a carnival corridor',
+      negative_prompt: 'two animals, duplicate animal, city street',
+      shot_type: 'Wide Shot',
+      camera_movement: 'Static',
+      camera_angle: 'Eye-level'
+    }
+  );
+
+  assert.equal(merged.prompt, 'one small animal in a carnival corridor');
+  assert.equal(merged.negative_prompt, 'two animals, duplicate animal, city street');
+  assert.equal(merged.shot_type, 'Wide Shot');
+});
+
+test('explicit request prompt fields override restored scene prompt fields', () => {
+  const merged = mergeSceneGenerationContext(
+    { prompt: 'request prompt', negative_prompt: 'request negative' },
+    { visual_prompt: 'database prompt', negative_prompt: 'database negative' }
+  );
+
+  assert.equal(merged.prompt, 'request prompt');
+  assert.equal(merged.negative_prompt, 'request negative');
+});
+
+test('mergeSceneGenerationContext restores shot_spec.shot_intent from the database', () => {
+  const merged = mergeSceneGenerationContext(
+    { model_type: 'pony', shot_type: 'Wide Shot' },
+    {
+      visual_prompt: 'paw presses music-note button on miniature park map',
+      shot_type: 'Wide Shot',
+      shot_spec: JSON.stringify({
+        shot_intent: 'insert',
+        location: 'arcade corridor',
+        primary_action: 'paw presses music-note button',
+      }),
+    }
+  );
+  assert.equal(merged.shot_intent, 'insert');
+  assert.equal(merged.shot_spec?.shot_intent, 'insert');
+});
+
+test('DB shot_spec insert intent drives enhancement even when shot_type looks wide', async () => {
+  const context = mergeSceneGenerationContext(
+    {
+      ...ponyWorkflow(),
+      gen_type: 'scene',
+      subject_type: 'nonhuman',
+      shot_type: 'Wide Shot',
+    },
+    {
+      visual_prompt: 'paw presses music-note button on miniature park map',
+      shot_type: 'Wide Shot',
+      shot_spec: JSON.stringify({ shot_intent: 'insert' }),
+    }
+  );
+  const compiled = await compileComfyWorkflow(
+    context,
+    context.prompt,
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  const text = String(compiled['6'].inputs.text);
+  assert.match(text, /narrative insert shot/i);
+  assert.doesNotMatch(text, /environment-dominant cinematic composition/i);
+});
+
+test('wide-shot appearance snippets omit face details and empty placeholder tags', () => {
+  const result = selectSceneCharacterAppearance(
+    [{
+      name: '主角小兽',
+      description: '一只警惕的毛茸小兽',
+      visual_tags: JSON.stringify({
+        base_model: {
+          tags: {
+            hair: 'short fluffy light beige and white fur, pointed animal ears',
+            eyes: 'large glowing amber eyes',
+            face_features: 'cute muzzle, soft whiskers',
+            build: 'small agile furry animal, cute paws',
+            clothing: 'none, soft natural fur',
+            accessories: 'none'
+          }
+        }
+      })
+    }],
+    'The creature appears as a tiny silhouette below a silent ferris wheel.',
+    { shotType: 'Wide Shot', chapterId: 'chapter-1' }
+  );
+
+  assert.equal(result.subjectType, 'nonhuman');
+  assert.match(result.snippets[0] || '', /light beige|pointed animal ears|small agile furry animal/i);
+  assert.doesNotMatch(result.snippets[0] || '', /glowing amber eyes|cute muzzle|whiskers|\bnone\b/i);
+});
+
+test('detail and insert shots suppress full character appearance for prop/body-part clues', () => {
+  assert.equal(
+    shouldSuppressAppearanceForDetailShot(
+      'Insert Shot',
+      'One padded paw touches a frozen light patch on the marble tile.'
+    ),
+    true
+  );
+  assert.equal(
+    shouldSuppressAppearanceForDetailShot('Medium Shot', 'The animal touches a ticket booth.'),
+    false
+  );
+});
+
+test('keeps mixed human and animal scenes distinct from pure nonhuman scenes', () => {
+  const result = selectSceneCharacterAppearance(
+    [
+      {
+        id: 1,
+        name: 'Mira',
+        description: 'adult woman, red coat',
+        visual_tags: JSON.stringify({ aliases: ['the guide'] })
+      },
+      {
+        id: 2,
+        name: 'Pip',
+        description: 'small fox, orange fur, white muzzle',
+        visual_tags: JSON.stringify({ aliases: ['the fox'], species: 'fox' })
+      }
+    ],
+    'Mira kneels beside Pip in the wide plaza',
+    { shotType: 'Wide Shot' }
+  );
+
+  assert.equal(result.subjectType, 'mixed');
+  assert.equal(result.snippets.length, 2);
 });
 
 test('builds the deterministic nine-panel image prompt without negative suffixes', () => {
@@ -325,10 +580,16 @@ test('timeline prompt policy mentions NSFW or SFW rules', () => {
   const nsfwPrompt = Prompts.generateTimeline('spring tide chapter', '', true);
   assert.match(nsfwPrompt, /NSFW mode ENABLED/i);
   assert.match(nsfwPrompt, /1girl|2girls|3girls/i);
+  assert.match(nsfwPrompt, /compilePonyPrompt|Shot Contract/i);
+  assert.match(nsfwPrompt, /Do NOT write a Detailed English scene description/i);
 
   const sfwPrompt = Prompts.generateTimeline('spring tide chapter', '', false);
   assert.match(sfwPrompt, /SFW|family-safe/i);
   assert.match(sfwPrompt, /no nudity/i);
+  assert.match(sfwPrompt, /compilePonyPrompt|Shot Contract/i);
+  assert.match(sfwPrompt, /Never write a Detailed English scene description/i);
+  assert.match(sfwPrompt, /visual_prompt": ""/);
+  assert.doesNotMatch(sfwPrompt, /visual_prompt MUST be detailed English/i);
 });
 
 test('decodes real Gemini inline image responses instead of returning a placeholder', async () => {

@@ -267,15 +267,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         for (const scene of scenes) {
           const sceneRes = await db.run(
             `INSERT INTO scene (
-              chapter_id, "index", visual_prompt, audio_prompt, dialogue,
+              chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration,
               duration, shot_type, camera_movement, camera_angle,
               negative_prompt, shot_spec, asset_status, asset_url, task_id, active_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             newChapterId,
             scene.index,
             scene.visual_prompt ?? null,
             scene.audio_prompt ?? null,
             scene.dialogue ?? null,
+            scene.narration ?? null,
             scene.duration ?? 3,
             scene.shot_type ?? null,
             scene.camera_movement ?? null,
@@ -298,16 +299,17 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
             for (const sv of sceneVersions) {
               await db.run(
                 `INSERT INTO scene_version (
-                  scene_id, version, label, visual_prompt, audio_prompt, dialogue,
+                  scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration,
                   duration, shot_type, camera_movement, camera_angle, negative_prompt,
                   asset_status, task_id, asset_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 newSceneId,
                 sv.version,
                 sv.label ?? null,
                 sv.visual_prompt ?? null,
                 sv.audio_prompt ?? null,
                 sv.dialogue ?? null,
+                sv.narration ?? null,
                 sv.duration ?? 3,
                 sv.shot_type ?? null,
                 sv.camera_movement ?? null,
@@ -340,8 +342,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                   await db.run(
                     `INSERT INTO coverage_shot (
                       coverage_group_id, slot, shot_size, camera_angle, camera_movement,
-                      narrative_purpose, visual_prompt, asset_status, task_id, asset_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                      narrative_purpose, visual_prompt, negative_prompt, shot_spec, shot_intent,
+                      asset_status, task_id, asset_url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     newCgId,
                     shot.slot ?? 1,
                     shot.shot_size ?? null,
@@ -349,6 +352,9 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                     shot.camera_movement ?? null,
                     shot.narrative_purpose ?? null,
                     shot.visual_prompt ?? null,
+                    shot.negative_prompt ?? null,
+                    shot.shot_spec ?? null,
+                    shot.shot_intent ?? null,
                     shot.asset_status || 'idle',
                     shot.task_id ?? null,
                     shot.asset_url ?? null

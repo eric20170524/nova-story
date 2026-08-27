@@ -102,6 +102,7 @@ export interface Scene {
   negative_prompt?: string; // Added for finer control
   audio_prompt: string;
   dialogue: string;
+  narration?: string;
   duration: number;
   shot_type?: string;
   camera_movement?: string;
@@ -133,6 +134,9 @@ export interface CoverageShot {
   camera_movement?: string;
   narrative_purpose?: string;
   visual_prompt?: string;
+  negative_prompt?: string;
+  shot_spec?: string;
+  shot_intent?: string;
   asset_status?: 'idle' | 'generating' | 'completed' | 'failed';
   asset_url?: string;
   promoted_scene_id?: number;

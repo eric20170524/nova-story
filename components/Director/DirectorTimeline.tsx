@@ -13,6 +13,8 @@ interface DirectorTimelineProps {
   loading: boolean;
   selectedChapterId: string;
   onGenerateTimeline: () => void;
+  onGenerateNarration: () => void;
+  generatingNarration: boolean;
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
   onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean }) => void;
@@ -27,6 +29,8 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   loading,
   selectedChapterId,
   onGenerateTimeline,
+  onGenerateNarration,
+  generatingNarration,
   showRightPanel,
   setShowRightPanel,
   onGenerateAsset,
@@ -142,6 +146,18 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
          </div>
          
          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            {timeline.length > 0 && (
+              <button
+                type="button"
+                onClick={onGenerateNarration}
+                disabled={loading || generatingNarration || !selectedChapterId}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-amber-200 hover:text-amber-100 bg-amber-950/40 hover:bg-amber-950/60 border border-amber-800/50 rounded-lg text-xs sm:text-sm font-medium transition-colors disabled:opacity-50"
+                title={t('director.generate_narration_hint', 'Use the local model to add narration without changing images')}
+              >
+                {generatingNarration ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
+                <span className="hidden sm:inline">{t('director.generate_narration', 'Local Narration')}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => agentCtx?.setOpen(true)}
@@ -374,6 +390,17 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                         value={scene.visual_prompt || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'visual_prompt', e.target.value)}
                                         placeholder="Describe the scene..."
+                                    />
+                                </div>
+
+                                {/* Narration */}
+                                <div>
+                                    <label className="text-[10px] font-bold text-amber-500/80 uppercase mb-1 block">{t('director.narration', 'Narration')}</label>
+                                    <textarea
+                                        className="w-full bg-amber-950/20 border border-amber-900/50 rounded p-2 text-xs text-amber-100 leading-relaxed resize-none focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/20 h-14"
+                                        value={scene.narration || ''}
+                                        onChange={(e) => onUpdateScene(scene.id, 'narration', e.target.value)}
+                                        placeholder={t('director.narration_placeholder', 'Narration or internal monologue...')}
                                     />
                                 </div>
 

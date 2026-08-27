@@ -23,6 +23,7 @@ export interface NovaStoryJsonImportScene {
   visualPrompt: string | null;
   audioPrompt: string | null;
   dialogue: string | null;
+  narration: string | null;
   duration: number;
   shotType: string | null;
   cameraMovement: string | null;
@@ -49,6 +50,9 @@ export interface NovaStoryJsonImportCoverageShot {
   cameraMovement: string | null;
   narrativePurpose: string | null;
   visualPrompt: string | null;
+  negativePrompt: string | null;
+  shotSpec: string | null;
+  shotIntent: string | null;
   assetStatus: string;
   taskId: string | null;
   assetUrl: string | null;
@@ -312,6 +316,7 @@ export const normalizeNovaStoryJsonProject = (
       visualPrompt: optionalText(raw.visual_prompt),
       audioPrompt: optionalText(raw.audio_prompt),
       dialogue: optionalText(raw.dialogue),
+      narration: optionalText(raw.narration),
       duration: finiteNumber(raw.duration, 3),
       shotType: optionalText(raw.shot_type),
       cameraMovement: optionalText(raw.camera_movement),
@@ -372,6 +377,9 @@ export const normalizeNovaStoryJsonProject = (
       cameraMovement: optionalText(raw.camera_movement),
       narrativePurpose: optionalText(raw.narrative_purpose),
       visualPrompt: optionalText(raw.visual_prompt),
+      negativePrompt: optionalText(raw.negative_prompt),
+      shotSpec: optionalText(raw.shot_spec),
+      shotIntent: optionalText(raw.shot_intent),
       assetStatus: typeof raw.asset_status === 'string' && raw.asset_status.trim()
         ? raw.asset_status.trim()
         : 'idle',

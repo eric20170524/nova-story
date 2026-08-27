@@ -89,6 +89,7 @@ const migrations: Migration[] = [
           visual_prompt TEXT,
           audio_prompt TEXT,
           dialogue TEXT,
+          narration TEXT,
           duration REAL DEFAULT 3.0,
           shot_type VARCHAR(50),
           camera_movement VARCHAR(50),
@@ -205,6 +206,7 @@ const migrations: Migration[] = [
           visual_prompt TEXT,
           audio_prompt TEXT,
           dialogue TEXT,
+          narration TEXT,
           duration REAL DEFAULT 3.0,
           shot_type VARCHAR(50),
           camera_movement VARCHAR(50),
@@ -230,14 +232,15 @@ const migrations: Migration[] = [
         if (existing) continue;
         await database.run(
           `INSERT INTO scene_version (
-            scene_id, version, label, visual_prompt, audio_prompt, dialogue, duration,
+            scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration, duration,
             shot_type, camera_movement, camera_angle, negative_prompt,
             asset_status, task_id, asset_url
-          ) VALUES (?, 1, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, 1, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           scene.id,
           scene.visual_prompt ?? null,
           scene.audio_prompt ?? null,
           scene.dialogue ?? null,
+          scene.narration ?? null,
           scene.duration ?? 3.0,
           scene.shot_type ?? null,
           scene.camera_movement ?? null,
@@ -386,6 +389,27 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS ix_project_document_context
           ON project_document(project_id, context_enabled, document_type);
       `);
+    }
+  },
+  {
+    version: '010_scene_narration',
+    up: async (database) => {
+      await ensureColumns(database, 'scene', {
+        narration: 'TEXT'
+      });
+      await ensureColumns(database, 'scene_version', {
+        narration: 'TEXT'
+      });
+    }
+  },
+  {
+    version: '011_coverage_shot_contract',
+    up: async (database) => {
+      await ensureColumns(database, 'coverage_shot', {
+        negative_prompt: 'TEXT',
+        shot_spec: 'TEXT',
+        shot_intent: 'VARCHAR(50)',
+      });
     }
   }
 ];

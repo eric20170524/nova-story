@@ -11,11 +11,15 @@ import { AssetTaskStore } from './task_store';
 import { getGeneratedDirectory } from '../core/paths';
 import {
     applyPromptEnhancement,
+    mergeClipPositivePrompt,
     normalizeImageModelFamily,
     resolveGenerationPlan,
+    sanitizeNegativePromptForSubject,
+    sanitizePromptForSubject,
     type ImageModelFamily
 } from './image_generation_policy';
 import {
+    buildCharacterAppearanceSnippet,
     mergeAppearanceIntoPrompt,
     planReferenceGeneration,
     resolveReferenceImg2ImgPolicy,
@@ -46,6 +50,162 @@ const isComfyWorkflow = (value: any) => {
 const parseWorkflowContent = (content: unknown) => {
     if (typeof content === 'string') return JSON.parse(content);
     return JSON.parse(JSON.stringify(content));
+};
+
+const NONHUMAN_PROMPT_RE =
+    /\b(animal|creature|furry|furred|quadruped|paw|paws|paw pads?|whiskers?|muzzle|snout|tail|kitten|cat|puppy|dog|fox|rabbit|bunny|wolf|bear|otter|hamster|mouse|deer|bird)\b/i;
+const HUMAN_PROMPT_RE =
+    /\b(1girl|2girls|3girls|1boy|2boys|3boys|girl|woman|women|female|boy|man|men|male|person|people|heroine|swordswoman|swordsman|princess|prince)\b/i;
+const ENVIRONMENT_PROMPT_RE =
+    /\b(wide shot|long shot|extreme long|establishing|panoramic|landscape|environment|overview|overhead shot|aerial shot|bird'?s[- ]eye|plaza|square|amusement park|theme park|corridor|hallway|cityscape)\b/i;
+
+export const shouldSuppressAppearanceForDetailShot = (
+    shotType?: string | null,
+    prompt?: string | null
+): boolean => {
+    const shot = String(shotType || '');
+    const text = String(prompt || '');
+    if (!/\b(insert shot|detail shot|macro shot|object close-up|prop close-up)\b/i.test(shot)) {
+        return false;
+    }
+    return /\b(paw|paws|paw pad|nose|whisker|ticket|cup|steam|machine|button|dispenser|floor|tile|light patch|object|prop)\b/i.test(text);
+};
+
+const parseSceneShotSpec = (raw: unknown): Record<string, unknown> | null => {
+    if (!raw) return null;
+    if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+    try {
+        const parsed = JSON.parse(String(raw));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed
+            : null;
+    } catch {
+        return null;
+    }
+};
+
+/** Restore scene-authored fields when a direct generation request only sends
+ * model/style settings. The database is the source of truth for both prompts. */
+export const mergeSceneGenerationContext = (
+    workflowData: any,
+    sceneRow: any
+): any => {
+    const shotSpec =
+        workflowData?.shot_spec
+        || parseSceneShotSpec(sceneRow?.shot_spec)
+        || null;
+    const shotIntent =
+        workflowData?.shot_intent
+        || shotSpec?.shot_intent
+        || null;
+    return {
+        ...workflowData,
+        prompt:
+            workflowData?.prompt
+            || workflowData?.text
+            || workflowData?.description
+            || sceneRow?.visual_prompt
+            || '',
+        negative_prompt:
+            workflowData?.negative_prompt
+            || sceneRow?.negative_prompt
+            || '',
+        shot_type: workflowData?.shot_type || sceneRow?.shot_type || null,
+        camera_movement:
+            workflowData?.camera_movement || sceneRow?.camera_movement || null,
+        camera_angle: workflowData?.camera_angle || sceneRow?.camera_angle || null,
+        shot_spec: shotSpec,
+        shot_intent: shotIntent,
+    };
+};
+
+const parseCharacterVisualTags = (value: unknown): any => {
+    if (!value || typeof value === 'object') return value || {};
+    try {
+        return JSON.parse(String(value));
+    } catch {
+        return {};
+    }
+};
+
+const characterLooksNonhuman = (character: any): boolean => {
+    const visualTags = parseCharacterVisualTags(character?.visual_tags);
+    return NONHUMAN_PROMPT_RE.test(
+        `${character?.description || ''} ${JSON.stringify(visualTags)}`
+    );
+};
+
+const characterMentioned = (prompt: string, character: any): boolean => {
+    const lower = String(prompt || '').toLowerCase();
+    const compact = lower.replace(/[\s_-]/g, '');
+    const name = String(character?.name || '').trim().toLowerCase();
+    if (name && (lower.includes(name) || compact.includes(name.replace(/[\s_-]/g, '')))) {
+        return true;
+    }
+    const visualTags = parseCharacterVisualTags(character?.visual_tags);
+    const aliases = Array.isArray(visualTags?.aliases)
+        ? visualTags.aliases
+        : (Array.isArray(character?.aliases) ? character.aliases : []);
+    return aliases.some((raw: unknown) => {
+        const alias = String(raw || '').trim().toLowerCase();
+        return Boolean(alias) && (
+            lower.includes(alias) || compact.includes(alias.replace(/[\s_-]/g, ''))
+        );
+    });
+};
+
+/**
+ * Resolve database character rows for a scene when the caller omitted appearance
+ * snippets. This keeps direct API and UI generation semantically equivalent.
+ */
+export const selectSceneCharacterAppearance = (
+    characters: any[],
+    prompt: string,
+    options: { chapterId?: string | number | null; shotType?: string | null } = {}
+): { snippets: string[]; subjectType: 'nonhuman' | 'human' | 'mixed' | 'environment' | null } => {
+    const normalized = (characters || []).map((character) => ({
+        ...character,
+        visual_tags: parseCharacterVisualTags(character?.visual_tags)
+    }));
+    const mentioned = normalized.filter((character) => characterMentioned(prompt, character));
+    let selected = mentioned;
+
+    if (selected.length === 0 && NONHUMAN_PROMPT_RE.test(prompt)) {
+        const nonhuman = normalized.filter(characterLooksNonhuman);
+        if (nonhuman.length === 1) selected = nonhuman;
+    }
+    if (selected.length === 0 && HUMAN_PROMPT_RE.test(prompt)) {
+        const human = normalized.filter((character) => !characterLooksNonhuman(character));
+        if (human.length === 1) selected = human;
+    }
+    if (
+        selected.length === 0
+        && normalized.length === 1
+        && /\b(protagonist|main character|the character|hero|heroine)\b/i.test(prompt)
+    ) {
+        selected = normalized;
+    }
+
+    const wideShot = /wide|long shot|extreme long|establishing|panoramic|overhead|aerial|bird'?s[- ]eye/i.test(
+        `${options.shotType || ''} ${prompt}`
+    );
+    const snippets = selected
+        .map((character) => buildCharacterAppearanceSnippet(character, {
+            chapterId: options.chapterId,
+            wideShot
+        }))
+        .filter(Boolean);
+
+    const selectedNonhumanCount = selected.filter(characterLooksNonhuman).length;
+    if (selectedNonhumanCount > 0 && selectedNonhumanCount < selected.length) {
+        return { snippets, subjectType: 'mixed' };
+    }
+    if (selectedNonhumanCount > 0) return { snippets, subjectType: 'nonhuman' };
+    if (selected.length > 0) return { snippets, subjectType: 'human' };
+    if (ENVIRONMENT_PROMPT_RE.test(`${options.shotType || ''} ${prompt}`)) {
+        return { snippets, subjectType: 'environment' };
+    }
+    return { snippets, subjectType: null };
 };
 
 const findNodeId = (workflow: any, predicate: (node: any) => boolean) =>
@@ -306,20 +466,27 @@ export const compileComfyWorkflow = async (
     };
 
     // Unified policy: LoRA stack (character → style → nsfw) + SFW/NSFW prompt boosters
+    const subjectSafePrompt = sanitizePromptForSubject(
+        finalPrompt,
+        enrichedWorkflowData.subject_type
+    );
     const plan = resolveGenerationPlan({
         modelFamily,
         nsfwEnabled,
         runtimeSettings,
         workflowData: enrichedWorkflowData,
-        basePrompt: finalPrompt
+        basePrompt: subjectSafePrompt
     });
 
-    const effectivePrompt = applyPromptEnhancement(finalPrompt, plan.enhancement);
+    const effectivePrompt = applyPromptEnhancement(subjectSafePrompt, plan.enhancement);
     const preserveTemplateConditioning =
         modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
 
     const negativeParts = [
-        workflowData?.negative_prompt || '',
+        sanitizeNegativePromptForSubject(
+            workflowData?.negative_prompt || '',
+            enrichedWorkflowData.subject_type
+        ),
         plan.enhancement.negativeExtra
     ];
     const negativePrompt = negativeParts.filter(Boolean).join(', ');
@@ -344,8 +511,16 @@ export const compileComfyWorkflow = async (
 
         if (positiveId && workflow[positiveId]?.inputs) {
             const templateText = String(workflow[positiveId].inputs.text || '').trim();
+            // Scene action owns the CLIP front window; template quality/framing tokens merge after.
             workflow[positiveId].inputs.text = preserveTemplateConditioning && templateText
-                ? `${templateText}, ${effectivePrompt}`
+                ? mergeClipPositivePrompt({
+                    scene: subjectSafePrompt,
+                    framing: [
+                      plan.enhancement.prefix,
+                      plan.enhancement.suffix,
+                    ].filter(Boolean).join(', '),
+                    templateText,
+                  })
                 : effectivePrompt;
         }
         if (negativeId && workflow[negativeId]?.inputs && negativeId !== positiveId) {
@@ -363,12 +538,19 @@ export const compileComfyWorkflow = async (
     }
 
     const isTurnaround = workflowData?.gen_type === 'turnaround';
-    let width = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 1152 : 768);
-    let height = mode === 'cinematic_grid' ? 1024 : (isTurnaround ? 768 : 1024);
+    const isLandscapeShot = /wide|long shot|extreme long|establishing|panoramic|landscape|overview|overhead|aerial|bird'?s[- ]eye/i.test(
+        `${workflowData?.shot_type || ''} ${finalPrompt}`
+    );
+    let width = mode === 'cinematic_grid'
+        ? 1024
+        : (isTurnaround ? 1152 : isLandscapeShot ? 1024 : 768);
+    let height = mode === 'cinematic_grid'
+        ? 1024
+        : (isTurnaround ? 768 : isLandscapeShot ? 768 : 1024);
     if (modelFamily === 'sd15' && mode !== 'cinematic_grid') {
         // Match sd15_draft_12gb latent defaults for fast iteration
-        width = isTurnaround ? 768 : 512;
-        height = isTurnaround ? 512 : 768;
+        width = isTurnaround ? 768 : isLandscapeShot ? 768 : 512;
+        height = isTurnaround ? 512 : isLandscapeShot ? 512 : 768;
     }
 
     for (const node of Object.values(workflow) as any[]) {
@@ -701,14 +883,26 @@ export class GenerationService {
 
             // Attach project settings from scene → chapter → project when available
             let effectiveWorkflowData = { ...workflowData };
+            let sceneProjectId: number | null = null;
+            let sceneChapterId: string | null = null;
             try {
-                const sceneRow = await db.get('SELECT chapter_id FROM scene WHERE id = ?', sceneId);
+                const sceneRow = await db.get(
+                    `SELECT chapter_id, visual_prompt, negative_prompt, shot_type, camera_movement, camera_angle, shot_spec
+                     FROM scene WHERE id = ?`,
+                    sceneId
+                );
                 if (sceneRow?.chapter_id) {
+                    sceneChapterId = sceneRow.chapter_id;
+                    effectiveWorkflowData = mergeSceneGenerationContext(
+                        effectiveWorkflowData,
+                        sceneRow
+                    );
                     const chapterRow = await db.get(
                         'SELECT project_id FROM chapter WHERE id = ?',
                         sceneRow.chapter_id
                     );
                     if (chapterRow?.project_id) {
+                        sceneProjectId = Number(chapterRow.project_id);
                         const projectRow = await db.get(
                             'SELECT settings FROM project WHERE id = ?',
                             chapterRow.project_id
@@ -753,6 +947,18 @@ export class GenerationService {
                 finalPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
             }
 
+            const cameraDetails = [
+                effectiveWorkflowData?.shot_type,
+                effectiveWorkflowData?.camera_movement,
+                effectiveWorkflowData?.camera_angle
+            ].filter(Boolean).map(String);
+            if (
+                cameraDetails.length > 0
+                && !cameraDetails.every((detail) => finalPrompt.toLowerCase().includes(detail.toLowerCase()))
+            ) {
+                finalPrompt = `(${cameraDetails.join(', ')}), ${finalPrompt}`;
+            }
+
             // Tier A: ensure character appearance tags survive even if a client omitted them
             const appearanceSnippets: string[] = [];
             if (effectiveWorkflowData?.character_appearance_prompt) {
@@ -761,6 +967,38 @@ export class GenerationService {
             if (Array.isArray(effectiveWorkflowData?.character_appearance_snippets)) {
                 for (const s of effectiveWorkflowData.character_appearance_snippets) {
                     if (s) appearanceSnippets.push(String(s));
+                }
+            }
+            if (appearanceSnippets.length === 0 && sceneProjectId != null) {
+                try {
+                    if (shouldSuppressAppearanceForDetailShot(
+                        effectiveWorkflowData?.shot_type,
+                        finalPrompt
+                    )) {
+                        logger.info(
+                            `[Task ${taskId}] Detail/insert shot: skipped full character appearance injection`
+                        );
+                    } else {
+                        const characters = await db.all(
+                            'SELECT id, name, role, description, visual_tags FROM character WHERE project_id = ?',
+                            sceneProjectId
+                        );
+                        const resolved = selectSceneCharacterAppearance(characters, finalPrompt, {
+                            chapterId: sceneChapterId,
+                            shotType: effectiveWorkflowData?.shot_type
+                        });
+                        appearanceSnippets.push(...resolved.snippets);
+                        if (!effectiveWorkflowData?.subject_type && resolved.subjectType) {
+                            effectiveWorkflowData.subject_type = resolved.subjectType;
+                        }
+                        if (resolved.snippets.length > 0) {
+                            logger.info(
+                                `[Task ${taskId}] Restored ${resolved.snippets.length} character appearance snippet(s) from project data`
+                            );
+                        }
+                    }
+                } catch (e) {
+                    logger.warn(`[Task ${taskId}] Could not restore character appearance data: ${e}`);
                 }
             }
             if (appearanceSnippets.length > 0) {

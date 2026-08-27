@@ -31,9 +31,13 @@ export interface ProjectComicChapterStatus {
   title: string;
   total_scenes: number;
   ready_scenes: number;
+  text_ready_scenes: number;
   missing_scene_ids: number[];
+  missing_text_scene_ids: number[];
+  asset_ready: boolean;
+  text_ready: boolean;
   ready: boolean;
-  blocker: 'no_scenes' | 'missing_assets' | null;
+  blocker: 'no_scenes' | 'missing_assets' | 'missing_text' | null;
 }
 
 export interface ProjectComicStatus {
@@ -44,6 +48,7 @@ export interface ProjectComicStatus {
   ready_chapters: number;
   total_scenes: number;
   ready_scenes: number;
+  text_ready_scenes: number;
   chapters: ProjectComicChapterStatus[];
 }
 
@@ -89,7 +94,7 @@ const loadImage = async (assetUrl: string, staticDirectory: string) => {
 export const renderComicPage = async (
   sceneId: number,
   assetUrl: string,
-  subtitle: string,
+  text: string | { narration?: string | null; dialogue?: string | null },
   staticDirectory: string,
   comicDirectory: string
 ) => {
@@ -99,27 +104,58 @@ export const renderComicPage = async (
   const width = metadata.width || 1024;
   const height = metadata.height || 1024;
   const fontSize = Math.max(22, Math.round(width * 0.027));
-  const lines = wrapSubtitle(
-    subtitle,
+  const narration = typeof text === 'string' ? '' : String(text.narration || '').trim();
+  const dialogue = typeof text === 'string' ? text : String(text.dialogue || '').trim();
+  const charactersPerLine = Math.max(12, Math.floor((width - 60) / (fontSize * 0.85)));
+  const narrationLines = wrapSubtitle(
+    narration,
+    charactersPerLine
+  );
+  const dialogueLines = wrapSubtitle(
+    dialogue,
     Math.max(12, Math.floor((width - 60) / (fontSize * 0.85)))
   );
 
   let output = image;
-  if (lines.length > 0) {
+  const overlays: Array<{ input: Buffer; gravity: 'north' | 'south' }> = [];
+  if (narrationLines.length > 0) {
     const lineHeight = Math.round(fontSize * 1.45);
-    const overlayHeight = lines.length * lineHeight + 30;
-    const textElements = lines.map((line, index) =>
+    const overlayHeight = narrationLines.length * lineHeight + 30;
+    const textElements = narrationLines.map((line, index) =>
+      `<text x="50%" y="${22 + fontSize + index * lineHeight}" text-anchor="middle" fill="#fff7d6">${escapeXml(line)}</text>`
+    ).join('');
+    overlays.push({
+      input: Buffer.from(
+        `<svg width="${width}" height="${overlayHeight}">
+          <rect width="100%" height="100%" fill="rgba(54,38,8,0.78)"/>
+          <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="${fontSize}" font-weight="500">
+            ${textElements}
+          </g>
+        </svg>`
+      ),
+      gravity: 'north'
+    });
+  }
+  if (dialogueLines.length > 0) {
+    const lineHeight = Math.round(fontSize * 1.45);
+    const overlayHeight = dialogueLines.length * lineHeight + 30;
+    const textElements = dialogueLines.map((line, index) =>
       `<text x="50%" y="${22 + fontSize + index * lineHeight}" text-anchor="middle" fill="white">${escapeXml(line)}</text>`
     ).join('');
-    const overlay = Buffer.from(
-      `<svg width="${width}" height="${overlayHeight}">
-        <rect width="100%" height="100%" fill="rgba(0,0,0,0.65)"/>
-        <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="${fontSize}" font-weight="500">
-          ${textElements}
-        </g>
-      </svg>`
-    );
-    output = image.composite([{ input: overlay, gravity: 'south' }]);
+    overlays.push({
+      input: Buffer.from(
+        `<svg width="${width}" height="${overlayHeight}">
+          <rect width="100%" height="100%" fill="rgba(0,0,0,0.68)"/>
+          <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="${fontSize}" font-weight="500">
+            ${textElements}
+          </g>
+        </svg>`
+      ),
+      gravity: 'south'
+    });
+  }
+  if (overlays.length > 0) {
+    output = image.composite(overlays);
   }
 
   const filename = `comic_scene_${safeFilenamePart(sceneId)}.jpg`;
@@ -167,6 +203,7 @@ export const generateChapterComic = async (
   chapterId: string,
   options: {
     strict?: boolean;
+    requireText?: boolean;
     onPageError?: (error: unknown, sceneId: number) => void;
   } = {}
 ) => {
@@ -187,6 +224,9 @@ export const generateChapterComic = async (
     .filter((scene: any) => !scene.asset_url)
     .map((scene: any) => Number(scene.id));
   const validScenes = scenes.filter((scene: any) => scene.asset_url);
+  const missingTextSceneIds = scenes
+    .filter((scene: any) => !String(scene.narration || '').trim() && !String(scene.dialogue || '').trim())
+    .map((scene: any) => Number(scene.id));
   if (validScenes.length === 0) {
     throw new ComicServiceError('No scenes have generated images', 400);
   }
@@ -197,6 +237,13 @@ export const generateChapterComic = async (
       { chapter_id: chapterId, missing_scene_ids: missingSceneIds }
     );
   }
+  if ((options.requireText ?? true) && missingTextSceneIds.length > 0) {
+    throw new ComicServiceError(
+      'Chapter comic is not ready: some scenes do not have narration or dialogue',
+      409,
+      { chapter_id: chapterId, missing_text_scene_ids: missingTextSceneIds }
+    );
+  }
 
   const { staticDirectory, comicDirectory } = ensureComicDirectory();
   const pages: ComicPageResult[] = [];
@@ -205,7 +252,7 @@ export const generateChapterComic = async (
       const page = await renderComicPage(
         Number(scene.id),
         scene.asset_url,
-        scene.dialogue || '',
+        { narration: scene.narration || '', dialogue: scene.dialogue || '' },
         staticDirectory,
         comicDirectory
       );
@@ -253,17 +300,25 @@ export const getProjectComicStatus = async (projectId: number): Promise<ProjectC
   const chapterStatuses: ProjectComicChapterStatus[] = [];
   for (const chapter of chapters) {
     const scenes = await db.all(
-      'SELECT id, asset_url FROM scene WHERE chapter_id = ? ORDER BY "index" ASC',
+      'SELECT id, asset_url, narration, dialogue FROM scene WHERE chapter_id = ? ORDER BY "index" ASC',
       chapter.id
     );
     const missingSceneIds = scenes
       .filter((scene: any) => !scene.asset_url)
       .map((scene: any) => Number(scene.id));
     const readyScenes = scenes.length - missingSceneIds.length;
+    const missingTextSceneIds = scenes
+      .filter((scene: any) => !String(scene.narration || '').trim() && !String(scene.dialogue || '').trim())
+      .map((scene: any) => Number(scene.id));
+    const textReadyScenes = scenes.length - missingTextSceneIds.length;
+    const assetReady = scenes.length > 0 && missingSceneIds.length === 0;
+    const textReady = scenes.length > 0 && missingTextSceneIds.length === 0;
     const blocker: ProjectComicChapterStatus['blocker'] = scenes.length === 0
       ? 'no_scenes'
       : missingSceneIds.length > 0
         ? 'missing_assets'
+        : missingTextSceneIds.length > 0
+          ? 'missing_text'
         : null;
 
     chapterStatuses.push({
@@ -272,7 +327,11 @@ export const getProjectComicStatus = async (projectId: number): Promise<ProjectC
       title: chapter.title,
       total_scenes: scenes.length,
       ready_scenes: readyScenes,
+      text_ready_scenes: textReadyScenes,
       missing_scene_ids: missingSceneIds,
+      missing_text_scene_ids: missingTextSceneIds,
+      asset_ready: assetReady,
+      text_ready: textReady,
       ready: blocker === null,
       blocker
     });
@@ -280,6 +339,7 @@ export const getProjectComicStatus = async (projectId: number): Promise<ProjectC
 
   const totalScenes = chapterStatuses.reduce((sum, chapter) => sum + chapter.total_scenes, 0);
   const readyScenes = chapterStatuses.reduce((sum, chapter) => sum + chapter.ready_scenes, 0);
+  const textReadyScenes = chapterStatuses.reduce((sum, chapter) => sum + chapter.text_ready_scenes, 0);
   const readyChapters = chapterStatuses.filter((chapter) => chapter.ready).length;
 
   return {
@@ -290,6 +350,7 @@ export const getProjectComicStatus = async (projectId: number): Promise<ProjectC
     ready_chapters: readyChapters,
     total_scenes: totalScenes,
     ready_scenes: readyScenes,
+    text_ready_scenes: textReadyScenes,
     chapters: chapterStatuses
   };
 };
@@ -298,7 +359,7 @@ export const generateProjectComic = async (projectId: number) => {
   const readiness = await getProjectComicStatus(projectId);
   if (!readiness.ready) {
     throw new ComicServiceError(
-      'Project comic is not ready: every chapter needs a timeline and every scene needs an image',
+      'Project comic is not ready: every scene needs an image and narration or dialogue',
       409,
       readiness
     );
@@ -336,7 +397,7 @@ export const generateProjectComic = async (projectId: number) => {
         const page = await renderComicPage(
           Number(scene.id),
           scene.asset_url,
-          scene.dialogue || '',
+          { narration: scene.narration || '', dialogue: scene.dialogue || '' },
           staticDirectory,
           comicDirectory
         );

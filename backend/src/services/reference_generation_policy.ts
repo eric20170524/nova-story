@@ -359,6 +359,30 @@ export const planReferenceGeneration = (
   };
 };
 
+/** Coerce base_model.tags / variant.tags (object | string[] | string) into a string map. */
+const coerceTagRecord = (tags: unknown): Record<string, string> => {
+  if (!tags) return {};
+  if (typeof tags === 'string') {
+    const trimmed = tags.trim();
+    return trimmed ? { lock: trimmed } : {};
+  }
+  if (Array.isArray(tags)) {
+    return Object.fromEntries(
+      tags
+        .map((value, index) => [`t${index}`, String(value || '').trim()] as const)
+        .filter(([, value]) => Boolean(value))
+    );
+  }
+  if (typeof tags === 'object') {
+    return Object.fromEntries(
+      Object.entries(tags as Record<string, unknown>)
+        .filter(([, value]) => typeof value === 'string' && String(value).trim())
+        .map(([key, value]) => [key, String(value).trim()])
+    );
+  }
+  return {};
+};
+
 /**
  * Flatten visual_tags (nested or flat) into a string map of appearance tags.
  */
@@ -371,7 +395,7 @@ export const flattenVisualTagMap = (
   let tagMap: Record<string, string> = {};
 
   if ('base_model' in visualTags) {
-    const baseTags = visualTags.base_model?.tags || {};
+    const baseTags = coerceTagRecord(visualTags.base_model?.tags);
     let variantTags: Record<string, string> = {};
     const timelineMap = visualTags.timeline_map || {};
     const chapterId = options.chapterId;
@@ -379,23 +403,15 @@ export const flattenVisualTagMap = (
     const variants = visualTags.variants || [];
     if (variantId) {
       const variant = variants.find((v: any) => v.id === variantId);
-      if (variant?.tags && typeof variant.tags === 'object') {
-        variantTags = variant.tags;
+      if (variant?.tags) {
+        variantTags = coerceTagRecord(variant.tags);
       }
     }
-    const merged = {
-      ...(typeof baseTags === 'object' && baseTags ? baseTags : {}),
-      ...variantTags
-    };
-    tagMap = Object.fromEntries(
-      Object.entries(merged).filter(([, v]) => typeof v === 'string' && String(v).trim())
-    ) as Record<string, string>;
+    tagMap = { ...baseTags, ...variantTags };
   } else {
     tagMap = Object.fromEntries(
-      Object.entries(visualTags).filter(
-        ([k, v]) => !ASSET_META_KEYS.has(k) && typeof v === 'string' && String(v).trim()
-      )
-    ) as Record<string, string>;
+      Object.entries(coerceTagRecord(visualTags)).filter(([k]) => !ASSET_META_KEYS.has(k))
+    );
   }
 
   if (options.wideShot) {
@@ -405,6 +421,22 @@ export const flattenVisualTagMap = (
   }
 
   return tagMap;
+};
+
+/**
+ * Comma-separated visual lock from Character.visual_tags only.
+ * Does not invent species (kitten / 1girl / wolf); empty tags → empty string.
+ */
+export const formatVisualLockTokens = (
+  visualTags: any,
+  options: { chapterId?: string | number | null; wideShot?: boolean } = {}
+): string => {
+  const tagMap = flattenVisualTagMap(visualTags, options);
+  return Object.values(tagMap)
+    .flatMap((value) => String(value).split(','))
+    .map((value) => value.trim())
+    .filter((value) => value && !/^(none|n\/a|unknown|not applicable)$/i.test(value))
+    .join(', ');
 };
 
 /**
@@ -421,11 +453,17 @@ export const buildCharacterAppearanceSnippet = (
 ): string => {
   const name = (char.name || 'character').trim();
   const tagMap = flattenVisualTagMap(char.visual_tags, options);
-  const tagValues = Object.values(tagMap).map((v) => String(v).trim()).filter(Boolean);
+  const tagValues = Object.values(tagMap)
+    .flatMap((value) => String(value).split(','))
+    .map((value) => value.trim())
+    .filter((value) => value && !/^(none|n\/a|unknown|not applicable)$/i.test(value));
+  const effectiveTagValues = options.wideShot
+    ? tagValues.slice(0, 6)
+    : tagValues;
 
-  if (tagValues.length > 0) {
+  if (effectiveTagValues.length > 0) {
     const label = options.wideShot ? 'outfit & build' : 'appearance';
-    return `${name} ${label}: ${tagValues.join(', ')}`;
+    return `${name} ${label}: ${effectiveTagValues.join(', ')}`;
   }
 
   const desc = String(char.description || '').trim();
@@ -446,12 +484,29 @@ export const mergeAppearanceIntoPrompt = (
   appearanceSnippets: string[]
 ): string => {
   let prompt = String(basePrompt || '').trim();
+  const genericIdentityWords = new Set([
+    'appearance', 'outfit', 'build', 'character', 'small', 'furry', 'animal',
+    'creature', 'natural', 'soft', 'body', 'full', 'with', 'from', 'view'
+  ]);
   for (const raw of appearanceSnippets) {
     const snippet = String(raw || '').trim();
     if (!snippet) continue;
     // Avoid duplicate injection when client already embedded the same text
     const needle = snippet.slice(0, Math.min(48, snippet.length));
     if (needle && prompt.toLowerCase().includes(needle.toLowerCase())) continue;
+    // LLM-authored prompts often paraphrase the same identity (for example
+    // "beige-and-white furry creature") instead of copying the full snippet.
+    // Re-appending the identity can make diffusion models render two subjects.
+    const promptWords = new Set(
+      (prompt.toLowerCase().replace(/-/g, ' ').match(/[a-z]{4,}/g) || [])
+        .filter((word) => !genericIdentityWords.has(word))
+    );
+    const identityWords = Array.from(new Set(
+      (snippet.toLowerCase().replace(/-/g, ' ').match(/[a-z]{4,}/g) || [])
+        .filter((word) => !genericIdentityWords.has(word))
+    ));
+    const overlap = identityWords.filter((word) => promptWords.has(word)).length;
+    if (overlap >= 2) continue;
     prompt = prompt ? `${prompt}, ${snippet}` : snippet;
   }
   return prompt;

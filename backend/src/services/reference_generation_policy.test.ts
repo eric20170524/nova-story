@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildCharacterAppearanceSnippet,
+  formatVisualLockTokens,
   mergeAppearanceIntoPrompt,
   planReferenceGeneration,
   resolveReferenceImg2ImgPolicy,
@@ -125,6 +126,17 @@ test('reference_tier A forces no character adapter', () => {
   assert.equal(plan.useCharacterAdapter, false);
 });
 
+test('formatVisualLockTokens accepts array base_model.tags', () => {
+  const lock = formatVisualLockTokens({
+    base_model: {
+      tags: ['small beige-and-white furry creature', 'quadruped', 'amber eyes'],
+    },
+  });
+  assert.match(lock, /beige-and-white furry creature/);
+  assert.match(lock, /quadruped/);
+  assert.doesNotMatch(lock, /\bkitten\b/);
+});
+
 test('buildCharacterAppearanceSnippet prefers tags then description', () => {
   const withTags = buildCharacterAppearanceSnippet({
     name: '陆嘉静',
@@ -156,4 +168,20 @@ test('mergeAppearanceIntoPrompt skips duplicates', () => {
   const merged = mergeAppearanceIntoPrompt(base, ['陆嘉静 appearance: silver hair', '裴雨涵 appearance: black hair']);
   assert.equal((merged.match(/陆嘉静 appearance/g) || []).length, 1);
   assert.match(merged, /裴雨涵 appearance: black hair/);
+});
+
+test('mergeAppearanceIntoPrompt skips paraphrased identity anchors but keeps generic prompts', () => {
+  const snippet =
+    '主角小兽 outfit & build: short fluffy light beige and white fur, pointed animal ears, cute paws';
+  const detailed = mergeAppearanceIntoPrompt(
+    'A small beige-and-white furry creature waits at the corridor threshold.',
+    [snippet]
+  );
+  assert.doesNotMatch(detailed, /outfit & build/i);
+
+  const generic = mergeAppearanceIntoPrompt(
+    'A small furry creature waits at the corridor threshold.',
+    [snippet]
+  );
+  assert.match(generic, /outfit & build/i);
 });

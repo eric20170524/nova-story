@@ -1,5 +1,19 @@
 import { buildTimelineVisualPromptPolicy } from './image_generation_policy';
 
+/** Shared rule: appearance comes only from visual_tags lock, never invented species. */
+export const CHARACTER_VISUAL_LOCK_RULES = `When a character is visible, copy their Visual Lock / Visual Tags string into visual_prompt verbatim.
+Do NOT invent species or body-plan tags absent from that lock (never invent kitten, 1girl, 1boy, wolf, fox, dog, human, girl, or housecat paraphrases).
+If Visual Lock is empty or missing, omit appearance tags rather than guessing hair/clothing/species.`;
+
+const buildCharacterLockInstruction = (characterProfiles: string): string => {
+  if (!characterProfiles?.trim()) return '';
+  return `
+### Character Visual Consistency (lock only):
+${CHARACTER_VISUAL_LOCK_RULES}
+${characterProfiles}
+`;
+};
+
 export class Prompts {
     static buildCinematicGridImagePrompt(scenePrompt: string): string {
         const normalizedPrompt = String(scenePrompt || '').replace(/\s+/g, ' ').trim();
@@ -41,14 +55,7 @@ export class Prompts {
         characterProfiles: string = '',
         nsfwEnabled: boolean = false
     ): string {
-        let charInstruction = '';
-        if (characterProfiles) {
-            charInstruction = `
-### Character Visual Consistency:
-Use the following character definitions to ensure consistent descriptions in 'visual_prompt':
-${characterProfiles}
-`;
-        }
+        const charInstruction = buildCharacterLockInstruction(characterProfiles);
         return `You are a master film director and cinematographer.
 Your task is to take a short story beat and expand it into EXACTLY 9 cinematic shots that cover the same action from different angles and compositions.
 
@@ -56,6 +63,7 @@ CRITICAL: Return EXACTLY 9 shots. Not 8, not 10. EXACTLY 9.
 
 ### Language Rules:
 - 'dialogue': Can be in Chinese or English matching the source story text so it can serve directly as comic subtitles.
+- 'narration': A concise comic caption in the source language. Preserve first-person voice when present; summarize only the story information visible or emotionally necessary for this shot.
 - 'visual_prompt', 'audio_prompt': MUST remain in detailed English for image generation models.
 ${buildTimelineVisualPromptPolicy(nsfwEnabled)}
 ### 9-Shot Grid Structure:
@@ -78,39 +86,44 @@ ${content}`;
         characterProfiles: string = '',
         nsfwEnabled: boolean = false
     ): string {
-        let charInstruction = '';
-        if (characterProfiles) {
-            charInstruction = `
-### Character Visual Consistency:
-Use the following character definitions to ensure consistent descriptions in 'visual_prompt'.
-Whenever a character appears, describe key identifying traits (hair, clothing, build) based on these profiles:
-${characterProfiles}
-`;
-        }
+        const charInstruction = buildCharacterLockInstruction(characterProfiles);
 
-        return `You are a master film director and storyboard artist creating cinematic image prompts.
-Break down the following story text into a sequence of storyboard shots based on 'Independent Action Units'.
+        return `You are a storyboard beat planner. Break the story into Independent Action Units and fill a Shot Contract for each beat.
+The server will compile Pony / SDXL tags via compilePonyPrompt — you must NOT author the final visual_prompt prose.
 
-### Core Cinematography & Storyboarding Principles:
-1. **Action-Driven Prompts (CRITICAL)**: Every 'visual_prompt' MUST describe a SPECIFIC physical action, gesture, or posture in English.
-2. **Props & Environmental Objects (CRITICAL)**: Always include key props, tools, or handheld items in English.
-3. **Multi-Person Spatial Interaction**: Explicitly describe their relative physical positions.
-4. **Visual Variety & Dynamic Framing**: Alternate between Shot Sizes.
-5. **Language Rule**: The 'dialogue' field SHOULD preserve original text language (Chinese or English) for subtitle use in comics. 'visual_prompt' and 'audio_prompt' MUST be in English.
+### Contract rules:
+1. Every shot MUST include location + primary_action. location = paintable nouns only (no mood words). primary_action = one visible verb.
+2. key_props: at most 2 concrete props. Omit rather than invent.
+3. shot_intent: establish | wide-action | medium-action | insert | reaction | overhead-map | payoff. Map shot_type accordingly (Insert Shot → insert, Establishing → establish, Wide/Long → wide-action, etc.).
+4. subject_scale: absent | small-15-20 | medium-20-40 | dominant. Wide/establish default small-15-20 or absent; insert often absent or paw-only via primary_subject.
+5. primary_subject = focus character Name from Character Visual Lock (not a free-form species essay). visible_subjects = all on-screen character Names for this beat.
+6. uniqueness_key = location + action + primary prop; adjacent shots must differ.
+7. Set visual_prompt to "" always. Never write a Detailed English scene description.
+8. Comic text: preserve spoken words in dialogue; write concise narration in the source language when there is no dialogue (Chinese ~12-35 chars). Never invent plot.
+9. Sounds/smells/psychology go in audio_prompt or narration — not in location/action/props.
 ${buildTimelineVisualPromptPolicy(nsfwEnabled)}
 ${charInstruction}
 ### Required Output Format (JSON Object):
-Return a JSON object with a key 'shots' containing a list of shot objects. Example:
 {
   "shots": [
     {
       "id": 1,
-      "shot_type": "Full Body Shot",
+      "shot_type": "Wide Shot",
+      "shot_intent": "wide-action",
       "camera_movement": "Static",
       "camera_angle": "Eye-level",
-      "visual_prompt": "Detailed English scene description including [Specific Physical Action & Body Language]",
-      "audio_prompt": "Background music and sound effects in English",
-      "dialogue": "Speaker: Line (in Chinese or English)",
+      "location": "european arcade corridor",
+      "primary_action": "character walks past a dark metal lamp post",
+      "primary_subject": "<Name from Character Visual Lock>",
+      "visible_subjects": ["<Name from Character Visual Lock>"],
+      "key_props": ["dark metal lamp post"],
+      "subject_scale": "small-15-20",
+      "uniqueness_key": "arcade corridor | walks past lamp | dark metal lamp post",
+      "must_not": [],
+      "visual_prompt": "",
+      "audio_prompt": "quiet hallway ambience",
+      "dialogue": null,
+      "narration": "Concise source-language comic caption or null",
       "duration": 4.0
     }
   ]
@@ -126,14 +139,7 @@ ${content}`;
         characterProfiles: string = '',
         nsfwEnabled: boolean = false
     ): string {
-        let charInstruction = '';
-        if (characterProfiles) {
-            charInstruction = `
-### Character Visual Consistency:
-Use the following character definitions to ensure consistent descriptions in 'visual_prompt':
-${characterProfiles}
-`;
-        }
+        const charInstruction = buildCharacterLockInstruction(characterProfiles);
 
         return `You are a professional film cinematographer creating a 9-shot coverage package for a SINGLE SCENE beat.
 CRITICAL: All 9 candidate shots MUST describe the EXACT SAME moment, action, environment, time of day, weather, lighting, and character state as the input scene. Do NOT advance the story timeline. Do NOT change character clothing or location.
@@ -155,7 +161,11 @@ Return a JSON object with a key 'shots' containing a list of EXACTLY 9 objects m
 - 'shot_type': Shot size
 - 'camera_angle': Camera angle
 - 'camera_movement': Movement choice
-- 'visual_prompt': Detailed English description for image generation
+- 'location': concrete paintable place (required)
+- 'primary_action': one visible verb/action (required)
+- 'shot_intent': establish | wide-action | medium-action | insert | reaction | overhead-map | payoff
+- 'key_props': up to 2 prop strings
+- 'visual_prompt': optional; may be "" (server compiles from contract)
 - 'audio_prompt': Audio BGM/SFX description in English
 - 'dialogue': Keep original dialogue (Chinese or English) if applicable or null
 - 'duration': 3.0

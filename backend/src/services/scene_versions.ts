@@ -8,6 +8,7 @@ export const SCENE_VERSION_FIELDS = [
   'visual_prompt',
   'audio_prompt',
   'dialogue',
+  'narration',
   'duration',
   'shot_type',
   'camera_movement',
@@ -28,6 +29,7 @@ export interface SceneVersionRow {
   visual_prompt?: string | null;
   audio_prompt?: string | null;
   dialogue?: string | null;
+  narration?: string | null;
   duration?: number | null;
   shot_type?: string | null;
   camera_movement?: string | null;
@@ -46,6 +48,7 @@ const snapshotFromScene = (scene: any, version: number, label?: string | null) =
   visual_prompt: scene.visual_prompt ?? null,
   audio_prompt: scene.audio_prompt ?? null,
   dialogue: scene.dialogue ?? null,
+  narration: scene.narration ?? null,
   duration: scene.duration ?? 3.0,
   shot_type: scene.shot_type ?? null,
   camera_movement: scene.camera_movement ?? null,
@@ -75,16 +78,17 @@ export async function ensureSceneVersionBaseline(sceneId: number): Promise<void>
   const snap = snapshotFromScene(scene, 1, 'v1');
   await db.run(
     `INSERT INTO scene_version (
-      scene_id, version, label, visual_prompt, audio_prompt, dialogue, duration,
+      scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration, duration,
       shot_type, camera_movement, camera_angle, negative_prompt,
       asset_status, task_id, asset_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     snap.scene_id,
     snap.version,
     snap.label,
     snap.visual_prompt,
     snap.audio_prompt,
     snap.dialogue,
+    snap.narration,
     snap.duration,
     snap.shot_type,
     snap.camera_movement,
@@ -130,6 +134,7 @@ export async function activateSceneVersion(
       visual_prompt = ?,
       audio_prompt = ?,
       dialogue = ?,
+      narration = ?,
       duration = ?,
       shot_type = ?,
       camera_movement = ?,
@@ -143,6 +148,7 @@ export async function activateSceneVersion(
     ver.visual_prompt,
     ver.audio_prompt,
     ver.dialogue,
+    ver.narration,
     ver.duration ?? 3.0,
     ver.shot_type,
     ver.camera_movement,
@@ -169,6 +175,7 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
       visual_prompt = ?,
       audio_prompt = ?,
       dialogue = ?,
+      narration = ?,
       duration = ?,
       shot_type = ?,
       camera_movement = ?,
@@ -181,6 +188,7 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
     scene.visual_prompt,
     scene.audio_prompt,
     scene.dialogue,
+    scene.narration,
     scene.duration ?? 3.0,
     scene.shot_type,
     scene.camera_movement,
@@ -261,16 +269,17 @@ export async function createSceneVersion(
 
   await db.run(
     `INSERT INTO scene_version (
-      scene_id, version, label, visual_prompt, audio_prompt, dialogue, duration,
+      scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration, duration,
       shot_type, camera_movement, camera_angle, negative_prompt,
       asset_status, task_id, asset_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     sceneId,
     nextVersion,
     label,
     source.visual_prompt,
     source.audio_prompt,
     source.dialogue,
+    source.narration,
     source.duration ?? 3.0,
     source.shot_type,
     source.camera_movement,

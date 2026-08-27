@@ -80,10 +80,18 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     (_, index) => ({
       slot: index + 1,
       shot_type: index === 0 ? 'Extreme Long Shot' : 'Medium Shot',
+      shot_intent: index === 0 ? 'establish' : index === 6 ? 'insert' : 'medium-action',
       camera_angle: index === 8 ? 'High Angle' : 'Eye-level',
       camera_movement: 'Static',
       narrative_purpose: `Purpose ${index + 1}`,
-      visual_prompt: `Coverage ${index + 1}`
+      location: 'european arcade corridor',
+      primary_action: index === 6
+        ? 'paw presses music-note button'
+        : 'Hero opens a door',
+      key_props: index === 6 ? ['music-note button'] : ['door'],
+      primary_subject: index === 6 ? 'paw-only' : 'Hero',
+      subject_scale: index === 6 ? 'absent' : 'medium-20-40',
+      visual_prompt: '',
     })
   );
   LLMService.extractCharacterProfiles = async () => [{

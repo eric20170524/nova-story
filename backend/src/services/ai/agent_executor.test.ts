@@ -133,6 +133,10 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
       shot_type: 'medium',
       camera_movement: 'static',
       camera_angle: 'eye_level',
+      location: 'training yard',
+      primary_action: 'hero raises sword',
+      shot_intent: 'medium-action',
+      key_props: ['sword'],
     },
     {
       visual_prompt: 'close up',
@@ -142,6 +146,10 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
       shot_type: 'close_up',
       camera_movement: 'static',
       camera_angle: 'eye_level',
+      location: 'training yard',
+      primary_action: 'hero face reaction',
+      shot_intent: 'reaction',
+      key_props: [],
     },
   ];
 
@@ -157,7 +165,12 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
       'tl-ch'
     );
     assert.equal(scenes.length, 2);
-    assert.equal(scenes[0].visual_prompt, 'new shot');
+    assert.match(String(scenes[0].visual_prompt), /hero raises sword|training yard/i);
+    const stored = await db.get(
+      'SELECT shot_spec FROM scene WHERE id = ?',
+      scenes[0].id
+    );
+    assert.match(String(stored?.shot_spec || ''), /training yard/i);
     for (const s of scenes) {
       const versions = await db.all(
         'SELECT version FROM scene_version WHERE scene_id = ?',
@@ -174,6 +187,10 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
         visual_prompt: 'from agent',
         duration: 3,
         shot_type: 'wide',
+        location: 'battlefield ridge',
+        primary_action: 'hero charges forward',
+        shot_intent: 'wide-action',
+        key_props: [],
       },
     ];
     const exec = await AgentExecutor.executeAll(
@@ -187,7 +204,7 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
       'tl-ch'
     );
     assert.equal(after.length, 1);
-    assert.equal(after[0].visual_prompt, 'from agent');
+    assert.match(String(after[0].visual_prompt), /hero charges|battlefield/i);
   } finally {
     LLMService.generateTimeline = prev;
   }

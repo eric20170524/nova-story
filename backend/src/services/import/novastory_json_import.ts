@@ -91,15 +91,16 @@ export const restoreNovaStoryJsonProject = async (
 
         const sceneResult = await db.run(
           `INSERT INTO scene (
-            chapter_id, "index", visual_prompt, audio_prompt, dialogue,
+            chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration,
             duration, shot_type, camera_movement, camera_angle,
             negative_prompt, shot_spec, asset_status, task_id, asset_url
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newChapterId,
           scene.index,
           scene.visualPrompt,
           scene.audioPrompt,
           scene.dialogue,
+          scene.narration,
           scene.duration,
           scene.shotType,
           scene.cameraMovement,
@@ -153,8 +154,9 @@ export const restoreNovaStoryJsonProject = async (
         await db.run(
           `INSERT INTO coverage_shot (
             coverage_group_id, slot, shot_size, camera_angle, camera_movement,
-            narrative_purpose, visual_prompt, asset_status, task_id, asset_url
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            narrative_purpose, visual_prompt, negative_prompt, shot_spec, shot_intent,
+            asset_status, task_id, asset_url
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newGroupId,
           shot.slot,
           shot.shotSize,
@@ -162,6 +164,9 @@ export const restoreNovaStoryJsonProject = async (
           shot.cameraMovement,
           shot.narrativePurpose,
           shot.visualPrompt,
+          shot.negativePrompt ?? null,
+          shot.shotSpec ?? null,
+          shot.shotIntent ?? null,
           shot.assetStatus,
           shot.taskId,
           shot.assetUrl

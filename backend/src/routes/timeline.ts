@@ -10,8 +10,32 @@ import {
   syncActiveVersionFromScene
 } from '../services/scene_versions';
 import { generateAndReplaceNarrativeTimeline } from '../services/timeline_generation_service';
+import { generateSceneNarrationForChapter } from '../services/scene_narration_service';
+import { regenerateSceneVisualPromptsForChapter } from '../services/scene_visual_prompt_service';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
+  app.post('/prompts/regenerate', async (request, reply) => {
+    const { chapter_id } = z.object({ chapter_id: z.string().min(1) }).parse(request.body);
+    try {
+      return await regenerateSceneVisualPromptsForChapter(chapter_id);
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      const status = message === 'Chapter not found' ? 404 : 500;
+      return reply.status(status).send({ detail: message });
+    }
+  });
+
+  app.post('/narration/generate', async (request, reply) => {
+    const { chapter_id } = z.object({ chapter_id: z.string().min(1) }).parse(request.body);
+    try {
+      return await generateSceneNarrationForChapter(chapter_id);
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      const status = message === 'Chapter not found' ? 404 : 500;
+      return reply.status(status).send({ detail: message });
+    }
+  });
+
   app.get('/:chapter_id', async (request, reply) => {
     const paramsSchema = z.object({ chapter_id: z.string() });
     const { chapter_id } = paramsSchema.parse(request.params);
@@ -91,6 +115,7 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       visual_prompt: z.string().optional().nullable(),
       audio_prompt: z.string().optional().nullable(),
       dialogue: z.string().optional().nullable(),
+      narration: z.string().optional().nullable(),
       duration: z.coerce.number().optional().nullable(),
       shot_type: z.string().optional().nullable(),
       camera_movement: z.string().optional().nullable(),

@@ -14,6 +14,7 @@
     "build:frontend": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "npm test --workspace backend",
     "check": "npm run typecheck && npm run build"
   },
   "dependencies": {

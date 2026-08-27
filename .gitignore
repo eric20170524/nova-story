@@ -24,14 +24,25 @@ node_modules/
 *.txt
 frontend/local/
 **/scripts
+# Un-ignore directory, re-ignore contents, then whitelist deliverables only.
+!backend/scripts/
+backend/scripts/**
+!backend/scripts/recompile_dreamcore_ch2_10.ts
+!backend/scripts/verify_dreamcore_ac.ts
+!backend/scripts/run-tests.ts
+!backend/scripts/fixtures/
+!backend/scripts/fixtures/dreamcore_ac_fixture.json
 *.bak
 backend/system_settings.json
 docs/短剧/qiongming.txt
 /local/
 # Local runtime (regenerate / machine-specific)
 backend/sql_app.db
+backend/sql_app.db-shm
+backend/sql_app.db-wal
 backend/logs/
 backend/dist/
 # On-disk static root (HTTP still served at /static/*)
 backend/static/generated/
 backend/static/comics/
+/backend/scripts/

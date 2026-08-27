@@ -385,6 +385,7 @@ class ApiService {
   // Timeline & Director
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
   generateTimeline = (chapterId: string, mode: string = 'narrative') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
+  generateNarration = (chapterId: string) => this.request<any>('/timeline/narration/generate', { method: 'POST', body: { chapter_id: chapterId } });
   updateScene = (sceneId: number | string, data: any) => this.request<any>(`/timeline/scene/${sceneId}`, { method: 'PUT', body: data });
 
   listSceneVersions = (sceneId: number | string) =>

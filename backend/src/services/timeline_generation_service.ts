@@ -7,10 +7,61 @@ import { db } from '../db/database';
 import { LLMService } from './llm';
 import { SettingsManager } from '../core/settings_manager';
 import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
+import { formatVisualLockTokens } from './reference_generation_policy';
 import {
   annotateSceneWithVersions,
   ensureSceneVersionBaseline,
 } from './scene_versions';
+import { sanitizeVisualPrompt } from './visual_prompt_sanitizer';
+import {
+  assertChapterUniqueness,
+  formatUniquenessFailure,
+} from './visual_prompt_uniqueness';
+import {
+  assertChapterShotQuota,
+  chapterLikelyHasKeyProps,
+  formatShotQuotaFailure,
+} from './shot_intent_quota';
+import { compileNegativePrompt } from './negative_prompt_compiler';
+import { packShotSpec } from '../schemas/shot_contract';
+import {
+  compilePonyPrompt,
+  type CharacterLockRef,
+} from './pony_prompt_compiler';
+
+const parseCharacterTags = (raw: unknown): any => {
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw || '{}') : raw || {};
+  } catch {
+    return {};
+  }
+};
+
+export async function buildCharacterLockRefsForChapter(
+  projectId: number,
+  chapterId: string
+): Promise<CharacterLockRef[]> {
+  const characters = await db.all(
+    'SELECT * FROM character WHERE project_id = ?',
+    projectId
+  );
+  if (!characters?.length) return [];
+  return characters
+    .map((c: any) => {
+      const tags = parseCharacterTags(c.visual_tags);
+      const lock = formatVisualLockTokens(tags, { chapterId });
+      if (!lock || /^\(none/i.test(lock)) return null;
+      const aliases = Array.isArray(tags?.aliases)
+        ? tags.aliases.map((a: unknown) => String(a || '').trim()).filter(Boolean)
+        : [];
+      return {
+        name: String(c.name || '').trim() || null,
+        aliases,
+        lock,
+      } satisfies CharacterLockRef;
+    })
+    .filter(Boolean) as CharacterLockRef[];
+}
 
 export async function buildCharacterProfilesForChapter(
   projectId: number,
@@ -23,46 +74,9 @@ export async function buildCharacterProfilesForChapter(
   if (!characters?.length) return '';
 
   const profiles = characters.map((c: any) => {
-    let tags =
-      typeof c.visual_tags === 'string'
-        ? JSON.parse(c.visual_tags || '{}')
-        : c.visual_tags || {};
-    let tagStr = '';
-
-    if (tags && tags.base_model) {
-      let baseTags = tags.base_model.tags || {};
-      if (typeof baseTags === 'string') baseTags = { base: baseTags };
-      let activeVariantTags: Record<string, unknown> = {};
-
-      const timelineMap = tags.timeline_map || {};
-      let activeVariantId = timelineMap[chapterId];
-      const variants = tags.variants || [];
-
-      if (!activeVariantId && variants.length > 0) {
-        activeVariantId = variants[0].id;
-      }
-
-      if (activeVariantId) {
-        const variant = variants.find((v: any) => v.id === activeVariantId);
-        if (variant) {
-          activeVariantTags = variant.tags || {};
-          if (typeof activeVariantTags === 'string') {
-            activeVariantTags = { variant: activeVariantTags };
-          }
-        }
-      }
-
-      const combined = { ...baseTags, ...activeVariantTags };
-      tagStr = Object.entries(combined)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(', ');
-    } else if (tags) {
-      tagStr = Object.entries(tags)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(', ');
-    }
-
-    return `- Name: ${c.name}\n  Description: ${c.description}\n  Visual Tags: ${tagStr}`;
+    const tags = parseCharacterTags(c.visual_tags);
+    const lock = formatVisualLockTokens(tags, { chapterId });
+    return `- Name: ${c.name}\n  Visual Lock: ${lock || '(none — do not invent appearance tags)'}`;
   });
 
   return profiles.join('\n');
@@ -118,6 +132,108 @@ export async function generateAndReplaceNarrativeTimeline(options: {
     { nsfwEnabled }
   );
 
+  const characterLocks = await buildCharacterLockRefsForChapter(
+    options.projectId,
+    options.chapterId
+  );
+
+  const preparedShots = (timelineData || []).map((item: any) => {
+    const location = String(item.location || item.shot_spec?.location || '').trim();
+    const primary_action = String(
+      item.primary_action || item.shot_spec?.primary_action || ''
+    ).trim();
+    const key_props = item.key_props || item.shot_spec?.key_props || [];
+    const shot_intent = item.shot_intent || item.shot_spec?.shot_intent || null;
+    const subject_scale = item.subject_scale || item.shot_spec?.subject_scale || null;
+    const primary_subject =
+      item.primary_subject || item.shot_spec?.primary_subject || null;
+    const visible_subjects =
+      item.visible_subjects || item.shot_spec?.visible_subjects || [];
+
+    // Always compile from contract; ignore LLM prose visual_prompt (Phase 2 redline).
+    const compiled = compilePonyPrompt(
+      {
+        shot_intent,
+        shot_type: item.shot_type,
+        location,
+        primary_action,
+        primary_subject,
+        visible_subjects,
+        key_props,
+        subject_scale,
+        must_not: item.must_not || item.shot_spec?.must_not || [],
+      },
+      characterLocks
+    );
+    const sanitized = sanitizeVisualPrompt(compiled.visual_prompt);
+    const compiledNegative = compileNegativePrompt({
+      shot_type: item.shot_type,
+      shot_intent: compiled.shot_intent || shot_intent,
+      visual_prompt: sanitized.visual_prompt,
+      location,
+      key_props,
+      character_lock: characterLocks.map((ref) => ref.lock).join(', '),
+      identity_mode: 'auto',
+    });
+    const negative = [
+      compiledNegative,
+      item.negative_prompt,
+      ...compiled.negative_extras,
+      ...sanitized.negative_extras,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const uniqueness_key =
+      item.uniqueness_key || item.shot_spec?.uniqueness_key || null;
+    const shot_spec = packShotSpec({
+      shot_intent,
+      location,
+      primary_action,
+      primary_subject,
+      visible_subjects,
+      key_props,
+      subject_scale,
+      uniqueness_key,
+      must_not: item.must_not || item.shot_spec?.must_not || [],
+      shot_type: item.shot_type,
+    });
+    return {
+      ...item,
+      location,
+      primary_action,
+      key_props,
+      shot_intent,
+      subject_scale,
+      primary_subject,
+      visible_subjects,
+      visual_prompt: sanitized.visual_prompt,
+      negative_prompt: negative || null,
+      uniqueness_key,
+      shot_spec,
+    };
+  });
+  const uniqueness = assertChapterUniqueness(
+    preparedShots.map((shot: any) => ({
+      visual_prompt: shot.visual_prompt,
+      uniqueness_key: shot.uniqueness_key,
+    }))
+  );
+  if (uniqueness.ok === false) {
+    throw new Error(formatUniquenessFailure(uniqueness.violation));
+  }
+
+  const quota = assertChapterShotQuota(
+    preparedShots.map((shot: any) => ({
+      shot_type: shot.shot_type,
+      shot_intent: shot.shot_intent || shot.shot_spec?.shot_intent,
+      visual_prompt: shot.visual_prompt,
+    })),
+    { hasKeyProps: chapterLikelyHasKeyProps(options.content) }
+  );
+  if (quota.ok === false) {
+    throw new Error(formatShotQuotaFailure(quota.violation));
+  }
+
   if (!timelineData || timelineData.length === 0) {
     throw new Error('LLM returned empty timeline data');
   }
@@ -145,23 +261,25 @@ export async function generateAndReplaceNarrativeTimeline(options: {
     await db.run('DELETE FROM scene WHERE chapter_id = ?', options.chapterId);
 
     const newScenes: any[] = [];
-    for (let i = 0; i < timelineData.length; i++) {
-      const item = timelineData[i];
+    for (let i = 0; i < preparedShots.length; i++) {
+      const item = preparedShots[i];
       const result = await db.run(
         `INSERT INTO scene (
-           chapter_id, "index", visual_prompt, audio_prompt, dialogue, duration,
-           shot_type, camera_movement, camera_angle, negative_prompt, asset_status
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,
+           chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration, duration,
+           shot_type, camera_movement, camera_angle, negative_prompt, shot_spec, asset_status
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,
         options.chapterId,
         i + 1,
         item.visual_prompt || '',
         item.audio_prompt || '',
         item.dialogue || '',
+        item.narration || '',
         item.duration || 3.0,
         item.shot_type || '',
         item.camera_movement || '',
         item.camera_angle || '',
-        item.negative_prompt || null
+        item.negative_prompt || null,
+        item.shot_spec || null
       );
 
       const newScene = await db.get(

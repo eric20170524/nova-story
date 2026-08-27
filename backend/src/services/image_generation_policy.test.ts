@@ -6,13 +6,39 @@ import test from 'node:test';
 import {
   applyPromptEnhancement,
   buildPromptEnhancement,
+  inferPromptSubjectType,
   inferStyleShotMode,
+  mergeClipPositivePrompt,
   normalizeImageModelFamily,
+  resolveGenerationPlan,
   resolveLoraStack,
   resolveNsfwLora,
   resolveStyleLora,
+  sanitizeNegativePromptForSubject,
+  sanitizePromptForSubject,
   stripStyleNarrativeTokens
 } from './image_generation_policy';
+
+test('mergeClipPositivePrompt puts scene before framing and quality; dedupes score/source', () => {
+  const REAL_TEMPLATE =
+    'score_9, score_8_up, score_7_up, source_anime, cinematic shot';
+  const merged = mergeClipPositivePrompt({
+    scene: 'paw presses music-note button on miniature park map',
+    framing:
+      '(narrative insert shot:1.35), source_anime, subject visibly interacting with the specified prop',
+    templateText: REAL_TEMPLATE,
+  });
+  const actionIdx = merged.indexOf('paw presses music-note button');
+  const cinematicIdx = merged.indexOf('cinematic shot');
+  const scoreIdx = merged.indexOf('score_9');
+  const sourceIdx = merged.indexOf('source_anime');
+  assert.ok(actionIdx >= 0 && actionIdx < cinematicIdx);
+  assert.ok(cinematicIdx >= 0 && cinematicIdx < scoreIdx);
+  assert.equal((merged.match(/\bscore_9\b/g) || []).length, 1);
+  assert.equal((merged.match(/\bsource_anime\b/g) || []).length, 1);
+  assert.ok(sourceIdx > actionIdx);
+  assert.match(merged, /cinematic shot/);
+});
 
 test('SFW mode never auto-picks Incase as style; NSFW picks Incase for adult slot', () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-lora-policy-'));
@@ -112,6 +138,177 @@ test('style preset injects guofeng boosters for xianxia stories', () => {
     existingPrompt: 'immortal woman on jade steps'
   });
   assert.match(enh.suffix, /xianxia|jade|ethereal/i);
+});
+
+test('animal story scenes never receive invented female-human identity tags', () => {
+  const prompt =
+    "The animal slowly steps forward, its paw pressing into a glowing patch on the marble floor.";
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: prompt,
+    genType: 'scene',
+    subjectType: 'nonhuman'
+  });
+
+  assert.equal(inferPromptSubjectType(prompt), 'nonhuman');
+  assert.doesNotMatch(enh.suffix, /beautiful East Asian woman|chinese beauty|\bfemale\b|\bwoman\b/i);
+  assert.doesNotMatch(enh.negativeExtra, /\bmale\b|\bman\b|\bboy\b|western face/i);
+  assert.match(enh.suffix, /xianxia|jade|ethereal/i);
+});
+
+test('nonhuman subject strips legacy portrait contamination from old clients', () => {
+  const positive = sanitizePromptForSubject(
+    'The animal crosses the plaza, beautiful East Asian woman, delicate feminine face, long flowing hair, cool jade tones',
+    'nonhuman'
+  );
+  const negative = sanitizeNegativePromptForSubject(
+    'western face, caucasian, male, man, boy, low quality, watermark',
+    'nonhuman'
+  );
+
+  assert.match(positive, /animal crosses the plaza|cool jade tones/i);
+  assert.doesNotMatch(positive, /woman|feminine face|flowing hair/i);
+  assert.equal(negative, 'low quality, watermark');
+});
+
+test('wide welcome-plaza scene remains environment-only', () => {
+  const prompt =
+    'A vast, colorful welcome plaza under a golden sunset, frozen flags above smooth marble.';
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: prompt,
+    genType: 'scene',
+    shotType: 'Wide Shot',
+    subjectType: 'environment'
+  });
+
+  assert.equal(inferStyleShotMode(prompt, { shotType: 'Wide Shot' }), 'environment');
+  assert.equal(
+    inferStyleShotMode('A furry creature crosses the plaza.', {
+      shotType: 'Wide Shot',
+      subjectType: 'nonhuman'
+    }),
+    'environment'
+  );
+  assert.match(enh.suffix, /environment-dominant|expansive detailed location/i);
+  assert.match(enh.negativeExtra, /close-up|face filling frame|centered character portrait/i);
+  assert.doesNotMatch(enh.suffix, /beautiful East Asian woman|chinese beauty|\bfemale\b|\bwoman\b/i);
+});
+
+test('insert shotIntent never stacks environment-dominant composition', () => {
+  const insertPrompt =
+    'insert shot, paw pressing music-note button on miniature park map, european arcade in soft background';
+  const insertEnh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    stylePreset: 'cinematic_grid',
+    existingPrompt: insertPrompt,
+    genType: 'scene',
+    shotType: 'Insert Shot',
+    shotIntent: 'insert',
+    subjectType: 'nonhuman',
+  });
+  assert.match(insertEnh.suffix, /narrative insert shot/i);
+  assert.doesNotMatch(insertEnh.suffix, /environment-dominant cinematic composition/i);
+
+  const wideEnh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    existingPrompt: 'european arcade corridor, creature walks past lamp post',
+    genType: 'scene',
+    shotType: 'Wide Shot',
+    shotIntent: 'wide-action',
+    subjectType: 'nonhuman',
+  });
+  assert.match(wideEnh.suffix, /environment-dominant cinematic composition/i);
+  assert.doesNotMatch(wideEnh.suffix, /narrative insert shot/i);
+});
+
+test('environment shots skip portrait-detail style LoRA', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-environment-lora-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
+
+  try {
+    const plan = resolveGenerationPlan({
+      modelFamily: 'pony',
+      nsfwEnabled: false,
+      runtimeSettings: {
+        comfyui: {
+          install_path: installPath,
+          pony_lora: 'Pony_DetailV2.0.safetensors',
+          pony_lora_strength: 0.65
+        }
+      },
+      workflowData: {
+        gen_type: 'scene',
+        subject_type: 'nonhuman',
+        shot_type: 'Wide Shot'
+      },
+      basePrompt: 'A furry creature crosses a vast abandoned amusement park.'
+    });
+    const style = plan.loras.find((slot) => slot.role === 'style');
+    assert.equal(style, undefined);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('narrative close-ups retain story context and reject studio portraits', () => {
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    existingPrompt: 'A furry creature sniffs beside a blue soda machine.',
+    genType: 'scene',
+    shotType: 'Close-Up',
+    subjectType: 'nonhuman'
+  });
+  assert.match(enh.suffix, /contextual narrative close-up|story location|props remain visible/i);
+  assert.match(enh.negativeExtra, /front-facing studio portrait|centered ID photo|isolated character/i);
+});
+
+test('insert shots emphasize the clue and exclude a full animal portrait', () => {
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    existingPrompt: 'One padded paw touches a frozen light patch on marble.',
+    genType: 'scene',
+    shotType: 'Insert Shot',
+    subjectType: 'nonhuman'
+  });
+  assert.match(enh.suffix, /narrative insert shot|specified prop or body part only/i);
+  assert.match(enh.negativeExtra, /animal portrait|full animal|no full face|face/i);
+});
+
+test('insert-shot intent takes precedence over environment words in the prompt', () => {
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    existingPrompt: 'A paper cup and three tickets on an amusement-park ticket booth counter.',
+    genType: 'scene',
+    shotType: 'Insert Shot',
+    subjectType: 'environment'
+  });
+
+  assert.match(enh.suffix, /narrative insert shot|extreme detail/i);
+  assert.doesNotMatch(enh.suffix, /wide shot|establishing shot|environment-dominant/i);
+  assert.doesNotMatch(enh.negativeExtra, /^.*close-up.*$/i);
+});
+
+test('explicit female characters still receive the intended identity enhancement', () => {
+  const enh = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    existingPrompt: '1girl, adult swordswoman standing on jade steps',
+    genType: 'scene'
+  });
+  assert.match(enh.suffix, /East Asian|chinese beauty|female/i);
+  assert.match(enh.negativeExtra, /western face|male/i);
 });
 
 test('SFW never injects fully clothed artistic portrait by default', () => {

@@ -38,6 +38,20 @@ const isCharacterMentionedInPrompt = (prompt: string, char: any): boolean => {
   });
 };
 
+const NONHUMAN_SCENE_RE =
+  /\b(animal|creature|furry|furred|quadruped|paw|paws|paw pads?|whiskers?|muzzle|snout|tail|kitten|cat|puppy|dog|fox|rabbit|bunny|wolf|bear|otter|hamster|mouse|deer|bird)\b/i;
+const HUMAN_SCENE_RE =
+  /\b(1girl|2girls|3girls|1boy|2boys|3boys|girl|woman|women|female|boy|man|men|male|person|people|heroine|swordswoman|swordsman|princess|prince)\b/i;
+
+const isNonhumanCharacter = (char: any): boolean => {
+  return NONHUMAN_SCENE_RE.test(
+    `${char?.description || ''} ${JSON.stringify(char?.visual_tags || {})}`
+  );
+};
+
+const HUMAN_IDENTITY_NEGATIVE_RE =
+  /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
+
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
@@ -58,7 +72,9 @@ export const DirectorMode: React.FC = () => {
   const [genScheduler, setGenScheduler] = useState('normal');
 
   const [selectedStyle, setSelectedStyle] = useState<string>(() => {
-    const saved = localStorage.getItem('director_selectedStyle');
+    const saved = projectId
+      ? localStorage.getItem(`director_project_${projectId}_style`)
+      : null;
     const styles = getVisualStyles();
     if (saved && styles.some((s) => s.value === saved)) return saved;
     return STANDARD_VISUAL_STYLES[0].value;
@@ -74,6 +90,7 @@ export const DirectorMode: React.FC = () => {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const [generatingNarration, setGeneratingNarration] = useState(false);
   const [renderingVideo, setRenderingVideo] = useState(false);
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
@@ -104,7 +121,10 @@ export const DirectorMode: React.FC = () => {
   // Persist settings
   useEffect(() => {
     localStorage.setItem('director_selectedStyle', selectedStyle);
-  }, [selectedStyle]);
+    if (projectId) {
+      localStorage.setItem(`director_project_${projectId}_style`, selectedStyle);
+    }
+  }, [projectId, selectedStyle]);
 
   // Drop advanced style selection if advanced styles are disabled
   useEffect(() => {
@@ -153,7 +173,16 @@ export const DirectorMode: React.FC = () => {
           if (styles.some((s) => s.value === settingsObj.default_style)) {
             setSelectedStyle(settingsObj.default_style);
             localStorage.setItem('director_selectedStyle', settingsObj.default_style);
+            localStorage.setItem(`director_project_${projectId}_style`, settingsObj.default_style);
           }
+        } else {
+          const savedProjectStyle = localStorage.getItem(`director_project_${projectId}_style`);
+          const styles = getVisualStyles();
+          setSelectedStyle(
+            savedProjectStyle && styles.some((s) => s.value === savedProjectStyle)
+              ? savedProjectStyle
+              : STANDARD_VISUAL_STYLES[0].value
+          );
         }
         if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony') {
           setProjectModelType(settingsObj.default_model_type);
@@ -279,6 +308,28 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
+  const handleGenerateNarration = async () => {
+    if (!selectedChapterId || timeline.length === 0) return;
+    setGeneratingNarration(true);
+    try {
+      const result = await api.generateNarration(selectedChapterId);
+      await loadTimeline(selectedChapterId);
+      showToast(
+        t('director.narration_generated', 'Generated narration for {count} scenes', {
+          count: result.generated_count || timeline.length,
+        }),
+        'success'
+      );
+    } catch (e: any) {
+      showToast(
+        e.message || t('director.narration_failed', 'Local narration generation failed'),
+        'error'
+      );
+    } finally {
+      setGeneratingNarration(false);
+    }
+  };
+
   const handleUpdateScene = (id: number | string, field: keyof Scene, value: any) => {
     setTimeline(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
     
@@ -327,14 +378,28 @@ export const DirectorMode: React.FC = () => {
 
   const generateAsset = async (
     sceneId: number | string,
-    options: { newVersion?: boolean } = {}
+    options: { newVersion?: boolean; preserveComposition?: boolean } = {}
   ) => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
 
+    // Character extraction may complete after this page mounted. Refresh on demand
+    // while the cached list is empty so a running batch can pick up new profiles.
+    let availableProjectCharacters = projectCharacters;
+    if (availableProjectCharacters.length === 0 && projectId) {
+      try {
+        const fresh = await api.getCharacters(Number(projectId));
+        if (Array.isArray(fresh)) {
+          availableProjectCharacters = fresh;
+          setProjectCharacters(fresh);
+        }
+      } catch {
+        // Backend also restores appearance from scene/project data as a safety net.
+      }
+    }
+
     const styleObj = findVisualStyle(selectedStyle);
-    const stylePromptRaw = styleObj ? styleObj.prompt : '';
-    const globalNegative = styleObj && styleObj.negative_prompt ? styleObj.negative_prompt : '';
+    const globalNegativeRaw = styleObj && styleObj.negative_prompt ? styleObj.negative_prompt : '';
     
     let finalPrompt = "";
 
@@ -357,13 +422,34 @@ export const DirectorMode: React.FC = () => {
       (k) => shotTypeLower.includes(k)
     );
     const promptForMention = `${scene.visual_prompt || ''} ${finalPrompt}`;
-    let mentionedChars = projectCharacters.filter((char) =>
+    let mentionedChars = availableProjectCharacters.filter((char) =>
       isCharacterMentionedInPrompt(promptForMention, char)
     );
-    // Solo project cast: still inject the only character when the shot text omits the name
-    if (mentionedChars.length === 0 && projectCharacters.length === 1) {
-      mentionedChars = [projectCharacters[0]];
+    const hasNonhumanSubject = NONHUMAN_SCENE_RE.test(promptForMention);
+    const hasHumanSubject = HUMAN_SCENE_RE.test(promptForMention);
+    // Generic "the animal" / "the character" prompts still resolve the sole cast
+    // member, but pure environment shots stay free of invented subjects.
+    if (mentionedChars.length === 0 && availableProjectCharacters.length === 1) {
+      const onlyCharacter = availableProjectCharacters[0];
+      if (
+        (hasNonhumanSubject && isNonhumanCharacter(onlyCharacter))
+        || (hasHumanSubject && !isNonhumanCharacter(onlyCharacter))
+        || /\b(protagonist|main character|the character|hero|heroine)\b/i.test(promptForMention)
+      ) {
+        mentionedChars = [onlyCharacter];
+      }
     }
+    const mentionedNonhumanCount = mentionedChars.filter(isNonhumanCharacter).length;
+    const sceneSubjectType =
+      mentionedNonhumanCount > 0 && mentionedNonhumanCount < mentionedChars.length
+        ? 'mixed'
+        : mentionedNonhumanCount > 0 || hasNonhumanSubject
+        ? 'nonhuman'
+        : mentionedChars.length > 0 || hasHumanSubject
+          ? 'human'
+          : isWideOrFullShot
+            ? 'environment'
+            : 'unknown';
 
     const appearanceSnippets: string[] = [];
     for (const char of mentionedChars) {
@@ -377,14 +463,17 @@ export const DirectorMode: React.FC = () => {
       }
     }
 
-    if (stylePromptRaw) {
-        if (styleStrength !== 1.0) {
-            finalPrompt += `, (${stylePromptRaw}:${styleStrength})`;
-        } else {
-            finalPrompt += `, ${stylePromptRaw}`;
-        }
-    }
+    // Scene style is applied by the backend from style_preset. Do not append the
+    // legacy UI style prose here: several presets contain face/hair/portrait nouns
+    // that can replace animals and environments with human beauty portraits.
 
+    const globalNegative = sceneSubjectType === 'nonhuman' || sceneSubjectType === 'environment'
+      ? globalNegativeRaw
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part && !HUMAN_IDENTITY_NEGATIVE_RE.test(part))
+          .join(', ')
+      : globalNegativeRaw;
     let finalNegative = globalNegative;
     if (scene.negative_prompt) {
         finalNegative = finalNegative ? `${finalNegative}, ${scene.negative_prompt}` : scene.negative_prompt;
@@ -417,11 +506,11 @@ export const DirectorMode: React.FC = () => {
         }
       }
 
-      // Composition ref (Tier B ControlNet):
-      // - in-place regenerate keeps previous frame layout
-      // - otherwise null → text composition only
+      // Composition ref (Tier B ControlNet): only reuse an old frame when the
+      // caller explicitly asks to preserve layout. Regeneration must otherwise
+      // be able to escape a bad prior composition.
       const compositionRefUrl =
-        !options.newVersion && scene.asset_url
+        options.preserveComposition && scene.asset_url
           ? scene.asset_url
           : null;
 
@@ -445,8 +534,13 @@ export const DirectorMode: React.FC = () => {
           prompt: finalPrompt,
           negative_prompt: finalNegative,
           style_preset: selectedStyle,
+          style_strength: styleStrength,
           mode: backendAssetMode,
           model_type: referenceModelType,
+          shot_type: scene.shot_type || null,
+          camera_movement: scene.camera_movement || null,
+          camera_angle: scene.camera_angle || null,
+          subject_type: sceneSubjectType,
           // Legacy single-ref slot (compat) + explicit Tier A/B fields
           ref_image_url: characterRefUrl,
           character_ref_url: characterRefUrl,
@@ -676,6 +770,8 @@ export const DirectorMode: React.FC = () => {
         loading={loading}
         selectedChapterId={selectedChapterId}
         onGenerateTimeline={triggerGenerateTimeline}
+        onGenerateNarration={handleGenerateNarration}
+        generatingNarration={generatingNarration}
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
         onGenerateAsset={generateAsset}
