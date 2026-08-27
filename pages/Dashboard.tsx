@@ -167,7 +167,7 @@ export const Dashboard: React.FC = () => {
     : [];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-950 p-4 sm:p-8 lg:p-12">
+    <div className="h-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12">
       <div className="max-w-7xl mx-auto">
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 sm:mb-10 gap-4">
           <div>

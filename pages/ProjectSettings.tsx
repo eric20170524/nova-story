@@ -245,11 +245,23 @@ export const ProjectSettings: React.FC = () => {
       }
   };
 
-  if (loading) return <div className="p-12 text-center text-slate-500">{t('dashboard.loading')}</div>;
-  if (!project) return <div className="p-12 text-center text-red-500">Project not found</div>;
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center bg-slate-950 p-12 text-slate-500">
+        {t('dashboard.loading')}
+      </div>
+    );
+  }
+  if (!project) {
+    return (
+      <div className="flex h-full items-center justify-center bg-slate-950 p-12 text-red-500">
+        Project not found
+      </div>
+    );
+  }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-950 p-4 sm:p-8 lg:p-12">
+    <div className="h-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12">
       <div className="max-w-3xl mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-white mb-6 sm:mb-8">{t('project_settings.title')}</h1>
         

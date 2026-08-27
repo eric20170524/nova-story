@@ -66,8 +66,8 @@ export const ProjectLayout: React.FC = () => {
           </NavLink>
         </div>
 
-        {/* Project Content Area */}
-        <div className="flex-1 overflow-hidden relative">
+        {/* Project Content Area — min-h-0 so nested pages can own vertical scroll */}
+        <div className="flex-1 min-h-0 overflow-hidden relative">
           <Outlet />
         </div>
 

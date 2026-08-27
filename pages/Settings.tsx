@@ -221,13 +221,14 @@ export const SettingsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
+      <div className="flex h-full items-center justify-center bg-slate-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
       </div>
     );
   }
 
   return (
+    <div className="h-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12">
     <div className="max-w-4xl mx-auto space-y-6 pb-12">
       <div>
         <h1 
@@ -265,40 +266,40 @@ export const SettingsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-800">
+      {/* Tabs — horizontal scroll on narrow viewports so labels are not clipped */}
+      <div className="flex border-b border-slate-800 overflow-x-auto custom-scrollbar -mx-1 px-1">
         <button
           onClick={() => setActiveTab('general')}
-          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
             activeTab === 'general'
               ? 'border-indigo-500 text-indigo-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Cloud className="w-4 h-4" />
+          <Cloud className="w-4 h-4 flex-shrink-0" />
           API & 服务配置
         </button>
         <button
           onClick={() => setActiveTab('workflow')}
-          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
             activeTab === 'workflow'
               ? 'border-indigo-500 text-indigo-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <WorkflowIcon className="w-4 h-4" />
+          <WorkflowIcon className="w-4 h-4 flex-shrink-0" />
           工作流预设 (Workflows)
         </button>
 
         <button
           onClick={() => setActiveTab('advanced')}
-          className={`py-3 px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
             activeTab === 'advanced'
               ? 'border-rose-500 text-rose-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Shield className="w-4 h-4" />
+          <Shield className="w-4 h-4 flex-shrink-0" />
           {t('advanced_settings.advanced_tab_title')}
         </button>
       </div>
@@ -731,6 +732,7 @@ export const SettingsPage: React.FC = () => {
           </button>
         </div>
       </form>
+    </div>
     </div>
   );
 };
