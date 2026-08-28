@@ -14,6 +14,20 @@ import { subscribeTaskProgress } from '../services/task_progress_bus';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
+  const parseProgressMetadata = (raw?: string | null) => {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        ...(typeof parsed?.width === 'number' ? { width: parsed.width } : {}),
+        ...(typeof parsed?.height === 'number' ? { height: parsed.height } : {}),
+        ...(typeof parsed?.aspect_ratio === 'string' ? { aspect_ratio: parsed.aspect_ratio } : {}),
+      };
+    } catch {
+      return {};
+    }
+  };
+
   app.post('/generate', async (request, reply) => {
     const req = GenerateRequestSchema.parse(request.body);
 
@@ -82,7 +96,8 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         image_url: task.image_url,
         error: task.error,
         comfy_prompt_id: task.comfy_prompt_id ?? null,
-        updated_at: task.updated_at
+        updated_at: task.updated_at,
+        ...parseProgressMetadata(task.progress_json),
       };
     }
     // Fallback: scene row may still know about a historical task
@@ -185,7 +200,12 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     // Initial check just in case it already finished
     const task = await AssetTaskStore.get(task_id);
     if (task?.status === 'completed' && task.image_url) {
-        writeEvent({ type: 'complete', status: 'completed', image_url: task.image_url });
+        writeEvent({
+          type: 'complete',
+          status: 'completed',
+          image_url: task.image_url,
+          ...parseProgressMetadata(task.progress_json),
+        });
         if (redis) redis.disconnect();
         endStream();
         return;

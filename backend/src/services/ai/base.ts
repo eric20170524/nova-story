@@ -6,6 +6,13 @@ export type StructuredGenOptions = {
   systemInstruction?: string;
 };
 
+export type ImageGenerationOptions = {
+  width: number;
+  height: number;
+  aspectRatio: '3:4' | '4:3' | '1:1';
+  imageSize: '512' | '1K' | '2K';
+};
+
 export interface AIProvider {
     generateText(prompt: string, systemInstruction?: string): Promise<string>;
 
@@ -17,5 +24,5 @@ export interface AIProvider {
       options?: StructuredGenOptions
     ): Promise<T>;
 
-    generateImage(prompt: string, size?: string, token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }>;
+    generateImage(prompt: string, options?: ImageGenerationOptions, token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }>;
 }

@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import type { AIProvider } from './base';
+import type { AIProvider, ImageGenerationOptions } from './base';
 import { logger } from '../../core/logging';
 
 function truncateLog(text: string, maxLength = 500): string {
@@ -143,8 +143,11 @@ export class OpenAIProvider implements AIProvider {
         }
     }
 
-    async generateImage(prompt: string, size: string = "1024x1024", token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }> {
+    async generateImage(prompt: string, options?: ImageGenerationOptions, token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }> {
         try {
+            const size = !options || options.aspectRatio === '1:1'
+                ? '1024x1024'
+                : options.aspectRatio === '4:3' ? '1792x1024' : '1024x1792';
             const response = await this.openai.images.generate({
                 model: this.imageModel,
                 prompt,

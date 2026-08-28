@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Video, BookOpen, X, Sliders, Zap, PlayCircle, Square, Library } from 'lucide-react';
-import { Scene, AssetMode } from '../../types';
+import { Scene, AssetMode, ImageOutputSpec } from '../../types';
 import { API_BASE_URL, formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -31,6 +31,7 @@ interface DirectorRightPanelProps {
   onStopBatchGenerate?: () => void;
   projectModelType?: string;
   effectiveNsfw?: boolean;
+  outputSpec?: ImageOutputSpec;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
@@ -54,7 +55,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   onStopBatchGenerate,
   isBatchGenerating,
   projectModelType = 'pony',
-  effectiveNsfw = false
+  effectiveNsfw = false,
+  outputSpec
 }) => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
@@ -181,6 +183,15 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                        {projectModelType === 'sd15'
                          ? t('director.model_sd15', 'SD 1.5 Draft')
                          : t('director.model_pony', 'Pony XL')}
+                     </span>
+                   </div>
+
+                   <div className="flex justify-between items-center bg-slate-900 px-2.5 py-1.5 rounded border border-slate-800/80 gap-2">
+                     <span className="text-slate-400 flex-shrink-0">{t('director.canvas_label', 'Canvas')}</span>
+                     <span className="text-sky-300 font-semibold">
+                       {outputSpec?.orientation_policy === 'auto_by_shot'
+                         ? t('director.canvas_auto', 'Auto by shot')
+                         : `${outputSpec?.aspect_ratio || '3:4'} · ${outputSpec?.resolution || 'standard'}`}
                      </span>
                    </div>
                  </div>

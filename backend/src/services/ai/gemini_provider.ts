@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
-import { AIProvider } from './base';
+import { AIProvider, ImageGenerationOptions } from './base';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
 
@@ -92,7 +92,7 @@ export class GeminiProvider implements AIProvider {
         }
     }
 
-    async generateImage(prompt: string, size: string = "1K", token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }> {
+    async generateImage(prompt: string, options?: ImageGenerationOptions, token?: string): Promise<{ url?: string; b64_json?: string; data?: Buffer; error?: string }> {
         if (!this.apiKey) {
             return { error: 'GEMINI_API_KEY is not configured.' };
         }
@@ -106,8 +106,8 @@ export class GeminiProvider implements AIProvider {
                 contents: prompt,
                 config: {
                     imageConfig: {
-                        aspectRatio: "1:1",
-                        imageSize: size as any
+                        aspectRatio: options?.aspectRatio || "1:1",
+                        imageSize: options?.imageSize || "1K"
                     }
                 }
             });

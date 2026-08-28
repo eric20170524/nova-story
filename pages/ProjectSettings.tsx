@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Loader2, Trash2, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
-import { Project } from '../types';
+import { ImageOutputSpec, Project } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import {
@@ -29,6 +29,11 @@ export const ProjectSettings: React.FC = () => {
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
   const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15'>('pony');
   const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
+  const [outputSpec, setOutputSpec] = useState<Required<ImageOutputSpec>>({
+    aspect_ratio: '3:4',
+    resolution: 'standard',
+    orientation_policy: 'fixed',
+  });
   const [workflows, setWorkflows] = useState<any[]>([]);
   /** inherit | on | off — project-level NSFW policy */
   const [nsfwMode, setNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
@@ -106,6 +111,21 @@ export const ProjectSettings: React.FC = () => {
           if (typeof settingsObj.default_workflow_id === 'number') {
               setDefaultWorkflowId(settingsObj.default_workflow_id);
           }
+          const savedOutputSpec = settingsObj.output_spec || {};
+          const aspectRatio = ['3:4', '4:3', '1:1', 'auto'].includes(savedOutputSpec.aspect_ratio)
+            ? savedOutputSpec.aspect_ratio
+            : '3:4';
+          const resolution = ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
+            ? savedOutputSpec.resolution
+            : 'standard';
+          const orientationPolicy = ['fixed', 'auto_by_shot'].includes(savedOutputSpec.orientation_policy)
+            ? savedOutputSpec.orientation_policy
+            : 'fixed';
+          setOutputSpec({
+            aspect_ratio: aspectRatio,
+            resolution,
+            orientation_policy: orientationPolicy,
+          });
           if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
               setNsfwMode(settingsObj.nsfw_mode);
           } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
@@ -189,6 +209,7 @@ export const ProjectSettings: React.FC = () => {
             default_style: defaultStyle,
             default_model_type: defaultModelType,
             default_workflow_id: defaultWorkflowId,
+            output_spec: outputSpec,
             nsfw_mode: nsfwMode,
             genre,
             style: storyStyle,
@@ -385,6 +406,58 @@ export const ProjectSettings: React.FC = () => {
                         <option value="on">{t('project_settings.nsfw_on')}</option>
                         <option value="off">{t('project_settings.nsfw_off')}</option>
                     </select>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.canvas_mode')}
+                        </label>
+                        <p className="text-xs text-slate-500 mb-2">
+                            {t('project_settings.canvas_mode_desc')}
+                        </p>
+                        <select
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm"
+                            value={
+                              outputSpec.orientation_policy === 'auto_by_shot' || outputSpec.aspect_ratio === 'auto'
+                                ? 'auto'
+                                : outputSpec.aspect_ratio
+                            }
+                            onChange={(e) => {
+                              const value = e.target.value as '3:4' | '4:3' | '1:1' | 'auto';
+                              setOutputSpec((current) => ({
+                                ...current,
+                                aspect_ratio: value === 'auto' ? '3:4' : value,
+                                orientation_policy: value === 'auto' ? 'auto_by_shot' : 'fixed',
+                              }));
+                            }}
+                        >
+                            <option value="3:4">{t('project_settings.canvas_portrait')}</option>
+                            <option value="4:3">{t('project_settings.canvas_landscape')}</option>
+                            <option value="1:1">{t('project_settings.canvas_square')}</option>
+                            <option value="auto">{t('project_settings.canvas_auto')}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-2">
+                            {t('project_settings.output_resolution')}
+                        </label>
+                        <p className="text-xs text-slate-500 mb-2">
+                            {t('project_settings.output_resolution_desc')}
+                        </p>
+                        <select
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm"
+                            value={outputSpec.resolution}
+                            onChange={(e) => setOutputSpec((current) => ({
+                              ...current,
+                              resolution: e.target.value as 'draft' | 'standard' | 'high',
+                            }))}
+                        >
+                            <option value="draft">{t('project_settings.resolution_draft')}</option>
+                            <option value="standard">{t('project_settings.resolution_standard')}</option>
+                            <option value="high">{t('project_settings.resolution_high')}</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 

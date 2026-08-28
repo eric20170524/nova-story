@@ -183,6 +183,16 @@ export interface GenerationParams {
   steps?: number;
   sampler_name?: string;
   scheduler?: string;
+  /** Low-level exact canvas override; width and height must be provided together. */
+  width?: number;
+  height?: number;
+  output_spec?: ImageOutputSpec;
+}
+
+export interface ImageOutputSpec {
+  aspect_ratio?: '3:4' | '4:3' | '1:1' | 'auto';
+  resolution?: 'draft' | 'standard' | 'high';
+  orientation_policy?: 'fixed' | 'auto_by_shot';
 }
 
 export interface GeneratePayload {
@@ -207,5 +217,6 @@ export interface GeneratePayload {
   model_type?: string;
   gen_type?: string;
   denoise?: number;
+  output_spec?: ImageOutputSpec;
   generation_params?: GenerationParams;
 }

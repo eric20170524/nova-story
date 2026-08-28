@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { Chapter, Scene, Workflow, StreamMessage, AssetMode } from '../types';
+import { Chapter, Scene, Workflow, StreamMessage, AssetMode, ImageOutputSpec } from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -96,6 +96,11 @@ export const DirectorMode: React.FC = () => {
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
+  const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
+    aspect_ratio: '3:4',
+    resolution: 'standard',
+    orientation_policy: 'fixed',
+  });
   const [systemNsfw, setSystemNsfw] = useState(false);
 
   // Comic State
@@ -190,6 +195,18 @@ export const DirectorMode: React.FC = () => {
           // FLUX.1-dev GGUF retired — migrate to Pony XL
           setProjectModelType('pony');
         }
+        const savedOutputSpec = settingsObj.output_spec || {};
+        setProjectOutputSpec({
+          aspect_ratio: ['3:4', '4:3', '1:1', 'auto'].includes(savedOutputSpec.aspect_ratio)
+            ? savedOutputSpec.aspect_ratio
+            : '3:4',
+          resolution: ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
+            ? savedOutputSpec.resolution
+            : 'standard',
+          orientation_policy: ['fixed', 'auto_by_shot'].includes(savedOutputSpec.orientation_policy)
+            ? savedOutputSpec.orientation_policy
+            : 'fixed',
+        });
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
         if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
           mode = settingsObj.nsfw_mode;
@@ -556,7 +573,8 @@ export const DirectorMode: React.FC = () => {
           new_version: Boolean(options.newVersion),
           project_settings: {
             nsfw_mode: projectNsfwMode,
-            default_style: selectedStyle
+            default_style: selectedStyle,
+            output_spec: projectOutputSpec,
           },
           generation_params: showAdvancedParams ? {
              steps: genSteps,
@@ -803,6 +821,7 @@ export const DirectorMode: React.FC = () => {
         onStopBatchGenerate={handleStopBatchGenerate}
         projectModelType={projectModelType}
         effectiveNsfw={effectiveNsfw}
+        outputSpec={projectOutputSpec}
       />
 
       {showComicViewer && (

@@ -68,3 +68,41 @@ test('uses Ollama JSON Schema mode for structured responses', async () => {
         });
     }
 });
+
+test('maps the logical portrait canvas to the image provider size', async () => {
+    let capturedBody: any;
+    const server = http.createServer(async (request, response) => {
+        let rawBody = '';
+        for await (const chunk of request) rawBody += chunk;
+        capturedBody = JSON.parse(rawBody);
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            created: 0,
+            data: [{ url: 'https://example.test/generated.png' }]
+        }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    try {
+        const address = server.address();
+        assert(address && typeof address !== 'string');
+        const provider = new OpenAIProvider(
+            'test-key',
+            'fake-model',
+            `http://127.0.0.1:${address.port}/v1`
+        );
+        const result = await provider.generateImage('portrait', {
+            width: 768,
+            height: 1024,
+            aspectRatio: '3:4',
+            imageSize: '1K'
+        });
+
+        assert.equal(capturedBody.size, '1024x1792');
+        assert.equal(result.url, 'https://example.test/generated.png');
+    } finally {
+        await new Promise<void>((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve());
+        });
+    }
+});

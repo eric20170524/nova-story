@@ -151,7 +151,8 @@ test('compiles the failed animal wide-shot case as landscape without female tags
       gen_type: 'scene',
       subject_type: 'nonhuman',
       shot_type: 'Wide Shot',
-      style_preset: 'xianxia_immortal'
+      style_preset: 'xianxia_immortal',
+      output_spec: { aspect_ratio: 'auto', orientation_policy: 'auto_by_shot' }
     },
     'The animal walks along the welcome plaza, its paws on the marble floor.',
     'standard',
@@ -174,7 +175,8 @@ test('compiles overhead story scenes as landscape and narrative close-ups with c
       ...ponyWorkflow(),
       gen_type: 'scene',
       subject_type: 'nonhuman',
-      shot_type: 'Overhead Shot'
+      shot_type: 'Overhead Shot',
+      output_spec: { aspect_ratio: 'auto', orientation_policy: 'auto_by_shot' }
     },
     'A tiny furry creature crosses the plaza toward a dark corridor.',
     'standard',

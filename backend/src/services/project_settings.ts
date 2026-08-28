@@ -12,6 +12,12 @@ export interface ProjectSettings {
   default_style?: string;
   default_model_type?: string; // e.g. 'pony' | 'sd15' (legacy 'flux' maps to pony on clients)
   default_workflow_id?: number | null;
+  /** Project storyboard canvas contract. Character portraits/turnarounds keep specialized framing. */
+  output_spec?: {
+    aspect_ratio?: '3:4' | '4:3' | '1:1' | 'auto';
+    resolution?: 'draft' | 'standard' | 'high';
+    orientation_policy?: 'fixed' | 'auto_by_shot';
+  };
   nsfw_mode?: ProjectNsfwMode;
   /** @deprecated prefer nsfw_mode; still honored when nsfw_mode is absent */
   nsfw_enabled?: boolean;

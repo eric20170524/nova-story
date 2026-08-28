@@ -38,6 +38,11 @@ import {
     createProgressPublisher,
     runVramHandoffForImageGen,
 } from './generation_progress';
+import {
+    normalizeGeneratedImage,
+    resolveImageOutputTarget,
+    type ImageOutputTarget,
+} from './image_output_spec';
 
 // Re-export for tests and callers that imported from generation_service
 export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
@@ -537,21 +542,18 @@ export const compileComfyWorkflow = async (
         if (generationParams?.scheduler) sampler.inputs.scheduler = generationParams.scheduler;
     }
 
-    const isTurnaround = workflowData?.gen_type === 'turnaround';
-    const isLandscapeShot = /wide|long shot|extreme long|establishing|panoramic|landscape|overview|overhead|aerial|bird'?s[- ]eye/i.test(
-        `${workflowData?.shot_type || ''} ${finalPrompt}`
+    const outputTarget = resolveImageOutputTarget({
+        workflowData,
+        generationParams,
+        mode,
+        modelFamily,
+        finalPrompt,
+    });
+    const { width, height } = outputTarget;
+    logger.info(
+        `Resolved image canvas ${width}x${height} ratio=${outputTarget.resolved_aspect_ratio} `
+        + `resolution=${outputTarget.resolution} source=${outputTarget.source}`
     );
-    let width = mode === 'cinematic_grid'
-        ? 1024
-        : (isTurnaround ? 1152 : isLandscapeShot ? 1024 : 768);
-    let height = mode === 'cinematic_grid'
-        ? 1024
-        : (isTurnaround ? 768 : isLandscapeShot ? 768 : 1024);
-    if (modelFamily === 'sd15' && mode !== 'cinematic_grid') {
-        // Match sd15_draft_12gb latent defaults for fast iteration
-        width = isTurnaround ? 768 : isLandscapeShot ? 768 : 512;
-        height = isTurnaround ? 512 : isLandscapeShot ? 512 : 768;
-    }
 
     for (const node of Object.values(workflow) as any[]) {
         if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
@@ -1007,6 +1009,24 @@ export class GenerationService {
                 effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
             }
 
+            const outputModelFamily = normalizeImageModelFamily(
+                effectiveWorkflowData?.model_type
+                || effectiveWorkflowData?.reference_model_type
+                || 'pony'
+            );
+            const outputTarget: ImageOutputTarget = resolveImageOutputTarget({
+                workflowData: effectiveWorkflowData,
+                generationParams,
+                mode,
+                modelFamily: outputModelFamily,
+                finalPrompt,
+            });
+            logger.info(
+                `[Task ${taskId}] Output contract ${outputTarget.width}x${outputTarget.height} `
+                + `ratio=${outputTarget.resolved_aspect_ratio} resolution=${outputTarget.resolution} `
+                + `source=${outputTarget.source}`
+            );
+
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
 
@@ -1060,7 +1080,12 @@ export class GenerationService {
             } else {
                 logger.info(`[Task ${taskId}] Using configured cloud image provider`);
                 const aiProvider = MediaService.getProvider();
-                const apiRes = await aiProvider.generateImage(finalPrompt, "1024x1024", userToken);
+                const apiRes = await aiProvider.generateImage(finalPrompt, {
+                    width: outputTarget.width,
+                    height: outputTarget.height,
+                    aspectRatio: outputTarget.resolved_aspect_ratio,
+                    imageSize: outputTarget.image_size,
+                }, userToken);
                 result = {
                     status: apiRes.error ? "failed" : "completed",
                     message: apiRes.error,
@@ -1073,17 +1098,34 @@ export class GenerationService {
 
             if (result?.status === "completed" && result.images && result.images.length > 0) {
                 const img = result.images[0];
-                if (img.data) {
+                let imageData: Buffer | null = img.data ? Buffer.from(img.data) : null;
+                if (!imageData && img.url) {
+                    const remoteResponse = await fetch(String(img.url), {
+                        signal: AbortSignal.timeout(60_000),
+                    });
+                    if (!remoteResponse.ok) {
+                        throw new Error(`Could not download generated image: HTTP ${remoteResponse.status}`);
+                    }
+                    imageData = Buffer.from(await remoteResponse.arrayBuffer());
+                }
+
+                if (imageData) {
+                    const normalizedImage = await normalizeGeneratedImage(imageData, outputTarget);
                     const filename = `${sceneId}_${taskId}.png`;
                     const filepath = path.join(staticDir, filename);
-                    fs.writeFileSync(filepath, img.data);
+                    fs.writeFileSync(filepath, normalizedImage.buffer);
                     assetUrl = `/static/generated/${filename}`;
                     finalStatus = "completed";
-                    logger.info(`[Task ${taskId}] Image saved to ${filepath}`);
-                } else if (img.url) {
-                    assetUrl = img.url;
-                    finalStatus = "completed";
-                    logger.info(`[Task ${taskId}] Using remote image URL: ${assetUrl}`);
+                    if (normalizedImage.normalized) {
+                        logger.warn(
+                            `[Task ${taskId}] Provider returned ${normalizedImage.sourceWidth}x${normalizedImage.sourceHeight}; `
+                            + `normalized to ${normalizedImage.width}x${normalizedImage.height}`
+                        );
+                    }
+                    logger.info(
+                        `[Task ${taskId}] Image saved to ${filepath} `
+                        + `(${normalizedImage.width}x${normalizedImage.height})`
+                    );
                 }
 
                 if (finalStatus === "completed" && sceneId < 90_000_000) {
@@ -1101,7 +1143,10 @@ export class GenerationService {
                 await AssetTaskStore.completed(taskId, sceneId, assetUrl!);
                 await progressHandler('complete', {
                     status: 'completed',
-                    image_url: assetUrl
+                    image_url: assetUrl,
+                    width: outputTarget.width,
+                    height: outputTarget.height,
+                    aspect_ratio: outputTarget.resolved_aspect_ratio,
                 });
             } else {
                 const errMsg = result?.message || "Unknown error";
