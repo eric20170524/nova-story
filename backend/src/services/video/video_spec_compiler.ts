@@ -1,5 +1,4 @@
 import {
-  VideoProfile,
   VideoPreset,
   VideoSpec,
   VideoGenerationRequest
@@ -36,12 +35,45 @@ export const cleanPromptForH3 = (rawPrompt?: string | null): string => {
     .replace(/^,\s*|,\s*$/g, '');
 };
 
+/**
+ * MiniMax H3 native video frames must lie on the 17k+5 grid.
+ * ComfyUI's official H3 node uses the same rule; 5 seconds at 24 fps
+ * therefore requests 124 model frames, then delivery post-processing trims
+ * to the product contract (120 frames / 5.0 seconds).
+ */
+export const alignH3FrameCount = (requestedFrames: number): number => {
+  let frames = Math.max(5, Math.ceil(requestedFrames));
+  while (frames % 17 !== 5) frames += 1;
+  return frames;
+};
+
 export const resolvePresetDimensions = (preset: VideoPreset) => {
+  const fps = 24;
+  const modelFrames = alignH3FrameCount(5 * fps);
   if (preset === 'standard_720p_5s') {
-    return { width: 1280, height: 720, frames: 121, fps: 24 };
+    return { width: 1280, height: 720, frames: modelFrames, fps };
   }
   // default preview_480p_5s
-  return { width: 864, height: 480, frames: 121, fps: 24 };
+  return { width: 864, height: 480, frames: modelFrames, fps };
+};
+
+const compileReferenceInstruction = (request: VideoGenerationRequest, charName: string): string[] => {
+  const instructions: string[] = [];
+  const pictureTags = (request.character_reference_asset_ids || []).map((_, index) => `<Picture ${index + 1}>`);
+
+  if (pictureTags.length > 0) {
+    instructions.push(
+      `${pictureTags.join(', ')} ${pictureTags.length === 1 ? 'is' : 'are'} identity reference${pictureTags.length === 1 ? '' : 's'} for the same character (${charName}); preserve face, hairstyle, costume and material details from these pictures.`
+    );
+  }
+
+  if (request.motion_reference_asset_id) {
+    instructions.push(
+      '<Video 1> is the motion-timing and body-pose reference only; preserve its action timing and pose trajectory without copying identity or appearance from the motion source.'
+    );
+  }
+
+  return instructions;
 };
 
 export const VideoSpecCompiler = {
@@ -76,8 +108,8 @@ export const VideoSpecCompiler = {
       }
     }
 
-    let environmentMotion = 'Subtle natural cloth and hair breeze.';
-    let temporalArc = isLoop
+    const environmentMotion = 'Subtle natural cloth and hair breeze.';
+    const temporalArc = isLoop
       ? 'Looping cycle: starts at neutral keyframe K, progresses through subtle natural motion, and returns smoothly to the exact same starting pose and near-zero velocity at the boundary.'
       : 'Narrative arc: natural progression of the primary action across 5 seconds.';
 
@@ -86,10 +118,13 @@ export const VideoSpecCompiler = {
       negativeMotion += ', camera drift, speech, mouth opening, wide hand gestures';
     }
 
-    // Compose Positive Prompt
-    const positiveParts: string[] = [];
+    // Compose Positive Prompt. H3 Ref2VA resolves references by ordinal tags,
+    // so make the binding explicit instead of relying on vague "reference" prose.
+    const positiveParts: string[] = [
+      ...compileReferenceInstruction(request, charName)
+    ];
     if (isLoop) {
-      positiveParts.push('Locked camera. Preserve the exact motion timing and body pose from the motion reference.');
+      positiveParts.push('Locked camera. Preserve the exact motion timing and body pose from <Video 1>.');
     } else {
       positiveParts.push(cameraMotion);
     }
