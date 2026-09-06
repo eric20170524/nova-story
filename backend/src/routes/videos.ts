@@ -5,13 +5,11 @@ import { randomUUID } from 'node:crypto';
 import {
   VideoPreflightRequestSchema,
   VideoGenerationRequestSchema,
-  VideoPromoteRequestSchema,
   VideoReprocessRequestSchema
 } from '../schemas/video';
 import { VideoGenerationService } from '../services/video/video_generation_service';
 import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
-import { LoopCloser } from '../services/video/loop_closer';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
 import { getGeneratedDirectory } from '../core/paths';
 
@@ -50,7 +48,8 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const characterId = fields.character_id?.value ? Number(fields.character_id.value) : undefined;
     const role = fields.role?.value || 'character_reference';
 
-    // Only allow uploading references and keyframes via upload endpoint.
+    // Only allow uploading source/reference assets. Generated derivatives are
+    // created internally so their lineage cannot be forged by clients.
     const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
     if (!allowedRoles.includes(role)) {
       return reply.status(400).send({ error: `Direct upload not allowed for role '${role}'. Allowed roles: ${allowedRoles.join(', ')}` });
@@ -121,12 +120,27 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     if (!body || !body.url || !body.role) {
       return reply.status(400).send({ error: 'Missing required asset fields (url, role)' });
     }
+
+    const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
+    if (!allowedRoles.includes(body.role)) {
+      return reply.status(400).send({
+        error: `External asset registration not allowed for role '${body.role}'`
+      });
+    }
+    const mediaType = body.media_type || 'image';
+    const requiredMediaType = body.role === 'motion_reference' ? 'video' : 'image';
+    if (mediaType !== requiredMediaType) {
+      return reply.status(400).send({
+        error: `Role '${body.role}' requires media_type '${requiredMediaType}', received '${mediaType}'`
+      });
+    }
+
     const asset = await MediaAssetService.createAsset({
       project_id: Number(body.project_id || 1),
       scene_id: body.scene_id != null ? Number(body.scene_id) : undefined,
       scene_version: body.scene_version != null ? Number(body.scene_version) : 1,
       character_id: body.character_id != null ? Number(body.character_id) : undefined,
-      media_type: body.media_type || 'image',
+      media_type: mediaType,
       role: body.role,
       profile: body.profile,
       status: body.status || 'ready',
@@ -235,24 +249,24 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   // POST /api/videos/assets/:asset_id/reprocess
   fastify.post('/assets/:asset_id/reprocess', async (request, reply) => {
     const { asset_id } = request.params as { asset_id: string };
-    const asset = await MediaAssetService.getAssetById(Number(asset_id));
-    if (!asset || asset.role !== 'raw_video') {
-      return reply.status(400).send({ error: 'Asset must be an existing raw_video asset' });
+    const parsed = VideoReprocessRequestSchema.safeParse({
+      asset_id: Number(asset_id),
+      run_loop_closer: (request.body as any)?.run_loop_closer
+    });
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: 'Invalid reprocess request',
+        details: parsed.error.flatten()
+      });
     }
 
-    const runLoopCloser = (request.body as any)?.run_loop_closer !== false;
-    const rawPath = MediaAssetService.resolveSafePath(asset.url);
-    const outputDir = path.dirname(rawPath);
-    const taskId = path.basename(outputDir);
-
-    const result = await LoopCloser.process({
-      taskId,
-      profile: asset.profile || 'character_loop',
-      rawVideoPath: rawPath,
-      outputDirectory: outputDir,
-      runLoopCloser
-    });
-
-    return { ok: true, result };
+    try {
+      return await VideoGenerationService.reprocessAsset(
+        parsed.data.asset_id,
+        parsed.data.run_loop_closer
+      );
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || String(err) });
+    }
   });
 };
