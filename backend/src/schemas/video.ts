@@ -17,6 +17,7 @@ export const VideoTaskStageSchema = z.enum([
   'collecting',
   'postprocessing',
   'qa_running',
+  'review_required',
   'completed',
   'rejected',
   'failed',
@@ -37,7 +38,7 @@ export const MediaAssetRoleSchema = z.enum([
 ]);
 export type MediaAssetRole = z.infer<typeof MediaAssetRoleSchema>;
 
-export const MediaAssetStatusSchema = z.enum(['draft', 'ready', 'rejected', 'archived']);
+export const MediaAssetStatusSchema = z.enum(['draft', 'review_required', 'ready', 'rejected', 'archived']);
 export type MediaAssetStatus = z.infer<typeof MediaAssetStatusSchema>;
 
 export const MediaAssetSchema = z.object({
@@ -165,7 +166,7 @@ export type VideoQAReport = z.infer<typeof VideoQAReportSchema>;
 export const VideoTaskResponseSchema = z.object({
   task_id: z.string(),
   scene_id: z.number().int(),
-  status: z.enum(['queued', 'processing', 'completed', 'rejected', 'failed', 'cancelled', 'interrupted']),
+  status: z.enum(['queued', 'processing', 'review_required', 'completed', 'rejected', 'failed', 'cancelled', 'interrupted']),
   stage: VideoTaskStageSchema.optional(),
   queue_position: z.number().int().optional(),
   error: z.string().nullable().optional(),
