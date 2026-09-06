@@ -37,6 +37,9 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
 
   // POST /api/videos/references/upload
   fastify.post('/references/upload', async (request, reply) => {
+    if (!request.isMultipart()) {
+      return reply.status(400).send({ error: 'Please upload the file as multipart/form-data' });
+    }
     const data = await request.file({ limits: { fileSize: 150 * 1024 * 1024 } });
     if (!data) {
       return reply.status(400).send({ error: 'No file uploaded' });

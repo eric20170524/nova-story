@@ -84,7 +84,9 @@ export function buildTurnaroundViewPrompt(
   const quality =
     modelFamily === 'pony'
       ? 'score_9, score_8_up, score_7_up, source_anime, masterpiece, best quality'
-      : 'masterpiece, best quality, highly detailed, anime style';
+      : modelFamily === 'redcraft_krea2'
+        ? 'masterpiece quality, highly detailed, clean studio render'
+        : 'masterpiece, best quality, highly detailed, anime style';
 
   const prompt = [
     quality,

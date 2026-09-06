@@ -18,6 +18,8 @@ const DEFAULT_SETTINGS = {
         // FLUX.1-dev GGUF retired (2026-08); flux_* keys ignored if present in old settings files.
         pony_lora: 'Pony_DetailV2.0.safetensors',
         pony_lora_strength: 0.65,
+        redcraft_krea2_lora: null,
+        redcraft_krea2_lora_strength: 0.8,
         default_workflow: 'pony_xl_12gb.json',
         /**
          * Tier B dual-reference (Pony/SDXL):
@@ -37,6 +39,7 @@ const DEFAULT_SETTINGS = {
         nsfw_enabled: false,
         // Adult style / unlock LoRAs — separate from style/detail; auto-discovered by filename patterns
         pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+        redcraft_krea2_nsfw_lora: null,
         nsfw_lora_strength: 0.55
     },
     // Local-first default (Ollama OpenAI-compatible). Cloud providers still work via settings/.env.

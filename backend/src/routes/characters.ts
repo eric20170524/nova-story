@@ -346,7 +346,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const modelFamily = normalizeImageModelFamily(req.model_type);
     const effectiveModelType = modelFamily === 'flux' ? 'pony' : modelFamily;
     const header = buildCharacterPromptHeader(
-      effectiveModelType === 'sd15' ? 'sd15' : 'pony',
+      effectiveModelType,
       nsfwEnabled,
       req.gen_type
     );

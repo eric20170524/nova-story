@@ -159,7 +159,7 @@ export const MOCK_TIMELINE = {
  * Adult-leaning styles live in frontend/local/advanced_visual_styles.ts (gitignored).
  * Unlock via Settings: click the hidden footer area 5 times.
  */
-export type RecommendedImageModel = 'pony_xl' | 'sd15_draft' | 'both';
+export type RecommendedImageModel = 'pony_xl' | 'redcraft_krea2' | 'sd15_draft' | 'both';
 export type VisualStyleTier = 'standard' | 'advanced';
 
 export interface VisualStyleDef {
@@ -174,12 +174,14 @@ export interface VisualStyleDef {
 
 export const IMAGE_MODEL_LABELS: Record<RecommendedImageModel, string> = {
   pony_xl: 'Pony XL',
+  redcraft_krea2: 'RedCraft 3.0 (Krea2)',
   sd15_draft: 'SD1.5 Draft',
-  both: 'Pony XL / SD1.5 Draft',
+  both: 'Pony XL / SD1.5 / RedCraft',
 };
 
 export const IMAGE_MODEL_WORKFLOWS: Record<Exclude<RecommendedImageModel, 'both'>, string> = {
   pony_xl: 'pony_xl_12gb.json',
+  redcraft_krea2: 'redcraft_krea2_12gb.json',
   sd15_draft: 'sd15_draft_12gb.json',
 };
 

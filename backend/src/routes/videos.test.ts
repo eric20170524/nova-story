@@ -315,7 +315,7 @@ test('Comprehensive /api/videos route verification', async () => {
   // 7b. Cancel non-existent task
   const cancelMissingRes = await app.inject({
     method: 'POST',
-    url: '/api/videos/tasks/fake_task_9999/cancel`'
+    url: '/api/videos/tasks/fake_task_9999/cancel'
   });
   assert.equal(cancelMissingRes.statusCode, 200);
   assert.equal(JSON.parse(cancelMissingRes.body).ok, false);

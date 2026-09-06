@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 
 /** Local Comfy model families. `flux` is legacy custom-graph only (GGUF retired 2026-08). */
-export type ImageModelFamily = 'pony' | 'sd15' | 'flux';
+export type ImageModelFamily = 'pony' | 'sd15' | 'redcraft_krea2' | 'flux';
 
 /**
  * Normalize free-form model_type / reference_model_type strings from UI or API.
@@ -22,6 +22,14 @@ export type ImageModelFamily = 'pony' | 'sd15' | 'flux';
  */
 export const normalizeImageModelFamily = (raw: unknown): ImageModelFamily => {
   const s = String(raw ?? 'pony').toLowerCase().trim();
+  if (
+    s.includes('krea')
+    || s.includes('redcraft')
+    || s.includes('赤佬')
+    || s.includes('chilao')
+  ) {
+    return 'redcraft_krea2';
+  }
   if (s.includes('flux')) return 'flux';
   if (
     s === 'sd15'
@@ -88,6 +96,8 @@ export const DEFAULT_STRENGTHS = {
   pony_nsfw: 0.55,
   flux_style: 0.75,
   flux_nsfw: 0.75,
+  redcraft_krea2_style: 0.8,
+  redcraft_krea2_nsfw: 0.7,
   character: 0.8
 } as const;
 
@@ -96,7 +106,9 @@ export const RECOMMENDED_LORA_NAMES = {
   pony_style: 'Pony_DetailV2.0.safetensors',
   pony_nsfw: 'Incase_Style_PonyXL.safetensors',
   flux_style: 'XLabs_Flux_Realism.safetensors',
-  flux_nsfw: 'aidmaNSFWunlock.safetensors'
+  flux_nsfw: 'aidmaNSFWunlock.safetensors',
+  redcraft_krea2_style: 'RedCraft_Style_v1.safetensors',
+  redcraft_krea2_nsfw: 'RedCraft_NSFW_v1.safetensors'
 } as const;
 
 const PONY_STYLE_PATTERNS: RegExp[] = [
@@ -132,6 +144,21 @@ const FLUX_NSFW_PATTERNS: RegExp[] = [
   /nsfw[_-]?unlock|unlock.*nsfw/i,
   /nude.*flux|flux.*nude/i,
   /nsfw/i
+];
+
+const REDCRAFT_KREA2_STYLE_PATTERNS: RegExp[] = [
+  /krea.*style|style.*krea/i,
+  /redcraft.*style|style.*redcraft/i,
+  /krea2[_-]?detail/i,
+  /krea2/i,
+  /redcraft/i
+];
+
+const REDCRAFT_KREA2_NSFW_PATTERNS: RegExp[] = [
+  /krea.*nsfw|nsfw.*krea/i,
+  /redcraft.*nsfw|nsfw.*redcraft/i,
+  /krea.*nude|redcraft.*nude/i,
+  /krea.*uncensor|redcraft.*uncensor/i
 ];
 
 /** Trigger words known for popular LoRAs (matched by filename). */
@@ -444,6 +471,17 @@ export const resolveStyleLora = (
     return null;
   }
 
+  if (modelFamily === 'redcraft_krea2') {
+    return resolveNamedOrDiscoveredLora({
+      configured: input.styleLora,
+      installPath: input.installPath,
+      allowRemoteUnverified: input.allowRemoteUnverified,
+      patterns: REDCRAFT_KREA2_STYLE_PATTERNS,
+      excludePatterns: REDCRAFT_KREA2_NSFW_PATTERNS,
+      fallbackPatterns: [/krea|redcraft/i]
+    });
+  }
+
   if (modelFamily === 'flux') {
     // Prefer Asian/guofeng first, then realism — never pick pure NSFW unlock as style.
     return resolveNamedOrDiscoveredLora({
@@ -475,6 +513,16 @@ export const resolveNsfwLora = (
   // SD1.5 draft: skip Pony/Incase NSFW LoRAs (incompatible).
   if (modelFamily === 'sd15') {
     return null;
+  }
+
+  if (modelFamily === 'redcraft_krea2') {
+    return resolveNamedOrDiscoveredLora({
+      configured: input.nsfwLora,
+      installPath: input.installPath,
+      allowRemoteUnverified: input.allowRemoteUnverified,
+      patterns: REDCRAFT_KREA2_NSFW_PATTERNS,
+      fallbackPatterns: [/krea.*nsfw|redcraft.*nsfw/i]
+    });
   }
 
   if (modelFamily === 'flux') {
@@ -536,7 +584,9 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
   const defaultStyleStrength =
     input.modelFamily === 'flux'
       ? DEFAULT_STRENGTHS.flux_style
-      : DEFAULT_STRENGTHS.pony_style;
+      : input.modelFamily === 'redcraft_krea2'
+        ? DEFAULT_STRENGTHS.redcraft_krea2_style
+        : DEFAULT_STRENGTHS.pony_style;
 
   if (styleName) {
     push({
@@ -557,7 +607,11 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
       allowRemoteUnverified: input.allowRemoteUnverified
     });
     const defaultNsfwStrength =
-      input.modelFamily === 'flux' ? DEFAULT_STRENGTHS.flux_nsfw : DEFAULT_STRENGTHS.pony_nsfw;
+      input.modelFamily === 'flux'
+        ? DEFAULT_STRENGTHS.flux_nsfw
+        : input.modelFamily === 'redcraft_krea2'
+          ? DEFAULT_STRENGTHS.redcraft_krea2_nsfw
+          : DEFAULT_STRENGTHS.pony_nsfw;
 
     if (nsfwName) {
       // If config accidentally points NSFW at the same detail file as style, try rediscovery
@@ -835,6 +889,16 @@ export const buildPromptEnhancement = (options: {
         negativeParts.push('exposed breasts');
       }
     }
+  } else if (modelFamily === 'redcraft_krea2') {
+    // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support)
+    if (nsfwEnabled) {
+      suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
+    } else {
+      negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
+      if (!isActionLike) {
+        negativeParts.push('exposed breasts');
+      }
+    }
   } else {
     if (nsfwEnabled) {
       suffixParts.push('detailed skin texture, natural anatomy');
@@ -854,8 +918,8 @@ export const buildPromptEnhancement = (options: {
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
   const booster = presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined;
   if (booster) {
-    // SD1.5 drafts use tag-like pony boosters; FLUX custom graphs use natural phrases
-    let boost = modelFamily === 'flux' ? booster.flux : booster.pony;
+    // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
+    let boost = (modelFamily === 'flux' || modelFamily === 'redcraft_krea2') ? booster.flux : booster.pony;
     // (2) Auto-strip alluring / intimate / portrait locks on action & aftermath
     if (isActionLike) {
       boost = stripStyleNarrativeTokens(boost);
@@ -882,7 +946,7 @@ export const buildPromptEnhancement = (options: {
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
     suffixParts.push(
-      modelFamily === 'flux'
+      modelFamily === 'flux' || modelFamily === 'redcraft_krea2'
         ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
         : 'East Asian features, ancient chinese fantasy, guofeng'
     ); // pony + sd15
@@ -946,11 +1010,15 @@ export const resolveGenerationPlan = (options: {
       ? comfy.flux_lora
       : modelFamily === 'sd15'
         ? null
-        : comfy.pony_lora;
+        : modelFamily === 'redcraft_krea2'
+          ? comfy.redcraft_krea2_lora
+          : comfy.pony_lora;
   const configuredStyleStrength =
     modelFamily === 'flux'
       ? comfy.flux_lora_strength ?? DEFAULT_STRENGTHS.flux_style
-      : comfy.pony_lora_strength ?? DEFAULT_STRENGTHS.pony_style;
+      : modelFamily === 'redcraft_krea2'
+        ? comfy.redcraft_krea2_lora_strength ?? DEFAULT_STRENGTHS.redcraft_krea2_style
+        : comfy.pony_lora_strength ?? DEFAULT_STRENGTHS.pony_style;
   const shotMode = inferStyleShotMode(basePrompt, {
     genType: workflowData?.gen_type ?? null,
     shotType: workflowData?.shot_type ?? null,
@@ -976,7 +1044,9 @@ export const resolveGenerationPlan = (options: {
       ? advanced.flux_nsfw_lora
       : modelFamily === 'sd15'
         ? null
-        : advanced.pony_nsfw_lora;
+        : modelFamily === 'redcraft_krea2'
+          ? advanced.redcraft_krea2_nsfw_lora
+          : advanced.pony_nsfw_lora;
 
   const characterLora =
     workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
@@ -1075,6 +1145,16 @@ export const buildCharacterPromptHeader = (
         ? `masterpiece, best quality, full body character design, consistent character identity, 1girl, solo, female, beautiful East Asian woman, delicate feminine face, clear skin`
         : `masterpiece, best quality, portrait, upper body, front view, detailed face and eyes, 1girl, solo, female, beautiful East Asian woman, delicate feminine face`;
     const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, lowres, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
+    const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
+    return { prefix: base, negative: neg };
+  }
+
+  if (modelFamily === 'redcraft_krea2') {
+    const base =
+      genType === 'turnaround'
+        ? `full body character design, consistent character identity, clean studio background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
+        : `high quality character portrait, front view, detailed face and eyes, clean studio background, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`;
+    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, child`;
     const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
     return { prefix: base, negative: neg };
   }

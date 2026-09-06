@@ -239,7 +239,9 @@ const injectLora = (
     const modelLoaderId = findNodeId(workflow, (node) =>
         modelType === 'flux'
             ? node?.class_type === 'UnetLoaderGGUF'
-            : node?.class_type === 'CheckpointLoaderSimple'
+            : modelType === 'redcraft_krea2'
+                ? (node?.class_type === 'UNETLoader' || node?.class_type === 'DiffusionModelLoader' || node?.class_type === 'CheckpointLoaderSimple')
+                : node?.class_type === 'CheckpointLoaderSimple'
     );
     if (!modelLoaderId) return;
 
@@ -256,7 +258,7 @@ const injectLora = (
         ? textEncoderNode.inputs.clip
         : [modelLoaderId, 1];
     const loraNodeId = nextNodeId(workflow);
-    if (modelType === 'flux') {
+    if (modelType === 'flux' || modelType === 'redcraft_krea2') {
         workflow[loraNodeId] = {
             inputs: {
                 lora_name: loraName,
@@ -264,7 +266,7 @@ const injectLora = (
                 model: currentModel
             },
             class_type: 'LoraLoaderModelOnly',
-            _meta: { title: 'NovaStory FLUX LoRA' }
+            _meta: { title: modelType === 'redcraft_krea2' ? 'NovaStory RedCraft Krea2 LoRA' : 'NovaStory FLUX LoRA' }
         };
     } else {
         workflow[loraNodeId] = {
@@ -287,6 +289,7 @@ const injectLora = (
         // Pony + SD1.5 both use CLIP-aware LoraLoader
         if (
             modelType !== 'flux'
+            && modelType !== 'redcraft_krea2'
             && node?.class_type === 'CLIPTextEncode'
             && node.inputs
         ) {
@@ -307,16 +310,16 @@ const injectImg2ImgReference = (
     denoise: number,
     width: number,
     height: number,
-    isFlux: boolean
+    isSeparateVae: boolean
 ) => {
-    const vaeSourceId = isFlux
+    const vaeSourceId = isSeparateVae
         ? findNodeId(workflow, (node) => node?.class_type === 'VAELoader')
         : findNodeId(workflow, (node) => node?.class_type === 'CheckpointLoaderSimple');
     if (!vaeSourceId) {
         logger.warn('Cannot inject img2img: no VAE source node found');
         return false;
     }
-    const vaeOutputIndex = isFlux ? 0 : 2;
+    const vaeOutputIndex = isSeparateVae ? 0 : 2;
 
     const loadId = nextNodeId(workflow);
     workflow[loadId] = {
@@ -393,11 +396,14 @@ export const compileComfyWorkflow = async (
             ? path.basename(String(selectedWorkflowFile), '.json')
             : null;
         const modelKey = requestedModel || 'pony';
-        // FLUX.1-dev GGUF retired (2026-08). Prefer SD1.5 draft or Pony XL.
+        // Preferred workflow by model family
+        const normalizedKey = normalizeImageModelFamily(modelKey);
         const preferredName =
-            normalizeImageModelFamily(modelKey) === 'sd15'
+            normalizedKey === 'sd15'
                 ? 'sd15_draft_12gb'
-                : 'pony_xl_12gb';
+                : normalizedKey === 'redcraft_krea2'
+                    ? 'redcraft_krea2_12gb'
+                    : 'pony_xl_12gb';
         const fallbackName = 'pony_xl_12gb';
         // Explicit model_type on the request must win over a global UI default.
         const explicitModel =
@@ -433,19 +439,26 @@ export const compileComfyWorkflow = async (
             && /flux/i.test(node.inputs?.ckpt_name || '')
         )
     ));
+    const isRedCraftKrea2 = Boolean(findNodeId(workflow, (node) =>
+        (node?.class_type === 'UNETLoader' && /krea|redcraft/i.test(node.inputs?.unet_name || ''))
+        || (node?.class_type === 'CLIPLoader' && /krea/i.test(node.inputs?.type || node.inputs?.clip_name || ''))
+        || /redcraft|krea2/i.test(JSON.stringify(node))
+    ));
     const ckptLooksSd15 = Boolean(findNodeId(workflow, (node) =>
         node?.class_type === 'CheckpointLoaderSimple'
         && /sd\s*1\.?5|anything|counterfeit|meina|chillout|sd15/i.test(
             String(node.inputs?.ckpt_name || '')
         )
     ));
-    // Graph detection wins for FLUX custom graphs; otherwise honor request / SD1.5 ckpt.
+    // Graph detection wins for FLUX/RedCraft custom graphs; otherwise honor request / SD1.5 ckpt.
     const modelFamily: ImageModelFamily = isFlux
         ? 'flux'
-        : normalizeImageModelFamily(
-            requestedModel
-            || (ckptLooksSd15 ? 'sd15' : 'pony')
-        );
+        : isRedCraftKrea2
+            ? 'redcraft_krea2'
+            : normalizeImageModelFamily(
+                requestedModel
+                || (ckptLooksSd15 ? 'sd15' : 'pony')
+            );
     const advancedSettings = runtimeSettings.advanced || {};
 
     // Request override → project nsfw_mode → system advanced.nsfw_enabled
@@ -497,14 +510,14 @@ export const compileComfyWorkflow = async (
     ];
     const negativePrompt = negativeParts.filter(Boolean).join(', ');
 
-    // FLUX prefers lower CFG; SD1.5 draft prefers fewer steps; Pony defaults otherwise
+    // FLUX prefers lower CFG; SD1.5 draft prefers fewer steps; RedCraft Krea2 defaults to 10 steps & CFG 1.0; Pony defaults otherwise
     const defaultSteps = Number(
         generationParams?.steps
-        || (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : 25)
+        || (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : modelFamily === 'redcraft_krea2' ? 10 : 25)
     );
     const defaultCfg = Number(
         generationParams?.cfg
-        || (modelFamily === 'flux' ? 3.5 : 7)
+        || (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' ? 1.0 : 7)
     );
 
     const samplerNodes = Object.values(workflow).filter(
@@ -539,8 +552,16 @@ export const compileComfyWorkflow = async (
         sampler.inputs.seed = Math.floor(Math.random() * 1_000_000_000);
         sampler.inputs.steps = defaultSteps;
         sampler.inputs.cfg = defaultCfg;
-        if (generationParams?.sampler_name) sampler.inputs.sampler_name = generationParams.sampler_name;
-        if (generationParams?.scheduler) sampler.inputs.scheduler = generationParams.scheduler;
+        if (generationParams?.sampler_name) {
+            sampler.inputs.sampler_name = generationParams.sampler_name;
+        } else if (modelFamily === 'redcraft_krea2' && !sampler.inputs.sampler_name) {
+            sampler.inputs.sampler_name = 'euler';
+        }
+        if (generationParams?.scheduler) {
+            sampler.inputs.scheduler = generationParams.scheduler;
+        } else if (modelFamily === 'redcraft_krea2' && !sampler.inputs.scheduler) {
+            sampler.inputs.scheduler = 'simple';
+        }
     }
 
     const outputTarget = resolveImageOutputTarget({
@@ -682,7 +703,7 @@ export const compileComfyWorkflow = async (
                 refPlan.img2img.denoise,
                 width,
                 height,
-                isFlux
+                isFlux || isRedCraftKrea2
             );
         } else if (!refPlan.useCharacterAdapter) {
             logger.info(

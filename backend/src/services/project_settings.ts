@@ -10,7 +10,7 @@ export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
 
 export interface ProjectSettings {
   default_style?: string;
-  default_model_type?: string; // e.g. 'pony' | 'sd15' (legacy 'flux' maps to pony on clients)
+  default_model_type?: string; // e.g. 'pony' | 'sd15' | 'redcraft_krea2' (legacy 'flux' maps to pony on clients)
   default_workflow_id?: number | null;
   /** Project storyboard canvas contract. Character portraits/turnarounds keep specialized framing. */
   output_spec?: {
