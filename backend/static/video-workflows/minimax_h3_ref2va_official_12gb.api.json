@@ -1,0 +1,127 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "first_frame.png"
+    }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_1.png"
+    }
+  },
+  "6": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_2.png"
+    }
+  },
+  "7": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_3.png"
+    }
+  },
+  "8": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "motion_track.mp4"
+    }
+  },
+  "10": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "clip": ["2", 0],
+      "vae": ["3", 0],
+      "prompt": "<Picture 1> is the scene/keyframe reference. <Picture 2> is the primary character identity reference. <Video 1> is the motion reference.",
+      "width": 864,
+      "height": 480,
+      "length": 124,
+      "ref_image_size": "match",
+      "ref_images.ref_image_0": ["4", 0],
+      "ref_images.ref_image_1": ["5", 0],
+      "ref_images.ref_image_2": ["6", 0],
+      "ref_images.ref_image_3": ["7", 0],
+      "ref_videos.ref_video_0": ["8", 0]
+    }
+  },
+  "11": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 42
+    }
+  },
+  "12": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "res_multistep"
+    }
+  },
+  "13": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": ["1", 0],
+      "scheduler": "normal",
+      "steps": 20,
+      "denoise": 1.0
+    }
+  },
+  "14": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": ["1", 0],
+      "conditioning": ["10", 0]
+    }
+  },
+  "15": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": ["11", 0],
+      "guider": ["14", 0],
+      "sampler": ["12", 0],
+      "sigmas": ["13", 0],
+      "latent_image": ["10", 1]
+    }
+  },
+  "16": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["15", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "17": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["16", 0],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "H3_Ref2VA_Official",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
