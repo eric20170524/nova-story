@@ -3,8 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
-import { getStaticDirectory, getVideoStagingDirectory, getGeneratedVideosDirectory } from '../../core/paths';
-import { MediaAsset, MediaAssetRole, MediaAssetStatus, VideoProfile } from '../../schemas/video';
+import { getStaticDirectory, getVideoStagingDirectory } from '../../core/paths';
+import { MediaAsset } from '../../schemas/video';
 
 export class MediaAssetService {
   static computeSha256(filePath: string): string {
@@ -24,7 +24,7 @@ export class MediaAssetService {
   static resolveSafePath(relativeOrUrl: string): string {
     const staticRoot = path.resolve(getStaticDirectory());
     // Strip leading /static/ or http.../static/
-    let cleaned = relativeOrUrl.replace(/^[a-zA-Z0-9]+:\/\/[^/]+\/static\//, '').replace(/^\/?static\//, '');
+    const cleaned = relativeOrUrl.replace(/^[a-zA-Z0-9]+:\/\/[^/]+\/static\//, '').replace(/^\/?static\//, '');
     const absolute = path.resolve(staticRoot, cleaned);
     if (!absolute.startsWith(staticRoot)) {
       throw new Error(`Path traversal detected for asset path: ${relativeOrUrl}`);
@@ -146,27 +146,57 @@ export class MediaAssetService {
     }));
   }
 
+  /** Resolve either a raw video or a final derivative back to its immutable raw parent. */
+  static async resolveRawVideoForReprocess(assetId: number): Promise<MediaAsset> {
+    const asset = await this.getAssetById(assetId);
+    if (!asset) {
+      throw new Error(`Media asset ${assetId} not found`);
+    }
+    if (asset.media_type !== 'video') {
+      throw new Error('Only video assets can be reprocessed');
+    }
+    if (asset.role === 'raw_video') {
+      return asset;
+    }
+    if (asset.role !== 'loop_master' && asset.role !== 'narrative_final') {
+      throw new Error('Asset must be a raw_video, loop_master, or narrative_final video');
+    }
+    if (!asset.parent_asset_id) {
+      throw new Error(`Final asset ${assetId} has no raw-video parent`);
+    }
+    const raw = await this.getAssetById(asset.parent_asset_id);
+    if (!raw || raw.role !== 'raw_video' || raw.media_type !== 'video') {
+      throw new Error(`Final asset ${assetId} does not point to a valid raw_video parent`);
+    }
+    return raw;
+  }
+
   static async promoteAsset(assetId: number): Promise<MediaAsset> {
     const asset = await this.getAssetById(assetId);
     if (!asset) {
       throw new Error(`Media asset ${assetId} not found`);
     }
     if (asset.media_type !== 'video' || (asset.role !== 'loop_master' && asset.role !== 'narrative_final')) {
-      throw new Error(`Only loop_master or narrative_final video assets can be promoted as active final clip`);
+      throw new Error('Only loop_master or narrative_final video assets can be promoted as active final clip');
+    }
+    if (asset.status === 'rejected' || asset.status === 'archived') {
+      throw new Error(`Cannot promote a ${asset.status} video asset`);
     }
 
-    // Demote any previously ready finals for this scene + version to draft
+    // Demote the previously promoted final only. Draft/review candidates retain
+    // their QA disposition and remain available for A/B comparison.
     if (asset.scene_id) {
       await db.run(
         `UPDATE media_asset SET status = 'draft'
-         WHERE scene_id = ? AND scene_version = ? AND id != ? AND role IN ('loop_master', 'narrative_final')`,
+         WHERE scene_id = ? AND scene_version = ? AND id != ? AND status = 'ready'
+           AND role IN ('loop_master', 'narrative_final')`,
         asset.scene_id,
         asset.scene_version || 1,
         asset.id
       );
     }
 
-    await db.run(`UPDATE media_asset SET status = 'ready' WHERE id = ?`, assetId);
+    await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'ready', assetId);
     logger.info(`Promoted asset ${assetId} as active final for scene ${asset.scene_id}`);
     return (await this.getAssetById(assetId))!;
   }
