@@ -6,6 +6,7 @@ export const translations = {
       nsfw_enable_title: "Enable NSFW Mode (auto LoRA + prompt policy)",
       nsfw_enable_desc: "When ON: stacks style + adult LoRAs (Pony: Detail + Incase-class), injects unlock triggers, and steers storyboard prompts for adult-capable tags. When OFF: style/detail only and hard SFW negatives. Does not download files automatically. FLUX.1-dev GGUF is retired.",
       pony_nsfw_lora_label: "Pony XL Adult Style LoRA (auto-discover if empty)",
+      redcraft_krea2_nsfw_lora_label: "RedCraft 3.0 / Krea2 Adult LoRA (optional)",
       flux_nsfw_lora_label: "FLUX NSFW Unlock LoRA (retired — unused)",
       nsfw_lora_strength_label: "NSFW LoRA Weight / Strength (recommend 0.45–0.65)"
     },
@@ -22,6 +23,7 @@ export const translations = {
     settings_title: "Global Settings",
     settings_subtitle: "Manage your AI models, backend connections, and application preferences.",
     pony: "Pony XL",
+    redcraft_krea2: "RedCraft 3.0 (Krea2)",
     flux: "FLUX.1",
 
     settings: {
@@ -527,6 +529,7 @@ export const translations = {
       model_preset_label: "Model preset",
       model_sd15: "SD 1.5 Draft",
       model_pony: "Pony XL",
+      model_redcraft_krea2: "RedCraft 3.0 (Krea2)",
       canvas_label: "Canvas",
       canvas_auto: "Auto by shot",
       shots_badge: "{count} shots",
@@ -644,6 +647,7 @@ export const translations = {
     comfyui_default: "Built-in Standard Workflow",
     comfyui_flux_lora_label: "Default FLUX.1-dev Style LoRA (retired — unused)",
     comfyui_pony_lora_label: "Default Pony XL Style LoRA Model",
+    comfyui_redcraft_krea2_lora_label: "Default RedCraft / Krea2 Style LoRA Model",
     detected_loras_title: "Detected LoRA Models in D:\\ComfyUI\\models\\loras",
     lora_select_placeholder: "Select loaded LoRA model...",
     lora_manual_entry: "-- Manual Filename Entry --",
@@ -660,6 +664,7 @@ export const translations = {
       nsfw_enable_title: "开启 NSFW 模式（自动 LoRA + 提示词策略）",
       nsfw_enable_desc: "开启：自动叠加 风格/细节 + 成人向 LoRA（Pony：Detail + Incase 类），注入触发词，分镜按成人向标签生成。关闭：仅风格/细节 LoRA，并强制 SFW 负向词。不会自动下载模型文件。FLUX.1-dev GGUF 已退役。",
       pony_nsfw_lora_label: "Pony XL 成人画风 LoRA（空=自动发现）",
+      redcraft_krea2_nsfw_lora_label: "RedCraft「赤佬 3.0 / Krea2」成人向 LoRA（选填）",
       flux_nsfw_lora_label: "FLUX NSFW 解锁 LoRA（已退役，未使用）",
       nsfw_lora_strength_label: "NSFW LoRA 权重（建议 0.45–0.65）"
     },
@@ -676,6 +681,7 @@ export const translations = {
     settings_title: "全局配置",
     settings_subtitle: "管理您的 AI 模型、后端服务连接以及全局应用偏好。",
     pony: "Pony XL 模型",
+    redcraft_krea2: "RedCraft「赤佬 3.0 / Krea2」",
     flux: "FLUX.1 模型",
 
     settings: {
@@ -1181,6 +1187,7 @@ export const translations = {
       model_preset_label: "模型预设",
       model_sd15: "SD 1.5 Draft",
       model_pony: "Pony XL",
+      model_redcraft_krea2: "RedCraft「赤佬 3.0 / Krea2」",
       canvas_label: "画布",
       canvas_auto: "按镜头自动",
       shots_badge: "{count} 镜头",
@@ -1298,6 +1305,7 @@ export const translations = {
     comfyui_default: "内置标准工作流",
     comfyui_flux_lora_label: "默认 FLUX.1-dev 风格 LoRA（已退役，未使用）",
     comfyui_pony_lora_label: "默认 Pony XL 风格 LoRA 模型",
+    comfyui_redcraft_krea2_lora_label: "默认 RedCraft / Krea2 风格 LoRA 模型",
     detected_loras_title: "在 D:\\ComfyUI\\models\\loras 目录中实测检测到的 LoRA 模型",
     lora_select_placeholder: "选择已加载 LoRA 模型...",
     lora_manual_entry: "-- 手动输入文件名 --",

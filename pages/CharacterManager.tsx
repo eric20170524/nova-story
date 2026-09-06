@@ -31,7 +31,7 @@ export const CharacterManager: React.FC = () => {
 
   // Turnaround Sheet Modal State
   const [sheetModalChar, setSheetModalChar] = useState<Character | null>(null);
-  const [modelType, setModelType] = useState<'pony' | 'sd15'>('pony');
+  const [modelType, setModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [genType, setGenType] = useState<'turnaround' | 'portrait'>('turnaround');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -43,7 +43,7 @@ export const CharacterManager: React.FC = () => {
 
   // Project policy for consistent style/NSFW on character gens
   const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -65,7 +65,7 @@ export const CharacterManager: React.FC = () => {
         const raw = proj?.settings;
         const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
         if (s.default_style) setProjectStyle(s.default_style);
-        if (s.default_model_type === 'sd15' || s.default_model_type === 'pony') {
+        if (s.default_model_type === 'sd15' || s.default_model_type === 'pony' || s.default_model_type === 'redcraft_krea2') {
           setProjectModelType(s.default_model_type);
         } else if (s.default_model_type === 'flux') {
           setProjectModelType('pony');
@@ -341,7 +341,7 @@ export const CharacterManager: React.FC = () => {
   // Open Turnaround Sheet Generator
   const openSheetModal = async (char: Character, overrideGenType?: 'turnaround' | 'portrait') => {
     setSheetModalChar(char);
-    const mType = projectModelType || char.model_type || 'pony';
+    const mType = (projectModelType || char.model_type || 'pony') as 'pony' | 'sd15' | 'redcraft_krea2';
     setModelType(mType);
 
     const availableRef = char.avatar_url || char.turnaround_url || null;
@@ -381,7 +381,7 @@ export const CharacterManager: React.FC = () => {
   };
 
   const handleRebuildPrompt = async (
-    selectedModel: 'pony' | 'sd15', 
+    selectedModel: 'pony' | 'sd15' | 'redcraft_krea2', 
     selectedGen: 'turnaround' | 'portrait',
     withRef: boolean = useRefPortrait,
     refUrl: string | null = refImageUrl
@@ -488,7 +488,7 @@ export const CharacterManager: React.FC = () => {
       for (let i = 0; i < characters.length; i++) {
         if (stopBatchRef.current) break;
         const char = characters[i];
-        const mType = (char.model_type === 'sd15' ? 'sd15' : 'pony') as 'pony' | 'sd15';
+        const mType = (char.model_type === 'sd15' ? 'sd15' : char.model_type === 'redcraft_krea2' ? 'redcraft_krea2' : 'pony') as 'pony' | 'sd15' | 'redcraft_krea2';
 
         // 1) Portrait
         setBatchProgress(`${i + 1}/${characters.length} ${char.name} · portrait…`);

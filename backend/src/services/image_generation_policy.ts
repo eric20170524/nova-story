@@ -444,11 +444,14 @@ export const resolveNamedOrDiscoveredLora = (options: {
   const configuredName = configured ? String(configured).trim() : '';
   if (configuredName) {
     const base = path.basename(configuredName);
-    if (!installPath && allowRemoteUnverified !== false) {
-      return base;
-    }
-    if (fileExistsInInstall(installPath, base)) {
-      return base;
+    const isExcluded = excludePatterns.some((re) => re.test(base));
+    if (!isExcluded) {
+      if (!installPath && allowRemoteUnverified !== false) {
+        return base;
+      }
+      if (fileExistsInInstall(installPath, base)) {
+        return base;
+      }
     }
   }
 
@@ -477,7 +480,7 @@ export const resolveStyleLora = (
       installPath: input.installPath,
       allowRemoteUnverified: input.allowRemoteUnverified,
       patterns: REDCRAFT_KREA2_STYLE_PATTERNS,
-      excludePatterns: REDCRAFT_KREA2_NSFW_PATTERNS,
+      excludePatterns: [...REDCRAFT_KREA2_NSFW_PATTERNS, /pony/i, /flux/i, /incase/i, /expressiveh/i],
       fallbackPatterns: [/krea|redcraft/i]
     });
   }
@@ -489,7 +492,7 @@ export const resolveStyleLora = (
       installPath: input.installPath,
       allowRemoteUnverified: input.allowRemoteUnverified,
       patterns: FLUX_STYLE_PATTERNS,
-      excludePatterns: FLUX_NSFW_PATTERNS.filter((p) => /aidma|nsfw[_-]?unlock/i.test(p.source)),
+      excludePatterns: [...FLUX_NSFW_PATTERNS.filter((p) => /aidma|nsfw[_-]?unlock/i.test(p.source)), /pony/i, /krea/i, /redcraft/i],
       fallbackPatterns: [/flux/i]
     });
   }
@@ -501,7 +504,7 @@ export const resolveStyleLora = (
     installPath: input.installPath,
     allowRemoteUnverified: input.allowRemoteUnverified,
     patterns: PONY_STYLE_PATTERNS,
-    excludePatterns: excludeNsfw,
+    excludePatterns: [...excludeNsfw, /flux/i, /krea/i, /redcraft/i],
     fallbackPatterns: nsfwEnabled ? [/pony/i] : [/pony|detail/i]
   });
 };
@@ -521,6 +524,7 @@ export const resolveNsfwLora = (
       installPath: input.installPath,
       allowRemoteUnverified: input.allowRemoteUnverified,
       patterns: REDCRAFT_KREA2_NSFW_PATTERNS,
+      excludePatterns: [/pony/i, /flux/i, /incase/i, /expressiveh/i, /aidma/i],
       fallbackPatterns: [/krea.*nsfw|redcraft.*nsfw/i]
     });
   }
@@ -891,8 +895,19 @@ export const buildPromptEnhancement = (options: {
     }
   } else if (modelFamily === 'redcraft_krea2') {
     // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support)
+    if (!/high aesthetic|photographic detail|delicate lighting/i.test(existingPrompt)) {
+      suffixParts.push('high aesthetic photographic detail, rich textures, natural studio lighting, intricate nuances');
+    }
+    const intimateCue =
+      /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
+        existingPrompt
+      );
     if (nsfwEnabled) {
-      suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
+      if (intimateCue) {
+        suffixParts.push('natural uncensored details, erotic sensual atmosphere, soft skin texture');
+      } else {
+        suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
+      }
     } else {
       negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
       if (!isActionLike) {

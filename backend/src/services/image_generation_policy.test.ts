@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   applyPromptEnhancement,
+  buildCharacterPromptHeader,
   buildPromptEnhancement,
   inferPromptSubjectType,
   inferStyleShotMode,
@@ -431,3 +432,104 @@ test('FLUX discovers asian style and aidma unlock separately', () => {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
 });
+
+test('normalizeImageModelFamily correctly normalizes redcraft and krea variants', () => {
+  assert.equal(normalizeImageModelFamily('redcraft_krea2'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('redcraft'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('krea2'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('krea'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('赤佬'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('chilao'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('RedCraft 3.0 (Krea2)'), 'redcraft_krea2');
+});
+
+test('RedCraft Krea2 isolates LoRAs from Pony and discovers RedCraft LoRAs', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-redcraft-policy-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Incase_Style_PonyXL.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'redcraft_krea2_style.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'krea2_nsfw_detail.safetensors'), '');
+
+  try {
+    // Style discovery should find redcraft_krea2_style, ignoring Pony
+    const style = resolveStyleLora('redcraft_krea2', true, { installPath, styleLora: null });
+    assert.equal(style, 'redcraft_krea2_style.safetensors');
+
+    // NSFW discovery should find krea2_nsfw_detail, ignoring Pony
+    const nsfw = resolveNsfwLora('redcraft_krea2', { installPath, nsfwLora: null });
+    assert.equal(nsfw, 'krea2_nsfw_detail.safetensors');
+
+    // Pony LoRAs passed explicitly should be ignored/filtered out for redcraft_krea2
+    const stack = resolveLoraStack({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      installPath,
+      styleLora: 'Pony_DetailV2.0.safetensors',
+      nsfwLora: 'Incase_Style_PonyXL.safetensors'
+    });
+    // Pony files should not match redcraft patterns and thus return empty or fallback
+    const names = stack.map((s) => s.name);
+    assert.ok(!names.includes('Pony_DetailV2.0.safetensors'));
+    assert.ok(!names.includes('Incase_Style_PonyXL.safetensors'));
+
+    // When valid RedCraft LoRAs are provided, they are correctly stacked with targetModel 'model_only'
+    const validStack = resolveLoraStack({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      installPath,
+      styleLora: 'redcraft_krea2_style.safetensors',
+      styleLoraStrength: 0.8,
+      nsfwLora: 'krea2_nsfw_detail.safetensors',
+      nsfwLoraStrength: 0.7
+    });
+    assert.equal(validStack.length, 2);
+    assert.equal(validStack[0]?.name, 'redcraft_krea2_style.safetensors');
+    assert.equal(validStack[0]?.strength, 0.8);
+    assert.equal(validStack[1]?.name, 'krea2_nsfw_detail.safetensors');
+    assert.equal(validStack[1]?.strength, 0.7);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('RedCraft Krea2 prompt enhancement uses natural language and no score_9 tags', () => {
+  const sfw = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: false,
+    existingPrompt: 'hero standing in an ancient garden'
+  });
+  // Must not have anime score/source tags
+  assert.doesNotMatch(sfw.suffix, /score_9|source_anime|danbooru/i);
+  // Natural language booster
+  assert.match(sfw.suffix, /high aesthetic photographic detail|rich textures|studio lighting/i);
+  // Negative prompt should contain standard quality/nsfw guards in natural language
+  assert.match(sfw.negativeExtra, /nsfw|explicit nudity|ugly|deformed/i);
+  assert.doesNotMatch(sfw.negativeExtra, /source_anime|score_6|score_4/i);
+
+  const nsfw = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    existingPrompt: 'hero and heroine intimate touching on silk sheets'
+  });
+  // NSFW mode must not block NSFW in negative
+  assert.doesNotMatch(nsfw.negativeExtra, /nsfw|explicit nudity/i);
+  // Intimate prompts get natural language adult enhancers
+  assert.match(nsfw.suffix, /natural uncensored details|erotic sensual atmosphere/i);
+});
+
+test('RedCraft Krea2 buildCharacterPromptHeader generates natural language portrait headers', () => {
+  const portrait = buildCharacterPromptHeader('redcraft_krea2', false, 'portrait');
+  assert.match(portrait.prefix, /high quality character portrait/i);
+  assert.match(portrait.prefix, /clean studio background/i);
+  assert.match(portrait.negative, /low quality/i);
+  assert.match(portrait.negative, /nsfw/i);
+  assert.doesNotMatch(portrait.prefix, /score_9|source_anime/i);
+
+  const turnaround = buildCharacterPromptHeader('redcraft_krea2', true, 'turnaround');
+  assert.match(turnaround.prefix, /full body character design|consistent character identity/i);
+  assert.doesNotMatch(turnaround.negative, /nsfw/i);
+  assert.doesNotMatch(turnaround.prefix, /score_9|source_anime/i);
+});
+

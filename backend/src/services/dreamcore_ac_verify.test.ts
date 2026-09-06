@@ -56,7 +56,7 @@ test('assertDreamcoreAc passes golden fixture', () => {
 test('assertDreamcoreAc fails cloud-like and missing payoff', () => {
   const bad = structuredClone(passingFixture);
   bad[1]!.scenes[0]!.visual_prompt = 'cloud-like platforms in the sky';
-  bad[3]!.scenes = [{ visual_prompt: 'park lights', negative_prompt: 'watermark' }];
+  bad[3]!.scenes = [{ index: 0, shot_intent: 'establish', visual_prompt: 'park lights', negative_prompt: 'watermark' }];
   const result = assertDreamcoreAc(bad);
   assert.equal(result.ok, false);
   if (result.ok) throw new Error('expected failure');

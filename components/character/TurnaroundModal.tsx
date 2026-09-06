@@ -7,8 +7,8 @@ import { PreviewableImage, ZoomHint } from '../ImageLightbox';
 interface TurnaroundModalProps {
   character: Character | null;
   onClose: () => void;
-  modelType: 'pony' | 'sd15';
-  setModelType: (type: 'pony' | 'sd15') => void;
+  modelType: 'pony' | 'sd15' | 'redcraft_krea2';
+  setModelType: (type: 'pony' | 'sd15' | 'redcraft_krea2') => void;
   genType: 'turnaround' | 'portrait';
   setGenType: (type: 'turnaround' | 'portrait') => void;
   prompt: string;
@@ -80,7 +80,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-1 rounded-md bg-indigo-950 border border-indigo-700/50 text-indigo-200 text-xs font-semibold">
-                  {modelType === 'sd15' ? 'SD 1.5 Draft' : 'Pony XL (SDXL)'}
+                  {modelType === 'sd15' ? 'SD 1.5 Draft' : modelType === 'redcraft_krea2' ? 'RedCraft 3.0 (Krea2)' : 'Pony XL (SDXL)'}
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-slate-900 border border-slate-700 text-slate-300 text-xs font-medium">
                   画风: {projectStyle}

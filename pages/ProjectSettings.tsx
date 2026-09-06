@@ -27,7 +27,7 @@ export const ProjectSettings: React.FC = () => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
-  const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15'>('pony');
+  const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
   const [outputSpec, setOutputSpec] = useState<Required<ImageOutputSpec>>({
     aspect_ratio: '3:4',
@@ -102,7 +102,7 @@ export const ProjectSettings: React.FC = () => {
           if (settingsObj.default_style) {
               setDefaultStyle(settingsObj.default_style);
           }
-          if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony') {
+          if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony' || settingsObj.default_model_type === 'redcraft_krea2') {
               setDefaultModelType(settingsObj.default_model_type);
           } else if (settingsObj.default_model_type === 'flux') {
               // FLUX.1-dev GGUF retired — migrate to Pony XL
@@ -364,18 +364,21 @@ export const ProjectSettings: React.FC = () => {
                                     const nameLower = (foundWf.name || '').toLowerCase();
                                     if (nameLower.includes('sd15') || nameLower.includes('sd1.5') || nameLower.includes('1.5')) {
                                       setDefaultModelType('sd15');
+                                    } else if (nameLower.includes('krea') || nameLower.includes('redcraft') || nameLower.includes('赤佬')) {
+                                      setDefaultModelType('redcraft_krea2');
                                     } else {
                                       setDefaultModelType('pony');
                                     }
                                 }
                             } else {
                                 setDefaultWorkflowId(null);
-                                setDefaultModelType(val as 'pony' | 'sd15');
+                                setDefaultModelType(val as 'pony' | 'sd15' | 'redcraft_krea2');
                             }
                         }}
                     >
                         <optgroup label="内置基础模型 (Base Models)">
                             <option value="pony">Pony XL (SDXL 二次元/国风 · 成片)</option>
+                            <option value="redcraft_krea2">RedCraft 3.0 (Krea2 静态文生图 · 12GB 推荐)</option>
                             <option value="sd15">SD 1.5 Draft (轻量草稿 · 快速迭代)</option>
                         </optgroup>
                         {workflows.length > 0 && (

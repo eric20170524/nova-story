@@ -116,7 +116,7 @@ export const DirectorMode: React.FC = () => {
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
     aspect_ratio: '3:4',
     resolution: 'standard',
@@ -212,7 +212,7 @@ export const DirectorMode: React.FC = () => {
               : STANDARD_VISUAL_STYLES[0].value
           );
         }
-        if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony') {
+        if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony' || settingsObj.default_model_type === 'redcraft_krea2') {
           setProjectModelType(settingsObj.default_model_type);
         } else if (settingsObj.default_model_type === 'flux') {
           setProjectModelType('pony');
@@ -529,7 +529,7 @@ export const DirectorMode: React.FC = () => {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
 
       let characterRefUrl: string | null = null;
-      let referenceModelType: 'pony' | 'sd15' = projectModelType || 'pony';
+      let referenceModelType: 'pony' | 'sd15' | 'redcraft_krea2' = projectModelType || 'pony';
       let characterLora: string | null = null;
 
       if (mentionedChars.length > 0) {
@@ -537,6 +537,7 @@ export const DirectorMode: React.FC = () => {
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
           if (char.model_type === 'sd15') referenceModelType = 'sd15';
+          else if (char.model_type === 'redcraft_krea2') referenceModelType = 'redcraft_krea2';
           else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }
@@ -824,7 +825,7 @@ export const DirectorMode: React.FC = () => {
 
     try {
       let characterRefUrl: string | null = null;
-      let referenceModelType: 'pony' | 'sd15' = projectModelType || 'pony';
+      let referenceModelType: 'pony' | 'sd15' | 'redcraft_krea2' = projectModelType || 'pony';
       let characterLora: string | null = null;
 
       if (mentionedChars.length > 0) {
@@ -832,6 +833,7 @@ export const DirectorMode: React.FC = () => {
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
           if (char.model_type === 'sd15') referenceModelType = 'sd15';
+          else if (char.model_type === 'redcraft_krea2') referenceModelType = 'redcraft_krea2';
           else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }

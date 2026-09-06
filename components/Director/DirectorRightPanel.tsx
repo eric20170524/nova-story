@@ -437,6 +437,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                      <span className="text-indigo-300 font-semibold">
                        {projectModelType === 'sd15'
                          ? t('director.model_sd15', 'SD 1.5 Draft')
+                         : projectModelType === 'redcraft_krea2'
+                         ? t('director.model_redcraft_krea2', 'RedCraft 3.0 (Krea2)')
                          : t('director.model_pony', 'Pony XL')}
                      </span>
                    </div>

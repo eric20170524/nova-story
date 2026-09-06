@@ -603,6 +603,29 @@ export const SettingsPage: React.FC = () => {
                         )}
                       </select>
                     </div>
+
+                    {/* Default RedCraft Krea2 LoRA Dropdown */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">
+                        {t('comfyui_redcraft_krea2_lora_label')}
+                      </label>
+                      <select
+                        value={settings.comfyui?.redcraft_krea2_lora || ''}
+                        onChange={(e) => handleComfyChange('redcraft_krea2_lora', e.target.value || null)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                      >
+                        <option value="">(自动发现 · RedCraft / Krea2 风格)</option>
+                        {availableLoras.map((lora) => (
+                          <option key={lora} value={lora}>{lora}</option>
+                        ))}
+                        {settings.comfyui?.redcraft_krea2_lora
+                          && !availableLoras.includes(settings.comfyui.redcraft_krea2_lora) && (
+                          <option value={settings.comfyui.redcraft_krea2_lora}>
+                            {settings.comfyui.redcraft_krea2_lora} (自定义配置)
+                          </option>
+                        )}
+                      </select>
+                    </div>
                   </div>
 
                   <div>
@@ -679,6 +702,28 @@ export const SettingsPage: React.FC = () => {
                       && !availableLoras.includes(settings.advanced.pony_nsfw_lora) && (
                       <option value={settings.advanced.pony_nsfw_lora}>
                         {settings.advanced.pony_nsfw_lora} (自定义配置)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    {t('advanced_settings.redcraft_krea2_nsfw_lora_label')}
+                  </label>
+                  <select
+                    value={settings.advanced?.redcraft_krea2_nsfw_lora || ''}
+                    onChange={(e) => handleAdvancedChange('redcraft_krea2_nsfw_lora', e.target.value || null)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
+                  >
+                    <option value="">(选填 · RedCraft 原生支持成人出图)</option>
+                    {availableLoras.map((lora) => (
+                      <option key={lora} value={lora}>{lora}</option>
+                    ))}
+                    {settings.advanced?.redcraft_krea2_nsfw_lora
+                      && !availableLoras.includes(settings.advanced.redcraft_krea2_nsfw_lora) && (
+                      <option value={settings.advanced.redcraft_krea2_nsfw_lora}>
+                        {settings.advanced.redcraft_krea2_nsfw_lora} (自定义配置)
                       </option>
                     )}
                   </select>

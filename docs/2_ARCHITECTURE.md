@@ -12,7 +12,7 @@
 | 数据 | SQLite | 唯一业务事实源；幂等版本迁移在 `backend/src/db/database.ts` |
 | 进度 | Redis 可选 | 未配置则进程内 / DB 降级 |
 | 文本 LLM | Provider 层 | Gemini / OpenAI / Grok / Ollama；前端禁止直连 |
-| 生图 | ComfyUI | 成片 **Pony XL**（`pony_xl_12gb`）；草稿 **SD1.5**。FLUX.1-dev GGUF 已退役 |
+| 生图 | ComfyUI | 成片 **Pony XL**（`pony_xl_12gb`）；次世代静态 **RedCraft 3.0 (Krea2)**（`redcraft_krea2_12gb`）；草稿 **SD1.5**。FLUX.1-dev GGUF 已退役 |
 
 ## 2. 架构红线
 
