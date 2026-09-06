@@ -6,10 +6,13 @@ import { VideoSpecCompiler } from './video_spec_compiler';
 test('VideoWorkflowCompiler loads manifest and workflow template correctly', () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
   assert.equal(bundle.manifest.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
+  assert.equal(bundle.manifest.stability, 'experimental');
   assert.ok(bundle.workflow['3']);
+  assert.equal(bundle.workflow['8'].inputs.type, 'minimax');
+  assert.equal(bundle.workflow['30'].inputs.length, 124);
 });
 
-test('VideoWorkflowCompiler injects spec, staged filenames, and seeds into slots', () => {
+test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed into slots', () => {
   const spec = VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
@@ -18,6 +21,7 @@ test('VideoWorkflowCompiler injects spec, staged filenames, and seeds into slots
       keyframe_asset_id: 10,
       character_reference_asset_ids: [100],
       motion_reference_asset_id: 200,
+      last_frame_asset_id: 300,
       preset: 'preview_480p_5s',
       seed: 123456,
       run_loop_closer: true
@@ -36,6 +40,7 @@ test('VideoWorkflowCompiler injects spec, staged filenames, and seeds into slots
     spec,
     stagedFiles: {
       firstFrameFilename: 'sha_first_frame.png',
+      lastFrameFilename: 'sha_last_frame.png',
       characterRefFilenames: ['sha_char1.png'],
       motionRefFilename: 'sha_motion.mp4'
     },
@@ -44,22 +49,72 @@ test('VideoWorkflowCompiler injects spec, staged filenames, and seeds into slots
   });
 
   const wf = compiled.workflow;
-  // Positive prompt injected
   assert.equal(wf['6'].inputs.text, spec.positive_prompt);
-  // Negative prompt injected
   assert.equal(wf['7'].inputs.text, spec.negative_prompt);
-  // First frame injected
   assert.equal(wf['10'].inputs.image, 'sha_first_frame.png');
-  // Motion ref injected
+  assert.equal(wf['11'].inputs.image, 'sha_last_frame.png');
+  assert.equal(wf['12'].inputs.image, 'sha_char1.png');
+  // Fixed-socket experimental graph repeats the primary identity ref instead of
+  // polluting unused identity sockets with the scene keyframe.
+  assert.equal(wf['13'].inputs.image, 'sha_char1.png');
+  assert.equal(wf['14'].inputs.image, 'sha_char1.png');
   assert.equal(wf['20'].inputs.video, 'sha_motion.mp4');
-  // Dimensions injected
   assert.equal(wf['30'].inputs.width, 864);
   assert.equal(wf['30'].inputs.height, 480);
+  assert.equal(wf['30'].inputs.length, 124);
   assert.equal(wf['30'].inputs.fps, 24);
-  // Seed injected
   assert.equal(wf['3'].inputs.seed, 123456);
-  // Prefix injected
   assert.equal(wf['40'].inputs.filename_prefix, 'Test_H3_Output');
+  assert.equal(compiled.appliedParams.delivery_frames, 120);
+});
+
+test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is omitted', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 1,
+      scene_version: 1,
+      profile: 'character_loop',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      motion_reference_asset_id: 200,
+      preset: 'preview_480p_5s',
+      run_loop_closer: true
+    },
+    scene: { id: 1 },
+    character: { name: 'Lu Xueqi' }
+  });
+
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: {
+      firstFrameFilename: 'same_anchor.png',
+      characterRefFilenames: ['identity.png'],
+      motionRefFilename: 'motion.mp4'
+    }
+  });
+
+  assert.equal(compiled.workflow['10'].inputs.image, 'same_anchor.png');
+  assert.equal(compiled.workflow['11'].inputs.image, 'same_anchor.png');
+});
+
+test('VideoWorkflowCompiler validates exact model availability from Comfy object_info', () => {
+  const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
+  const classTypes = new Set(Object.values(bundle.workflow).map((node: any) => node.class_type));
+  const objectInfo: Record<string, any> = {};
+  for (const classType of classTypes) {
+    objectInfo[String(classType)] = { input: { required: {} } };
+  }
+  objectInfo.UNETLoader.models = ['minimax_h3_ref2va_pruned_int8_convrot.safetensors'];
+  objectInfo.CLIPLoader.models = ['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors'];
+  // Deliberately omit video VAE.
+
+  const validation = VideoWorkflowCompiler.validateAgainstComfyObjectInfo(
+    objectInfo,
+    bundle.manifest,
+    bundle.workflow
+  );
+  assert.equal(validation.valid, false);
+  assert.deepEqual(validation.missingModels, ['minimax_h3_video_vae_fp16.safetensors']);
 });
 
 test('VideoWorkflowCompiler throws when unknown slot node is referenced', () => {
