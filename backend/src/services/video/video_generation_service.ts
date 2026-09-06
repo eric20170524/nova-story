@@ -8,8 +8,6 @@ import {
   VideoCapabilities,
   VideoGenerationRequest,
   VideoPreflightResponse,
-  VideoProfile,
-  VideoPreset,
   VideoTaskResponse,
   VideoTaskStage
 } from '../../schemas/video';
@@ -26,6 +24,31 @@ import { VramService } from '../vram_service';
 export class VideoGenerationService {
   private static runningTasks = new Map<string, { abortController?: AbortController; promptId?: string }>();
 
+  static isFeatureEnabled(): boolean {
+    return process.env.NOVASTORY_ENABLE_VIDEO === 'true' || process.env.ENABLE_VIDEO_GENERATION === 'true';
+  }
+
+  private static async resolveCharacterForRequest(request: VideoGenerationRequest, projectId: number): Promise<any | null> {
+    // Prefer the explicit character binding carried by reference assets. This keeps
+    // prompt identity aligned with the images actually sent to H3.
+    for (const assetId of request.character_reference_asset_ids || []) {
+      const asset = await MediaAssetService.getAssetById(assetId);
+      if (asset?.character_id) {
+        const character = await db.get(
+          'SELECT * FROM character WHERE id = ? AND project_id = ?',
+          asset.character_id,
+          projectId
+        );
+        if (character) return character;
+      }
+    }
+
+    // A single-character project is an unambiguous fallback. For multi-character
+    // projects, returning null is safer than injecting the wrong person's identity.
+    const characters = await db.all('SELECT * FROM character WHERE project_id = ? ORDER BY id ASC', projectId);
+    return characters.length === 1 ? characters[0] : null;
+  }
+
   static async getCapabilities(): Promise<VideoCapabilities> {
     const vramStatus = await VramService.getStatus();
     const comfyProvider = new ComfyH3Provider();
@@ -41,8 +64,8 @@ export class VideoGenerationService {
 
     const missingComponents: string[] = [];
 
-    // Feature flag: disabled by default in Gate G0 unless explicitly turned on
-    const featureEnabled = process.env.NOVASTORY_ENABLE_VIDEO === 'true' || process.env.ENABLE_VIDEO_GENERATION === 'true';
+    // Gate G0 is an actual execution gate, not just a UI hint.
+    const featureEnabled = this.isFeatureEnabled();
     if (!featureEnabled) {
       missingComponents.push('Video generation feature is disabled by default (Gate G0)');
     }
@@ -52,7 +75,7 @@ export class VideoGenerationService {
     if (!comfyOnline) {
       missingComponents.push('ComfyUI server is offline');
     } else {
-      // Validate workflow against ComfyUI object_info
+      // Validate workflow against ComfyUI object_info, including exact model names.
       try {
         const objectInfo = await comfyProvider.getObjectInfo();
         const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
@@ -64,6 +87,9 @@ export class VideoGenerationService {
           }
           if (validation.missingSlots.length > 0) {
             missingComponents.push(`Invalid workflow slots: ${validation.missingSlots.join(', ')}`);
+          }
+          if (validation.missingModels.length > 0) {
+            missingComponents.push(`Missing H3 model files: ${validation.missingModels.join(', ')}`);
           }
         }
       } catch (err: any) {
@@ -95,11 +121,20 @@ export class VideoGenerationService {
     const blockers: string[] = [];
     const warnings: string[] = [];
 
+    if (!this.isFeatureEnabled()) {
+      blockers.push('Video generation is disabled by Gate G0. Set NOVASTORY_ENABLE_VIDEO=true to enable it.');
+    }
+
     // 1. Check Scene Existence
     const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
     if (!scene) {
       blockers.push(`Scene ID ${request.scene_id} does not exist`);
     }
+
+    const chapter = scene
+      ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id)
+      : null;
+    const projectId = chapter?.project_id ? Number(chapter.project_id) : null;
 
     // 2. Check Scene Version
     if (scene) {
@@ -114,7 +149,7 @@ export class VideoGenerationService {
       }
     }
 
-    // 3. Check Keyframe Asset (Must exist, must be image, must belong to project/scene)
+    // 3. Check Keyframe Asset
     let keyframeAsset = request.keyframe_asset_id ? await MediaAssetService.getAssetById(request.keyframe_asset_id) : null;
     if (!keyframeAsset && scene?.asset_url) {
       const existing = await db.get('SELECT * FROM media_asset WHERE url = ?', scene.asset_url);
@@ -122,9 +157,8 @@ export class VideoGenerationService {
         keyframeAsset = existing;
         request.keyframe_asset_id = existing.id;
       } else {
-        const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
         const newAsset = await MediaAssetService.createAsset({
-          project_id: chapter?.project_id || 1,
+          project_id: projectId || 1,
           scene_id: scene.id,
           scene_version: scene.active_version || 1,
           media_type: 'image',
@@ -141,9 +175,33 @@ export class VideoGenerationService {
       blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} does not exist.`);
     } else if (keyframeAsset.media_type !== 'image') {
       blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} must be an image.`);
+    } else {
+      if (projectId && keyframeAsset.project_id !== projectId) {
+        blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} belongs to a different project.`);
+      }
+      if (keyframeAsset.scene_id != null && Number(keyframeAsset.scene_id) !== Number(request.scene_id)) {
+        blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} belongs to a different scene.`);
+      }
     }
 
-    // 4. Check Character References
+    // 4. Check explicit Last Frame. If omitted, character_loop intentionally uses K -> K.
+    if (request.last_frame_asset_id) {
+      const lastFrameAsset = await MediaAssetService.getAssetById(request.last_frame_asset_id);
+      if (!lastFrameAsset) {
+        blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} does not exist.`);
+      } else if (lastFrameAsset.media_type !== 'image') {
+        blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} must be an image.`);
+      } else {
+        if (projectId && lastFrameAsset.project_id !== projectId) {
+          blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} belongs to a different project.`);
+        }
+        if (lastFrameAsset.scene_id != null && Number(lastFrameAsset.scene_id) !== Number(request.scene_id)) {
+          blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} belongs to a different scene.`);
+        }
+      }
+    }
+
+    // 5. Check Character References
     if (request.profile === 'character_loop') {
       if (!request.character_reference_asset_ids || request.character_reference_asset_ids.length === 0) {
         blockers.push('character_loop profile requires 1 to 3 character_reference_asset_ids');
@@ -157,11 +215,13 @@ export class VideoGenerationService {
           blockers.push(`Character reference asset ID ${charAssetId} does not exist.`);
         } else if (asset.media_type !== 'image') {
           blockers.push(`Character reference asset ID ${charAssetId} must be an image.`);
+        } else if (projectId && asset.project_id !== projectId) {
+          blockers.push(`Character reference asset ID ${charAssetId} belongs to a different project.`);
         }
       }
     }
 
-    // 5. Check Motion Reference
+    // 6. Check Motion Reference
     if (request.profile === 'character_loop') {
       if (!request.motion_reference_asset_id) {
         blockers.push('character_loop profile requires exactly 1 motion_reference_asset_id');
@@ -171,6 +231,8 @@ export class VideoGenerationService {
           blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} does not exist.`);
         } else if (motionAsset.media_type !== 'video') {
           blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} must be a video.`);
+        } else if (projectId && motionAsset.project_id !== projectId) {
+          blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} belongs to a different project.`);
         }
       }
     } else if (request.motion_reference_asset_id) {
@@ -179,17 +241,14 @@ export class VideoGenerationService {
         blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} does not exist.`);
       } else if (motionAsset.media_type !== 'video') {
         blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} must be a video.`);
+      } else if (projectId && motionAsset.project_id !== projectId) {
+        blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} belongs to a different project.`);
       }
     }
 
-    // Check Character Profile
-    let character = null;
-    if (scene) {
-      const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
-      if (chapter?.project_id) {
-        character = await db.get('SELECT * FROM character WHERE project_id = ? LIMIT 1', chapter.project_id);
-      }
-    }
+    const character = projectId
+      ? await this.resolveCharacterForRequest(request, projectId)
+      : null;
 
     let compiledSpec;
     if (blockers.length === 0 && scene) {
@@ -300,6 +359,14 @@ export class VideoGenerationService {
   private static async runTaskPipeline(taskId: string, request: VideoGenerationRequest): Promise<void> {
     const rawPublisher: ProgressPublisher = createProgressPublisher(taskId, null);
     let lease = null;
+    let leaseHeartbeat: NodeJS.Timeout | null = null;
+
+    const stopLeaseHeartbeat = () => {
+      if (leaseHeartbeat) {
+        clearInterval(leaseHeartbeat);
+        leaseHeartbeat = null;
+      }
+    };
 
     const isCancelled = async () => {
       const current = await this.getTask(taskId);
@@ -307,7 +374,6 @@ export class VideoGenerationService {
     };
 
     const emitEvent = async (stage: VideoTaskStage, data: Record<string, any> = {}) => {
-      const isTerminal = stage === 'completed' || stage === 'rejected' || stage === 'failed' || stage === 'cancelled' || stage === 'interrupted';
       const status = stage === 'completed' ? 'completed'
         : stage === 'rejected' ? 'rejected'
         : stage === 'failed' ? 'failed'
@@ -335,7 +401,19 @@ export class VideoGenerationService {
 
       // 1. Acquire GPU Lease
       lease = await GpuLeaseService.acquireLease(taskId, 'video');
+      leaseHeartbeat = setInterval(() => {
+        if (!lease) return;
+        GpuLeaseService.heartbeat(lease.lease_id, taskId);
+        void db.run(
+          'UPDATE generation_task SET heartbeat_at = ?, updated_at = ? WHERE task_id = ?',
+          new Date().toISOString(),
+          new Date().toISOString(),
+          taskId
+        ).catch(() => {});
+      }, 20_000);
+
       if (await isCancelled()) {
+        stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
         return;
       }
@@ -350,9 +428,10 @@ export class VideoGenerationService {
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
       const projectId = chapter?.project_id || 1;
-      const character = await db.get('SELECT * FROM character WHERE project_id = ? LIMIT 1', projectId);
+      const character = await this.resolveCharacterForRequest(request, Number(projectId));
 
       if (await isCancelled()) {
+        stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
         return;
       }
@@ -365,6 +444,7 @@ export class VideoGenerationService {
       await GpuLeaseService.prepareGpuForTask('video');
 
       if (await isCancelled()) {
+        stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
         return;
       }
@@ -378,6 +458,16 @@ export class VideoGenerationService {
       await db.run(`UPDATE generation_task SET stage = 'staging_refs', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
       const keyframeAsset = (await MediaAssetService.getAssetById(request.keyframe_asset_id))!;
       const stagedKf = await MediaAssetService.stageAssetForComfy(keyframeAsset);
+
+      let stagedLastFrameFilename: string | undefined;
+      if (request.last_frame_asset_id) {
+        const lastFrameAsset = await MediaAssetService.getAssetById(request.last_frame_asset_id);
+        if (!lastFrameAsset) {
+          throw new Error(`Last-frame asset ${request.last_frame_asset_id} disappeared after preflight`);
+        }
+        const stagedLast = await MediaAssetService.stageAssetForComfy(lastFrameAsset);
+        stagedLastFrameFilename = stagedLast.stagedFilename;
+      }
 
       const stagedCharFiles: string[] = [];
       for (const charAssetId of request.character_reference_asset_ids) {
@@ -398,6 +488,7 @@ export class VideoGenerationService {
       }
 
       if (await isCancelled()) {
+        stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
         return;
       }
@@ -413,6 +504,7 @@ export class VideoGenerationService {
         spec,
         stagedFiles: {
           firstFrameFilename: stagedKf.stagedFilename,
+          lastFrameFilename: stagedLastFrameFilename,
           characterRefFilenames: stagedCharFiles,
           motionRefFilename: stagedMotionFilename
         },
@@ -449,6 +541,7 @@ export class VideoGenerationService {
       });
 
       if (await isCancelled()) {
+        stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
         return;
       }
@@ -486,6 +579,7 @@ export class VideoGenerationService {
 
       // Release GPU lease early so next task can start generating
       if (lease) {
+        stopLeaseHeartbeat();
         GpuLeaseService.releaseLease(lease.lease_id, taskId);
         lease = null;
       }
@@ -593,6 +687,7 @@ export class VideoGenerationService {
 
     } catch (err: any) {
       logger.error(`Task ${taskId} failed: ${err?.message || err}`);
+      stopLeaseHeartbeat();
       if (lease) {
         GpuLeaseService.releaseLease(lease.lease_id, taskId);
       }
@@ -608,6 +703,7 @@ export class VideoGenerationService {
         message_zh: `视频生成失败：${err?.message || err}`
       });
     } finally {
+      stopLeaseHeartbeat();
       this.runningTasks.delete(taskId);
     }
   }
