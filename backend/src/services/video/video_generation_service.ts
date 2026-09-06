@@ -5,9 +5,12 @@ import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { getGeneratedVideosDirectory, getVideoWorkflowsDirectory } from '../../core/paths';
 import {
+  MediaAsset,
+  MediaAssetStatus,
   VideoCapabilities,
   VideoGenerationRequest,
   VideoPreflightResponse,
+  VideoQAReport,
   VideoTaskResponse,
   VideoTaskStage
 } from '../../schemas/video';
@@ -17,15 +20,36 @@ import { MediaAssetService } from './media_asset_service';
 import { GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
-import { LoopCloser } from './loop_closer';
+import { LoopCloser, type ProcessVideoResult } from './loop_closer';
 import { createProgressPublisher, ProgressPublisher } from '../generation_progress';
 import { VramService } from '../vram_service';
+
+type QaDisposition = {
+  assetStatus: MediaAssetStatus;
+  taskStatus: 'completed' | 'review_required' | 'rejected';
+  taskStage: Extract<VideoTaskStage, 'completed' | 'review_required' | 'rejected'>;
+};
 
 export class VideoGenerationService {
   private static runningTasks = new Map<string, { abortController?: AbortController; promptId?: string }>();
 
   static isFeatureEnabled(): boolean {
     return process.env.NOVASTORY_ENABLE_VIDEO === 'true' || process.env.ENABLE_VIDEO_GENERATION === 'true';
+  }
+
+  private static resolveQaDisposition(qaReport: VideoQAReport): QaDisposition {
+    if (qaReport.quality_grade === 'reject') {
+      return { assetStatus: 'rejected', taskStatus: 'rejected', taskStage: 'rejected' };
+    }
+    if (qaReport.quality_grade === 'manual_review') {
+      return {
+        assetStatus: 'review_required',
+        taskStatus: 'review_required',
+        taskStage: 'review_required'
+      };
+    }
+    // A passing render is still a candidate until the user explicitly promotes it.
+    return { assetStatus: 'draft', taskStatus: 'completed', taskStage: 'completed' };
   }
 
   private static async resolveCharacterForRequest(request: VideoGenerationRequest, projectId: number): Promise<any | null> {
@@ -47,6 +71,77 @@ export class VideoGenerationService {
     // projects, returning null is safer than injecting the wrong person's identity.
     const characters = await db.all('SELECT * FROM character WHERE project_id = ? ORDER BY id ASC', projectId);
     return characters.length === 1 ? characters[0] : null;
+  }
+
+  private static async persistProcessedAssets(options: {
+    projectId: number;
+    sceneId: number;
+    sceneVersion: number;
+    rawAsset: MediaAsset;
+    profile: VideoGenerationRequest['profile'];
+    artifactId: string;
+    processRes: ProcessVideoResult;
+    metadata?: Record<string, any>;
+  }) {
+    const { projectId, sceneId, sceneVersion, rawAsset, profile, artifactId, processRes, metadata = {} } = options;
+    const disposition = this.resolveQaDisposition(processRes.qaReport);
+    const finalRole = profile === 'character_loop' ? 'loop_master' : 'narrative_final';
+    const baseUrl = `/static/generated/videos/${projectId}/${sceneId}/${artifactId}`;
+
+    const finalAsset = await MediaAssetService.createAsset({
+      project_id: projectId,
+      scene_id: sceneId,
+      scene_version: sceneVersion,
+      parent_asset_id: rawAsset.id,
+      media_type: 'video',
+      role: finalRole,
+      profile,
+      status: disposition.assetStatus,
+      url: `${baseUrl}/final.mp4`,
+      mime_type: 'video/mp4',
+      width: processRes.probe.width,
+      height: processRes.probe.height,
+      fps: processRes.probe.fps,
+      frame_count: processRes.probe.frame_count,
+      duration_ms: Math.round(processRes.probe.duration_s * 1000),
+      sha256: MediaAssetService.computeSha256(processRes.finalVideoPath),
+      metadata_json: JSON.stringify({
+        qa_report: processRes.qaReport,
+        raw_asset_id: rawAsset.id,
+        ...metadata
+      })
+    });
+
+    const posterAsset = await MediaAssetService.createAsset({
+      project_id: projectId,
+      scene_id: sceneId,
+      scene_version: sceneVersion,
+      parent_asset_id: finalAsset.id,
+      media_type: 'image',
+      role: 'poster',
+      profile,
+      status: 'ready',
+      url: `${baseUrl}/poster.jpg`,
+      mime_type: 'image/jpeg',
+      sha256: MediaAssetService.computeSha256(processRes.posterPath)
+    });
+
+    const qaAsset = await MediaAssetService.createAsset({
+      project_id: projectId,
+      scene_id: sceneId,
+      scene_version: sceneVersion,
+      parent_asset_id: finalAsset.id,
+      media_type: 'json',
+      role: 'qa_report',
+      profile,
+      status: 'ready',
+      url: `${baseUrl}/qa.json`,
+      mime_type: 'application/json',
+      sha256: MediaAssetService.computeSha256(processRes.qaPath),
+      metadata_json: JSON.stringify({ qa_report: processRes.qaReport })
+    });
+
+    return { disposition, finalAsset, posterAsset, qaAsset };
   }
 
   static async getCapabilities(): Promise<VideoCapabilities> {
@@ -307,14 +402,27 @@ export class VideoGenerationService {
     if (!row) return null;
 
     let qaReport = null;
+    let metadata: Record<string, any> = {};
     if (row.metadata_json) {
       try {
-        const parsed = JSON.parse(row.metadata_json);
-        qaReport = parsed.qa_report || null;
+        metadata = JSON.parse(row.metadata_json);
+        qaReport = metadata.qa_report || null;
       } catch {}
     }
 
     const queuePos = row.stage === 'queued' ? GpuLeaseService.getQueuePosition(taskId) : 0;
+    const rawAsset = metadata.raw_asset_id
+      ? await MediaAssetService.getAssetById(Number(metadata.raw_asset_id))
+      : null;
+    const finalAsset = metadata.final_asset_id
+      ? await MediaAssetService.getAssetById(Number(metadata.final_asset_id))
+      : null;
+    const poster = finalAsset?.id
+      ? await db.get('SELECT url FROM media_asset WHERE parent_asset_id = ? AND role = ? ORDER BY id DESC LIMIT 1', finalAsset.id, 'poster')
+      : null;
+    const qa = finalAsset?.id
+      ? await db.get('SELECT url FROM media_asset WHERE parent_asset_id = ? AND role = ? ORDER BY id DESC LIMIT 1', finalAsset.id, 'qa_report')
+      : null;
 
     return {
       task_id: row.task_id,
@@ -324,6 +432,9 @@ export class VideoGenerationService {
       queue_position: queuePos,
       error: row.error,
       output_url: row.output_url,
+      raw_video_url: rawAsset?.url ?? null,
+      poster_url: poster?.url ?? null,
+      qa_report_url: qa?.url ?? null,
       qa_report: qaReport,
       created_at: row.created_at,
       updated_at: row.updated_at
@@ -332,7 +443,10 @@ export class VideoGenerationService {
 
   static async cancelTask(taskId: string): Promise<boolean> {
     const task = await this.getTask(taskId);
-    if (!task || task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+    if (
+      !task
+      || ['completed', 'review_required', 'rejected', 'failed', 'cancelled', 'interrupted'].includes(task.status)
+    ) {
       return false;
     }
 
@@ -356,6 +470,65 @@ export class VideoGenerationService {
     return true;
   }
 
+  static async reprocessAsset(assetId: number, runLoopCloser = true) {
+    const rawAsset = await MediaAssetService.resolveRawVideoForReprocess(assetId);
+    if (!rawAsset.id || rawAsset.scene_id == null) {
+      throw new Error(`Raw video asset ${rawAsset.id ?? assetId} is missing scene lineage`);
+    }
+
+    const rawVideoPath = MediaAssetService.resolveSafePath(rawAsset.url);
+    if (!fs.existsSync(rawVideoPath)) {
+      throw new Error(`Raw video file does not exist: ${rawVideoPath}`);
+    }
+
+    const artifactId = `reprocess_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const outputDirectory = path.join(
+      getGeneratedVideosDirectory(),
+      String(rawAsset.project_id),
+      String(rawAsset.scene_id),
+      artifactId
+    );
+    const profile = rawAsset.profile || 'character_loop';
+
+    const processRes = await LoopCloser.process({
+      taskId: artifactId,
+      profile,
+      rawVideoPath,
+      outputDirectory,
+      runLoopCloser,
+      metadata: {
+        reprocess: true,
+        source_asset_id: assetId,
+        raw_asset_id: rawAsset.id
+      }
+    });
+
+    const persisted = await this.persistProcessedAssets({
+      projectId: rawAsset.project_id,
+      sceneId: rawAsset.scene_id,
+      sceneVersion: rawAsset.scene_version || 1,
+      rawAsset,
+      profile,
+      artifactId,
+      processRes,
+      metadata: {
+        reprocessed_from_asset_id: assetId,
+        reprocess_id: artifactId
+      }
+    });
+
+    return {
+      ok: true,
+      reprocess_id: artifactId,
+      raw_asset_id: rawAsset.id,
+      final_asset: persisted.finalAsset,
+      poster_asset: persisted.posterAsset,
+      qa_asset: persisted.qaAsset,
+      qa_report: processRes.qaReport,
+      status: persisted.disposition.taskStatus
+    };
+  }
+
   private static async runTaskPipeline(taskId: string, request: VideoGenerationRequest): Promise<void> {
     const rawPublisher: ProgressPublisher = createProgressPublisher(taskId, null);
     let lease: GpuLease | null = null;
@@ -375,6 +548,7 @@ export class VideoGenerationService {
 
     const emitEvent = async (stage: VideoTaskStage, data: Record<string, any> = {}) => {
       const status = stage === 'completed' ? 'completed'
+        : stage === 'review_required' ? 'review_required'
         : stage === 'rejected' ? 'rejected'
         : stage === 'failed' ? 'failed'
         : stage === 'cancelled' ? 'cancelled'
@@ -427,8 +601,8 @@ export class VideoGenerationService {
       // Load DB records
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
-      const projectId = chapter?.project_id || 1;
-      const character = await this.resolveCharacterForRequest(request, Number(projectId));
+      const projectId = Number(chapter?.project_id || 1);
+      const character = await this.resolveCharacterForRequest(request, projectId);
 
       if (await isCancelled()) {
         stopLeaseHeartbeat();
@@ -606,60 +780,22 @@ export class VideoGenerationService {
         }
       });
 
-      // Create Final Video Media Asset
-      const finalRole = request.profile === 'character_loop' ? 'loop_master' : 'narrative_final';
-      const finalAsset = await MediaAssetService.createAsset({
-        project_id: projectId,
-        scene_id: request.scene_id,
-        scene_version: request.scene_version,
-        parent_asset_id: rawAsset.id,
-        media_type: 'video',
-        role: finalRole,
+      const persisted = await this.persistProcessedAssets({
+        projectId,
+        sceneId: request.scene_id,
+        sceneVersion: request.scene_version,
+        rawAsset,
         profile: request.profile,
-        status: processRes.qaReport.quality_grade === 'reject' ? 'rejected' : 'ready',
-        url: `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/final.mp4`,
-        mime_type: 'video/mp4',
-        width: processRes.probe.width,
-        height: processRes.probe.height,
-        fps: processRes.probe.fps,
-        frame_count: processRes.probe.frame_count,
-        duration_ms: Math.round(processRes.probe.duration_s * 1000),
-        sha256: MediaAssetService.computeSha256(processRes.finalVideoPath)
+        artifactId: taskId,
+        processRes,
+        metadata: {
+          task_id: taskId,
+          compiled_params: compiledWorkflow.appliedParams
+        }
       });
 
-      // Create Poster Asset
-      await MediaAssetService.createAsset({
-        project_id: projectId,
-        scene_id: request.scene_id,
-        scene_version: request.scene_version,
-        parent_asset_id: finalAsset.id,
-        media_type: 'image',
-        role: 'poster',
-        profile: request.profile,
-        status: 'ready',
-        url: `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/poster.jpg`,
-        mime_type: 'image/jpeg',
-        sha256: MediaAssetService.computeSha256(processRes.posterPath)
-      });
-
-      // Create QA Report Asset
-      await MediaAssetService.createAsset({
-        project_id: projectId,
-        scene_id: request.scene_id,
-        scene_version: request.scene_version,
-        parent_asset_id: finalAsset.id,
-        media_type: 'json',
-        role: 'qa_report',
-        profile: request.profile,
-        status: 'ready',
-        url: `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/qa.json`,
-        mime_type: 'application/json'
-      });
-
-      // 8. Finalize Task Status
-      const finalStatus = processRes.qaReport.quality_grade === 'reject' ? 'rejected' : 'completed';
-      const finalStage: VideoTaskStage = processRes.qaReport.quality_grade === 'reject' ? 'rejected' : 'completed';
-
+      // 8. Finalize Task Status. manual_review is terminal but not success-ready.
+      const { disposition, finalAsset } = persisted;
       await db.run(
         `UPDATE generation_task SET
           status = ?,
@@ -669,20 +805,36 @@ export class VideoGenerationService {
           completed_at = ?,
           updated_at = ?
          WHERE task_id = ?`,
-        finalStatus,
-        finalStage,
+        disposition.taskStatus,
+        disposition.taskStage,
         finalAsset.url,
-        JSON.stringify({ qa_report: processRes.qaReport, raw_asset_id: rawAsset.id, final_asset_id: finalAsset.id }),
+        JSON.stringify({
+          qa_report: processRes.qaReport,
+          raw_asset_id: rawAsset.id,
+          final_asset_id: finalAsset.id,
+          poster_asset_id: persisted.posterAsset.id,
+          qa_asset_id: persisted.qaAsset.id
+        }),
         new Date().toISOString(),
         new Date().toISOString(),
         taskId
       );
 
-      await emitEvent(finalStage, {
+      const isPass = disposition.taskStatus === 'completed';
+      const isReview = disposition.taskStatus === 'review_required';
+      await emitEvent(disposition.taskStage, {
         output_url: finalAsset.url,
         qa_report: processRes.qaReport,
-        message: finalStatus === 'completed' ? 'Video generation completed successfully' : 'Video generated but failed QA quality gate',
-        message_zh: finalStatus === 'completed' ? '视频生成并后处理完成' : '视频已生成，但未达到质量门验收标准'
+        message: isPass
+          ? 'Video candidate passed automated QA and is ready for promotion review'
+          : isReview
+            ? 'Video generated; manual QA review is required before promotion'
+            : 'Video generated but failed QA quality gate',
+        message_zh: isPass
+          ? '视频候选已通过自动 QA，请人工确认后设为成片'
+          : isReview
+            ? '视频已生成，但需人工复核后才能设为成片'
+            : '视频已生成，但未达到质量门验收标准'
       });
 
     } catch (err: any) {
@@ -728,7 +880,7 @@ export class VideoGenerationService {
 
         const scene = request?.scene_id ? await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id) : null;
         const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
-        const projectId = chapter?.project_id || 1;
+        const projectId = Number(chapter?.project_id || 1);
 
         const taskAssetDir = path.join(
           getGeneratedVideosDirectory(),
@@ -793,7 +945,13 @@ export class VideoGenerationService {
     });
 
     const rawSha = MediaAssetService.computeSha256(rawVideoPath);
-    let rawAsset = await db.get('SELECT * FROM media_asset WHERE url LIKE ?', `%/videos/${projectId}/${request.scene_id}/${taskId}/raw.mp4`);
+    const rawRow = await db.get(
+      'SELECT id FROM media_asset WHERE url LIKE ? ORDER BY id DESC LIMIT 1',
+      `%/videos/${projectId}/${request.scene_id}/${taskId}/raw.mp4`
+    );
+    let rawAsset = rawRow?.id
+      ? await MediaAssetService.getAssetById(Number(rawRow.id))
+      : null;
     if (!rawAsset) {
       rawAsset = await MediaAssetService.createAsset({
         project_id: projectId,
@@ -818,46 +976,82 @@ export class VideoGenerationService {
       metadata: { recovered: true, request }
     });
 
-    const finalRole = request.profile === 'character_loop' ? 'loop_master' : 'narrative_final';
-    const finalAsset = await MediaAssetService.createAsset({
-      project_id: projectId,
-      scene_id: request.scene_id,
-      scene_version: request.scene_version,
-      parent_asset_id: rawAsset.id,
-      media_type: 'video',
-      role: finalRole,
-      profile: request.profile,
-      status: processRes.qaReport.quality_grade === 'reject' ? 'rejected' : 'ready',
-      url: `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/final.mp4`,
-      mime_type: 'video/mp4',
-      width: processRes.probe.width,
-      height: processRes.probe.height,
-      fps: processRes.probe.fps,
-      frame_count: processRes.probe.frame_count,
-      duration_ms: Math.round(processRes.probe.duration_s * 1000),
-      sha256: MediaAssetService.computeSha256(processRes.finalVideoPath)
-    });
+    // Recovery may be retried; reuse the same final row for this task URL if it
+    // already exists instead of multiplying derivatives on every restart.
+    const expectedFinalUrl = `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/final.mp4`;
+    const existingFinalRow = await db.get(
+      'SELECT id FROM media_asset WHERE parent_asset_id = ? AND url = ? ORDER BY id DESC LIMIT 1',
+      rawAsset.id,
+      expectedFinalUrl
+    );
 
-    const finalStatus = processRes.qaReport.quality_grade === 'reject' ? 'rejected' : 'completed';
+    let persisted;
+    if (existingFinalRow?.id) {
+      const disposition = this.resolveQaDisposition(processRes.qaReport);
+      await db.run(
+        `UPDATE media_asset SET status = ?, width = ?, height = ?, fps = ?, frame_count = ?,
+          duration_ms = ?, sha256 = ?, metadata_json = ? WHERE id = ?`,
+        disposition.assetStatus,
+        processRes.probe.width,
+        processRes.probe.height,
+        processRes.probe.fps,
+        processRes.probe.frame_count,
+        Math.round(processRes.probe.duration_s * 1000),
+        MediaAssetService.computeSha256(processRes.finalVideoPath),
+        JSON.stringify({ qa_report: processRes.qaReport, raw_asset_id: rawAsset.id, recovered: true }),
+        existingFinalRow.id
+      );
+      const finalAsset = (await MediaAssetService.getAssetById(Number(existingFinalRow.id)))!;
+      persisted = {
+        disposition,
+        finalAsset,
+        posterAsset: null,
+        qaAsset: null
+      };
+    } else {
+      persisted = await this.persistProcessedAssets({
+        projectId,
+        sceneId: request.scene_id,
+        sceneVersion: request.scene_version,
+        rawAsset,
+        profile: request.profile,
+        artifactId: taskId,
+        processRes,
+        metadata: { recovered: true, task_id: taskId }
+      });
+    }
+
     await db.run(
       `UPDATE generation_task SET status = ?, stage = ?, output_url = ?, metadata_json = ?, completed_at = ?, updated_at = ? WHERE task_id = ?`,
-      finalStatus,
-      finalStatus,
-      finalAsset.url,
-      JSON.stringify({ qa_report: processRes.qaReport, raw_asset_id: rawAsset.id, final_asset_id: finalAsset.id }),
+      persisted.disposition.taskStatus,
+      persisted.disposition.taskStage,
+      persisted.finalAsset.url,
+      JSON.stringify({
+        qa_report: processRes.qaReport,
+        raw_asset_id: rawAsset.id,
+        final_asset_id: persisted.finalAsset.id
+      }),
       new Date().toISOString(),
       new Date().toISOString(),
       taskId
     );
 
-    await publisher(finalStatus, {
+    await publisher(persisted.disposition.taskStage, {
       task_id: taskId,
-      stage: finalStatus,
-      status: finalStatus,
-      output_url: finalAsset.url,
+      stage: persisted.disposition.taskStage,
+      status: persisted.disposition.taskStatus,
+      output_url: persisted.finalAsset.url,
       qa_report: processRes.qaReport,
-      message: 'Video recovered and processed successfully',
-      message_zh: '已成功恢复并完成视频处理'
+      message: persisted.disposition.taskStatus === 'review_required'
+        ? 'Recovered video requires manual QA review'
+        : persisted.disposition.taskStatus === 'completed'
+          ? 'Recovered video candidate passed automated QA'
+          : 'Recovered video failed QA',
+      message_zh: persisted.disposition.taskStatus === 'review_required'
+        ? '恢复视频需人工复核'
+        : persisted.disposition.taskStatus === 'completed'
+          ? '恢复视频候选已通过自动 QA'
+          : '恢复视频未通过 QA'
     });
   }
 
