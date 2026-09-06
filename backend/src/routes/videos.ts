@@ -13,8 +13,7 @@ import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
 import { LoopCloser } from '../services/video/loop_closer';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
-import { getGeneratedVideosDirectory, getGeneratedDirectory } from '../core/paths';
-import { logger } from '../core/logging';
+import { getGeneratedDirectory } from '../core/paths';
 
 export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   // GET /api/videos/capabilities
@@ -48,15 +47,23 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const fields = data.fields as any;
     const projectId = Number(fields.project_id?.value || 1);
     const sceneId = fields.scene_id?.value ? Number(fields.scene_id.value) : undefined;
+    const characterId = fields.character_id?.value ? Number(fields.character_id.value) : undefined;
     const role = fields.role?.value || 'character_reference';
-    
-    // Only allow uploading references and keyframes via upload endpoint
+
+    // Only allow uploading references and keyframes via upload endpoint.
     const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
     if (!allowedRoles.includes(role)) {
       return reply.status(400).send({ error: `Direct upload not allowed for role '${role}'. Allowed roles: ${allowedRoles.join(', ')}` });
     }
 
     const mediaType = data.mimetype.startsWith('video/') ? 'video' : 'image';
+    const requiredMediaType = role === 'motion_reference' ? 'video' : 'image';
+    if (mediaType !== requiredMediaType) {
+      return reply.status(400).send({
+        error: `Role '${role}' requires media_type '${requiredMediaType}', received '${mediaType}'`
+      });
+    }
+
     const ext = path.extname(data.filename) || (mediaType === 'video' ? '.mp4' : '.png');
     const safeBase = `ref_${randomUUID().slice(0, 12)}${ext}`;
     const uploadDir = path.join(getGeneratedDirectory(), 'references', String(projectId));
@@ -91,6 +98,7 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const asset = await MediaAssetService.createAsset({
       project_id: projectId,
       scene_id: sceneId,
+      character_id: characterId,
       media_type: mediaType,
       role: role as any,
       status: 'ready',
