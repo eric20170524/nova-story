@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "workflow_id": "minimax_h3_ref2va_official_12gb",
+  "name": "MiniMax H3 Ref2VA Official-Core (12GB Candidate)",
+  "description": "Production-candidate Ref2VA graph derived from the current Comfy-Org MiniMax H3 template: MiniMaxH3ReferenceToVideo + CLIPLoader(type=minimax) + res_multistep + BasicScheduler/BasicGuider/SamplerCustomAdvanced. NovaStory keeps video-only delivery and VHS MP4 encoding to avoid loading/decoding the audio VAE on 12GB GPUs.",
+  "stability": "candidate",
+  "workflow_family": "ref2va",
+  "upstream_reference": "Comfy-Org/workflow_templates:templates/video_minimax_h3_r2v.json",
+  "reference_tag_policy": {
+    "first_frame": "<Picture 1>",
+    "character_refs_start_at": 2,
+    "motion_ref": "<Video 1>"
+  },
+  "slots": {
+    "positive_prompt": {
+      "node": "10",
+      "input": "prompt"
+    },
+    "first_frame": {
+      "node": "4",
+      "input": "image"
+    },
+    "character_refs": [
+      {
+        "node": "5",
+        "input": "image"
+      },
+      {
+        "node": "6",
+        "input": "image"
+      },
+      {
+        "node": "7",
+        "input": "image"
+      }
+    ],
+    "video_refs": [
+      {
+        "node": "8",
+        "input": "video"
+      }
+    ],
+    "width": {
+      "node": "10",
+      "input": "width"
+    },
+    "height": {
+      "node": "10",
+      "input": "height"
+    },
+    "frames": {
+      "node": "10",
+      "input": "length"
+    },
+    "steps": {
+      "node": "13",
+      "input": "steps"
+    },
+    "seed": {
+      "node": "11",
+      "input": "noise_seed"
+    },
+    "output_prefix": {
+      "node": "17",
+      "input": "filename_prefix"
+    }
+  },
+  "default_params": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "delivery_frames": 120,
+    "fps": 24,
+    "steps": 20,
+    "sampler": "res_multistep",
+    "scheduler": "normal",
+    "ref_image_size": "match"
+  },
+  "required_models": [
+    "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax_h3_video_vae_fp16.safetensors"
+  ],
+  "required_custom_nodes": [
+    {
+      "name": "ComfyUI-VideoHelperSuite",
+      "nodes": ["VHS_LoadVideo", "VHS_VideoCombine"],
+      "min_version": "0.3.0"
+    }
+  ]
+}
