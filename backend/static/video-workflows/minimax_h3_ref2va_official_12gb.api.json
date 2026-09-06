@@ -115,11 +115,11 @@
   "17": {
     "class_type": "VHS_VideoCombine",
     "inputs": {
-      "images": ["16", 0],
-      "frame_rate": 24,
-      "loop_count": 0,
+      "crf": 19,
       "filename_prefix": "H3_Ref2VA_Official",
       "format": "video/h264-mp4",
+      "fps": 24,
+      "images": ["16", 0],
       "pingpong": false,
       "save_output": true
     }
