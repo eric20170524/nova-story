@@ -47,4 +47,5 @@ backend/static/generated/
 backend/static/comics/
 /backend/scripts/
 /questionlist/
+backend/static/staging/
 
