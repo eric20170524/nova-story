@@ -57,7 +57,7 @@
     "class_type": "CLIPLoader",
     "inputs": {
       "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-      "type": "sd3"
+      "type": "minimax"
     }
   },
   "10": {
@@ -142,7 +142,7 @@
     "inputs": {
       "fps": 24,
       "height": 480,
-      "length": 121,
+      "length": 124,
       "width": 864
     }
   },
