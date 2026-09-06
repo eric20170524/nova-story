@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VideoSpecCompiler, cleanPromptForH3 } from './video_spec_compiler';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3 } from './video_spec_compiler';
 
 test('cleanPromptForH3 removes Pony scores and cleans whitespace', () => {
   const dirty = 'score_9, score_8_up, masterpiece, 1girl, lu xueqi, best quality, ice sword';
@@ -12,14 +12,21 @@ test('cleanPromptForH3 removes Pony scores and cleans whitespace', () => {
   assert.ok(cleaned.includes('ice sword'));
 });
 
-test('VideoSpecCompiler compiles character_loop with locked camera and closed mouth', () => {
+test('alignH3FrameCount follows the MiniMax H3 17k+5 frame grid', () => {
+  assert.equal(alignH3FrameCount(5), 5);
+  assert.equal(alignH3FrameCount(120), 124);
+  assert.equal(alignH3FrameCount(121), 124);
+  assert.equal(alignH3FrameCount(124), 124);
+});
+
+test('VideoSpecCompiler compiles character_loop with H3 tags, locked camera and closed mouth', () => {
   const spec = VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
       profile: 'character_loop',
       keyframe_asset_id: 10,
-      character_reference_asset_ids: [100],
+      character_reference_asset_ids: [100, 101],
       motion_reference_asset_id: 200,
       preset: 'preview_480p_5s',
       run_loop_closer: true
@@ -39,6 +46,11 @@ test('VideoSpecCompiler compiles character_loop with locked camera and closed mo
   assert.equal(spec.output_contract.is_loop, true);
   assert.equal(spec.output_contract.width, 864);
   assert.equal(spec.output_contract.height, 480);
+  assert.equal(spec.output_contract.frames, 124);
+  assert.ok(spec.positive_prompt.includes('<Picture 1>'));
+  assert.ok(spec.positive_prompt.includes('<Picture 2>'));
+  assert.ok(spec.positive_prompt.includes('<Video 1>'));
+  assert.ok(spec.positive_prompt.includes('motion-timing and body-pose reference only'));
   assert.ok(spec.positive_prompt.includes('Locked camera'));
   assert.ok(spec.positive_prompt.includes('Mouth remains gently closed'));
   assert.ok(spec.positive_prompt.includes('Lu Xueqi'));
@@ -71,6 +83,8 @@ test('VideoSpecCompiler compiles narrative_clip with camera movement', () => {
   assert.equal(spec.output_contract.is_loop, false);
   assert.equal(spec.output_contract.width, 1280);
   assert.equal(spec.output_contract.height, 720);
+  assert.equal(spec.output_contract.frames, 124);
+  assert.ok(spec.positive_prompt.includes('<Picture 1>'));
   assert.ok(spec.positive_prompt.includes('slow pan right'));
   assert.ok(spec.positive_prompt.includes('raising the Tianya sword'));
 });
