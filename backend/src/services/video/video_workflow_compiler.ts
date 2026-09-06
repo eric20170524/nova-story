@@ -13,6 +13,8 @@ export interface WorkflowManifest {
   workflow_id: string;
   name: string;
   description?: string;
+  stability?: 'experimental' | 'candidate' | 'stable' | string;
+  upstream_reference?: string;
   slots: {
     positive_prompt?: WorkflowManifestSlot;
     negative_prompt?: WorkflowManifestSlot;
@@ -30,6 +32,11 @@ export interface WorkflowManifest {
   };
   default_params?: Record<string, any>;
   required_models?: string[];
+  required_custom_nodes?: Array<{
+    name: string;
+    nodes?: string[];
+    min_version?: string;
+  }>;
 }
 
 export interface CompileWorkflowInputs {
@@ -119,18 +126,21 @@ export class VideoWorkflowCompiler {
       workflow[slots.first_frame.node].inputs[slots.first_frame.input] = stagedFiles.firstFrameFilename;
     }
 
-    // Inject Last Frame (default to first frame if not specified in character_loop)
+    // Inject Last Frame. character_loop intentionally falls back K -> K only when
+    // the caller did not provide an explicit last-frame asset.
     if (slots.last_frame) {
       const lastFrame = stagedFiles.lastFrameFilename || stagedFiles.firstFrameFilename;
       workflow[slots.last_frame.node].inputs[slots.last_frame.input] = lastFrame;
     }
 
-    // Inject Character References
+    // Inject Character References. The current experimental Hybrid node exposes
+    // three fixed sockets; if fewer refs are supplied, repeat the primary identity
+    // ref rather than silently substituting the scene keyframe as an identity ref.
     if (slots.character_refs && Array.isArray(slots.character_refs)) {
       const refs = stagedFiles.characterRefFilenames || [];
       slots.character_refs.forEach((slot, idx) => {
         if (workflow[slot.node] && workflow[slot.node].inputs) {
-          const file = refs[idx] || stagedFiles.firstFrameFilename;
+          const file = refs[idx] || refs[0] || stagedFiles.firstFrameFilename;
           workflow[slot.node].inputs[slot.input] = file;
         }
       });
@@ -150,7 +160,8 @@ export class VideoWorkflowCompiler {
     if (slots.frames) workflow[slots.frames.node].inputs[slots.frames.input] = contract.frames;
     if (slots.fps) workflow[slots.fps.node].inputs[slots.fps.input] = contract.fps;
 
-    // Inject Steps
+    // Current experimental Hybrid graph retains its existing step policy until
+    // the official Ref2VA baseline is introduced and benchmarked.
     const steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
     if (slots.steps) workflow[slots.steps.node].inputs[slots.steps.input] = steps;
 
@@ -169,6 +180,7 @@ export class VideoWorkflowCompiler {
         width: contract.width,
         height: contract.height,
         frames: contract.frames,
+        delivery_frames: 120,
         fps: contract.fps,
         steps,
         seed,
@@ -181,25 +193,29 @@ export class VideoWorkflowCompiler {
     objectInfo: Record<string, any> | null,
     manifest: WorkflowManifest,
     workflow: Record<string, any>
-  ): { valid: boolean; missingNodes: string[]; missingSlots: string[] } {
+  ): { valid: boolean; missingNodes: string[]; missingSlots: string[]; missingModels: string[] } {
     const missingNodes: string[] = [];
     const missingSlots: string[] = [];
+    const missingModels: string[] = [];
 
     if (!objectInfo) {
-      return { valid: false, missingNodes: ['ComfyUI object_info unavailable'], missingSlots: [] };
+      return {
+        valid: false,
+        missingNodes: ['ComfyUI object_info unavailable'],
+        missingSlots: [],
+        missingModels: manifest.required_models || []
+      };
     }
 
-    // Check every node class_type used in workflow exists in object_info
-    for (const [nodeId, nodeData] of Object.entries(workflow)) {
+    // Check every node class_type used in workflow exists in object_info.
+    for (const nodeData of Object.values(workflow)) {
       const classType = (nodeData as any)?.class_type;
-      if (classType && !objectInfo[classType]) {
-        if (!missingNodes.includes(classType)) {
-          missingNodes.push(classType);
-        }
+      if (classType && !objectInfo[classType] && !missingNodes.includes(classType)) {
+        missingNodes.push(classType);
       }
     }
 
-    // Check declared slots
+    // Check declared slots.
     for (const [slotName, slotValue] of Object.entries(manifest.slots)) {
       if (!slotValue) continue;
       const slotList = Array.isArray(slotValue) ? slotValue : [slotValue];
@@ -212,10 +228,21 @@ export class VideoWorkflowCompiler {
       }
     }
 
+    // ComfyUI exposes loader combo choices through /object_info. Verify that the
+    // exact model filenames declared by the workflow manifest are actually present,
+    // rather than treating the existence of UNETLoader/CLIPLoader/VAELoader as proof.
+    const objectInfoText = JSON.stringify(objectInfo);
+    for (const modelName of manifest.required_models || []) {
+      if (!objectInfoText.includes(modelName)) {
+        missingModels.push(modelName);
+      }
+    }
+
     return {
-      valid: missingNodes.length === 0 && missingSlots.length === 0,
+      valid: missingNodes.length === 0 && missingSlots.length === 0 && missingModels.length === 0,
       missingNodes,
-      missingSlots
+      missingSlots,
+      missingModels
     };
   }
 }
