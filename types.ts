@@ -132,6 +132,7 @@ export type VideoTaskStage =
   | 'collecting'
   | 'postprocessing'
   | 'qa_running'
+  | 'review_required'
   | 'completed'
   | 'rejected'
   | 'failed'
@@ -158,7 +159,7 @@ export interface MediaAsset {
   media_type: 'image' | 'video' | 'json';
   role: MediaAssetRole;
   profile?: VideoProfile | null;
-  status: 'draft' | 'ready' | 'rejected' | 'archived';
+  status: 'draft' | 'review_required' | 'ready' | 'rejected' | 'archived';
   url: string;
   mime_type?: string;
   width?: number | null;
@@ -201,7 +202,7 @@ export interface VideoQAReport {
 export interface VideoTaskState {
   task_id: string;
   scene_id: number;
-  status: 'queued' | 'processing' | 'completed' | 'rejected' | 'failed' | 'cancelled' | 'interrupted';
+  status: 'queued' | 'processing' | 'review_required' | 'completed' | 'rejected' | 'failed' | 'cancelled' | 'interrupted';
   stage?: VideoTaskStage;
   queue_position?: number;
   error?: string | null;
