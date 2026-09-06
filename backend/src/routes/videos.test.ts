@@ -27,6 +27,10 @@ const multipartUpload = async (
 };
 
 test('Comprehensive /api/videos route verification', async () => {
+  const previousVideoFlag = process.env.NOVASTORY_ENABLE_VIDEO;
+  delete process.env.NOVASTORY_ENABLE_VIDEO;
+  delete process.env.ENABLE_VIDEO_GENERATION;
+
   const app = await buildApp({ logger: false });
 
   // Cleanup any leftover test rows from previous run
@@ -42,6 +46,7 @@ test('Comprehensive /api/videos route verification', async () => {
 
   const genDir = getGeneratedDirectory();
   const kfPath = path.join(genDir, 'test_kf.png');
+  const lastKfPath = path.join(genDir, 'test_last_kf.png');
   const charPath = path.join(genDir, 'test_char.png');
   const motionPath = path.join(genDir, 'test_motion.mp4');
   const loopMasterPath = path.join(genDir, 'test_loop_master.mp4');
@@ -49,11 +54,30 @@ test('Comprehensive /api/videos route verification', async () => {
   const fallbackScenePath = path.join(genDir, 'scene_fallback.png');
 
   fs.writeFileSync(kfPath, Buffer.from('mock_kf_data'));
+  fs.writeFileSync(lastKfPath, Buffer.from('mock_last_kf_data'));
   fs.writeFileSync(charPath, Buffer.from('mock_char_data'));
   fs.writeFileSync(motionPath, Buffer.from('mock_motion_data'));
   fs.writeFileSync(loopMasterPath, Buffer.from('mock_loop_master_data'));
   fs.writeFileSync(narrativeFinalPath, Buffer.from('mock_narrative_final_data'));
   fs.writeFileSync(fallbackScenePath, Buffer.from('mock_scene_fallback_data'));
+
+  // Gate G0 is a hard preflight blocker while the feature is disabled.
+  const gatedPreflightRes = await app.inject({
+    method: 'POST',
+    url: '/api/videos/preflight',
+    payload: {
+      scene_id: 9991,
+      profile: 'narrative_clip'
+    }
+  });
+  assert.equal(gatedPreflightRes.statusCode, 200);
+  const gatedPreflight = JSON.parse(gatedPreflightRes.body);
+  assert.equal(gatedPreflight.ready, false);
+  assert.ok(gatedPreflight.blockers.some((b: string) => b.includes('Gate G0')));
+
+  // Enable the feature for the remainder of this route contract test. Runtime
+  // Comfy/ffmpeg readiness is covered by /capabilities and dedicated integration tests.
+  process.env.NOVASTORY_ENABLE_VIDEO = 'true';
 
   // 1. GET /api/videos/capabilities
   const capRes = await app.inject({
@@ -100,7 +124,21 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(illegalRes.statusCode, 400);
   assert.ok(JSON.parse(illegalRes.body).error.includes('Direct upload not allowed'));
 
-  // 2c. Reject upload when no file is provided
+  // 2c. Reject a role/media mismatch before writing it as an asset.
+  const badMotionUpload = await multipartUpload('motion.png', 'not-video', 'image/png', {
+    project_id: '999',
+    role: 'motion_reference'
+  });
+  const badMotionRes = await app.inject({
+    method: 'POST',
+    url: '/api/videos/references/upload',
+    headers: badMotionUpload.headers,
+    payload: badMotionUpload.payload
+  });
+  assert.equal(badMotionRes.statusCode, 400);
+  assert.ok(JSON.parse(badMotionRes.body).error.includes("requires media_type 'video'"));
+
+  // 2d. Reject upload when no file is provided
   const noFileRes = await app.inject({
     method: 'POST',
     url: '/api/videos/references/upload',
@@ -125,6 +163,16 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(registerRes.statusCode, 200);
   const kfAsset = JSON.parse(registerRes.body);
   assert.equal(kfAsset.role, 'video_keyframe');
+
+  const lastFrameAsset = await MediaAssetService.createAsset({
+    project_id: 999,
+    scene_id: 9991,
+    scene_version: 1,
+    media_type: 'image',
+    role: 'video_keyframe',
+    status: 'ready',
+    url: '/static/generated/test_last_kf.png'
+  });
 
   // 3b. Missing required fields in asset registration
   const badRegisterRes = await app.inject({
@@ -164,7 +212,7 @@ test('Comprehensive /api/videos route verification', async () => {
   });
 
   // 4. POST /api/videos/preflight
-  // 4a. Valid character_loop preflight
+  // 4a. Valid character_loop preflight with an explicit last frame
   const preflightLoopRes = await app.inject({
     method: 'POST',
     url: '/api/videos/preflight',
@@ -173,6 +221,7 @@ test('Comprehensive /api/videos route verification', async () => {
       scene_version: 1,
       profile: 'character_loop',
       keyframe_asset_id: kfAsset.id,
+      last_frame_asset_id: lastFrameAsset.id,
       character_reference_asset_ids: [uploadedCharAsset.id],
       motion_reference_asset_id: motionAsset.id,
       preset: 'preview_480p_5s'
@@ -182,6 +231,9 @@ test('Comprehensive /api/videos route verification', async () => {
   const preflightLoop = JSON.parse(preflightLoopRes.body);
   assert.equal(preflightLoop.ready, true);
   assert.equal(preflightLoop.blockers.length, 0);
+  assert.equal(preflightLoop.compiled_spec.output_contract.frames, 124);
+  assert.ok(preflightLoop.compiled_spec.positive_prompt.includes('<Picture 1>'));
+  assert.ok(preflightLoop.compiled_spec.positive_prompt.includes('<Video 1>'));
   assert.ok(preflightLoop.compiled_spec.positive_prompt.includes('Locked camera'));
 
   // 4b. Valid narrative_clip preflight without character or motion refs
@@ -254,7 +306,7 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(badPreflightRes.statusCode, 400);
 
   // 5. POST /api/videos/generate
-  // 5a. Successful generation task creation
+  // 5a. Successful generation task creation preserves explicit last-frame request
   const genRes = await app.inject({
     method: 'POST',
     url: '/api/videos/generate',
@@ -263,6 +315,7 @@ test('Comprehensive /api/videos route verification', async () => {
       scene_version: 1,
       profile: 'character_loop',
       keyframe_asset_id: kfAsset.id,
+      last_frame_asset_id: lastFrameAsset.id,
       character_reference_asset_ids: [uploadedCharAsset.id],
       motion_reference_asset_id: motionAsset.id,
       preset: 'preview_480p_5s'
@@ -272,6 +325,9 @@ test('Comprehensive /api/videos route verification', async () => {
   const genData = JSON.parse(genRes.body);
   assert.ok(genData.task_id);
   assert.equal(typeof genData.queue_position, 'number');
+
+  const persistedTask = await db.get('SELECT request_json FROM generation_task WHERE task_id = ?', genData.task_id);
+  assert.equal(JSON.parse(persistedTask.request_json).last_frame_asset_id, lastFrameAsset.id);
 
   // 5b. Reject generation for non-existent scene
   const badGenRes = await app.inject({
@@ -392,6 +448,7 @@ test('Comprehensive /api/videos route verification', async () => {
 
   // Cleanup test rows and files
   try { fs.unlinkSync(kfPath); } catch {}
+  try { fs.unlinkSync(lastKfPath); } catch {}
   try { fs.unlinkSync(charPath); } catch {}
   try { fs.unlinkSync(motionPath); } catch {}
   try { fs.unlinkSync(loopMasterPath); } catch {}
@@ -401,4 +458,7 @@ test('Comprehensive /api/videos route verification', async () => {
   await db.run('DELETE FROM chapter WHERE id = "chap_vid_1"');
   await db.run('DELETE FROM project WHERE id = 999');
   await app.close();
+
+  if (previousVideoFlag == null) delete process.env.NOVASTORY_ENABLE_VIDEO;
+  else process.env.NOVASTORY_ENABLE_VIDEO = previousVideoFlag;
 });
