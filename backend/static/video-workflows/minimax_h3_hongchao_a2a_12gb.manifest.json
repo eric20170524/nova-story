@@ -1,8 +1,10 @@
 {
   "schema_version": 1,
   "workflow_id": "minimax_h3_hongchao_a2a_12gb",
-  "name": "红潮 MiniMax H3 A2A (12GB 优化版)",
-  "description": "基于 MiniMax-H3 pruned INT8 ConvRot 的 Ref2VA/A2A 视频生成工作流",
+  "name": "红潮 MiniMax H3 A2A (12GB 实验版)",
+  "description": "实验性 Hybrid 图：基于 MiniMax-H3 pruned INT8 ConvRot 的 Ref2VA/A2A 视频生成工作流。Production baseline 应优先对齐 ComfyUI 官方 MiniMaxH3ReferenceToVideo / MiniMaxH3ImageToVideo 图。",
+  "stability": "experimental",
+  "upstream_reference": "Comfy-Org/workflow_templates:templates/video_minimax_h3_r2v.json",
   "slots": {
     "positive_prompt": {
       "node": "6",
@@ -72,7 +74,8 @@
   "default_params": {
     "width": 864,
     "height": 480,
-    "frames": 121,
+    "frames": 124,
+    "delivery_frames": 120,
     "fps": 24,
     "steps": 6,
     "cfg": 3.5
