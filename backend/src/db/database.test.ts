@@ -47,7 +47,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
       'coverage_shot',
       'workflow',
       'schema_migration',
-      'project_document'
+      'project_document',
+      'media_asset'
     ]) {
       assert.ok(tables.has(tableName), `legacy upgrade did not create ${tableName}`);
     }
@@ -91,8 +92,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 011_coverage_shot_contract
-    assert.equal(migrationCount.count, 11);
+    // 001_core through 012_video_generation
+    assert.equal(migrationCount.count, 12);
   } finally {
     await legacyDatabase.close();
   }

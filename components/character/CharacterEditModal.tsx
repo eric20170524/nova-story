@@ -102,8 +102,8 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto flex flex-col">
-        <div className="p-4 sm:p-6 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900 z-10">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto flex flex-col custom-scrollbar">
+        <div className="p-4 sm:p-6 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900 z-10 flex-shrink-0">
           <h3 className="text-lg sm:text-xl font-bold text-white">
             {editingChar.id ? t('characters.edit_title') : t('characters.new_title')}
           </h3>

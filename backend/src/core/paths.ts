@@ -48,3 +48,24 @@ export const getComicsDirectory = () => {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 };
+
+/** Bundled video workflows and sidecar manifests: `backend/static/video-workflows/` */
+export const getVideoWorkflowsDirectory = () => {
+  const dir = path.join(getStaticDirectory(), 'video-workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
+
+/** Generated video directory: `backend/static/generated/videos/` */
+export const getGeneratedVideosDirectory = () => {
+  const dir = path.join(getGeneratedDirectory(), 'videos');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
+
+/** Video staging directory: `backend/static/staging/` */
+export const getVideoStagingDirectory = () => {
+  const dir = path.join(getStaticDirectory(), 'staging');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};

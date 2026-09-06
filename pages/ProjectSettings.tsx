@@ -282,7 +282,7 @@ export const ProjectSettings: React.FC = () => {
   }
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12">
+    <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar">
       <div className="max-w-3xl mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-white mb-6 sm:mb-8">{t('project_settings.title')}</h1>
         

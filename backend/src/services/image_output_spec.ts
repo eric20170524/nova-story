@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 
-export type ImageAspectRatio = '3:4' | '4:3' | '1:1' | 'auto';
+export type ImageAspectRatio = '3:4' | '4:3' | '1:1' | '16:9' | '9:16' | 'auto';
 export type ImageResolution = 'draft' | 'standard' | 'high';
 export type ImageOrientationPolicy = 'fixed' | 'auto_by_shot';
 
@@ -24,7 +24,7 @@ export const DEFAULT_IMAGE_OUTPUT_SPEC: ImageOutputSpec = {
   orientation_policy: 'fixed',
 };
 
-const ASPECT_RATIOS = new Set<ImageAspectRatio>(['3:4', '4:3', '1:1', 'auto']);
+const ASPECT_RATIOS = new Set<ImageAspectRatio>(['3:4', '4:3', '1:1', '16:9', '9:16', 'auto']);
 const RESOLUTIONS = new Set<ImageResolution>(['draft', 'standard', 'high']);
 const ORIENTATION_POLICIES = new Set<ImageOrientationPolicy>(['fixed', 'auto_by_shot']);
 
@@ -72,6 +72,16 @@ const dimensionsFor = (
   aspectRatio: Exclude<ImageAspectRatio, 'auto'>
 ) => {
   const isSd15 = modelFamily === 'sd15';
+  if (aspectRatio === '16:9') {
+    return isSd15
+      ? (resolution === 'draft' ? { width: 640, height: 384 } : resolution === 'high' ? { width: 1024, height: 576 } : { width: 768, height: 448 })
+      : (resolution === 'draft' ? { width: 896, height: 512 } : resolution === 'high' ? { width: 1536, height: 864 } : { width: 1344, height: 768 });
+  }
+  if (aspectRatio === '9:16') {
+    return isSd15
+      ? (resolution === 'draft' ? { width: 384, height: 640 } : resolution === 'high' ? { width: 576, height: 1024 } : { width: 448, height: 768 })
+      : (resolution === 'draft' ? { width: 512, height: 896 } : resolution === 'high' ? { width: 864, height: 1536 } : { width: 768, height: 1344 });
+  }
   const portraitByResolution: Record<ImageResolution, [number, number]> = isSd15
     ? {
         draft: [384, 512],

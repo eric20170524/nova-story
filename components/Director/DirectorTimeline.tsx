@@ -1,12 +1,30 @@
 import React, { useState } from 'react';
-import { Loader2, Film, PanelRight, ImageIcon, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Music, Grid, X, Check, ArrowRight, Sparkles } from 'lucide-react';
-import { Scene, CoverageGroup, CoverageShot } from '../../types';
+import {
+  Loader2,
+  Film,
+  PanelRight,
+  ImageIcon,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  Music,
+  Grid,
+  X,
+  Check,
+  ArrowRight,
+  Sparkles,
+  Crop,
+  Video
+} from 'lucide-react';
+import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { useProjectAgentOptional } from '../../contexts/ProjectAgentContext';
 import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
+import { SceneVideoPlayer } from './SceneVideoPlayer';
 
 interface DirectorTimelineProps {
   timeline: Scene[];
@@ -17,11 +35,18 @@ interface DirectorTimelineProps {
   generatingNarration: boolean;
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
-  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean }) => void;
+  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean; canvasAspectRatio?: string }) => void;
+  onGenerateKeyframe?: (sceneId: number | string) => void;
   onUpdateScene: (id: number | string, field: keyof Scene, value: any) => void;
   onRefreshTimeline?: () => void;
   onActivateVersion?: (sceneId: number | string, version: number) => void;
   onCreateVersion?: (sceneId: number | string, clearAsset?: boolean) => void;
+  mediaAssetsByScene?: Record<number | string, MediaAsset[]>;
+  videoTasksByScene?: Record<number | string, VideoTaskState>;
+  onGenerateVideo?: (sceneId: number | string, options?: any) => void;
+  onPromoteVideoAsset?: (assetId: number) => void;
+  onReprocessVideoAsset?: (assetId: number) => void;
+  onCancelVideoTask?: (taskId: string) => void;
 }
 
 export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
@@ -34,14 +59,22 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   showRightPanel,
   setShowRightPanel,
   onGenerateAsset,
+  onGenerateKeyframe,
   onUpdateScene,
   onRefreshTimeline,
   onActivateVersion,
-  onCreateVersion
+  onCreateVersion,
+  mediaAssetsByScene = {},
+  videoTasksByScene = {},
+  onGenerateVideo,
+  onPromoteVideoAsset,
+  onReprocessVideoAsset,
+  onCancelVideoTask
 }) => {
   const { t } = useLanguage();
   const agentCtx = useProjectAgentOptional();
   const [expandedCards, setExpandedCards] = useState<Set<number | string>>(new Set());
+  const [activeMediaTabs, setActiveMediaTabs] = useState<Record<number | string, 'storyboard' | 'keyframe' | 'video'>>({});
   
   // Single-Scene Coverage Modal State
   const [activeCoverageScene, setActiveCoverageScene] = useState<Scene | null>(null);
@@ -135,9 +168,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-slate-950">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-slate-950">
       {/* Header */}
-      <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925 gap-2">
+      <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925 gap-2 flex-shrink-0">
          <div className="flex items-center gap-3 min-w-0">
            <h2 className="text-white font-medium truncate">{t('director.storyboard')}</h2>
            <span className="text-xs px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/50 text-indigo-300 font-mono flex-shrink-0">
@@ -188,7 +221,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar min-h-0">
          <div className="flex flex-wrap gap-6 justify-center sm:justify-start pb-20">
             {loading ? (
                 Array.from({ length: 4 }).map((_, i) => <SceneCardSkeleton key={i} />)
@@ -203,6 +236,14 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     
                     {timeline.map((scene, idx) => {
                     const isExpanded = expandedCards.has(scene.id);
+                    const sceneMedia = mediaAssetsByScene[scene.id] || [];
+                    const sceneTask = videoTasksByScene[scene.id];
+                    const hasVideoAssets = sceneMedia.some((m) => m.media_type === 'video' || m.role === 'loop_master' || m.role === 'narrative_final' || m.role === 'raw_video');
+                    const isVideoGenerating = sceneTask && (sceneTask.status === 'queued' || sceneTask.status === 'processing');
+                    const keyframeAsset = sceneMedia.find((m) => m.role === 'video_keyframe');
+
+                    const currentTab = activeMediaTabs[scene.id] || (hasVideoAssets || isVideoGenerating ? 'video' : 'storyboard');
+
                     return (
                     <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl hover:shadow-2xl transition-all group animate-in fade-in zoom-in-95 duration-300">
                         {/* Header */}
@@ -259,71 +300,175 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             </div>
                         </div>
 
-                        {/* Image Area — click image for full preview; hover for regenerate */}
-                        <div className="aspect-square bg-black relative flex items-center justify-center group/image h-64">
-                            {scene.asset_status === 'completed' && scene.asset_url ? (
-                                <>
-                                  <PreviewableImage
-                                    src={scene.asset_url}
-                                    alt={`Scene ${scene.id}`}
-                                    className="w-full h-full object-cover"
-                                  />
-                                  <ZoomHint className="group-hover/image:opacity-100" />
-                                </>
-                            ) : (
-                                <div className="text-slate-600 flex flex-col items-center">
-                                {scene.asset_status === 'generating' ? (
-                                    <Loader2 className="animate-spin text-indigo-500 mb-2" size={32} />
-                                ) : (
-                                    <ImageIcon size={32} className="mb-2 opacity-50" />
-                                )}
-                                <span className="text-xs capitalize">
-                                    {scene.asset_status === 'generating' ? t('director.status_generating') : scene.asset_status === 'failed' ? t('director.status_failed') : scene.asset_status || 'No Asset'}
-                                </span>
+                        {/* Media Tabs Switcher */}
+                        <div className="flex bg-slate-950 border-b border-slate-800 p-1 text-[10px] font-medium gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'storyboard' }))}
+                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                              currentTab === 'storyboard'
+                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <ImageIcon size={11} />
+                            <span>{t('director.media_tab_storyboard', '漫画图')}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'keyframe' }))}
+                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                              currentTab === 'keyframe'
+                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <Crop size={11} />
+                            <span>{t('director.media_tab_keyframe', '16:9 关键帧')}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }))}
+                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                              currentTab === 'video'
+                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <Film size={11} />
+                            <span>{t('director.media_tab_video', '视频')}</span>
+                            {hasVideoAssets && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
+                            {isVideoGenerating && <Loader2 size={10} className="animate-spin text-amber-400" />}
+                          </button>
+                        </div>
+
+                        {/* Media Viewport */}
+                        {currentTab === 'video' ? (
+                          <SceneVideoPlayer
+                            scene={scene}
+                            mediaAssets={sceneMedia}
+                            taskState={sceneTask}
+                            onGenerateVideo={(opts) => onGenerateVideo?.(scene.id, opts)}
+                            onPromoteAsset={onPromoteVideoAsset}
+                            onReprocessAsset={onReprocessVideoAsset}
+                            onCancelTask={onCancelVideoTask}
+                          />
+                        ) : currentTab === 'keyframe' ? (
+                          <div className="aspect-video bg-black relative flex items-center justify-center group/keyframe h-48">
+                            {keyframeAsset?.url ? (
+                              <>
+                                <PreviewableImage
+                                  src={keyframeAsset.url}
+                                  alt={`Scene ${scene.id} 16:9 Keyframe`}
+                                  className="w-full h-full object-cover"
+                                />
+                                <ZoomHint className="group-hover/keyframe:opacity-100" />
+                                <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/keyframe:opacity-100 flex items-center justify-center gap-1.5 transition-opacity">
+                                  <button
+                                    type="button"
+                                    onClick={() => onGenerateKeyframe ? onGenerateKeyframe(scene.id) : onGenerateAsset(scene.id, { canvasAspectRatio: '16:9', newVersion: false })}
+                                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium shadow"
+                                    title="生成专用的 16:9 关键帧"
+                                  >
+                                    重新生成
+                                  </button>
+                                  {onGenerateVideo && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }));
+                                        onGenerateVideo(scene.id);
+                                      }}
+                                      className="bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium shadow"
+                                    >
+                                      以此帧生视频
+                                    </button>
+                                  )}
                                 </div>
+                              </>
+                            ) : (
+                              <div className="text-slate-600 flex flex-col items-center p-3 text-center">
+                                <Crop size={24} className="mb-1 opacity-50" />
+                                <span className="text-[11px]">暂无 16:9 关键帧</span>
+                                <button
+                                  type="button"
+                                  onClick={() => onGenerateKeyframe ? onGenerateKeyframe(scene.id) : onGenerateAsset(scene.id, { canvasAspectRatio: '16:9', newVersion: false })}
+                                  className="mt-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-2.5 py-1 rounded text-[10px] font-medium transition-colors"
+                                >
+                                  生成 16:9 关键帧
+                                </button>
+                              </div>
                             )}
-                            
-                            {/* Overlay: preview + regenerate (don't block image click on empty area) */}
-                            <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/image:opacity-100 flex flex-wrap items-center justify-center gap-1.5 transition-opacity pointer-events-none">
-                                {scene.asset_status === 'completed' && scene.asset_url && (
+                          </div>
+                        ) : (
+                          /* Storyboard Image Area (Standard) */
+                          <div className="aspect-square bg-black relative flex items-center justify-center group/image h-64">
+                              {scene.asset_status === 'completed' && scene.asset_url ? (
+                                  <>
+                                    <PreviewableImage
+                                      src={scene.asset_url}
+                                      alt={`Scene ${scene.id}`}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <ZoomHint className="group-hover/image:opacity-100" />
+                                  </>
+                              ) : (
+                                  <div className="text-slate-600 flex flex-col items-center">
+                                  {scene.asset_status === 'generating' ? (
+                                      <Loader2 className="animate-spin text-indigo-500 mb-2" size={32} />
+                                  ) : (
+                                      <ImageIcon size={32} className="mb-2 opacity-50" />
+                                  )}
+                                  <span className="text-xs capitalize">
+                                      {scene.asset_status === 'generating' ? t('director.status_generating') : scene.asset_status === 'failed' ? t('director.status_failed') : scene.asset_status || 'No Asset'}
+                                  </span>
+                                  </div>
+                              )}
+
+                              {/* Overlay: preview + regenerate */}
+                              <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/image:opacity-100 flex flex-wrap items-center justify-center gap-1.5 transition-opacity pointer-events-none">
+                                  {scene.asset_status === 'completed' && scene.asset_url && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openPreview(scene.asset_url);
+                                      }}
+                                      className="pointer-events-auto bg-slate-800/90 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 shadow-lg border border-slate-600"
+                                    >
+                                      放大
+                                    </button>
+                                  )}
+                                  <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onGenerateAsset(scene.id, { newVersion: false });
+                                  }}
+                                  disabled={scene.asset_status === 'generating'}
+                                  className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                  title="覆盖当前版本图片"
+                                  >
+                                  <RefreshCw size={12} className={scene.asset_status === 'generating' ? "animate-spin" : ""} />
+                                  {scene.asset_status === 'generating' ? t('director.status_generating') : '生成本版'}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      openPreview(scene.asset_url);
+                                      onGenerateAsset(scene.id, { newVersion: true });
                                     }}
-                                    className="pointer-events-auto bg-slate-800/90 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 shadow-lg border border-slate-600"
+                                    disabled={scene.asset_status === 'generating'}
+                                    className="pointer-events-auto bg-amber-700 hover:bg-amber-600 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                                    title="新建版本并生成（保留旧版文案与图片）"
                                   >
-                                    放大
+                                    +新版生成
                                   </button>
-                                )}
-                                <button 
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onGenerateAsset(scene.id, { newVersion: false });
-                                }}
-                                disabled={scene.asset_status === 'generating'}
-                                className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-                                title="覆盖当前版本图片"
-                                >
-                                <RefreshCw size={12} className={scene.asset_status === 'generating' ? "animate-spin" : ""} />
-                                {scene.asset_status === 'generating' ? t('director.status_generating') : '生成本版'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onGenerateAsset(scene.id, { newVersion: true });
-                                  }}
-                                  disabled={scene.asset_status === 'generating'}
-                                  className="pointer-events-auto bg-amber-700 hover:bg-amber-600 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-                                  title="新建版本并生成（保留旧版文案与图片）"
-                                >
-                                  +新版生成
-                                </button>
-                            </div>
-                        </div>
+                              </div>
+                          </div>
+                        )}
 
                         {/* Content (Editable) */}
                         <div className="flex-1 p-3 flex flex-col gap-2 bg-slate-900 border-t border-slate-800">
@@ -467,7 +612,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-purple-800/60 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="px-6 py-4 bg-slate-925 border-b border-purple-800/40 flex items-center justify-between">
+            <div className="px-6 py-4 bg-slate-925 border-b border-purple-800/40 flex items-center justify-between flex-shrink-0">
               <div>
                 <div className="flex items-center gap-2">
                   <Grid size={18} className="text-purple-400" />
@@ -488,7 +633,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
             {/* Notice Banner */}
             {actionNotice && (
-              <div className="bg-purple-950/60 border-b border-purple-800/50 px-6 py-2 text-xs text-purple-200 flex items-center justify-between font-medium">
+              <div className="bg-purple-950/60 border-b border-purple-800/50 px-6 py-2 text-xs text-purple-200 flex items-center justify-between font-medium flex-shrink-0">
                 <span>{actionNotice}</span>
                 <button onClick={() => setActionNotice(null)} className="text-purple-400 hover:text-white">
                   <X size={14} />
@@ -497,7 +642,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
             )}
 
             {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 min-h-0 custom-scrollbar">
               {/* Controls bar */}
               <div className="flex items-center justify-between bg-slate-950/60 p-4 rounded-xl border border-slate-800">
                 <div className="text-xs text-slate-300">

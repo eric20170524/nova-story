@@ -411,6 +411,58 @@ const migrations: Migration[] = [
         shot_intent: 'VARCHAR(50)',
       });
     }
+  },
+  {
+    version: '012_video_generation',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS media_asset (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL,
+          scene_id INTEGER,
+          scene_version INTEGER,
+          character_id INTEGER,
+          parent_asset_id INTEGER,
+          media_type VARCHAR(20) NOT NULL,
+          role VARCHAR(50) NOT NULL,
+          profile VARCHAR(50),
+          status VARCHAR(50) NOT NULL DEFAULT 'ready',
+          url TEXT NOT NULL,
+          mime_type TEXT,
+          width INTEGER,
+          height INTEGER,
+          fps REAL,
+          frame_count INTEGER,
+          duration_ms INTEGER,
+          sha256 TEXT,
+          metadata_json TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE,
+          FOREIGN KEY(parent_asset_id) REFERENCES media_asset(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_media_asset_project
+          ON media_asset(project_id);
+        CREATE INDEX IF NOT EXISTS ix_media_asset_scene
+          ON media_asset(scene_id, scene_version);
+        CREATE INDEX IF NOT EXISTS ix_media_asset_character
+          ON media_asset(character_id);
+        CREATE INDEX IF NOT EXISTS ix_media_asset_role
+          ON media_asset(role);
+        CREATE INDEX IF NOT EXISTS ix_media_asset_parent
+          ON media_asset(parent_asset_id);
+      `);
+
+      await ensureColumns(database, 'generation_task', {
+        kind: "VARCHAR(20) DEFAULT 'image'",
+        stage: 'VARCHAR(50)',
+        output_url: 'TEXT',
+        request_json: 'TEXT',
+        metadata_json: 'TEXT',
+        heartbeat_at: 'DATETIME',
+        started_at: 'DATETIME',
+        completed_at: 'DATETIME',
+      });
+    }
   }
 ];
 

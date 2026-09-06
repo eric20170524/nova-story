@@ -22,7 +22,9 @@ import { chapterRoutes } from './routes/chapters';
 import { creativeRoutes } from './routes/creative';
 import { assistantRoutes } from './routes/assistant';
 import { coverageRoutes } from './routes/coverage';
+import { videoRoutes } from './routes/videos';
 import { AssetTaskStore } from './services/task_store';
+import { VideoGenerationService } from './services/video/video_generation_service';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
   const app = Fastify({
@@ -120,11 +122,13 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(creativeRoutes, { prefix: '/api/agent' });
   await app.register(assistantRoutes, { prefix: '/api/assistant' });
   await app.register(coverageRoutes, { prefix: '/api' });
+  await app.register(videoRoutes, { prefix: '/api/videos' });
 
   // After DB migrations (import of routes/db already ran them via proxy),
   // mark orphaned processing tasks so clients don't hang after restart.
   try {
     await AssetTaskStore.markOrphanedProcessingInterrupted();
+    await VideoGenerationService.markOrphanedTasks();
   } catch {
     /* table may not exist in pure unit tests without full migrate */
   }

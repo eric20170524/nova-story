@@ -6,7 +6,14 @@ import {
   MOCK_WORKFLOWS, 
   MOCK_TIMELINE 
 } from '../constants';
-import type { ProjectExport } from '../types';
+import type {
+  ProjectExport,
+  VideoCapabilities,
+  VideoPreflightResponse,
+  VideoGenerationRequest,
+  VideoTaskState,
+  MediaAsset
+} from '../types';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -20,22 +27,15 @@ class ApiService {
   private async request<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
     const { method = 'GET', body, headers = {} } = options;
 
-    // Retrieve token from storage
     const token = localStorage.getItem('access_token');
-    
-    const reqHeaders: Record<string, string> = {
-        ...headers,
-    };
+    const reqHeaders: Record<string, string> = { ...headers };
 
-    // Only set JSON content-type when there is a body. Fastify rejects
-    // DELETE/GET with Content-Type: application/json and an empty body
-    // (FST_ERR_CTP_EMPTY_JSON_BODY → 400).
     if (body !== undefined && body !== null) {
-        reqHeaders['Content-Type'] = 'application/json';
+      reqHeaders['Content-Type'] = 'application/json';
     }
 
     if (token) {
-        reqHeaders['Authorization'] = `Bearer ${token}`;
+      reqHeaders['Authorization'] = `Bearer ${token}`;
     }
 
     const config: RequestInit = {
@@ -79,38 +79,36 @@ class ApiService {
   private getMockResponse<T>(endpoint: string, method: HttpMethod, body?: any): Promise<T> {
     return new Promise((resolve) => {
       setTimeout(() => {
-        // Projects
         if (endpoint.startsWith('/projects/')) {
-           if (method === 'GET' && endpoint === '/projects/') return resolve(MOCK_PROJECTS as any);
-           if (method === 'GET' && endpoint.endsWith('/export')) {
-             return resolve({
-               format: 'novastory-project',
-               version: 1,
-               exported_at: new Date().toISOString(),
-               project: MOCK_PROJECTS[0],
-               screenplay: { chapters: MOCK_CHAPTERS },
-               character_center: { characters: MOCK_CHARACTERS },
-               director: {
-                 scenes: MOCK_TIMELINE.timeline,
-                 coverage_groups: [],
-                 coverage_shots: []
-               },
-               summary: {
-                 chapters: MOCK_CHAPTERS.length,
-                 characters: MOCK_CHARACTERS.length,
-                 scenes: MOCK_TIMELINE.timeline.length,
-                 coverage_groups: 0,
-                 coverage_shots: 0
-               }
-             } as any);
-           }
-           if (method === 'GET' && endpoint !== '/projects/') return resolve(MOCK_PROJECTS[0] as any);
-           if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000), created_at: new Date().toISOString() } as any);
-           if (method === 'PUT') return resolve({ ...MOCK_PROJECTS[0], ...body } as any);
-           if (method === 'DELETE') return resolve({} as any);
+          if (method === 'GET' && endpoint === '/projects/') return resolve(MOCK_PROJECTS as any);
+          if (method === 'GET' && endpoint.endsWith('/export')) {
+            return resolve({
+              format: 'novastory-project',
+              version: 1,
+              exported_at: new Date().toISOString(),
+              project: MOCK_PROJECTS[0],
+              screenplay: { chapters: MOCK_CHAPTERS },
+              character_center: { characters: MOCK_CHARACTERS },
+              director: {
+                scenes: MOCK_TIMELINE.timeline,
+                coverage_groups: [],
+                coverage_shots: []
+              },
+              summary: {
+                chapters: MOCK_CHAPTERS.length,
+                characters: MOCK_CHARACTERS.length,
+                scenes: MOCK_TIMELINE.timeline.length,
+                coverage_groups: 0,
+                coverage_shots: 0
+              }
+            } as any);
+          }
+          if (method === 'GET' && endpoint !== '/projects/') return resolve(MOCK_PROJECTS[0] as any);
+          if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000), created_at: new Date().toISOString() } as any);
+          if (method === 'PUT') return resolve({ ...MOCK_PROJECTS[0], ...body } as any);
+          if (method === 'DELETE') return resolve({} as any);
         }
 
-        // Characters
         if (endpoint.includes('/characters/')) {
           if (method === 'GET') return resolve(MOCK_CHARACTERS as any);
           if (method === 'POST') return resolve({ ...body, id: Math.floor(Math.random() * 1000) } as any);
@@ -118,7 +116,6 @@ class ApiService {
           if (method === 'DELETE') return resolve({} as any);
         }
         
-        // Chapters
         if (endpoint.includes('/chapters/')) {
           if (method === 'GET') return resolve(MOCK_CHAPTERS as any);
           if (method === 'POST') return resolve({ ...body, id: 'mock-uuid-' + Date.now() } as any);
@@ -126,40 +123,20 @@ class ApiService {
           if (method.includes('PUT') && endpoint.includes('move')) return resolve({ status: 'moved' } as any);
         }
 
-        // Workflows
         if (endpoint.startsWith('/workflows/')) {
-           return resolve(MOCK_WORKFLOWS as any);
+          return resolve(MOCK_WORKFLOWS as any);
         }
         
-        // Timeline
         if (endpoint.includes('/timeline/generate')) {
-           return resolve(MOCK_TIMELINE as any);
+          return resolve(MOCK_TIMELINE as any);
         }
 
-        // Assets
         if (endpoint.includes('/assets/generate')) {
-           return resolve({ task_id: 'mock-task-999', status: 'processing' } as any);
-        }
-
-        // Agent
-        if (endpoint.includes('/agent/draft')) {
-           return resolve({ content: " (AI Generated Mock Content) Suddenly, the door burst open and..." } as any);
-        }
-        if (endpoint.includes('/agent/analyze')) {
-           return resolve({ new_entities: ["Kael", "Viper"], updates: ["A tense meeting occurred."] } as any);
-        }
-        
-        // Assistant
-        if (endpoint.includes('/assistant/chat')) {
-           return resolve({ 
-             thought: "Processing mock request...", 
-             response: "I'm a mock agent. Backend might be unreachable.",
-             action: null
-           } as any);
+          return resolve({ task_id: 'mock-task-999', status: 'processing' } as any);
         }
 
         resolve({} as T);
-      }, 600); // Simulate network delay
+      }, 600);
     });
   }
 
@@ -174,6 +151,7 @@ class ApiService {
   exportProject = (id: number) => this.request<ProjectExport>(`/projects/${id}/export`);
   updateProject = (id: number, data: any) => this.request<any>(`/projects/${id}`, { method: 'PUT', body: data });
   deleteProject = (id: number) => this.request(`/projects/${id}`, { method: 'DELETE' });
+
   private async requestFormData<T>(endpoint: string, formData: FormData): Promise<T> {
     const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = {};
@@ -412,18 +390,16 @@ class ApiService {
   updateWorkflow = (id: number, data: any) => this.request<any>(`/workflows/${id}`, { method: 'PUT', body: data });
 
   generateAsset = async (workflowData: any, sceneId: number | string) => {
-    // Inject generation_params into the outer payload if they exist in workflowData
     const payload: any = {
-        workflow: workflowData,
-        scene_id: sceneId,
-        mode: workflowData.mode || 'standard',
-        new_version: Boolean(workflowData.new_version || workflowData.create_new_version)
+      workflow: workflowData,
+      scene_id: sceneId,
+      mode: workflowData.mode || 'standard',
+      new_version: Boolean(workflowData.new_version || workflowData.create_new_version)
     };
     if (workflowData.generation_params) {
-        payload.generation_params = workflowData.generation_params;
+      payload.generation_params = workflowData.generation_params;
     }
 
-    // Get Token for direct fetch
     const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -477,14 +453,39 @@ class ApiService {
   generateProjectComic = (projectId: number) =>
     this.request<any>(`/comics/project/${projectId}/generate`, { method: 'POST' });
 
-  renderVideo = async (timeline: any[], projectId: number): Promise<{ video_url: string }> => {
-    // Mock implementation for demo
-    return new Promise((resolve) => {
-        setTimeout(() => {
-            resolve({ video_url: "https://www.w3schools.com/html/mov_bbb.mp4" });
-        }, 1500);
+  // Video Pipeline
+  getVideoCapabilities = () => this.request<VideoCapabilities>('/videos/capabilities');
+  preflightVideo = (data: VideoGenerationRequest) =>
+    this.request<VideoPreflightResponse>('/videos/preflight', { method: 'POST', body: data });
+  generateVideo = (data: VideoGenerationRequest) =>
+    this.request<{ task_id: string; queue_position: number }>('/videos/generate', { method: 'POST', body: data });
+  getVideoTask = (taskId: string) => this.request<VideoTaskState>(`/videos/tasks/${taskId}`);
+  cancelVideoTask = (taskId: string) => this.request<{ ok: boolean }>(`/videos/tasks/${taskId}/cancel`, { method: 'POST' });
+  getSceneMediaAssets = (sceneId: number | string, version?: number) =>
+    this.request<{ scene_id: number; assets: MediaAsset[] }>(
+      `/scenes/${sceneId}/media${version != null ? `?version=${version}` : ''}`
+    );
+  promoteVideoAsset = (assetId: number) =>
+    this.request<MediaAsset>(`/videos/assets/${assetId}/promote`, { method: 'POST' });
+  reprocessVideoAsset = (assetId: number, runLoopCloser = true) =>
+    this.request<any>(`/videos/assets/${assetId}/reprocess`, { method: 'POST', body: { run_loop_closer: runLoopCloser } });
+  uploadVideoReference = async (formData: FormData): Promise<MediaAsset> => {
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE_URL}/videos/references/upload`, {
+      method: 'POST',
+      headers,
+      body: formData
     });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || errJson.detail || `Upload failed (${res.status})`);
+    }
+    return res.json();
   };
+  registerMediaAsset = (data: Partial<MediaAsset>) =>
+    this.request<MediaAsset>('/videos/assets/register', { method: 'POST', body: data });
 
   // Settings
   getSettings = () => this.request<any>('/settings/');

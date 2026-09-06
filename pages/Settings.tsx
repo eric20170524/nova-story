@@ -228,7 +228,7 @@ export const SettingsPage: React.FC = () => {
   }
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12">
+    <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar">
     <div className="max-w-4xl mx-auto space-y-6 pb-12">
       <div>
         <h1 

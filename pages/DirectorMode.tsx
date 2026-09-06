@@ -1,7 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { Chapter, Scene, Workflow, StreamMessage, AssetMode, ImageOutputSpec } from '../types';
+import {
+  Chapter,
+  Scene,
+  Workflow,
+  StreamMessage,
+  AssetMode,
+  ImageOutputSpec,
+  VideoProfile,
+  VideoPreset,
+  MediaAsset,
+  VideoTaskState,
+  VideoGenerationRequest
+} from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -62,8 +74,6 @@ export const DirectorMode: React.FC = () => {
   const [timeline, setTimeline] = useState<Scene[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   
-  // Style Settings
-
   // Advanced Generation Params State
   const [showAdvancedParams, setShowAdvancedParams] = useState(false);
   const [genSteps, setGenSteps] = useState(25);
@@ -85,6 +95,17 @@ export const DirectorMode: React.FC = () => {
   const [assetMode, setAssetMode] = useState<AssetMode>(() => {
     return (localStorage.getItem('director_assetMode') as AssetMode) || 'single_image';
   });
+
+  // Video Pipeline States
+  const [mediaAssetsByScene, setMediaAssetsByScene] = useState<Record<number | string, MediaAsset[]>>({});
+  const [videoTasksByScene, setVideoTasksByScene] = useState<Record<number | string, VideoTaskState>>({});
+  const [videoProfile, setVideoProfile] = useState<VideoProfile>('narrative_clip');
+  const [videoPreset, setVideoPreset] = useState<VideoPreset>('preview_480p_5s');
+  const [runLoopCloser, setRunLoopCloser] = useState<boolean>(true);
+  const [videoMotionPrompt, setVideoMotionPrompt] = useState<string>('');
+  const [isBatchGeneratingVideo, setIsBatchGeneratingVideo] = useState<boolean>(false);
+  const stopBatchVideoRef = React.useRef<boolean>(false);
+  const activeVideoEvtSourcesRef = React.useRef<Map<string, EventSource>>(new Map());
 
   // Re-storyboard Confirmation Modal
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -120,6 +141,8 @@ export const DirectorMode: React.FC = () => {
         activeEvtSourceRef.current.close();
         activeEvtSourceRef.current = null;
       }
+      activeVideoEvtSourcesRef.current.forEach((src) => src.close());
+      activeVideoEvtSourcesRef.current.clear();
     };
   }, []);
 
@@ -192,12 +215,11 @@ export const DirectorMode: React.FC = () => {
         if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony') {
           setProjectModelType(settingsObj.default_model_type);
         } else if (settingsObj.default_model_type === 'flux') {
-          // FLUX.1-dev GGUF retired — migrate to Pony XL
           setProjectModelType('pony');
         }
         const savedOutputSpec = settingsObj.output_spec || {};
         setProjectOutputSpec({
-          aspect_ratio: ['3:4', '4:3', '1:1', 'auto'].includes(savedOutputSpec.aspect_ratio)
+          aspect_ratio: ['3:4', '4:3', '1:1', '16:9', '9:16', 'auto'].includes(savedOutputSpec.aspect_ratio)
             ? savedOutputSpec.aspect_ratio
             : '3:4',
           resolution: ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
@@ -221,7 +243,6 @@ export const DirectorMode: React.FC = () => {
     });
   };
 
-  // Load project defaults + system NSFW (style + policy strip)
   useEffect(() => {
     if (projectId) {
       loadProjectDefaults();
@@ -273,6 +294,15 @@ export const DirectorMode: React.FC = () => {
     }
   }, [projectId]);
 
+  const loadSceneMedia = async (sceneId: number | string, version?: number) => {
+    try {
+      const res = await api.getSceneMediaAssets(sceneId, version);
+      if (res?.assets) {
+        setMediaAssetsByScene((prev) => ({ ...prev, [sceneId]: res.assets }));
+      }
+    } catch (_) {}
+  };
+
   const loadTimeline = (chapterId: string) => {
     if (!chapterId) return;
     setLoading(true);
@@ -284,6 +314,10 @@ export const DirectorMode: React.FC = () => {
             asset_status: s.asset_status || 'idle' 
           }));
           setTimeline(scenes);
+          // Load media assets for all scenes
+          scenes.forEach((s: Scene) => {
+            loadSceneMedia(s.id, s.active_version);
+          });
         } else {
           setTimeline([]);
         }
@@ -292,7 +326,6 @@ export const DirectorMode: React.FC = () => {
       .finally(() => setLoading(false));
   };
 
-  // Load timeline when chapter is selected
   useEffect(() => {
     if (selectedChapterId) {
       loadTimeline(selectedChapterId);
@@ -350,7 +383,6 @@ export const DirectorMode: React.FC = () => {
   const handleUpdateScene = (id: number | string, field: keyof Scene, value: any) => {
     setTimeline(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
     
-    // Save edit persistence to backend
     if (typeof id === 'number') {
       api.updateScene(id, { [field]: value }).catch(err => {
         console.error("Failed to persist scene update:", err);
@@ -363,6 +395,7 @@ export const DirectorMode: React.FC = () => {
     try {
       const updated = await api.activateSceneVersion(sceneId, version);
       setTimeline((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...updated } : s)));
+      loadSceneMedia(sceneId, version);
       showToast(
         t('director.version_switched', 'Switched to v{version}', { version }),
         'success'
@@ -395,13 +428,11 @@ export const DirectorMode: React.FC = () => {
 
   const generateAsset = async (
     sceneId: number | string,
-    options: { newVersion?: boolean; preserveComposition?: boolean } = {}
+    options: { newVersion?: boolean; preserveComposition?: boolean; canvasAspectRatio?: string } = {}
   ) => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
 
-    // Character extraction may complete after this page mounted. Refresh on demand
-    // while the cached list is empty so a running batch can pick up new profiles.
     let availableProjectCharacters = projectCharacters;
     if (availableProjectCharacters.length === 0 && projectId) {
       try {
@@ -410,9 +441,7 @@ export const DirectorMode: React.FC = () => {
           availableProjectCharacters = fresh;
           setProjectCharacters(fresh);
         }
-      } catch {
-        // Backend also restores appearance from scene/project data as a safety net.
-      }
+      } catch {}
     }
 
     const styleObj = findVisualStyle(selectedStyle);
@@ -432,8 +461,6 @@ export const DirectorMode: React.FC = () => {
 
     finalPrompt += scene.visual_prompt || "";
 
-    // Tier A: always inject appearance tags/description for characters in the shot.
-    // Composition stays text-driven (camera + visual_prompt); image ref is optional below.
     const shotTypeLower = (scene.shot_type || '').toLowerCase();
     const isWideOrFullShot = ['wide', 'long shot', 'full body', 'extreme long', 'establishing'].some(
       (k) => shotTypeLower.includes(k)
@@ -444,8 +471,7 @@ export const DirectorMode: React.FC = () => {
     );
     const hasNonhumanSubject = NONHUMAN_SCENE_RE.test(promptForMention);
     const hasHumanSubject = HUMAN_SCENE_RE.test(promptForMention);
-    // Generic "the animal" / "the character" prompts still resolve the sole cast
-    // member, but pure environment shots stay free of invented subjects.
+
     if (mentionedChars.length === 0 && availableProjectCharacters.length === 1) {
       const onlyCharacter = availableProjectCharacters[0];
       if (
@@ -480,10 +506,6 @@ export const DirectorMode: React.FC = () => {
       }
     }
 
-    // Scene style is applied by the backend from style_preset. Do not append the
-    // legacy UI style prose here: several presets contain face/hair/portrait nouns
-    // that can replace animals and environments with human beauty portraits.
-
     const globalNegative = sceneSubjectType === 'nonhuman' || sceneSubjectType === 'environment'
       ? globalNegativeRaw
           .split(',')
@@ -497,7 +519,6 @@ export const DirectorMode: React.FC = () => {
     }
 
     setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'generating' } : s));
-    // Plan 1 UI: show handoff immediately (backend confirms via SSE shortly)
     emitVramSchedulerPhase({
       phase: 'vram_tuning',
       message: 'Optimizing VRAM for image generation…',
@@ -507,8 +528,6 @@ export const DirectorMode: React.FC = () => {
     try {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
 
-      // Character identity ref: always attach when available.
-      // Backend Tier B uses IP-Adapter; Tier A only applies img2img on close-ups.
       let characterRefUrl: string | null = null;
       let referenceModelType: 'pony' | 'sd15' = projectModelType || 'pony';
       let characterLora: string | null = null;
@@ -517,21 +536,16 @@ export const DirectorMode: React.FC = () => {
         const char = mentionedChars[0];
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
-          // Character model_type: sd15 stays; flux legacy and pony use pony (or project default)
           if (char.model_type === 'sd15') referenceModelType = 'sd15';
           else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }
 
-      // Composition ref (Tier B ControlNet): only reuse an old frame when the
-      // caller explicitly asks to preserve layout. Regeneration must otherwise
-      // be able to escape a bad prior composition.
       const compositionRefUrl =
         options.preserveComposition && scene.asset_url
           ? scene.asset_url
           : null;
 
-      // Prefer first mentioned character's LoRA when ready (identity > img2img)
       for (const char of mentionedChars) {
         const lora = getCharacterLoraName(char);
         if (lora) {
@@ -540,12 +554,15 @@ export const DirectorMode: React.FC = () => {
         }
       }
 
-      // Legacy Tier A denoise only meaningful when backend falls back to img2img
       const useLegacyImg2ImgHint = shouldUsePortraitImg2ImgForScene({
         shotType: scene.shot_type,
         visualPrompt: scene.visual_prompt,
         mentionedCount: mentionedChars.length
       });
+
+      const effectiveOutputSpec = options.canvasAspectRatio
+        ? { ...projectOutputSpec, aspect_ratio: options.canvasAspectRatio as any }
+        : projectOutputSpec;
 
       const payload: Record<string, unknown> = {
           prompt: finalPrompt,
@@ -558,7 +575,6 @@ export const DirectorMode: React.FC = () => {
           camera_movement: scene.camera_movement || null,
           camera_angle: scene.camera_angle || null,
           subject_type: sceneSubjectType,
-          // Legacy single-ref slot (compat) + explicit Tier A/B fields
           ref_image_url: characterRefUrl,
           character_ref_url: characterRefUrl,
           composition_ref_url: compositionRefUrl,
@@ -568,13 +584,12 @@ export const DirectorMode: React.FC = () => {
           reference_model_type: referenceModelType,
           denoise: useLegacyImg2ImgHint && characterRefUrl ? 0.62 : 1.0,
           gen_type: 'scene',
-          // Backend upgrades to B when adapters + refs are ready
           reference_tier: characterRefUrl || compositionRefUrl ? 'A+B' : 'A',
           new_version: Boolean(options.newVersion),
           project_settings: {
             nsfw_mode: projectNsfwMode,
             default_style: selectedStyle,
-            output_spec: projectOutputSpec,
+            output_spec: effectiveOutputSpec,
           },
           generation_params: showAdvancedParams ? {
              steps: genSteps,
@@ -620,7 +635,6 @@ export const DirectorMode: React.FC = () => {
                       ? { ...v, asset_url: data.image_url, asset_status: 'completed', has_image: true }
                       : v
                   );
-                  // Ensure active version appears in list after new_version fork
                   const active = s.active_version || 1;
                   if (!versions.some((v) => v.version === active)) {
                     versions.push({
@@ -639,27 +653,8 @@ export const DirectorMode: React.FC = () => {
                     versions
                   };
                 }));
-                // Refresh versions from server for accuracy
-                if (typeof sceneId === 'number') {
-                  api.listSceneVersions(sceneId).then((res) => {
-                    setTimeline((prev) => prev.map((s) =>
-                      s.id === sceneId
-                        ? {
-                            ...s,
-                            active_version: res.active_version,
-                            versions: res.versions.map((v: any) => ({
-                              version: v.version,
-                              label: v.label,
-                              asset_status: v.asset_status,
-                              asset_url: v.asset_url,
-                              has_image: Boolean(v.asset_url),
-                              created_at: v.created_at
-                            }))
-                          }
-                        : s
-                    ));
-                  }).catch(() => {});
-                }
+
+                loadSceneMedia(sceneId);
                 evtSource.close();
                 activeEvtSourceRef.current = null;
                 resolve();
@@ -734,6 +729,476 @@ export const DirectorMode: React.FC = () => {
       showToast(t('director.batch_stopped') || "Batch generation stopped", 'warning');
   };
 
+  const handleGenerateKeyframe = async (sceneId: number | string) => {
+    const scene = timeline.find((s) => s.id === sceneId);
+    if (!scene) return;
+
+    let availableProjectCharacters = projectCharacters;
+    if (availableProjectCharacters.length === 0 && projectId) {
+      try {
+        const fresh = await api.getCharacters(Number(projectId));
+        if (Array.isArray(fresh)) {
+          availableProjectCharacters = fresh;
+          setProjectCharacters(fresh);
+        }
+      } catch {}
+    }
+
+    const styleObj = findVisualStyle(selectedStyle);
+    const globalNegativeRaw = styleObj && styleObj.negative_prompt ? styleObj.negative_prompt : '';
+
+    let finalPrompt = "";
+    const cameraDetails = [
+      scene.shot_type,
+      scene.camera_movement,
+      scene.camera_angle
+    ].filter(Boolean).join(", ");
+
+    if (cameraDetails) {
+      finalPrompt += `(${cameraDetails}), `;
+    }
+    finalPrompt += scene.visual_prompt || "";
+
+    const shotTypeLower = (scene.shot_type || '').toLowerCase();
+    const isWideOrFullShot = ['wide', 'long shot', 'full body', 'extreme long', 'establishing'].some(
+      (k) => shotTypeLower.includes(k)
+    );
+    const promptForMention = `${scene.visual_prompt || ''} ${finalPrompt}`;
+    let mentionedChars = availableProjectCharacters.filter((char) =>
+      isCharacterMentionedInPrompt(promptForMention, char)
+    );
+    const hasNonhumanSubject = NONHUMAN_SCENE_RE.test(promptForMention);
+    const hasHumanSubject = HUMAN_SCENE_RE.test(promptForMention);
+
+    if (mentionedChars.length === 0 && availableProjectCharacters.length === 1) {
+      const onlyCharacter = availableProjectCharacters[0];
+      if (
+        (hasNonhumanSubject && isNonhumanCharacter(onlyCharacter))
+        || (hasHumanSubject && !isNonhumanCharacter(onlyCharacter))
+        || /\b(protagonist|main character|the character|hero|heroine)\b/i.test(promptForMention)
+      ) {
+        mentionedChars = [onlyCharacter];
+      }
+    }
+    const mentionedNonhumanCount = mentionedChars.filter(isNonhumanCharacter).length;
+    const sceneSubjectType =
+      mentionedNonhumanCount > 0 && mentionedNonhumanCount < mentionedChars.length
+        ? 'mixed'
+        : mentionedNonhumanCount > 0 || hasNonhumanSubject
+        ? 'nonhuman'
+        : mentionedChars.length > 0 || hasHumanSubject
+          ? 'human'
+          : isWideOrFullShot
+            ? 'environment'
+            : 'unknown';
+
+    const appearanceSnippets: string[] = [];
+    for (const char of mentionedChars) {
+      const snippet = buildCharacterAppearanceSnippet(char, {
+        chapterId: selectedChapterId,
+        wideShot: isWideOrFullShot
+      });
+      if (snippet) {
+        appearanceSnippets.push(snippet);
+        finalPrompt += `, ${snippet}`;
+      }
+    }
+
+    const globalNegative = sceneSubjectType === 'nonhuman' || sceneSubjectType === 'environment'
+      ? globalNegativeRaw
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part && !HUMAN_IDENTITY_NEGATIVE_RE.test(part))
+          .join(', ')
+      : globalNegativeRaw;
+    let finalNegative = globalNegative;
+    if (scene.negative_prompt) {
+      finalNegative = finalNegative ? `${finalNegative}, ${scene.negative_prompt}` : scene.negative_prompt;
+    }
+
+    emitVramSchedulerPhase({
+      phase: 'vram_tuning',
+      message: 'Generating 16:9 keyframe…',
+      message_zh: '正在生成 16:9 视频关键帧…',
+    });
+
+    try {
+      let characterRefUrl: string | null = null;
+      let referenceModelType: 'pony' | 'sd15' = projectModelType || 'pony';
+      let characterLora: string | null = null;
+
+      if (mentionedChars.length > 0) {
+        const char = mentionedChars[0];
+        if (char.avatar_url || char.turnaround_url || char.face_url) {
+          characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
+          if (char.model_type === 'sd15') referenceModelType = 'sd15';
+          else if (char.model_type === 'pony') referenceModelType = 'pony';
+        }
+      }
+
+      for (const char of mentionedChars) {
+        const lora = getCharacterLoraName(char);
+        if (lora) {
+          characterLora = lora;
+          break;
+        }
+      }
+
+      const payload: Record<string, unknown> = {
+        prompt: finalPrompt,
+        negative_prompt: finalNegative,
+        style_preset: selectedStyle,
+        style_strength: styleStrength,
+        mode: 'standard',
+        model_type: referenceModelType,
+        shot_type: scene.shot_type || null,
+        camera_movement: scene.camera_movement || null,
+        camera_angle: scene.camera_angle || null,
+        subject_type: sceneSubjectType,
+        ref_image_url: characterRefUrl,
+        character_ref_url: characterRefUrl,
+        character_appearance_prompt: appearanceSnippets.join(', '),
+        character_appearance_snippets: appearanceSnippets,
+        character_lora: characterLora,
+        reference_model_type: referenceModelType,
+        gen_type: 'scene',
+        reference_tier: characterRefUrl ? 'A+B' : 'A',
+        new_version: false,
+        project_settings: {
+          nsfw_mode: projectNsfwMode,
+          default_style: selectedStyle,
+          output_spec: {
+            ...projectOutputSpec,
+            aspect_ratio: '16:9'
+          }
+        },
+        generation_params: showAdvancedParams ? {
+          steps: genSteps,
+          cfg: genCfg,
+          sampler_name: genSampler,
+          scheduler: genScheduler
+        } : undefined
+      };
+
+      const response = await api.generateAsset(payload, sceneId);
+      const taskId = response.task_id;
+
+      showToast('正在生成 16:9 关键帧…', 'info');
+
+      return new Promise<void>((resolve) => {
+        const evtSource = new EventSource(`${API_BASE_URL}/assets/stream/${taskId}`);
+        activeEvtSourceRef.current = evtSource;
+
+        evtSource.onmessage = async (event) => {
+          const data: StreamMessage = JSON.parse(event.data);
+          handleGenerationStreamForVram(data, taskId);
+
+          if (data.status === 'completed' && data.image_url) {
+            clearVramSchedulerPhase();
+            try {
+              await api.registerMediaAsset({
+                project_id: Number(projectId) || 1,
+                scene_id: Number(sceneId),
+                scene_version: scene.active_version || 1,
+                media_type: 'image',
+                role: 'video_keyframe',
+                url: data.image_url,
+                status: 'ready'
+              });
+              await loadSceneMedia(sceneId);
+              showToast('16:9 关键帧生成完成！', 'success');
+            } catch (regErr: any) {
+              showToast(`关键帧注册失败: ${regErr.message || regErr}`, 'error');
+            }
+            evtSource.close();
+            activeEvtSourceRef.current = null;
+            resolve();
+          } else if (data.status === 'failed') {
+            clearVramSchedulerPhase();
+            showToast((data as any).error || '关键帧生成失败', 'error');
+            evtSource.close();
+            activeEvtSourceRef.current = null;
+            resolve();
+          }
+        };
+
+        evtSource.onerror = () => {
+          evtSource.close();
+          activeEvtSourceRef.current = null;
+          clearVramSchedulerPhase();
+          showToast('关键帧生成连接中断', 'error');
+          resolve();
+        };
+      });
+    } catch (e: any) {
+      clearVramSchedulerPhase();
+      showToast(e.message || '生成关键帧失败', 'error');
+    }
+  };
+
+  // Video Generation Handlers
+  const handleGenerateVideo = async (
+    sceneId: number | string,
+    options: {
+      profile?: VideoProfile;
+      preset?: VideoPreset;
+      prompt?: string;
+      keyframeAssetId?: number;
+      characterRefAssetIds?: number[];
+      motionRefAssetId?: number;
+    } = {}
+  ) => {
+    const scene = timeline.find((s) => s.id === sceneId);
+    if (!scene) return;
+
+    const profile = options.profile || videoProfile;
+    const preset = options.preset || videoPreset;
+    const numericSceneId = Number(sceneId);
+
+    const sceneAssets = mediaAssetsByScene[sceneId] || [];
+    const existingKeyframe = sceneAssets.find((a) => a.role === 'video_keyframe');
+    const keyframeAssetId = options.keyframeAssetId || existingKeyframe?.id || 0;
+
+    let characterRefIds = options.characterRefAssetIds;
+    if (!characterRefIds || characterRefIds.length === 0) {
+      characterRefIds = sceneAssets
+        .filter((a) => a.role === 'character_reference' && a.id)
+        .map((a) => a.id!);
+    }
+
+    let motionRefId = options.motionRefAssetId;
+    if (!motionRefId) {
+      const motionAsset = sceneAssets.find((a) => a.role === 'motion_reference' && a.id);
+      motionRefId = motionAsset?.id;
+    }
+
+    const motionPromptText = options.prompt || (videoMotionPrompt ? `${scene.visual_prompt || ''}, ${videoMotionPrompt}` : undefined);
+
+    const request: VideoGenerationRequest = {
+      scene_id: numericSceneId,
+      scene_version: scene.active_version || 1,
+      profile,
+      preset,
+      keyframe_asset_id: keyframeAssetId,
+      character_reference_asset_ids: characterRefIds,
+      motion_reference_asset_id: motionRefId,
+      prompt_override: motionPromptText,
+      run_loop_closer: runLoopCloser
+    };
+
+    try {
+      // 1. Run Preflight Check
+      const preflight = await api.preflightVideo(request);
+      if (!preflight.ready && preflight.blockers && preflight.blockers.length > 0) {
+        showToast(`前置检查未通过: ${preflight.blockers.join('; ')}`, 'error');
+        return;
+      }
+
+      emitVramSchedulerPhase({
+        phase: 'vram_tuning',
+        message: 'Optimizing VRAM for H3 video generation…',
+        message_zh: '正在调优显存环境以运行 H3 视频模型…',
+      });
+
+      setVideoTasksByScene((prev) => ({
+        ...prev,
+        [sceneId]: {
+          task_id: '',
+          scene_id: numericSceneId,
+          status: 'queued',
+          stage: 'queued'
+        }
+      }));
+
+      const response = await api.generateVideo(request);
+      const taskId = response.task_id;
+
+      setVideoTasksByScene((prev) => ({
+        ...prev,
+        [sceneId]: {
+          task_id: taskId,
+          scene_id: numericSceneId,
+          status: 'processing',
+          stage: 'vram_tuning',
+          queue_position: response.queue_position
+        }
+      }));
+
+      return new Promise<void>((resolve) => {
+        let isDone = false;
+        let pollInterval: NodeJS.Timeout | null = null;
+
+        const cleanup = () => {
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
+          const src = activeVideoEvtSourcesRef.current.get(taskId);
+          if (src) {
+            src.close();
+            activeVideoEvtSourcesRef.current.delete(taskId);
+          }
+          clearVramSchedulerPhase();
+        };
+
+        const onTaskFinished = (status: string, outputUrl?: string, errorMsg?: string, qaReport?: any) => {
+          if (isDone) return;
+          isDone = true;
+          cleanup();
+
+          if (status === 'completed') {
+            loadSceneMedia(sceneId);
+            showToast(t('director.video_completed', 'H3 视频生成完成！'), 'success');
+          } else {
+            showToast(errorMsg || t('director.video_failed', '视频生成失败'), 'error');
+          }
+          resolve();
+        };
+
+        const startPollingFallback = () => {
+          if (pollInterval || isDone) return;
+          pollInterval = setInterval(async () => {
+            try {
+              const taskState = await api.getVideoTask(taskId);
+              if (taskState) {
+                setVideoTasksByScene((prev) => ({
+                  ...prev,
+                  [sceneId]: { ...prev[sceneId], ...taskState }
+                }));
+                if (taskState.status === 'completed' || taskState.status === 'failed' || taskState.status === 'rejected' || taskState.status === 'cancelled') {
+                  onTaskFinished(taskState.status, taskState.output_url, taskState.error, taskState.qa_report);
+                }
+              }
+            } catch (_) {}
+          }, 2000);
+        };
+
+        const evtSource = new EventSource(`${API_BASE_URL}/videos/tasks/${taskId}/stream`);
+        activeVideoEvtSourcesRef.current.set(taskId, evtSource);
+
+        evtSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'snapshot' && data.task) {
+              setVideoTasksByScene((prev) => ({
+                ...prev,
+                [sceneId]: { ...prev[sceneId], ...data.task }
+              }));
+              if (data.task.status === 'completed' || data.task.status === 'failed' || data.task.status === 'rejected' || data.task.status === 'cancelled') {
+                onTaskFinished(data.task.status, data.task.output_url, data.task.error, data.task.qa_report);
+              }
+            } else if (data.stage || data.status || data.phase) {
+              const updatedStatus = data.status || 'processing';
+              const updatedStage = data.stage || data.phase;
+              setVideoTasksByScene((prev) => ({
+                ...prev,
+                [sceneId]: {
+                  ...prev[sceneId],
+                  status: updatedStatus,
+                  stage: updatedStage || prev[sceneId]?.stage,
+                  output_url: data.output_url || prev[sceneId]?.output_url,
+                  qa_report: data.qa_report || prev[sceneId]?.qa_report,
+                  error: data.error
+                }
+              }));
+
+              if (updatedStatus === 'completed' || updatedStatus === 'failed' || updatedStatus === 'rejected' || updatedStatus === 'cancelled') {
+                onTaskFinished(updatedStatus, data.output_url, data.error, data.qa_report);
+              }
+            }
+          } catch (_) {}
+        };
+
+        evtSource.onerror = () => {
+          startPollingFallback();
+        };
+      });
+    } catch (err: any) {
+      clearVramSchedulerPhase();
+      setVideoTasksByScene((prev) => ({
+        ...prev,
+        [sceneId]: { task_id: '', scene_id: numericSceneId, status: 'failed', error: err.message }
+      }));
+      showToast(err.message || 'Failed to submit video generation', 'error');
+    }
+  };
+
+  const handleBatchGenerateVideo = async () => {
+    if (isBatchGeneratingVideo || timeline.length === 0) return;
+
+    stopBatchVideoRef.current = false;
+    setIsBatchGeneratingVideo(true);
+    showToast(t('director.batch_started', 'Sequential batch video generation started'), 'info');
+
+    for (const scene of timeline) {
+      if (stopBatchVideoRef.current) break;
+      await handleGenerateVideo(scene.id);
+      if (stopBatchVideoRef.current) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    const wasStopped = stopBatchVideoRef.current;
+    setIsBatchGeneratingVideo(false);
+    stopBatchVideoRef.current = false;
+
+    if (wasStopped) {
+      showToast(t('director.batch_stopped', 'Batch video generation stopped'), 'warning');
+    } else {
+      showToast(t('director.batch_complete', 'Batch video generation complete'), 'success');
+    }
+  };
+
+  const handleStopBatchGenerateVideo = async () => {
+    stopBatchVideoRef.current = true;
+    activeVideoEvtSourcesRef.current.forEach((src) => src.close());
+    activeVideoEvtSourcesRef.current.clear();
+    setIsBatchGeneratingVideo(false);
+    showToast(t('director.batch_stopped', 'Batch generation stopped'), 'warning');
+  };
+
+  const handleCancelVideoTask = async (taskId: string) => {
+    const src = activeVideoEvtSourcesRef.current.get(taskId);
+    if (src) {
+      src.close();
+      activeVideoEvtSourcesRef.current.delete(taskId);
+    }
+    try {
+      await api.cancelVideoTask(taskId);
+      setVideoTasksByScene((prev) => {
+        const next = { ...prev };
+        for (const k of Object.keys(next)) {
+          if (next[k].task_id === taskId) {
+            next[k] = { ...next[k], status: 'cancelled' };
+          }
+        }
+        return next;
+      });
+      showToast('视频生成任务已取消', 'info');
+    } catch (_) {}
+  };
+
+  const handlePromoteVideoAsset = async (assetId: number) => {
+    try {
+      const promoted = await api.promoteVideoAsset(assetId);
+      if (promoted.scene_id) {
+        await loadSceneMedia(promoted.scene_id);
+      }
+      showToast(t('director.coverage_promote_ok', '已设为主成片'), 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to promote video', 'error');
+    }
+  };
+
+  const handleReprocessVideoAsset = async (assetId: number) => {
+    try {
+      await api.reprocessVideoAsset(assetId, runLoopCloser);
+      timeline.forEach((s) => loadSceneMedia(s.id));
+      showToast('已重新执行 LoopCloser 闭环分析与平滑融合', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reprocess video', 'error');
+    }
+  };
+
   const handleGenerateComic = async () => {
     if (!selectedChapterId) return;
     setGeneratingComic(true);
@@ -755,35 +1220,17 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
-  const handleRenderVideo = async () => {
-      if (timeline.length === 0) return;
-      setRenderingVideo(true);
-      try {
-          const res = await api.renderVideo(timeline, Number(projectId));
-          if (res.video_url) {
-              window.open(res.video_url, '_blank');
-              showToast(t("director.video_completed", "Video rendering completed"), 'success');
-          } else {
-              showToast(t("director.video_started", "Video rendering started"), 'info');
-          }
-      } catch (e) {
-          console.error(e);
-          showToast(t("director.video_failed", "Failed to start video rendering."), 'error');
-      } finally {
-          setRenderingVideo(false);
-      }
-  };
-
   return (
-    <div className="flex h-full bg-slate-950">
-      
-      <DirectorSidebar 
+    <div className="flex-1 flex overflow-hidden bg-slate-950 text-slate-100 h-full w-full min-h-0">
+      {/* Sidebar: Chapters */}
+      <DirectorSidebar
         chapters={chapters}
         selectedChapterId={selectedChapterId}
         onSelectChapter={setSelectedChapterId}
       />
 
-      <DirectorTimeline 
+      {/* Main Content Area: Timeline */}
+      <DirectorTimeline
         timeline={timeline}
         loading={loading}
         selectedChapterId={selectedChapterId}
@@ -793,12 +1240,20 @@ export const DirectorMode: React.FC = () => {
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
         onGenerateAsset={generateAsset}
+        onGenerateKeyframe={handleGenerateKeyframe}
         onUpdateScene={handleUpdateScene}
         onRefreshTimeline={() => loadTimeline(selectedChapterId)}
         onActivateVersion={handleActivateVersion}
         onCreateVersion={handleCreateVersion}
+        mediaAssetsByScene={mediaAssetsByScene}
+        videoTasksByScene={videoTasksByScene}
+        onGenerateVideo={handleGenerateVideo}
+        onPromoteVideoAsset={handlePromoteVideoAsset}
+        onReprocessVideoAsset={handleReprocessVideoAsset}
+        onCancelVideoTask={handleCancelVideoTask}
       />
-      
+
+      {/* Right Drawer: Style, Asset Mode, Production, Video Controls */}
       <DirectorRightPanel
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
@@ -809,7 +1264,7 @@ export const DirectorMode: React.FC = () => {
         assetMode={assetMode}
         setAssetMode={setAssetMode}
         renderingVideo={renderingVideo}
-        onRenderVideo={handleRenderVideo}
+        onRenderVideo={() => {}}
         generatingComic={generatingComic}
         onGenerateComic={handleGenerateComic}
         comicPages={comicPages}
@@ -822,46 +1277,61 @@ export const DirectorMode: React.FC = () => {
         projectModelType={projectModelType}
         effectiveNsfw={effectiveNsfw}
         outputSpec={projectOutputSpec}
+        videoProfile={videoProfile}
+        setVideoProfile={setVideoProfile}
+        videoPreset={videoPreset}
+        setVideoPreset={setVideoPreset}
+        runLoopCloser={runLoopCloser}
+        setRunLoopCloser={setRunLoopCloser}
+        videoMotionPrompt={videoMotionPrompt}
+        setVideoMotionPrompt={setVideoMotionPrompt}
+        onBatchGenerateVideo={handleBatchGenerateVideo}
+        isBatchGeneratingVideo={isBatchGeneratingVideo}
+        onStopBatchGenerateVideo={handleStopBatchGenerateVideo}
       />
 
-      {showComicViewer && (
-        <ComicViewer 
-            pages={comicPages} 
-            pdfUrl={comicPdf} 
-            onClose={() => setShowComicViewer(false)} 
-        />
-      )}
-
-      {/* Re-storyboard Overwrite Confirmation Modal */}
+      {/* Re-storyboard Confirmation Modal */}
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md p-6 shadow-2xl space-y-4">
-                <div className="flex items-center gap-3 text-amber-400">
-                    <AlertTriangle size={24} />
-                    <h3 className="text-lg font-bold text-white">{t('director.confirm_title')}</h3>
-                </div>
-                <p className="text-sm text-slate-300 leading-relaxed">
-                    {t('director.confirm_desc')}
-                </p>
-                <div className="flex justify-end gap-3 pt-2">
-                    <button 
-                        onClick={() => setShowConfirmModal(false)}
-                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors"
-                    >
-                        {t('director.confirm_no')}
-                    </button>
-                    <button 
-                        onClick={() => executeGenerateTimeline()}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-                    >
-                        <Film size={16} />
-                        {t('director.confirm_yes')}
-                    </button>
-                </div>
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-400">
+              <AlertTriangle size={24} />
+              <h3 className="text-lg font-bold text-white">
+                {t('director.re_generate_confirm_title', '重新生成分镜')}
+              </h3>
             </div>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              {t(
+                'director.re_generate_confirm_desc',
+                '重新生成分镜将覆盖当前章节的所有镜头与参数设置。确认继续？'
+              )}
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                {t('common.cancel', '取消')}
+              </button>
+              <button
+                onClick={executeGenerateTimeline}
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-500 rounded-lg transition-colors shadow-lg shadow-amber-600/30"
+              >
+                {t('common.confirm', '确认重新生成')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
+      {/* Comic Viewer Modal */}
+      {showComicViewer && (
+        <ComicViewer
+          pages={comicPages}
+          pdfUrl={comicPdf}
+          onClose={() => setShowComicViewer(false)}
+        />
+      )}
     </div>
   );
 };

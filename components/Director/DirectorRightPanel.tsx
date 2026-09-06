@@ -1,7 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Loader2, Video, BookOpen, X, Sliders, Zap, PlayCircle, Square, Library } from 'lucide-react';
-import { Scene, AssetMode, ImageOutputSpec } from '../../types';
+import {
+  Loader2,
+  Video,
+  BookOpen,
+  X,
+  Sliders,
+  Zap,
+  PlayCircle,
+  Square,
+  Library,
+  Film,
+  ShieldCheck,
+  Cpu,
+  RefreshCw,
+  Sparkles
+} from 'lucide-react';
+import { Scene, AssetMode, ImageOutputSpec, VideoProfile, VideoPreset, VideoCapabilities } from '../../types';
 import { API_BASE_URL, formatVisualStyleLabel, getVisualStyles, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -32,6 +47,18 @@ interface DirectorRightPanelProps {
   projectModelType?: string;
   effectiveNsfw?: boolean;
   outputSpec?: ImageOutputSpec;
+  // Video Generation Controls
+  videoProfile?: VideoProfile;
+  setVideoProfile?: (profile: VideoProfile) => void;
+  videoPreset?: VideoPreset;
+  setVideoPreset?: (preset: VideoPreset) => void;
+  runLoopCloser?: boolean;
+  setRunLoopCloser?: (run: boolean) => void;
+  videoMotionPrompt?: string;
+  setVideoMotionPrompt?: (prompt: string) => void;
+  onBatchGenerateVideo?: () => void;
+  isBatchGeneratingVideo?: boolean;
+  onStopBatchGenerateVideo?: () => void;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
@@ -56,13 +83,26 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   isBatchGenerating,
   projectModelType = 'pony',
   effectiveNsfw = false,
-  outputSpec
+  outputSpec,
+  videoProfile = 'narrative_clip',
+  setVideoProfile,
+  videoPreset = 'preview_480p_5s',
+  setVideoPreset,
+  runLoopCloser = true,
+  setRunLoopCloser,
+  videoMotionPrompt = '',
+  setVideoMotionPrompt,
+  onBatchGenerateVideo,
+  isBatchGeneratingVideo = false,
+  onStopBatchGenerateVideo
 }) => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
   const { showToast } = useToast();
   const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
   const [generatingProjectComic, setGeneratingProjectComic] = useState(false);
+  const [videoCaps, setVideoCaps] = useState<VideoCapabilities | null>(null);
+  const [checkingCaps, setCheckingCaps] = useState(false);
 
   useEffect(() => {
     const refresh = () => setVisualStyles(getVisualStyles());
@@ -73,6 +113,24 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
       window.removeEventListener('storage', refresh);
     };
   }, []);
+
+  const loadCapabilities = async () => {
+    setCheckingCaps(true);
+    try {
+      const caps = await api.getVideoCapabilities();
+      setVideoCaps(caps);
+    } catch (_) {
+      // capabilities endpoint might be offline or mocked
+    } finally {
+      setCheckingCaps(false);
+    }
+  };
+
+  useEffect(() => {
+    if (assetMode === 'video_clip') {
+      loadCapabilities();
+    }
+  }, [assetMode]);
 
   const activeStyleDef = visualStyles.find((s) => s.value === selectedStyle);
   const activeStyleLabel = activeStyleDef
@@ -133,14 +191,14 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
     <>
       <div className={`
         fixed inset-y-0 right-0 w-80 bg-slate-900 border-l border-slate-800 shadow-2xl z-50 transform transition-transform duration-300
-        lg:static lg:translate-x-0 lg:shadow-none lg:w-80 lg:flex lg:flex-col
+        lg:static lg:translate-x-0 lg:shadow-none lg:w-80 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:flex-shrink-0
         ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}
       `}>
          {/* Header */}
-         <div className="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-900">
+         <div className="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-900 flex-shrink-0">
              <h4 className="font-semibold text-white text-sm flex items-center gap-2">
                <Sliders size={16} className="text-indigo-400" />
-               {t('director.production_controls', '分镜出图控制')}
+               {t('director.production_controls', '制作控制台')}
              </h4>
              <button onClick={() => setShowRightPanel(false)} className="text-slate-400 hover:text-white lg:hidden">
                <X size={20} />
@@ -148,13 +206,210 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
          </div>
 
          {/* Panel Content */}
-         <div className="flex-1 overflow-y-auto p-4 gap-6 flex flex-col custom-scrollbar">
+         <div className="flex-1 overflow-y-auto p-4 gap-6 flex flex-col custom-scrollbar min-h-0">
             {/* Render Controls */}
             <div className="space-y-4">
                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
                  <Sliders size={14} />
                  {t('director.production_settings')}
                </h4>
+
+               {/* Mode Switcher */}
+               <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700 space-y-3">
+                 <div>
+                   <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.asset_mode_label')}</label>
+                   <div className="grid grid-cols-2 bg-slate-950 p-1 rounded-lg border border-slate-700 gap-1">
+                       <button
+                           onClick={() => setAssetMode('single_image')}
+                           className={`py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'single_image' ? 'bg-indigo-600 text-white shadow-sm font-semibold' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                           {t('director.mode_single_image', '单张绘图')}
+                       </button>
+                       <button
+                           onClick={() => setAssetMode('video_clip')}
+                           className={`py-1.5 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${assetMode === 'video_clip' ? 'bg-indigo-600 text-white shadow-sm font-semibold' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                           <Film size={12} />
+                           <span>{t('director.mode_video_clip', 'H3 视频生成')}</span>
+                       </button>
+                   </div>
+                 </div>
+
+                 {/* Video Generation Controls */}
+                 {assetMode === 'video_clip' ? (
+                   <div className="space-y-3 pt-2 border-t border-slate-700/60">
+                     {/* Video Profile */}
+                     <div>
+                       <label className="block text-[11px] font-semibold text-indigo-300 mb-1.5">
+                         {t('director.video_profile', '视频生成档案 (Profile)')}
+                       </label>
+                       <div className="grid grid-cols-1 gap-1.5">
+                         <button
+                           type="button"
+                           onClick={() => setVideoProfile?.('narrative_clip')}
+                           className={`p-2 rounded-lg text-left text-xs border transition-all ${
+                             videoProfile === 'narrative_clip'
+                               ? 'bg-indigo-950/70 border-indigo-500 text-white shadow'
+                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                           }`}
+                         >
+                           <div className="font-semibold flex items-center justify-between">
+                             <span>叙事单镜头 (Narrative)</span>
+                             {videoProfile === 'narrative_clip' && <span className="text-indigo-400 text-[10px]">● 启用</span>}
+                           </div>
+                           <p className="text-[10px] text-slate-500 mt-0.5">单动作、运镜与情节推进，保持动作自然连贯</p>
+                         </button>
+
+                         <button
+                           type="button"
+                           onClick={() => setVideoProfile?.('character_loop')}
+                           className={`p-2 rounded-lg text-left text-xs border transition-all ${
+                             videoProfile === 'character_loop'
+                               ? 'bg-indigo-950/70 border-indigo-500 text-white shadow'
+                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                           }`}
+                         >
+                           <div className="font-semibold flex items-center justify-between">
+                             <span>角色循环动态 (Loop Master)</span>
+                             {videoProfile === 'character_loop' && <span className="text-indigo-400 text-[10px]">● 启用</span>}
+                           </div>
+                           <p className="text-[10px] text-slate-500 mt-0.5">5.0s 严格闭环、静态机位、微动态与 LoopCloser 缝合</p>
+                         </button>
+                       </div>
+                     </div>
+
+                     {/* Video Preset */}
+                     <div>
+                       <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                         {t('director.video_preset', '分辨率与画质预设')}
+                       </label>
+                       <div className="grid grid-cols-2 gap-1.5">
+                         <button
+                           type="button"
+                           onClick={() => setVideoPreset?.('preview_480p_5s')}
+                           className={`py-1.5 px-2 rounded text-[11px] font-medium border text-center transition-all ${
+                             videoPreset === 'preview_480p_5s'
+                               ? 'bg-indigo-600 border-indigo-400 text-white font-bold shadow'
+                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                           }`}
+                         >
+                           480P 快速预览
+                         </button>
+                         <button
+                           type="button"
+                           onClick={() => setVideoPreset?.('standard_720p_5s')}
+                           className={`py-1.5 px-2 rounded text-[11px] font-medium border text-center transition-all ${
+                             videoPreset === 'standard_720p_5s'
+                               ? 'bg-indigo-600 border-indigo-400 text-white font-bold shadow'
+                               : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                           }`}
+                         >
+                           720P 标准画质
+                         </button>
+                       </div>
+                     </div>
+
+                     {/* LoopCloser Toggle for Character Loop */}
+                     {videoProfile === 'character_loop' && (
+                       <div className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between">
+                         <div className="flex flex-col">
+                           <span className="text-[11px] font-semibold text-slate-200 flex items-center gap-1">
+                             <ShieldCheck size={12} className="text-emerald-400" />
+                             <span>LoopCloser 首尾闭环</span>
+                           </span>
+                           <span className="text-[9px] text-slate-500">8帧时间混合与接缝误差分析</span>
+                         </div>
+                         <input
+                           type="checkbox"
+                           checked={runLoopCloser}
+                           onChange={(e) => setRunLoopCloser?.(e.target.checked)}
+                           className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-indigo-500"
+                         />
+                       </div>
+                     )}
+
+                     {/* Motion Prompt Override */}
+                     <div>
+                       <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                         {t('director.motion_prompt', '全局动态提示词 (可选)')}
+                       </label>
+                       <textarea
+                         className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-300 placeholder-slate-600 resize-none focus:outline-none focus:border-indigo-500 h-14"
+                         value={videoMotionPrompt}
+                         onChange={(e) => setVideoMotionPrompt?.(e.target.value)}
+                         placeholder={t('director.motion_prompt_placeholder', '自然身体微动态，轻柔呼吸，闭口静止...')}
+                       />
+                     </div>
+
+                     {/* Hardware Capability Card */}
+                     <div className="bg-slate-950/80 p-2 rounded border border-slate-800 text-[10px] space-y-1">
+                       <div className="flex items-center justify-between text-slate-400">
+                         <span className="flex items-center gap-1">
+                           <Cpu size={11} className="text-indigo-400" />
+                           <span>GPU 显存调度器:</span>
+                         </span>
+                         <span className="font-mono text-emerald-400 font-semibold">排队序列化 (Max 1)</span>
+                       </div>
+                       {videoCaps && (
+                         <div className="text-[9px] text-slate-500 flex justify-between">
+                           <span>ComfyUI H3: {videoCaps.comfyui_online ? '在线' : '未连接'}</span>
+                           <span>FFmpeg: {videoCaps.ffmpeg_available ? '就绪' : '缺失'}</span>
+                         </div>
+                       )}
+                     </div>
+
+                     {/* Batch Video Generation Button */}
+                     {onBatchGenerateVideo && (
+                       <div className="pt-1">
+                         {isBatchGeneratingVideo ? (
+                           <button
+                             type="button"
+                             onClick={onStopBatchGenerateVideo}
+                             className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-rose-600/30 animate-pulse"
+                           >
+                             <Square size={14} className="fill-current" />
+                             <span>停止批量生视频</span>
+                           </button>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={onBatchGenerateVideo}
+                             disabled={timeline.length === 0}
+                             className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-purple-600/30 hover:shadow-purple-500/50 disabled:opacity-50"
+                           >
+                             <Zap size={14} className="fill-current" />
+                             <span>{t('director.batch_video_generate', '一键批量生视频')}</span>
+                           </button>
+                         )}
+                       </div>
+                     )}
+                   </div>
+                 ) : (
+                   /* Batch Image Generation Button */
+                   onBatchGenerate && (
+                     <div className="pt-2 border-t border-slate-700/50">
+                       {isBatchGenerating ? (
+                         <button
+                           onClick={onStopBatchGenerate}
+                           className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-rose-600/30 animate-pulse"
+                         >
+                           <Square size={14} className="fill-current" />
+                           <span>{t('director.stop_batch', 'Stop batch generation')}</span>
+                         </button>
+                       ) : (
+                         <button
+                           onClick={onBatchGenerate}
+                           disabled={timeline.length === 0}
+                           className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                         >
+                           <Zap size={14} className="fill-current" />
+                           <span>{t('director.generate_all', 'Generate all shots')}</span>
+                         </button>
+                       )}
+                     </div>
+                   )
+                 )}
+               </div>
 
                {/* Unified Project Generation Config & Policy Card */}
                <div className="rounded-lg border bg-slate-950 p-3.5 space-y-2.5 border-slate-800">
@@ -196,50 +451,6 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                    </div>
                  </div>
                </div>
-               
-               <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 space-y-4">
-                 <div>
-                   <label className="block text-xs font-medium text-slate-400 mb-2">{t('director.asset_mode_label')}</label>
-                   <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
-                       <button
-                           onClick={() => setAssetMode('single_image')}
-                           className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'single_image' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                       >
-                           {t('director.mode_single_image', 'Single image')}
-                       </button>
-                       <button
-                           onClick={() => setAssetMode('continuous_motion')}
-                           className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${assetMode === 'continuous_motion' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                       >
-                           {t('director.mode_continuous_motion', 'Motion sequence')}
-                       </button>
-                   </div>
-                 </div>
-
-                 {/* Batch Generation Button */}
-                 {onBatchGenerate && (
-                   <div className="pt-2 border-t border-slate-700/50">
-                     {isBatchGenerating ? (
-                       <button
-                         onClick={onStopBatchGenerate}
-                         className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-rose-600/30 animate-pulse"
-                       >
-                         <Square size={14} className="fill-current" />
-                         <span>{t('director.stop_batch', 'Stop batch generation')}</span>
-                       </button>
-                     ) : (
-                       <button
-                         onClick={onBatchGenerate}
-                         disabled={timeline.length === 0}
-                         className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                       >
-                         <Zap size={14} className="fill-current" />
-                         <span>{t('director.generate_all', 'Generate all shots')}</span>
-                       </button>
-                     )}
-                   </div>
-                 )}
-               </div>
             </div>
 
             {/* Export & Production */}
@@ -250,15 +461,6 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                </h4>
                
                <div className="space-y-2">
-                  <button 
-                    onClick={onRenderVideo}
-                    disabled={renderingVideo || timeline.length === 0}
-                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                  >
-                     {renderingVideo ? <Loader2 className="animate-spin" size={14} /> : <PlayCircle size={14} />}
-                     {t('director.render_video')}
-                  </button>
-
                   <button 
                     onClick={onGenerateComic}
                     disabled={generatingComic || timeline.length === 0}

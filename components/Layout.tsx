@@ -137,7 +137,7 @@ export const Layout: React.FC = () => {
         <div className="h-11 flex-shrink-0 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm flex items-center justify-start px-3 sm:px-4 z-30">
           <VramHealthBadge />
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden relative">
+        <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col h-full w-full">
           <Outlet />
         </div>
       </main>

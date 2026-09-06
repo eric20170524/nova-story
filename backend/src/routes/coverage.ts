@@ -471,4 +471,14 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     }
   });
+
+  app.get('/scenes/:scene_id/media', async (request, reply) => {
+    const { scene_id } = z.object({
+      scene_id: z.coerce.number().int(),
+    }).parse(request.params);
+    const version = (request.query as any)?.version ? Number((request.query as any).version) : undefined;
+    const { MediaAssetService } = await import('../services/video/media_asset_service');
+    const assets = await MediaAssetService.listAssetsByScene(scene_id, version);
+    return { scene_id, assets };
+  });
 };

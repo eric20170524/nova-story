@@ -21,13 +21,25 @@ const collectTests = async (directory: string): Promise<string[]> => {
 };
 
 const main = async () => {
+  const passthrough = process.argv.slice(2);
+  const hasConcurrency = passthrough.some(
+    (arg) => arg === '--test-concurrency' || arg.startsWith('--test-concurrency=')
+  );
   const tests = (await collectTests(path.resolve('src'))).sort();
   if (tests.length === 0) {
     throw new Error('No backend test files were found');
   }
 
   const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
-  const child = spawn(command, ['--test', '--test-force-exit', ...tests], {
+  // Default to serial execution — concurrent entry was flaky (170/171).
+  const args = [
+    '--test',
+    '--test-force-exit',
+    ...(hasConcurrency ? [] : ['--test-concurrency=1']),
+    ...passthrough,
+    ...tests,
+  ];
+  const child = spawn(command, args, {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });

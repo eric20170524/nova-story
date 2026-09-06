@@ -1,0 +1,183 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 3.5,
+      "denoise": 1,
+      "latent_image": [
+        "30",
+        0
+      ],
+      "model": [
+        "25",
+        0
+      ],
+      "negative": [
+        "25",
+        2
+      ],
+      "positive": [
+        "25",
+        1
+      ],
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "seed": 42,
+      "steps": 6
+    }
+  },
+  "4": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "text": "positive prompt"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "text": "negative prompt"
+    }
+  },
+  "8": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "sd3"
+    }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "first_frame.png"
+    }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "last_frame.png"
+    }
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_1.png"
+    }
+  },
+  "13": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_2.png"
+    }
+  },
+  "14": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "char_ref_3.png"
+    }
+  },
+  "20": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "motion_track.mp4"
+    }
+  },
+  "25": {
+    "class_type": "H3Ref2VAAdapter",
+    "inputs": {
+      "char_ref_1": [
+        "12",
+        0
+      ],
+      "char_ref_2": [
+        "13",
+        0
+      ],
+      "char_ref_3": [
+        "14",
+        0
+      ],
+      "first_frame": [
+        "10",
+        0
+      ],
+      "last_frame": [
+        "11",
+        0
+      ],
+      "model": [
+        "4",
+        0
+      ],
+      "motion_video": [
+        "20",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ]
+    }
+  },
+  "30": {
+    "class_type": "EmptyLatentVideo",
+    "inputs": {
+      "fps": 24,
+      "height": 480,
+      "length": 121,
+      "width": 864
+    }
+  },
+  "35": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "36",
+        0
+      ]
+    }
+  },
+  "36": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    }
+  },
+  "40": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "crf": 19,
+      "filename_prefix": "H3_Hongchao",
+      "format": "video/h264-mp4",
+      "fps": 24,
+      "images": [
+        "35",
+        0
+      ],
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}

@@ -43,6 +43,7 @@ import {
     resolveImageOutputTarget,
     type ImageOutputTarget,
 } from './image_output_spec';
+import { GpuLeaseService } from './gpu_lease_service';
 
 // Re-export for tests and callers that imported from generation_service
 export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
@@ -1030,6 +1031,9 @@ export class GenerationService {
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
 
+                // Acquire GPU lease to ensure single concurrent access to GPU
+                await GpuLeaseService.acquireLease(taskId, 'image');
+
                 // Plan 1: auto VRAM handoff — unload Ollama before Pony/SDXL claims GPU
                 await runVramHandoffForImageGen(progressHandler);
 
@@ -1184,6 +1188,7 @@ export class GenerationService {
                 });
             } catch (e) {}
         } finally {
+            GpuLeaseService.releaseLease('', taskId);
             if (redis) redis.disconnect();
         }
     }

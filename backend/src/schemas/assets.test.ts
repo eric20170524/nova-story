@@ -24,6 +24,6 @@ test('generation params reject incomplete or unsupported canvas dimensions', () 
   }).success, false);
   assert.equal(GenerateRequestSchema.safeParse({
     ...baseRequest,
-    generation_params: { width: 1280, height: 720 },
+    generation_params: { width: 1200, height: 300 },
   }).success, false);
 });

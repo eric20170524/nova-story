@@ -649,7 +649,7 @@ export const CharacterManager: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 bg-slate-950 p-4 sm:p-8 overflow-y-auto h-full">
+    <div className="flex-1 bg-slate-950 p-4 sm:p-8 overflow-y-auto h-full w-full custom-scrollbar overscroll-contain">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6 sm:mb-8">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-white">{t('characters.title')}</h2>

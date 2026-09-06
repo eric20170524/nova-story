@@ -58,8 +58,8 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto flex flex-col">
-        <div className="p-4 sm:p-6 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900 z-10">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto flex flex-col custom-scrollbar">
+        <div className="p-4 sm:p-6 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900 z-10 flex-shrink-0">
           <div className="flex items-center gap-3">
             <Sparkles className="text-indigo-400" size={22} />
             <h3 className="text-lg sm:text-xl font-bold text-white">

@@ -17,14 +17,14 @@ export const DirectorSidebar: React.FC<DirectorSidebarProps> = ({
   const { t } = useLanguage();
 
   return (
-    <div className="w-16 lg:w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all">
-      <div className="p-4 border-b border-slate-800 h-14 flex items-center justify-center lg:justify-start">
+    <div className="w-16 lg:w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all h-full min-h-0">
+      <div className="p-4 border-b border-slate-800 h-14 flex items-center justify-center lg:justify-start flex-shrink-0">
         <h3 className="font-semibold text-slate-300 flex items-center gap-2">
           <Film size={18} />
           <span className="hidden lg:block">{t('story.chapters')}</span>
         </h3>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-h-0">
         {chapters.map((chapter) => (
           <div
             key={chapter.id}

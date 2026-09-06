@@ -67,7 +67,7 @@ export const ProjectLayout: React.FC = () => {
         </div>
 
         {/* Project Content Area — min-h-0 so nested pages can own vertical scroll */}
-        <div className="flex-1 min-h-0 overflow-hidden relative">
+        <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col h-full w-full">
           <Outlet />
         </div>
 

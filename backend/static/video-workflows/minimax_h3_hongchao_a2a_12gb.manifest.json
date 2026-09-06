@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "workflow_id": "minimax_h3_hongchao_a2a_12gb",
+  "name": "红潮 MiniMax H3 A2A (12GB 优化版)",
+  "description": "基于 MiniMax-H3 pruned INT8 ConvRot 的 Ref2VA/A2A 视频生成工作流",
+  "slots": {
+    "positive_prompt": {
+      "node": "6",
+      "input": "text"
+    },
+    "negative_prompt": {
+      "node": "7",
+      "input": "text"
+    },
+    "first_frame": {
+      "node": "10",
+      "input": "image"
+    },
+    "last_frame": {
+      "node": "11",
+      "input": "image"
+    },
+    "character_refs": [
+      {
+        "node": "12",
+        "input": "image"
+      },
+      {
+        "node": "13",
+        "input": "image"
+      },
+      {
+        "node": "14",
+        "input": "image"
+      }
+    ],
+    "video_refs": [
+      {
+        "node": "20",
+        "input": "video"
+      }
+    ],
+    "width": {
+      "node": "30",
+      "input": "width"
+    },
+    "height": {
+      "node": "30",
+      "input": "height"
+    },
+    "frames": {
+      "node": "30",
+      "input": "length"
+    },
+    "fps": {
+      "node": "30",
+      "input": "fps"
+    },
+    "steps": {
+      "node": "3",
+      "input": "steps"
+    },
+    "seed": {
+      "node": "3",
+      "input": "seed"
+    },
+    "output_prefix": {
+      "node": "40",
+      "input": "filename_prefix"
+    }
+  },
+  "default_params": {
+    "width": 864,
+    "height": 480,
+    "frames": 121,
+    "fps": 24,
+    "steps": 6,
+    "cfg": 3.5
+  },
+  "required_models": [
+    "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax_h3_video_vae_fp16.safetensors"
+  ],
+  "required_custom_nodes": [
+    {
+      "name": "ComfyUI-VideoHelperSuite",
+      "nodes": ["VHS_LoadVideo", "VHS_VideoCombine"],
+      "min_version": "0.3.0"
+    },
+    {
+      "name": "ComfyUI-MiniMax-H3",
+      "nodes": ["H3Ref2VAAdapter", "EmptyLatentVideo"],
+      "min_version": "0.1.0"
+    }
+  ],
+  "model_fingerprints": {
+    "diffusion_base": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "format": "Pruned INT8 ConvRot",
+      "license": "MiniMax / Apache-2.0 Derived Research"
+    },
+    "text_encoder": {
+      "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "format": "NVFP4 / AWQ INT8",
+      "license": "Qwen / Tongyi + ComfyOrg"
+    },
+    "video_vae": {
+      "filename": "minimax_h3_video_vae_fp16.safetensors",
+      "format": "FP16",
+      "license": "MiniMax H3 Native Video VAE"
+    }
+  }
+}

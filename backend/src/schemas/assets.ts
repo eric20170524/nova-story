@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const ImageOutputSpecSchema = z.object({
-  aspect_ratio: z.enum(['3:4', '4:3', '1:1', 'auto']).optional(),
+  aspect_ratio: z.enum(['3:4', '4:3', '1:1', '16:9', '9:16', 'auto']).optional(),
   resolution: z.enum(['draft', 'standard', 'high']).optional(),
   orientation_policy: z.enum(['fixed', 'auto_by_shot']).optional(),
 }).optional();
@@ -21,9 +21,9 @@ export const GenerationParamsSchema = z.object({
   (value) => {
     if (value.width == null || value.height == null) return true;
     const ratio = value.width / value.height;
-    return [3 / 4, 4 / 3, 1].some((allowed) => Math.abs(ratio - allowed) <= 0.03);
+    return [3 / 4, 4 / 3, 1, 16 / 9, 9 / 16].some((allowed) => Math.abs(ratio - allowed) <= 0.04);
   },
-  { message: 'width and height must use a supported 3:4, 4:3, or 1:1 aspect ratio' }
+  { message: 'width and height must use a supported aspect ratio (3:4, 4:3, 1:1, 16:9, or 9:16)' }
 ).optional().nullable();
 
 export const GenerateRequestSchema = z.object({

@@ -367,10 +367,10 @@ export const StoryEditor: React.FC = () => {
   }), [t]);
 
   return (
-    <div className="flex h-full bg-slate-950">
+    <div className="flex h-full w-full min-h-0 bg-slate-950">
       {/* Chapter Sidebar */}
-      <div className="w-16 lg:w-60 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all">
-        <div className="p-4 border-b border-slate-800 flex justify-between items-center h-14">
+      <div className="w-16 lg:w-60 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all h-full min-h-0">
+        <div className="p-4 border-b border-slate-800 flex justify-between items-center h-14 flex-shrink-0">
           <h3 className="font-semibold text-slate-300 hidden lg:block text-sm">{t('story.chapters')}</h3>
           <button
             onClick={handleCreateChapter}
@@ -380,7 +380,7 @@ export const StoryEditor: React.FC = () => {
             <Plus size={18} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-h-0">
           {chapters.map((chapter, index) => (
             <div
               key={chapter.id}
@@ -431,7 +431,7 @@ export const StoryEditor: React.FC = () => {
       </div>
 
       {/* Main Full-Width Editor Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
         {/* Editor Top Bar — z-20 so bar chrome stays above editor; menu itself portals to body */}
         <div className="relative z-20 h-14 border-b border-slate-800 flex items-center justify-between px-3 sm:px-6 bg-slate-900/90 backdrop-blur gap-3 flex-shrink-0">
           <input
@@ -677,7 +677,7 @@ export const StoryEditor: React.FC = () => {
 
         {/* Outline / Summary Bar */}
         {selectedChapter && (
-          <div className="px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80">
+          <div className="px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80 flex-shrink-0">
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
                 {t('story.chapter_summary', '本章剧情大纲 / 梗概 (Summary)')}
@@ -694,7 +694,7 @@ export const StoryEditor: React.FC = () => {
         )}
         
         {/* Editor Body */}
-        <div className="flex-1 relative group/editor overflow-hidden flex flex-col">
+        <div className="flex-1 relative group/editor overflow-hidden flex flex-col min-h-0">
           {selectedChapter ? (
             <SimpleMDE
               key={selectedChapter.id}
