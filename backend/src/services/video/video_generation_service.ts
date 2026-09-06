@@ -14,7 +14,7 @@ import {
 import { VideoSpecCompiler } from './video_spec_compiler';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
-import { GpuLeaseService } from '../gpu_lease_service';
+import { GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
 import { LoopCloser } from './loop_closer';
@@ -358,7 +358,7 @@ export class VideoGenerationService {
 
   private static async runTaskPipeline(taskId: string, request: VideoGenerationRequest): Promise<void> {
     const rawPublisher: ProgressPublisher = createProgressPublisher(taskId, null);
-    let lease = null;
+    let lease: GpuLease | null = null;
     let leaseHeartbeat: NodeJS.Timeout | null = null;
 
     const stopLeaseHeartbeat = () => {
