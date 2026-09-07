@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { db } from '../../db/database';
+import { getGeneratedDirectory } from '../../core/paths';
 import { MediaAssetService } from './media_asset_service';
 
 test('MediaAssetService resolves a final derivative back to its raw parent', async () => {
@@ -71,4 +74,58 @@ test('MediaAssetService refuses to promote rejected final candidates', async () 
 
   await assert.rejects(() => MediaAssetService.promoteAsset(asset.id!), /Cannot promote a rejected video asset/);
   await db.run('DELETE FROM project WHERE id = ?', projectId);
+});
+
+test('MediaAssetService can stage a reference through the remote Comfy HTTP input transport', async () => {
+  const generatedDir = getGeneratedDirectory();
+  fs.mkdirSync(generatedDir, { recursive: true });
+  const sourcePath = path.join(generatedDir, 'remote_transport_ref.png');
+  fs.writeFileSync(sourcePath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+  const originalFetch = global.fetch;
+  const originalTransport = process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT;
+  process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT = 'http';
+
+  let uploadedFilename = '';
+  global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const form = init?.body as FormData;
+    const file = form.get('image') as any;
+    uploadedFilename = String(file?.name || '');
+    return new Response(JSON.stringify({
+      name: uploadedFilename,
+      subfolder: 'novastory',
+      type: 'input'
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  }) as typeof fetch;
+
+  let stagedPath = '';
+  try {
+    const staged = await MediaAssetService.stageAssetForComfy({
+      id: 991299,
+      project_id: 9912,
+      scene_id: 99121,
+      scene_version: 1,
+      media_type: 'image',
+      role: 'character_reference',
+      status: 'ready',
+      url: '/static/generated/remote_transport_ref.png',
+      mime_type: 'image/png'
+    });
+    stagedPath = staged.stagedPath;
+
+    assert.ok(uploadedFilename.endsWith('_remote_transport_ref.png'));
+    assert.equal(staged.stagedFilename, `novastory/${uploadedFilename}`);
+    assert.equal(fs.existsSync(staged.stagedPath), true);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalTransport == null) delete process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT;
+    else process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT = originalTransport;
+    try { fs.unlinkSync(sourcePath); } catch {}
+    if (stagedPath) {
+      try { fs.unlinkSync(stagedPath); } catch {}
+    }
+  }
 });
