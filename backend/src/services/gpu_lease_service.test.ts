@@ -69,7 +69,7 @@ test('GpuLeaseService rejects a queued waiter when the task is cancelled', async
   assert.equal(GpuLeaseService.isAvailable(), true);
 });
 
-test('releaseLease remains backward-compatible for cancelling a queued task', async () => {
+test('releaseLease remains backward-compatible for explicitly cancelling a queued task', async () => {
   GpuLeaseService.resetForTesting();
 
   const lease1 = await GpuLeaseService.acquireLease('task_1', 'video');
@@ -81,4 +81,49 @@ test('releaseLease remains backward-compatible for cancelling a queued task', as
 
   GpuLeaseService.releaseLease(lease1.lease_id, 'task_1');
   assert.equal(GpuLeaseService.isAvailable(), true);
+});
+
+test('GpuLeaseService defers release until a guarded Comfy prompt is confirmed stopped', async () => {
+  GpuLeaseService.resetForTesting();
+
+  const lease1 = await GpuLeaseService.acquireLease('task_guarded', 'video');
+  let lease2Granted = false;
+  const lease2Promise = GpuLeaseService.acquireLease('task_next', 'video').then((lease) => {
+    lease2Granted = true;
+    return lease;
+  });
+
+  assert.equal(GpuLeaseService.guardLeaseForPrompt('task_guarded', 'prompt_guarded'), true);
+  assert.equal(GpuLeaseService.getGuardedPromptId('task_guarded'), 'prompt_guarded');
+
+  GpuLeaseService.releaseLease(lease1.lease_id, 'task_guarded');
+  assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, 'task_guarded');
+  assert.equal(lease2Granted, false);
+
+  GpuLeaseService.confirmPromptStopped('prompt_guarded');
+  const lease2 = await lease2Promise;
+  assert.equal(lease2.owner_task_id, 'task_next');
+  assert.equal(lease2Granted, true);
+  assert.equal(GpuLeaseService.getGuardedPromptId('task_guarded'), null);
+
+  GpuLeaseService.releaseLease(lease2.lease_id, 'task_next');
+  assert.equal(GpuLeaseService.isAvailable(), true);
+});
+
+test('blank release hints do not preempt an active lease or reject a queued waiter', async () => {
+  GpuLeaseService.resetForTesting();
+
+  const lease1 = await GpuLeaseService.acquireLease('task_active', 'video');
+  const queued = GpuLeaseService.acquireLease('task_queued', 'video');
+
+  GpuLeaseService.releaseLease('', 'task_active');
+  assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, 'task_active');
+
+  GpuLeaseService.releaseLease('', 'task_queued');
+  assert.equal(GpuLeaseService.getQueueLength(), 1);
+
+  GpuLeaseService.releaseLease(lease1.lease_id, 'task_active');
+  const lease2 = await queued;
+  assert.equal(lease2.owner_task_id, 'task_queued');
+  GpuLeaseService.releaseLease(lease2.lease_id, 'task_queued');
 });
