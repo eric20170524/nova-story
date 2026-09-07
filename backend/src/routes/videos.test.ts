@@ -111,6 +111,28 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(uploadedCharAsset.role, 'character_reference');
   assert.equal(uploadedCharAsset.media_type, 'image');
 
+  const validLastUpload = await multipartUpload('last_frame.png', 'mock_last_png', 'image/png', {
+    project_id: '999', scene_id: '9991', role: 'last_frame_reference'
+  });
+  const upLastRes = await app.inject({
+    method: 'POST', url: '/api/videos/references/upload',
+    headers: validLastUpload.headers, payload: validLastUpload.payload
+  });
+  assert.equal(upLastRes.statusCode, 200);
+  const uploadedLastAsset = JSON.parse(upLastRes.body);
+  assert.equal(uploadedLastAsset.role, 'last_frame_reference');
+  assert.equal(uploadedLastAsset.media_type, 'image');
+
+  const unsupportedMimeUpload = await multipartUpload('not_image.pdf', 'mock_pdf', 'application/pdf', {
+    project_id: '999', scene_id: '9991', role: 'character_reference'
+  });
+  const unsupportedMimeRes = await app.inject({
+    method: 'POST', url: '/api/videos/references/upload',
+    headers: unsupportedMimeUpload.headers, payload: unsupportedMimeUpload.payload
+  });
+  assert.equal(unsupportedMimeRes.statusCode, 400);
+  assert.ok(JSON.parse(unsupportedMimeRes.body).error.includes('Unsupported reference MIME type'));
+
   const illegalRoleUpload = await multipartUpload('illegal.mp4', 'data', 'video/mp4', {
     project_id: '999', role: 'loop_master'
   });
@@ -245,7 +267,7 @@ test('Comprehensive /api/videos route verification', async () => {
     payload: {
       scene_id: 9991, profile: 'character_loop',
       workflow_id: 'minimax_h3_fl2va_official_12gb',
-      keyframe_asset_id: kfAsset.id, last_frame_asset_id: lastFrameAsset.id,
+      keyframe_asset_id: kfAsset.id, last_frame_asset_id: uploadedLastAsset.id,
       character_reference_asset_ids: []
     }
   });
@@ -296,6 +318,7 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(mediaRes.statusCode, 200);
   const mediaData = JSON.parse(mediaRes.body);
   assert.ok(mediaData.assets.some((a: any) => a.role === 'video_keyframe'));
+  assert.ok(mediaData.assets.some((a: any) => a.role === 'last_frame_reference'));
   assert.ok(mediaData.assets.some((a: any) => a.role === 'loop_master'));
 
   const mediaVersionRes = await app.inject({ method: 'GET', url: '/api/videos/scenes/9991/media?version=1' });
