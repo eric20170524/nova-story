@@ -30,9 +30,19 @@ type GpuLeaseWaiter = {
 export class GpuLeaseService {
   private static currentLease: GpuLease | null = null;
   private static waitQueue: GpuLeaseWaiter[] = [];
+  private static guardedPrompts = new Map<string, string>();
+  private static pendingReleases = new Set<string>();
 
   static isAvailable(): boolean {
     if (!this.currentLease) return true;
+
+    // A live/unknown Comfy prompt is a stronger ownership signal than the normal
+    // heartbeat timeout. Never reclaim a guarded lease until the provider confirms
+    // that the prompt has left ComfyUI's running/pending queue.
+    if (this.guardedPrompts.has(this.currentLease.owner_task_id)) {
+      return false;
+    }
+
     const now = Date.now();
     const lastHeartbeat = new Date(this.currentLease.heartbeat_at).getTime();
     if (now - lastHeartbeat > this.currentLease.timeout_ms) {
@@ -142,16 +152,74 @@ export class GpuLeaseService {
     return true;
   }
 
+  /**
+   * Bind the currently owned video lease to the Comfy prompt that actually occupies
+   * the GPU. While guarded, normal release calls and heartbeat expiry are deferred.
+   */
+  static guardLeaseForPrompt(taskId: string, promptId: string): boolean {
+    if (!this.currentLease || this.currentLease.owner_task_id !== taskId) {
+      logger.warn(`Cannot guard GPU lease for prompt ${promptId}: task ${taskId} does not own the current lease.`);
+      return false;
+    }
+    this.guardedPrompts.set(taskId, promptId);
+    logger.info(`GPU lease for task ${taskId} guarded by Comfy prompt ${promptId}.`);
+    return true;
+  }
+
+  static getGuardedPromptId(taskId: string): string | null {
+    return this.guardedPrompts.get(taskId) ?? null;
+  }
+
+  /**
+   * Called only after Comfy queue/history evidence confirms that the prompt has ended
+   * or has been removed. If a release was requested while the prompt was still live,
+   * complete it now and grant the next queued task.
+   */
+  static confirmPromptStopped(promptId: string): void {
+    const entry = Array.from(this.guardedPrompts.entries())
+      .find(([, guardedPromptId]) => guardedPromptId === promptId);
+    if (!entry) return;
+
+    const [taskId] = entry;
+    this.guardedPrompts.delete(taskId);
+    logger.info(`Comfy prompt ${promptId} stopped; GPU lease guard cleared for task ${taskId}.`);
+
+    if (this.pendingReleases.delete(taskId) && this.currentLease?.owner_task_id === taskId) {
+      const leaseId = this.currentLease.lease_id;
+      logger.info(`Completing deferred GPU lease release for task ${taskId} (leaseId=${leaseId}).`);
+      this.currentLease = null;
+      this.processNextInQueue();
+    }
+  }
+
   static releaseLease(leaseId: string, taskId: string): void {
+    // Historical cancellation code passes an empty lease id. Treat that as a
+    // cancellation hint only: it must never pre-empt an active GPU owner, and it must
+    // not reject a queued worker before the task row has reached its cancelled state.
+    if (!leaseId) {
+      logger.info(`Ignoring blank GPU lease release hint for task ${taskId}; pipeline ownership will unwind safely.`);
+      return;
+    }
+
     if (this.currentLease && (this.currentLease.lease_id === leaseId || this.currentLease.owner_task_id === taskId)) {
+      const guardedPromptId = this.guardedPrompts.get(taskId);
+      if (guardedPromptId) {
+        this.pendingReleases.add(taskId);
+        logger.warn(
+          `Deferring GPU lease release for task ${taskId}: Comfy prompt ${guardedPromptId} is not confirmed stopped.`
+        );
+        return;
+      }
+
       logger.info(`GPU lease released by task ${taskId} (leaseId=${leaseId})`);
+      this.pendingReleases.delete(taskId);
       this.currentLease = null;
       this.processNextInQueue();
       return;
     }
 
-    // Backward-compatible cancellation for callers that historically used
-    // releaseLease() to remove a queued task. Rejecting the waiter prevents a worker
+    // Backward-compatible explicit cancellation for callers that pass a non-empty
+    // lease id while removing a queued task. Rejecting the waiter prevents a worker
     // from remaining suspended forever.
     this.cancelQueuedTask(taskId);
   }
@@ -185,6 +253,8 @@ export class GpuLeaseService {
     const queued = this.waitQueue;
     this.currentLease = null;
     this.waitQueue = [];
+    this.guardedPrompts.clear();
+    this.pendingReleases.clear();
     for (const waiter of queued) {
       waiter.reject(new GpuLeaseCancelledError(waiter.taskId));
     }
