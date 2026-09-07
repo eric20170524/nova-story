@@ -5,6 +5,23 @@ import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { getStaticDirectory, getVideoStagingDirectory } from '../../core/paths';
 import { MediaAsset } from '../../schemas/video';
+import {
+  ComfyInputTransport,
+  normalizeReferenceTransportMode,
+  shouldUseHttpReferenceTransport
+} from './comfy_input_transport';
+
+const inferReferenceMimeType = (asset: MediaAsset, sourcePath: string): string => {
+  if (asset.mime_type) return asset.mime_type;
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.mp4' || ext === '.m4v') return 'video/mp4';
+  if (ext === '.mov') return 'video/quicktime';
+  if (ext === '.webm') return 'video/webm';
+  return asset.media_type === 'video' ? 'video/mp4' : 'application/octet-stream';
+};
 
 export class MediaAssetService {
   static computeSha256(filePath: string): string {
@@ -43,6 +60,9 @@ export class MediaAssetService {
     const safeName = this.sanitizeFilename(path.basename(sourcePath));
     const stagedFilename = `${prefix}_${safeName}`;
 
+    // NovaStory always retains a local staging copy for reproducibility. When callers
+    // explicitly provide comfyInputDir this directory itself is the transport target,
+    // which preserves the existing unit-test / custom-deployment contract.
     const stagingDir = comfyInputDir || getVideoStagingDirectory();
     fs.mkdirSync(stagingDir, { recursive: true });
     const targetPath = path.join(stagingDir, stagedFilename);
@@ -52,21 +72,81 @@ export class MediaAssetService {
       logger.info(`Staged asset ${asset.id} to ${targetPath}`);
     }
 
-    // Also mirror to ComfyUI install_path/input if configured
-    try {
-      const { SettingsManager } = await import('../../core/settings_manager');
-      const settings = SettingsManager.loadSettings();
-      if (settings.comfyui?.install_path) {
-        const comfyInput = path.join(settings.comfyui.install_path, 'input');
-        if (fs.existsSync(comfyInput)) {
+    if (comfyInputDir) {
+      return { stagedFilename, stagedPath: targetPath };
+    }
+
+    const { SettingsManager } = await import('../../core/settings_manager');
+    const settings = SettingsManager.loadSettings();
+    const comfySettings = (settings.comfyui || {}) as Record<string, any>;
+    const baseUrl = String(comfySettings.base_url || 'http://127.0.0.1:8188').replace(/\/$/, '');
+    const transportMode = normalizeReferenceTransportMode(
+      process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT || comfySettings.reference_transport
+    );
+
+    let filesystemAvailable = false;
+    let filesystemError: Error | null = null;
+    if (comfySettings.install_path) {
+      const comfyInput = path.join(String(comfySettings.install_path), 'input');
+      if (fs.existsSync(comfyInput)) {
+        try {
           const comfyTargetPath = path.join(comfyInput, stagedFilename);
           if (!fs.existsSync(comfyTargetPath)) {
             fs.copyFileSync(sourcePath, comfyTargetPath);
             logger.info(`Mirrored staged asset ${asset.id} to ComfyUI input: ${comfyTargetPath}`);
           }
+          filesystemAvailable = true;
+        } catch (err: any) {
+          filesystemError = err instanceof Error ? err : new Error(String(err));
+          logger.warn(`Failed to mirror asset ${asset.id} into ComfyUI input: ${filesystemError.message}`);
         }
       }
-    } catch {}
+    }
+
+    if (transportMode === 'filesystem') {
+      if (!filesystemAvailable) {
+        throw new Error(
+          `Comfy reference transport is forced to filesystem, but the configured ComfyUI input directory is unavailable${
+            filesystemError ? `: ${filesystemError.message}` : ''
+          }`
+        );
+      }
+      return { stagedFilename, stagedPath: targetPath };
+    }
+
+    const useHttp = shouldUseHttpReferenceTransport({
+      mode: transportMode,
+      baseUrl,
+      filesystemAvailable,
+      comfyEnabled: Boolean(comfySettings.enabled)
+    });
+
+    if (useHttp) {
+      const timeoutMs = Math.max(
+        500,
+        Number(process.env.NOVASTORY_COMFY_REFERENCE_UPLOAD_TIMEOUT_MS || 15_000)
+      );
+      const uploaded = await ComfyInputTransport.uploadInput({
+        baseUrl,
+        filename: stagedFilename,
+        buffer: fs.readFileSync(sourcePath),
+        mimeType: inferReferenceMimeType(asset, sourcePath),
+        subfolder: 'novastory',
+        timeoutMs
+      });
+      return {
+        stagedFilename: uploaded.inputName,
+        stagedPath: targetPath
+      };
+    }
+
+    if (!filesystemAvailable) {
+      logger.warn(
+        `Comfy reference asset ${asset.id} remains in NovaStory local staging only. `
+        + `Set comfyui.reference_transport=http (or NOVASTORY_COMFY_REFERENCE_TRANSPORT=http) `
+        + `when loopback ComfyUI is enabled without a shared install_path.`
+      );
+    }
 
     return { stagedFilename, stagedPath: targetPath };
   }
