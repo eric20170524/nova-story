@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "workflow_id": "minimax_h3_fl2va_official_12gb",
+  "name": "MiniMax H3 FL2VA Official-Core (12GB Candidate)",
+  "description": "Boundary-focused H3 candidate derived from the current ComfyUI MiniMaxH3ImageToVideo path. Uses the FL2VA checkpoint with explicit first/last frame conditioning and video-only delivery.",
+  "stability": "candidate",
+  "workflow_family": "fl2va",
+  "upstream_reference": "Comfy-Org/workflow_templates:templates/video_minimax_h3_i2v.json",
+  "slots": {
+    "positive_prompt": {
+      "node": "10",
+      "input": "prompt"
+    },
+    "first_frame": {
+      "node": "4",
+      "input": "image"
+    },
+    "last_frame": {
+      "node": "5",
+      "input": "image"
+    },
+    "width": {
+      "node": "10",
+      "input": "width"
+    },
+    "height": {
+      "node": "10",
+      "input": "height"
+    },
+    "frames": {
+      "node": "10",
+      "input": "length"
+    },
+    "steps": {
+      "node": "13",
+      "input": "steps"
+    },
+    "seed": {
+      "node": "11",
+      "input": "noise_seed"
+    },
+    "output_prefix": {
+      "node": "17",
+      "input": "filename_prefix"
+    }
+  },
+  "default_params": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "delivery_frames": 120,
+    "fps": 24,
+    "steps": 20,
+    "sampler": "res_multistep",
+    "scheduler": "normal"
+  },
+  "required_models": [
+    "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax_h3_video_vae_fp16.safetensors"
+  ],
+  "required_custom_nodes": [
+    {
+      "name": "ComfyUI-VideoHelperSuite",
+      "nodes": ["VHS_VideoCombine"],
+      "min_version": "0.3.0"
+    }
+  ]
+}
