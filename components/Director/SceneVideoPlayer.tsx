@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Play,
   Pause,
@@ -10,11 +11,25 @@ import {
   Loader2,
   Video,
   Sparkles,
-  Check
+  Check,
+  SlidersHorizontal,
+  Upload,
+  Image as ImageIcon,
+  Film,
+  X,
+  Link2
 } from 'lucide-react';
-import { Scene, MediaAsset, VideoTaskState, VideoQAReport } from '../../types';
+import {
+  Scene,
+  MediaAsset,
+  VideoTaskState,
+  VideoQAReport,
+  VideoWorkflowId
+} from '../../types';
 import { useLanguage } from '../../LanguageContext';
+import { useToast } from '../../ToastContext';
 import { API_BASE_URL } from '../../constants';
+import { api } from '../../services/api';
 
 interface SceneVideoPlayerProps {
   scene: Scene;
@@ -26,8 +41,50 @@ interface SceneVideoPlayerProps {
   onCancelTask?: (taskId: string) => void;
 }
 
+type ReferenceUploadRole =
+  | 'video_keyframe'
+  | 'last_frame_reference'
+  | 'character_reference'
+  | 'motion_reference';
+
+const WORKFLOWS: Array<{
+  id: VideoWorkflowId;
+  label: string;
+  badge: string;
+  description: string;
+}> = [
+  {
+    id: 'minimax_h3_hongchao_a2a_12gb',
+    label: 'Hybrid A2A',
+    badge: '实验',
+    description: '人物参考 + 动作参考，可选硬尾帧。'
+  },
+  {
+    id: 'minimax_h3_ref2va_official_12gb',
+    label: 'Official Ref2VA',
+    badge: '候选',
+    description: '人物/动作参考；不支持硬尾帧。'
+  },
+  {
+    id: 'minimax_h3_fl2va_official_12gb',
+    label: 'Official FL2VA',
+    badge: '候选',
+    description: '首帧/尾帧边界；不消费人物/动作参考。'
+  }
+];
+
+const WORKFLOW_IDS = new Set(WORKFLOWS.map((workflow) => workflow.id));
+
 const isFinalVideo = (asset?: MediaAsset | null) =>
   Boolean(asset && (asset.role === 'loop_master' || asset.role === 'narrative_final'));
+
+const latestAsset = (assets: MediaAsset[]) =>
+  [...assets].sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+
+const assetLabel = (asset: MediaAsset, prefix?: string) => {
+  const name = String(asset.url || '').split('/').filter(Boolean).pop() || `asset-${asset.id}`;
+  return `${prefix ? `${prefix} · ` : ''}#${asset.id} ${name}`;
+};
 
 export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   scene,
@@ -38,7 +95,9 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   onReprocessAsset,
   onCancelTask
 }) => {
+  const { id: projectIdParam } = useParams<{ id: string }>();
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -46,9 +105,38 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showQADetails, setShowQADetails] = useState(false);
+  const [showReferenceManager, setShowReferenceManager] = useState(false);
+  const [localReferenceAssets, setLocalReferenceAssets] = useState<MediaAsset[]>([]);
+  const [uploadingRole, setUploadingRole] = useState<ReferenceUploadRole | null>(null);
+  const [workflowId, setWorkflowId] = useState<VideoWorkflowId>(() => {
+    try {
+      const saved = localStorage.getItem('director_videoWorkflowId') as VideoWorkflowId | null;
+      if (saved && WORKFLOW_IDS.has(saved)) return saved;
+    } catch {}
+    return 'minimax_h3_hongchao_a2a_12gb';
+  });
+  const [selectedKeyframeId, setSelectedKeyframeId] = useState<number | null>(null);
+  const [selectedLastFrameId, setSelectedLastFrameId] = useState<number | null>(null);
+  const [selectedCharacterRefIds, setSelectedCharacterRefIds] = useState<number[]>([]);
+  const [selectedMotionRefId, setSelectedMotionRefId] = useState<number | null>(null);
 
-  const videoAssets = mediaAssets.filter((asset) => asset.media_type === 'video');
+  const mergedAssets = React.useMemo(() => {
+    const byId = new Map<number, MediaAsset>();
+    [...mediaAssets, ...localReferenceAssets].forEach((asset) => {
+      if (asset?.id != null) byId.set(asset.id, asset);
+    });
+    return Array.from(byId.values());
+  }, [mediaAssets, localReferenceAssets]);
+
+  const videoAssets = mergedAssets.filter((asset) => asset.media_type === 'video');
   const finalVideoAssets = videoAssets.filter((asset) => isFinalVideo(asset));
+  const keyframeAssets = mergedAssets.filter((asset) => asset.role === 'video_keyframe' && asset.media_type === 'image');
+  const explicitLastFrameAssets = mergedAssets.filter((asset) => asset.role === 'last_frame_reference' && asset.media_type === 'image');
+  const characterReferenceAssets = mergedAssets.filter((asset) => asset.role === 'character_reference' && asset.media_type === 'image');
+  const motionReferenceAssets = mergedAssets.filter((asset) => asset.role === 'motion_reference' && asset.media_type === 'video');
+  const lastFrameChoices = Array.from(
+    new Map([...keyframeAssets, ...explicitLastFrameAssets].map((asset) => [asset.id, asset])).values()
+  );
 
   const selectedAsset = selectedAssetId != null
     ? videoAssets.find((asset) => asset.id === selectedAssetId)
@@ -72,6 +160,41 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       setSelectedAssetId(preferredAsset.id);
     }
   }, [selectedAssetId, preferredAsset?.id]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('director_videoWorkflowId', workflowId);
+    } catch {}
+  }, [workflowId]);
+
+  useEffect(() => {
+    const validKeyframeIds = new Set(keyframeAssets.map((asset) => asset.id));
+    if (selectedKeyframeId == null || !validKeyframeIds.has(selectedKeyframeId)) {
+      setSelectedKeyframeId(latestAsset(keyframeAssets)?.id ?? null);
+    }
+
+    const validLastIds = new Set(lastFrameChoices.map((asset) => asset.id));
+    if (selectedLastFrameId != null && !validLastIds.has(selectedLastFrameId)) {
+      setSelectedLastFrameId(null);
+    }
+
+    const validCharIds = new Set(characterReferenceAssets.map((asset) => asset.id));
+    setSelectedCharacterRefIds((current) => {
+      const preserved = current.filter((id) => validCharIds.has(id)).slice(0, 3);
+      if (preserved.length > 0) return preserved;
+      return characterReferenceAssets.slice(-3).map((asset) => asset.id);
+    });
+
+    const validMotionIds = new Set(motionReferenceAssets.map((asset) => asset.id));
+    if (selectedMotionRefId == null || !validMotionIds.has(selectedMotionRefId)) {
+      setSelectedMotionRefId(latestAsset(motionReferenceAssets)?.id ?? null);
+    }
+  }, [
+    keyframeAssets.map((asset) => asset.id).join(','),
+    lastFrameChoices.map((asset) => asset.id).join(','),
+    characterReferenceAssets.map((asset) => asset.id).join(','),
+    motionReferenceAssets.map((asset) => asset.id).join(',')
+  ]);
 
   const handleTogglePlay = () => {
     if (!videoRef.current) return;
@@ -107,7 +230,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
   const videoUrl = formatMediaUrl(activeAsset?.url || taskState?.output_url || taskState?.raw_video_url);
   const posterAsset = activeAsset?.id
-    ? mediaAssets.find((asset) => asset.role === 'poster' && asset.parent_asset_id === activeAsset.id)
+    ? mergedAssets.find((asset) => asset.role === 'poster' && asset.parent_asset_id === activeAsset.id)
     : undefined;
   const posterUrl = formatMediaUrl(posterAsset?.url || taskState?.poster_url || scene.asset_url);
 
@@ -123,6 +246,285 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const isGenerating = Boolean(
     taskState && (taskState.status === 'queued' || taskState.status === 'processing')
   );
+
+  const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
+  const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
+
+  const toggleCharacterRef = (assetId: number) => {
+    setSelectedCharacterRefIds((current) => {
+      if (current.includes(assetId)) return current.filter((id) => id !== assetId);
+      if (current.length >= 3) {
+        showToast('人物参考最多选择 3 张', 'warning');
+        return current;
+      }
+      return [...current, assetId];
+    });
+  };
+
+  const uploadReference = async (role: ReferenceUploadRole, file?: File) => {
+    if (!file) return;
+    const projectId = Number(projectIdParam || mergedAssets[0]?.project_id || 0);
+    const sceneId = Number(scene.id);
+    if (!Number.isFinite(projectId) || projectId <= 0 || !Number.isFinite(sceneId) || sceneId <= 0) {
+      showToast('无法确定 Project / Scene ID，参考素材未上传', 'error');
+      return;
+    }
+
+    setUploadingRole(role);
+    try {
+      const formData = new FormData();
+      // Fastify multipart exposes fields already seen when request.file() resolves;
+      // append metadata before the file so role/project ownership is deterministic.
+      formData.append('project_id', String(projectId));
+      formData.append('scene_id', String(sceneId));
+      formData.append('role', role);
+      formData.append('file', file);
+
+      const asset = await api.uploadVideoReference(formData);
+      setLocalReferenceAssets((current) => [
+        ...current.filter((item) => item.id !== asset.id),
+        asset
+      ]);
+
+      if (role === 'video_keyframe') setSelectedKeyframeId(asset.id);
+      if (role === 'last_frame_reference') setSelectedLastFrameId(asset.id);
+      if (role === 'motion_reference') setSelectedMotionRefId(asset.id);
+      if (role === 'character_reference') {
+        setSelectedCharacterRefIds((current) => [...current.filter((id) => id !== asset.id), asset.id].slice(-3));
+      }
+      showToast('参考素材已上传并绑定到当前 Scene', 'success');
+    } catch (error: any) {
+      showToast(error?.message || '参考素材上传失败', 'error');
+    } finally {
+      setUploadingRole(null);
+    }
+  };
+
+  const submitConfiguredGeneration = () => {
+    if (!onGenerateVideo) return;
+    if (!selectedKeyframeId) {
+      showToast('请先选择或上传 First Frame', 'warning');
+      return;
+    }
+
+    onGenerateVideo({
+      workflowId,
+      keyframeAssetId: selectedKeyframeId,
+      lastFrameAssetId: isRef2va ? undefined : (selectedLastFrameId || undefined),
+      characterRefAssetIds: isFl2va ? [] : selectedCharacterRefIds,
+      motionRefAssetId: isFl2va ? undefined : (selectedMotionRefId || undefined)
+    });
+    setShowReferenceManager(false);
+  };
+
+  const renderUploadButton = (
+    role: ReferenceUploadRole,
+    label: string,
+    accept: string,
+    icon: React.ReactNode
+  ) => (
+    <label
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] cursor-pointer transition-colors ${
+        uploadingRole === role
+          ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-wait'
+          : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-indigo-600 hover:text-indigo-200'
+      }`}
+    >
+      {uploadingRole === role ? <Loader2 size={11} className="animate-spin" /> : icon}
+      <span>{label}</span>
+      <input
+        type="file"
+        accept={accept}
+        disabled={uploadingRole != null}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = '';
+          void uploadReference(role, file);
+        }}
+      />
+    </label>
+  );
+
+  const renderReferenceManager = () => {
+    if (!showReferenceManager) return null;
+
+    return (
+      <div className="p-3 bg-slate-950 border-t border-indigo-900/50 space-y-3 text-[11px]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-indigo-200 font-semibold">
+            <SlidersHorizontal size={13} />
+            <span>H3 Reference Manager</span>
+          </div>
+          <button
+            type="button"
+            className="p-1 rounded text-slate-500 hover:text-white hover:bg-slate-800"
+            onClick={() => setShowReferenceManager(false)}
+            title="关闭参考配置"
+          >
+            <X size={13} />
+          </button>
+        </div>
+
+        <div className="space-y-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Workflow Strategy</span>
+          <div className="grid grid-cols-1 gap-1.5">
+            {WORKFLOWS.map((workflow) => (
+              <button
+                key={workflow.id}
+                type="button"
+                onClick={() => setWorkflowId(workflow.id)}
+                className={`p-2 rounded-lg border text-left transition-all ${
+                  workflowId === workflow.id
+                    ? 'bg-indigo-950/70 border-indigo-500 text-white'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{workflow.label}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                    workflow.id === 'minimax_h3_hongchao_a2a_12gb'
+                      ? 'text-amber-300 border-amber-800 bg-amber-950/40'
+                      : 'text-sky-300 border-sky-800 bg-sky-950/40'
+                  }`}>
+                    {workflow.badge}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[9px] text-slate-500">{workflow.description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="rounded-lg bg-slate-900/70 border border-slate-800 p-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-300 flex items-center gap-1">
+                <ImageIcon size={11} className="text-indigo-400" />
+                First Frame <span className="text-rose-400">*</span>
+              </span>
+              {renderUploadButton('video_keyframe', '上传', 'image/*', <Upload size={10} />)}
+            </div>
+            <select
+              value={selectedKeyframeId ?? ''}
+              onChange={(event) => setSelectedKeyframeId(event.target.value ? Number(event.target.value) : null)}
+              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">未选择 First Frame</option>
+              {keyframeAssets.map((asset) => (
+                <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={`rounded-lg bg-slate-900/70 border p-2 space-y-1.5 ${isRef2va ? 'border-slate-800 opacity-55' : 'border-slate-800'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-300 flex items-center gap-1">
+                <Link2 size={11} className="text-emerald-400" />
+                Last Frame
+              </span>
+              {!isRef2va && renderUploadButton('last_frame_reference', '上传', 'image/*', <Upload size={10} />)}
+            </div>
+            {isRef2va ? (
+              <div className="text-[9px] text-amber-400">Ref2VA 不支持硬尾帧；该输入会被明确排除。</div>
+            ) : (
+              <>
+                <select
+                  value={selectedLastFrameId ?? ''}
+                  onChange={(event) => setSelectedLastFrameId(event.target.value ? Number(event.target.value) : null)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">不指定 Last Frame</option>
+                  {lastFrameChoices.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {assetLabel(asset, asset.role === 'video_keyframe' ? 'K / First Frame' : 'Last')}
+                    </option>
+                  ))}
+                </select>
+                {selectedKeyframeId && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedLastFrameId(selectedKeyframeId)}
+                    className="text-[9px] text-indigo-300 hover:text-indigo-200 underline underline-offset-2"
+                  >
+                    使用 First Frame 作为 Last Frame（K→K）
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className={`rounded-lg bg-slate-900/70 border border-slate-800 p-2 space-y-1.5 ${isFl2va ? 'opacity-55' : ''}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-300 flex items-center gap-1">
+                <ImageIcon size={11} className="text-purple-400" />
+                Character Ref 1..3
+              </span>
+              {!isFl2va && renderUploadButton('character_reference', '上传', 'image/*', <Upload size={10} />)}
+            </div>
+            {isFl2va ? (
+              <div className="text-[9px] text-amber-400">FL2VA 不消费人物 identity reference。</div>
+            ) : characterReferenceAssets.length === 0 ? (
+              <div className="text-[9px] text-slate-600">暂无人物参考图</div>
+            ) : (
+              <div className="space-y-1 max-h-24 overflow-y-auto custom-scrollbar">
+                {characterReferenceAssets.map((asset) => (
+                  <label key={asset.id} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-slate-800/70 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedCharacterRefIds.includes(asset.id)}
+                      onChange={() => toggleCharacterRef(asset.id)}
+                      className="w-3 h-3 rounded bg-slate-950 border-slate-700 text-indigo-600"
+                    />
+                    <span className="truncate text-[10px] text-slate-300">{assetLabel(asset)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className={`rounded-lg bg-slate-900/70 border border-slate-800 p-2 space-y-1.5 ${isFl2va ? 'opacity-55' : ''}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-300 flex items-center gap-1">
+                <Film size={11} className="text-sky-400" />
+                Motion Ref
+              </span>
+              {!isFl2va && renderUploadButton('motion_reference', '上传', 'video/*', <Upload size={10} />)}
+            </div>
+            {isFl2va ? (
+              <div className="text-[9px] text-amber-400">FL2VA 不消费 motion reference。</div>
+            ) : (
+              <select
+                value={selectedMotionRefId ?? ''}
+                onChange={(event) => setSelectedMotionRefId(event.target.value ? Number(event.target.value) : null)}
+                className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="">未选择 Motion Ref</option>
+                {motionReferenceAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800">
+          <div className="text-[9px] text-slate-500 leading-relaxed">
+            所有输入在生成前仍会经过后端策略 schema + runtime preflight；不兼容输入不会被静默忽略。
+          </div>
+          <button
+            type="button"
+            disabled={!selectedKeyframeId || uploadingRole != null}
+            onClick={submitConfiguredGeneration}
+            className="flex-shrink-0 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            <Sparkles size={11} />
+            开始生成
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const getQABadge = (report?: VideoQAReport | null) => {
     if (!report) return null;
@@ -182,9 +584,12 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
         <span className="text-xs font-semibold text-indigo-200 mb-1">
           {t('director.generating_video_status', 'H3 视频生成中...')}
         </span>
-        <span className="text-[11px] font-mono px-2.5 py-1 rounded bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 mb-3">
+        <span className="text-[11px] font-mono px-2.5 py-1 rounded bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 mb-1">
           {stageLabels[stage] || stage}
         </span>
+        {typeof taskState?.queue_position === 'number' && taskState.queue_position > 0 && (
+          <span className="text-[9px] text-slate-500 mb-3">GPU Queue #{taskState.queue_position}</span>
+        )}
         {taskState?.task_id && onCancelTask && (
           <button
             type="button"
@@ -200,26 +605,29 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
   if (!videoUrl) {
     return (
-      <div className="w-full h-full min-h-[220px] bg-slate-950/90 flex flex-col items-center justify-center p-4 text-center select-none border-b border-slate-800">
-        <div className="w-12 h-12 rounded-full bg-indigo-950/50 border border-indigo-800/40 flex items-center justify-center mb-3 text-indigo-400 shadow-inner">
-          <Video size={22} />
+      <div className="w-full bg-slate-950/90 flex flex-col select-none border-b border-slate-800">
+        <div className="min-h-[220px] flex flex-col items-center justify-center p-4 text-center">
+          <div className="w-12 h-12 rounded-full bg-indigo-950/50 border border-indigo-800/40 flex items-center justify-center mb-3 text-indigo-400 shadow-inner">
+            <Video size={22} />
+          </div>
+          <p className="text-xs text-slate-300 font-medium mb-1">
+            {t('director.no_video_yet', '暂未生成 H3 视频镜头')}
+          </p>
+          <p className="text-[10px] text-slate-500 mb-3 max-w-[240px]">
+            H3 模型按 124 帧生成，交付标准化为 5.0s / 120帧 / 24fps
+          </p>
+          {onGenerateVideo && (
+            <button
+              type="button"
+              onClick={() => setShowReferenceManager(true)}
+              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/50 transition-all"
+            >
+              <SlidersHorizontal size={14} />
+              <span>配置参考并生成</span>
+            </button>
+          )}
         </div>
-        <p className="text-xs text-slate-300 font-medium mb-1">
-          {t('director.no_video_yet', '暂未生成 H3 视频镜头')}
-        </p>
-        <p className="text-[10px] text-slate-500 mb-3 max-w-[220px]">
-          H3 模型按 124 帧生成，交付标准化为 5.0s / 120帧 / 24fps
-        </p>
-        {onGenerateVideo && (
-          <button
-            type="button"
-            onClick={() => onGenerateVideo()}
-            className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 hover:shadow-indigo-500/50 transition-all"
-          >
-            <Sparkles size={14} />
-            <span>{t('director.video_generate_btn', '一键生成 5s 视频')}</span>
-          </button>
-        )}
+        {renderReferenceManager()}
       </div>
     );
   }
@@ -398,15 +806,21 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
         {onGenerateVideo && (
           <button
             type="button"
-            onClick={() => onGenerateVideo()}
-            className="bg-slate-800 hover:bg-indigo-950 hover:text-indigo-200 text-slate-300 py-1 px-2 rounded text-[11px] flex items-center justify-center gap-1 border border-slate-700 hover:border-indigo-700 transition-colors"
-            title="重新生成新的 H3 视频候选"
+            onClick={() => setShowReferenceManager((show) => !show)}
+            className={`py-1 px-2 rounded text-[11px] flex items-center justify-center gap-1 border transition-colors ${
+              showReferenceManager
+                ? 'bg-indigo-950 text-indigo-200 border-indigo-700'
+                : 'bg-slate-800 hover:bg-indigo-950 hover:text-indigo-200 text-slate-300 border-slate-700 hover:border-indigo-700'
+            }`}
+            title="配置 H3 workflow 与参考素材并生成新候选"
           >
-            <Sparkles size={11} />
-            <span>+新视频</span>
+            <SlidersHorizontal size={11} />
+            <span>参考/新视频</span>
           </button>
         )}
       </div>
+
+      {renderReferenceManager()}
 
       {showQADetails && qaReport && (
         <div className="p-3 bg-slate-900 border-t border-slate-800 text-[11px] text-slate-300 space-y-2 animate-in slide-in-from-top-2 duration-150">
