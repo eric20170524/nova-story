@@ -6,7 +6,7 @@
 
 ## 1. 当前阶段结论
 
-生视频链路已从“应用层集成原型”推进到“**有显式模型策略、真实 runtime gate、真实轻量 Loop QA、不可变资产血缘、单 GPU 崩溃恢复保护的候选实现**”。
+生视频链路已从“应用层集成原型”推进到“**有显式模型策略、真实 runtime gate、真实轻量 Loop QA、不可变资产血缘、单 GPU 崩溃恢复保护、可操作 Reference Manager 的候选实现**”。
 
 仍不应标记 Production Ready，唯一无法在 GitHub CI 中替代的核心门是：
 
@@ -38,6 +38,8 @@
 - [x] reference asset 的 `character_id` 优先决定人物身份。
 - [x] 多角色项目不再默认取数据库第一人。
 - [x] `last_frame_asset_id` 已贯通 schema → preflight → staging → workflow。
+- [x] 独立 `last_frame_reference` MediaAsset role，避免把尾帧伪装成普通 first/keyframe 资产。
+- [x] reference upload 只接受 `image/*` / `video/*`，并按 role 强制媒体类型；PDF/任意 MIME 不再被误注册为图片。
 
 ### Runtime Gate
 
@@ -62,6 +64,7 @@
 - [x] cancel 网络请求独立有界；deadline 不再等待无限期 `/interrupt`。
 - [x] Comfy prompt accepted 后绑定 GPU prompt guard；未确认停止时拒绝释放 lease。
 - [x] `cancelled` 为单调终态：queued rejection、pipeline catch、postprocess 完成都不能再覆盖成 `failed/completed`。
+- [x] task terminal transition 通过 SQLite `WHERE status='processing'` 原子竞争，stale pre-check 不再覆盖先到终态。
 - [x] 启动时先做 orphan Comfy prompt reconciliation：进程重启后若旧 prompt 仍活跃/所有权未知，先抢占 synthetic recovery lease，直到 prompt 被确认清除。
 - [x] 通用 AssetTaskStore orphan cleanup 排除 video，避免提前把可从 `raw.mp4` / Comfy history 恢复的视频任务改成 `interrupted`。
 
@@ -87,6 +90,20 @@
 - [x] reprocess 从 final 沿 `parent_asset_id` 找 raw。
 - [x] 每次 reprocess 创建独立 `reprocess_*` derivative，不覆盖旧 final/poster/qa。
 - [x] task API 返回 raw/poster/qa URL。
+
+### Director / Reference Manager
+
+- [x] 每个 Scene 视频卡提供 H3 Reference Manager。
+- [x] First Frame：选择既有 `video_keyframe` 或直接上传。
+- [x] Last Frame：独立选择/上传 `last_frame_reference`，并支持一键 K→K。
+- [x] Character Ref：选择/上传 1..3 张人物参考图。
+- [x] Motion Ref：选择/上传动作参考视频。
+- [x] Scene 内可显式选择 Hybrid / Official Ref2VA / Official FL2VA；最近策略写入本地偏好，批量任务继承该策略。
+- [x] UI 主动隐藏不兼容输入：Ref2VA 不提交 hard last-frame；FL2VA 不提交 identity/motion refs；后端 schema/preflight 仍作为最终硬门。
+- [x] 当前 GPU queue position 在生成卡中可见。
+- [x] 单任务取消调用真实 `/videos/tasks/:task_id/cancel`，不再只关闭 SSE。
+- [x] batch stop 调用后端 cancel 当前 active H3 task；preflight/request-in-flight 两个竞态窗口均会阻止或立即取消新任务。
+- [x] Stop 时保留 SSE/poll 直到收到 terminal cancellation，避免前端 Promise 因“关闭连接”而永久悬挂。
 
 ---
 
@@ -168,9 +185,9 @@ error / blockers
 
 ### P1 / 前端契约
 
-- [ ] Reference Manager：First Frame / Last Frame / Character Ref 1..3 / Motion Ref。
-- [ ] Director workflow strategy selector。
-- [ ] batch stop UI 调用后端 cancel 当前 active task；后端 scoped cancel 已完成。
+- [x] Reference Manager：First Frame / Last Frame / Character Ref 1..3 / Motion Ref。
+- [x] Director workflow strategy selector（Scene 级选择；batch 继承最近选择）。
+- [x] batch stop UI 调用后端 cancel 当前 active task。
 
 ### P1 / 调度
 
@@ -179,7 +196,7 @@ error / blockers
 
 ### P1 / 部署
 
-- [ ] Remote Comfy reference transport（HTTP upload），解除必须同机/共享文件系统的限制。
+- [ ] Remote Comfy reference transport（HTTP upload 到远端 Comfy input），解除 NovaStory 与 Comfy 必须同机/共享文件系统的限制。
 
 ### P2 / QA 增强
 
@@ -200,6 +217,6 @@ PR #13 当前保持 Draft。
 2. 目标 Comfy 对三个 workflow 的 runtime preflight 输出已保存。
 3. Ref2VA 与 FL2VA 至少各真实成功生成一条。
 4. benchmark 最小矩阵已有结果，且没有发现 workflow JSON/API 结构错误。
-5. experimental Hybrid 仍可回退，不因 candidate 引入破坏现有路径。
+5. experimental Hybrid 仍可作为实验对照，不因 candidate 引入破坏现有路径。
 
 在实机门未完成前，代码可以继续合并工程修复，但不应把 Official candidate 标为 stable/default。
