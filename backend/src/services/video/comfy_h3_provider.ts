@@ -1,7 +1,5 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
 
@@ -16,6 +14,17 @@ export interface ComfyVideoOutput {
   type?: string;
   buffer: Buffer;
 }
+
+const queueEntryContainsPromptId = (entry: unknown, promptId: string): boolean => {
+  if (entry === promptId) return true;
+  if (Array.isArray(entry)) return entry.some((value) => queueEntryContainsPromptId(value, promptId));
+  if (entry && typeof entry === 'object') {
+    return Object.values(entry as Record<string, unknown>).some(
+      (value) => queueEntryContainsPromptId(value, promptId)
+    );
+  }
+  return false;
+};
 
 export class ComfyH3Provider {
   private baseUrl: string;
@@ -48,9 +57,7 @@ export class ComfyH3Provider {
       const id = setTimeout(() => controller.abort(), 3000);
       const res = await fetch(`${this.baseUrl}/object_info`, { signal: controller.signal });
       clearTimeout(id);
-      if (res.ok) {
-        return (await res.json()) as Record<string, any>;
-      }
+      if (res.ok) return (await res.json()) as Record<string, any>;
     } catch {
       /* ComfyUI offline or unreachable */
     }
@@ -59,7 +66,10 @@ export class ComfyH3Provider {
 
   async getQueue(): Promise<{ running: any[]; pending: any[] } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/queue`);
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`${this.baseUrl}/queue`, { signal: controller.signal });
+      clearTimeout(id);
       if (res.ok) {
         const data = await res.json() as any;
         return {
@@ -76,9 +86,7 @@ export class ComfyH3Provider {
   async getHistory(promptId: string): Promise<Record<string, any> | null> {
     try {
       const res = await fetch(`${this.baseUrl}/history/${promptId}`);
-      if (res.ok) {
-        return (await res.json()) as Record<string, any>;
-      }
+      if (res.ok) return (await res.json()) as Record<string, any>;
     } catch {
       /* offline */
     }
@@ -104,6 +112,7 @@ export class ComfyH3Provider {
     options: {
       onPromptQueued?: (promptId: string) => void | Promise<void>;
       onProgress?: (data: { stage: string; current?: number; total?: number; message?: string }) => void;
+      timeoutMs?: number;
     } = {}
   ): Promise<{ status: 'completed' | 'error' | 'cancelled'; videos: ComfyVideoOutput[]; prompt_id?: string; error?: string }> {
     let ws: WebSocket | null = null;
@@ -140,26 +149,27 @@ export class ComfyH3Provider {
       }
 
       const resJson = await submitRes.json() as Record<string, any>;
-      const promptId = resJson.prompt_id;
+      const promptId = String(resJson.prompt_id || '');
       if (!promptId) {
         ws.close();
         return { status: 'error', videos: [], error: 'No prompt_id returned from ComfyUI' };
       }
 
-      if (options.onPromptQueued) {
-        await options.onPromptQueued(promptId);
-      }
+      if (options.onPromptQueued) await options.onPromptQueued(promptId);
 
       const collectedVideos: ComfyVideoOutput[] = [];
+      const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
 
       return new Promise((resolve) => {
         let isDone = false;
-        let pollInterval: any = null;
+        let pollInterval: NodeJS.Timeout | null = null;
+        let deadlineTimer: NodeJS.Timeout | null = null;
 
         const cleanup = (result: { status: 'completed' | 'error' | 'cancelled'; error?: string }) => {
           if (isDone) return;
           isDone = true;
           if (pollInterval) clearInterval(pollInterval);
+          if (deadlineTimer) clearTimeout(deadlineTimer);
           try {
             ws?.removeAllListeners();
             ws?.close();
@@ -172,6 +182,45 @@ export class ComfyH3Provider {
           });
         };
 
+        const fetchHistoryFallback = async () => {
+          try {
+            const histRes = await fetch(`${this.baseUrl}/history/${promptId}`);
+            if (!histRes.ok) return;
+            const histData = await histRes.json() as Record<string, any>;
+            const promptOutputs = histData[promptId]?.outputs || {};
+            for (const nodeId of Object.keys(promptOutputs)) {
+              const nodeOut = promptOutputs[nodeId];
+              const list = nodeOut.videos || nodeOut.gifs || nodeOut.images || [];
+              for (const item of list) {
+                if (collectedVideos.some((video) => video.filename === item.filename && video.subfolder === item.subfolder)) {
+                  continue;
+                }
+                const buf = await this.downloadFile(item.filename, item.subfolder, item.type);
+                if (buf) {
+                  collectedVideos.push({
+                    filename: item.filename,
+                    subfolder: item.subfolder,
+                    type: item.type,
+                    buffer: buf
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            logger.warn(`History fetch error: ${err}`);
+          }
+        };
+
+        deadlineTimer = setTimeout(() => {
+          void (async () => {
+            await this.cancelPrompt(promptId);
+            cleanup({
+              status: 'error',
+              error: `ComfyUI H3 execution exceeded deadline (${Math.round(timeoutMs / 1000)}s)`
+            });
+          })();
+        }, timeoutMs);
+
         ws!.on('message', async (raw: any) => {
           try {
             const msg = JSON.parse(raw.toString());
@@ -180,28 +229,28 @@ export class ComfyH3Provider {
 
             if (msgType === 'execution_start' && data.prompt_id === promptId) {
               options.onProgress?.({ stage: 'generating', message: 'H3 execution started in ComfyUI' });
-            } else if (msgType === 'progress' && data.value && data.max) {
+            } else if (msgType === 'progress' && data.value != null && data.max != null) {
               options.onProgress?.({ stage: 'generating', current: data.value, total: data.max });
             } else if (msgType === 'executing') {
               if (!data.node && (!data.prompt_id || data.prompt_id === promptId)) {
                 setTimeout(async () => {
-                  // Fallback query history if no outputs received directly
-                  if (collectedVideos.length === 0) {
-                    await fetchHistoryFallback();
-                  }
-                  cleanup({ status: collectedVideos.length > 0 ? 'completed' : 'error', error: collectedVideos.length === 0 ? 'No video outputs collected' : undefined });
+                  if (collectedVideos.length === 0) await fetchHistoryFallback();
+                  cleanup({
+                    status: collectedVideos.length > 0 ? 'completed' : 'error',
+                    error: collectedVideos.length === 0 ? 'No video outputs collected' : undefined
+                  });
                 }, 1000);
               }
             } else if (msgType === 'executed' && data.prompt_id === promptId) {
               const output = data.output || {};
               const videoList = output.videos || output.gifs || output.images || [];
-              for (const v of videoList) {
-                const buffer = await this.downloadFile(v.filename, v.subfolder, v.type);
+              for (const item of videoList) {
+                const buffer = await this.downloadFile(item.filename, item.subfolder, item.type);
                 if (buffer) {
                   collectedVideos.push({
-                    filename: v.filename,
-                    subfolder: v.subfolder,
-                    type: v.type,
+                    filename: item.filename,
+                    subfolder: item.subfolder,
+                    type: item.type,
                     buffer
                   });
                 }
@@ -211,47 +260,22 @@ export class ComfyH3Provider {
             } else if (msgType === 'execution_interrupted' && (!data.prompt_id || data.prompt_id === promptId)) {
               cleanup({ status: 'cancelled', error: 'ComfyUI execution interrupted' });
             }
-          } catch (e) {
-            // Ignore parse errors
+          } catch {
+            // Ignore unrelated/non-JSON websocket messages.
           }
         });
-
-        const fetchHistoryFallback = async () => {
-          try {
-            const histRes = await fetch(`${this.baseUrl}/history/${promptId}`);
-            if (histRes.ok) {
-              const histData = await histRes.json() as Record<string, any>;
-              const promptOutputs = histData[promptId]?.outputs || {};
-              for (const nodeId of Object.keys(promptOutputs)) {
-                const nodeOut = promptOutputs[nodeId];
-                const list = nodeOut.videos || nodeOut.gifs || nodeOut.images || [];
-                for (const item of list) {
-                  const buf = await this.downloadFile(item.filename, item.subfolder, item.type);
-                  if (buf) {
-                    collectedVideos.push({
-                      filename: item.filename,
-                      subfolder: item.subfolder,
-                      type: item.type,
-                      buffer: buf
-                    });
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            logger.warn(`History fetch error: ${e}`);
-          }
-        };
 
         pollInterval = setInterval(async () => {
           try {
             const histRes = await fetch(`${this.baseUrl}/history/${promptId}`);
-            if (histRes.ok) {
-              const histData = await histRes.json() as Record<string, any>;
-              if (histData[promptId]) {
-                await fetchHistoryFallback();
-                cleanup({ status: collectedVideos.length > 0 ? 'completed' : 'error' });
-              }
+            if (!histRes.ok) return;
+            const histData = await histRes.json() as Record<string, any>;
+            if (histData[promptId]) {
+              await fetchHistoryFallback();
+              cleanup({
+                status: collectedVideos.length > 0 ? 'completed' : 'error',
+                error: collectedVideos.length === 0 ? 'ComfyUI history completed without video outputs' : undefined
+              });
             }
           } catch {}
         }, 5000);
@@ -260,7 +284,10 @@ export class ComfyH3Provider {
           setTimeout(async () => {
             if (!isDone) {
               await fetchHistoryFallback();
-              cleanup({ status: collectedVideos.length > 0 ? 'completed' : 'error' });
+              cleanup({
+                status: collectedVideos.length > 0 ? 'completed' : 'error',
+                error: collectedVideos.length === 0 ? 'ComfyUI connection closed before video output was available' : undefined
+              });
             }
           }, 1500);
         });
@@ -271,16 +298,43 @@ export class ComfyH3Provider {
     }
   }
 
+  /**
+   * Cancel only the owned prompt. Pending prompts are deleted from the queue without
+   * calling ComfyUI's process-global /interrupt. A running prompt is interrupted only
+   * when it is the sole running prompt, which matches NovaStory's exclusive GPU lease
+   * assumption while avoiding accidental interruption of unrelated shared-Comfy work.
+   */
   async cancelPrompt(promptId: string): Promise<boolean> {
     try {
-      await fetch(`${this.baseUrl}/queue`, {
+      const queue = await this.getQueue();
+      const pendingMatch = queue?.pending.some((entry) => queueEntryContainsPromptId(entry, promptId)) ?? false;
+      const runningMatches = queue?.running.filter((entry) => queueEntryContainsPromptId(entry, promptId)) ?? [];
+
+      const deleteRes = await fetch(`${this.baseUrl}/queue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ delete: [promptId] })
       });
-      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
-      return true;
-    } catch {
+
+      if (pendingMatch) return deleteRes.ok;
+
+      if (runningMatches.length > 0) {
+        const runningCount = queue?.running.length ?? 0;
+        if (runningCount !== 1) {
+          logger.warn(
+            `Refusing global ComfyUI interrupt for ${promptId}: ${runningCount} prompts are reported running.`
+          );
+          return false;
+        }
+        const interruptRes = await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
+        return deleteRes.ok && interruptRes.ok;
+      }
+
+      // Queue state can race with completion. Deleting a no-longer-pending prompt is
+      // harmless, but do not issue a blind global interrupt when ownership is unknown.
+      return deleteRes.ok;
+    } catch (err) {
+      logger.warn(`Failed to cancel ComfyUI prompt ${promptId}: ${err}`);
       return false;
     }
   }
