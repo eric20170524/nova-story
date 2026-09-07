@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getVideoWorkflowsDirectory } from '../../core/paths';
-import { VideoSpec } from '../../schemas/video';
+import { DEFAULT_VIDEO_WORKFLOW_ID, VideoSpec } from '../../schemas/video';
 
 export interface WorkflowManifestSlot {
   node: string;
@@ -14,6 +14,7 @@ export interface WorkflowManifest {
   name: string;
   description?: string;
   stability?: 'experimental' | 'candidate' | 'stable' | string;
+  workflow_family?: string;
   upstream_reference?: string;
   slots: {
     positive_prompt?: WorkflowManifestSlot;
@@ -53,7 +54,7 @@ export interface CompileWorkflowInputs {
 }
 
 export class VideoWorkflowCompiler {
-  static loadWorkflowBundle(workflowId = 'minimax_h3_hongchao_a2a_12gb'): {
+  static loadWorkflowBundle(workflowId = DEFAULT_VIDEO_WORKFLOW_ID): {
     manifest: WorkflowManifest;
     workflow: Record<string, any>;
   } {
@@ -70,7 +71,6 @@ export class VideoWorkflowCompiler {
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as WorkflowManifest;
     const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf-8')) as Record<string, any>;
-
     return { manifest, workflow };
   }
 
@@ -89,16 +89,14 @@ export class VideoWorkflowCompiler {
     manifest: WorkflowManifest;
     appliedParams: Record<string, any>;
   } {
-    const workflowId = inputs.workflowId || 'minimax_h3_hongchao_a2a_12gb';
+    const workflowId = inputs.workflowId || inputs.spec.workflow_id || DEFAULT_VIDEO_WORKFLOW_ID;
     const { manifest, workflow: template } = this.loadWorkflowBundle(workflowId);
 
-    // Deep clone template
     const workflow = JSON.parse(JSON.stringify(template));
     const slots = manifest.slots;
     const { spec, stagedFiles } = inputs;
     const contract = spec.output_contract;
 
-    // Validate slots
     if (slots.positive_prompt) this.validateSlot(workflow, slots.positive_prompt, 'positive_prompt');
     if (slots.negative_prompt) this.validateSlot(workflow, slots.negative_prompt, 'negative_prompt');
     if (slots.first_frame) this.validateSlot(workflow, slots.first_frame, 'first_frame');
@@ -111,65 +109,58 @@ export class VideoWorkflowCompiler {
     if (slots.seed) this.validateSlot(workflow, slots.seed, 'seed');
     if (slots.output_prefix) this.validateSlot(workflow, slots.output_prefix, 'output_prefix');
 
-    // Inject Positive Prompt
     if (slots.positive_prompt) {
       workflow[slots.positive_prompt.node].inputs[slots.positive_prompt.input] = spec.positive_prompt;
     }
-
-    // Inject Negative Prompt
     if (slots.negative_prompt) {
       workflow[slots.negative_prompt.node].inputs[slots.negative_prompt.input] = spec.negative_prompt;
     }
-
-    // Inject First Frame
     if (slots.first_frame && stagedFiles.firstFrameFilename) {
       workflow[slots.first_frame.node].inputs[slots.first_frame.input] = stagedFiles.firstFrameFilename;
     }
 
-    // Inject Last Frame. character_loop intentionally falls back K -> K only when
-    // the caller did not provide an explicit last-frame asset.
     if (slots.last_frame) {
       const lastFrame = stagedFiles.lastFrameFilename || stagedFiles.firstFrameFilename;
       workflow[slots.last_frame.node].inputs[slots.last_frame.input] = lastFrame;
     }
 
-    // Inject Character References. The current experimental Hybrid node exposes
-    // three fixed sockets; if fewer refs are supplied, repeat the primary identity
-    // ref rather than silently substituting the scene keyframe as an identity ref.
+    // Fixed-socket graphs need every declared loader populated. Candidate official
+    // Ref2VA currently repeats the primary identity ref when fewer than the declared
+    // loaders are supplied; it remains non-stable until real-machine A/B proves this
+    // fallback harmless or dynamic optional refs replace it.
     if (slots.character_refs && Array.isArray(slots.character_refs)) {
       const refs = stagedFiles.characterRefFilenames || [];
       slots.character_refs.forEach((slot, idx) => {
-        if (workflow[slot.node] && workflow[slot.node].inputs) {
+        if (workflow[slot.node]?.inputs) {
           const file = refs[idx] || refs[0] || stagedFiles.firstFrameFilename;
           workflow[slot.node].inputs[slot.input] = file;
         }
       });
     }
 
-    // Inject Video Reference (Motion Track)
     if (slots.video_refs && Array.isArray(slots.video_refs) && slots.video_refs.length > 0) {
       const slot = slots.video_refs[0];
-      if (slot && workflow[slot.node] && workflow[slot.node].inputs && stagedFiles.motionRefFilename) {
+      if (slot && workflow[slot.node]?.inputs && stagedFiles.motionRefFilename) {
         workflow[slot.node].inputs[slot.input] = stagedFiles.motionRefFilename;
       }
     }
 
-    // Inject Dimensions & FPS
     if (slots.width) workflow[slots.width.node].inputs[slots.width.input] = contract.width;
     if (slots.height) workflow[slots.height.node].inputs[slots.height.input] = contract.height;
     if (slots.frames) workflow[slots.frames.node].inputs[slots.frames.input] = contract.frames;
     if (slots.fps) workflow[slots.fps.node].inputs[slots.fps.input] = contract.fps;
 
-    // Current experimental Hybrid graph retains its existing step policy until
-    // the official Ref2VA baseline is introduced and benchmarked.
-    const steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
+    const manifestSteps = Number(manifest.default_params?.steps);
+    const steps = Number.isFinite(manifestSteps) && manifestSteps > 0
+      ? manifestSteps
+      : workflowId === DEFAULT_VIDEO_WORKFLOW_ID
+        ? (spec.preset === 'preview_480p_5s' ? 6 : 10)
+        : 20;
     if (slots.steps) workflow[slots.steps.node].inputs[slots.steps.input] = steps;
 
-    // Inject Seed
     const seed = inputs.seed != null ? inputs.seed : Math.floor(Math.random() * 100000000);
     if (slots.seed) workflow[slots.seed.node].inputs[slots.seed.input] = seed;
 
-    // Inject Output Prefix
     const prefix = inputs.outputPrefix || `NovaH3_${Date.now()}`;
     if (slots.output_prefix) workflow[slots.output_prefix.node].inputs[slots.output_prefix.input] = prefix;
 
@@ -177,6 +168,9 @@ export class VideoWorkflowCompiler {
       workflow,
       manifest,
       appliedParams: {
+        workflow_id: workflowId,
+        workflow_family: manifest.workflow_family || 'unknown',
+        stability: manifest.stability || 'unknown',
         width: contract.width,
         height: contract.height,
         frames: contract.frames,
@@ -207,7 +201,6 @@ export class VideoWorkflowCompiler {
       };
     }
 
-    // Check every node class_type used in workflow exists in object_info.
     for (const nodeData of Object.values(workflow)) {
       const classType = (nodeData as any)?.class_type;
       if (classType && !objectInfo[classType] && !missingNodes.includes(classType)) {
@@ -215,7 +208,6 @@ export class VideoWorkflowCompiler {
       }
     }
 
-    // Check declared slots.
     for (const [slotName, slotValue] of Object.entries(manifest.slots)) {
       if (!slotValue) continue;
       const slotList = Array.isArray(slotValue) ? slotValue : [slotValue];
@@ -228,14 +220,9 @@ export class VideoWorkflowCompiler {
       }
     }
 
-    // ComfyUI exposes loader combo choices through /object_info. Verify that the
-    // exact model filenames declared by the workflow manifest are actually present,
-    // rather than treating the existence of UNETLoader/CLIPLoader/VAELoader as proof.
     const objectInfoText = JSON.stringify(objectInfo);
     for (const modelName of manifest.required_models || []) {
-      if (!objectInfoText.includes(modelName)) {
-        missingModels.push(modelName);
-      }
+      if (!objectInfoText.includes(modelName)) missingModels.push(modelName);
     }
 
     return {
