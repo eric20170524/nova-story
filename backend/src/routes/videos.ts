@@ -24,6 +24,13 @@ const taskForClient = <T extends Record<string, any> | null>(task: T): T => {
   return { ...task, status: 'completed', stage: 'review_required' } as T;
 };
 
+const REFERENCE_UPLOAD_ROLES = [
+  'character_reference',
+  'motion_reference',
+  'video_keyframe',
+  'last_frame_reference'
+] as const;
+
 export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   // GET /api/videos/capabilities?workflow_id=...
   fastify.get('/capabilities', async (request, reply) => {
@@ -95,9 +102,10 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const characterId = fields.character_id?.value ? Number(fields.character_id.value) : undefined;
     const role = fields.role?.value || 'character_reference';
 
-    const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
-    if (!allowedRoles.includes(role)) {
-      return reply.status(400).send({ error: `Direct upload not allowed for role '${role}'. Allowed roles: ${allowedRoles.join(', ')}` });
+    if (!(REFERENCE_UPLOAD_ROLES as readonly string[]).includes(role)) {
+      return reply.status(400).send({
+        error: `Direct upload not allowed for role '${role}'. Allowed roles: ${REFERENCE_UPLOAD_ROLES.join(', ')}`
+      });
     }
 
     const mediaType = data.mimetype.startsWith('video/') ? 'video' : 'image';
@@ -166,8 +174,7 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       return reply.status(400).send({ error: 'Missing required asset fields (url, role)' });
     }
 
-    const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
-    if (!allowedRoles.includes(body.role)) {
+    if (!(REFERENCE_UPLOAD_ROLES as readonly string[]).includes(body.role)) {
       return reply.status(400).send({
         error: `External asset registration not allowed for role '${body.role}'`
       });
