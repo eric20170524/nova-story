@@ -30,6 +30,7 @@ backend/scripts/**
 !backend/scripts/recompile_dreamcore_ch2_10.ts
 !backend/scripts/verify_dreamcore_ac.ts
 !backend/scripts/run-tests.ts
+!backend/scripts/video-benchmark.ts
 !backend/scripts/fixtures/
 !backend/scripts/fixtures/dreamcore_ac_fixture.json
 *.bak
@@ -48,4 +49,3 @@ backend/static/comics/
 /backend/scripts/
 /questionlist/
 backend/static/staging/
-
