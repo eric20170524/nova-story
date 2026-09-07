@@ -121,6 +121,10 @@ export type AssetMode = 'single_image' | 'contact_sheet_3x3' | 'video_clip';
 
 export type VideoProfile = 'narrative_clip' | 'character_loop';
 export type VideoPreset = 'preview_480p_5s' | 'standard_720p_5s';
+export type VideoWorkflowId =
+  | 'minimax_h3_hongchao_a2a_12gb'
+  | 'minimax_h3_ref2va_official_12gb'
+  | 'minimax_h3_fl2va_official_12gb';
 export type VideoTaskStage =
   | 'queued'
   | 'preflight'
@@ -209,6 +213,7 @@ export interface VideoTaskState {
   output_url?: string | null;
   raw_video_url?: string | null;
   poster_url?: string | null;
+  qa_report_url?: string | null;
   qa_report?: VideoQAReport | null;
   created_at?: string;
   updated_at?: string;
@@ -226,6 +231,10 @@ export interface VideoCapabilities {
   supported_presets: VideoPreset[];
   supported_profiles: VideoProfile[];
   missing_components: string[];
+  workflow_id?: VideoWorkflowId;
+  workflow_family?: string;
+  workflow_stability?: string;
+  upstream_reference?: string;
 }
 
 export interface VideoPreflightResponse {
@@ -236,12 +245,23 @@ export interface VideoPreflightResponse {
   blockers: string[];
   warnings: string[];
   estimated_duration_seconds: number;
+  runtime?: {
+    workflow_id: VideoWorkflowId;
+    workflow_family: string;
+    workflow_stability: string;
+    comfyui_online: boolean;
+    h3_workflow_ready: boolean;
+    ffmpeg_available: boolean;
+    ffprobe_available: boolean;
+    missing_components: string[];
+  };
 }
 
 export interface VideoGenerationRequest {
   scene_id: number;
   scene_version?: number;
   profile: VideoProfile;
+  workflow_id?: VideoWorkflowId;
   keyframe_asset_id?: number;
   character_reference_asset_ids?: number[];
   motion_reference_asset_id?: number;
