@@ -53,13 +53,27 @@ export const resolvePresetDimensions = (preset: VideoPreset) => {
   if (preset === 'standard_720p_5s') {
     return { width: 1280, height: 720, frames: modelFrames, fps };
   }
-  // default preview_480p_5s
   return { width: 864, height: 480, frames: modelFrames, fps };
 };
 
 const compileReferenceInstruction = (request: VideoGenerationRequest, charName: string): string[] => {
+  if (request.workflow_id === 'minimax_h3_fl2va_official_12gb') {
+    // FL2VA uses keyframe conditioning rather than Ref2VA ordinal tags.
+    return [];
+  }
+
   const instructions: string[] = [];
-  const pictureTags = (request.character_reference_asset_ids || []).map((_, index) => `<Picture ${index + 1}>`);
+  const isOfficialRef2va = request.workflow_id === 'minimax_h3_ref2va_official_12gb';
+  const pictureOffset = isOfficialRef2va ? 2 : 1;
+  const pictureTags = (request.character_reference_asset_ids || []).map(
+    (_, index) => `<Picture ${index + pictureOffset}>`
+  );
+
+  if (isOfficialRef2va) {
+    instructions.push(
+      '<Picture 1> is the scene/keyframe reference; preserve its composition, lighting and starting appearance.'
+    );
+  }
 
   if (pictureTags.length > 0) {
     instructions.push(
@@ -80,29 +94,27 @@ export const VideoSpecCompiler = {
   compile(options: CompileVideoSpecOptions): VideoSpec {
     const { request, scene, character } = options;
     const isLoop = request.profile === 'character_loop';
+    const isFl2va = request.workflow_id === 'minimax_h3_fl2va_official_12gb';
     const dimensions = resolvePresetDimensions(request.preset);
 
-    // Extract subject identity
     const charName = character?.name || 'Character';
     const charDesc = character?.description ? cleanPromptForH3(character.description) : '';
     const subjectIdentity = charDesc
       ? `The same character (${charName}), ${charDesc}, face, hairstyle, costume, and lighting remain strictly consistent.`
-      : `The same character (${charName}), consistent facial features, costume and lighting.`;
+      : isFl2va
+        ? 'Preserve the exact subject identity, face, hairstyle, costume, materials and lighting established by the keyframe image(s).'
+        : `The same character (${charName}), consistent facial features, costume and lighting.`;
 
-    // Camera motion
     let cameraMotion = 'Locked camera, static frame with no camera movement.';
     if (!isLoop && scene.camera_movement && scene.camera_movement !== 'static' && scene.camera_movement !== 'none') {
       cameraMotion = `Smooth camera movement: ${scene.camera_movement}.`;
     }
 
-    // Action and shot spec
     let primaryAction = cleanPromptForH3(scene.visual_prompt) || 'Subtle character motion, standing still with natural breathing.';
     if (scene.shot_spec) {
       try {
         const parsedSpec = JSON.parse(scene.shot_spec);
-        if (parsedSpec.primary_action) {
-          primaryAction = parsedSpec.primary_action;
-        }
+        if (parsedSpec.primary_action) primaryAction = parsedSpec.primary_action;
       } catch {
         // use raw visual_prompt fallback
       }
@@ -110,37 +122,36 @@ export const VideoSpecCompiler = {
 
     const environmentMotion = 'Subtle natural cloth and hair breeze.';
     const temporalArc = isLoop
-      ? 'Looping cycle: starts at neutral keyframe K, progresses through subtle natural motion, and returns smoothly to the exact same starting pose and near-zero velocity at the boundary.'
+      ? isFl2va
+        ? 'Boundary-constrained loop: begin at the first keyframe, perform one subtle motion cycle, and arrive at the last keyframe with near-zero boundary velocity.'
+        : 'Looping cycle: starts at neutral keyframe K, progresses through subtle natural motion, and returns smoothly to the exact same starting pose and near-zero velocity at the boundary.'
       : 'Narrative arc: natural progression of the primary action across 5 seconds.';
 
     let negativeMotion = 'deformed anatomy, floating limbs, extra fingers, identity shift, sudden lighting flicker, face distortion, blurry artifacts';
-    if (isLoop) {
-      negativeMotion += ', camera drift, speech, mouth opening, wide hand gestures';
-    }
+    if (isLoop) negativeMotion += ', camera drift, speech, mouth opening, wide hand gestures';
 
-    // Compose Positive Prompt. H3 Ref2VA resolves references by ordinal tags,
-    // so make the binding explicit instead of relying on vague "reference" prose.
     const positiveParts: string[] = [
       ...compileReferenceInstruction(request, charName)
     ];
     if (isLoop) {
-      positiveParts.push('Locked camera. Preserve the exact motion timing and body pose from <Video 1>.');
+      if (isFl2va) {
+        positiveParts.push('Locked camera. Treat the first and last keyframes as hard visual boundary anchors.');
+      } else {
+        positiveParts.push('Locked camera. Preserve the exact motion timing and body pose from <Video 1>.');
+      }
     } else {
       positiveParts.push(cameraMotion);
     }
     positiveParts.push(subjectIdentity);
     if (isLoop) {
       positiveParts.push('Natural breathing, one gentle blink, subtle head-and-shoulder micro-motion. Mouth remains gently closed.');
-      positiveParts.push('End at the exact same pose and near-zero velocity as the first frame.');
+      positiveParts.push('End at the exact boundary pose with near-zero velocity.');
     } else {
       positiveParts.push(`Action: ${primaryAction}.`);
     }
-    if (request.prompt_override) {
-      positiveParts.push(cleanPromptForH3(request.prompt_override));
-    }
+    if (request.prompt_override) positiveParts.push(cleanPromptForH3(request.prompt_override));
     positiveParts.push(environmentMotion);
 
-    // Compose Negative Prompt
     const negativeParts: string[] = [negativeMotion];
     if (scene.negative_prompt) {
       const cleanedNeg = cleanPromptForH3(scene.negative_prompt);
@@ -150,6 +161,7 @@ export const VideoSpecCompiler = {
     return {
       profile: request.profile,
       preset: request.preset,
+      workflow_id: request.workflow_id,
       subject_identity: subjectIdentity,
       primary_action: isLoop ? 'Natural subtle breathing and posture stabilization' : primaryAction,
       camera_motion: cameraMotion,
