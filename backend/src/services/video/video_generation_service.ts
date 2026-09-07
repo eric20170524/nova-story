@@ -30,6 +30,24 @@ type QaDisposition = {
   taskStage: Extract<VideoTaskStage, 'completed' | 'review_required' | 'rejected'>;
 };
 
+const TERMINAL_TASK_STATUSES = new Set([
+  'completed',
+  'review_required',
+  'rejected',
+  'failed',
+  'cancelled',
+  'interrupted'
+]);
+
+const TERMINAL_TASK_STAGES = new Set<VideoTaskStage>([
+  'completed',
+  'review_required',
+  'rejected',
+  'failed',
+  'cancelled',
+  'interrupted'
+]);
+
 export class VideoGenerationService {
   private static runningTasks = new Map<string, { abortController?: AbortController; promptId?: string }>();
 
@@ -416,22 +434,23 @@ export class VideoGenerationService {
 
   static async cancelTask(taskId: string): Promise<boolean> {
     const task = await this.getTask(taskId);
-    if (
-      !task
-      || ['completed', 'review_required', 'rejected', 'failed', 'cancelled', 'interrupted'].includes(task.status)
-    ) {
+    if (!task || TERMINAL_TASK_STATUSES.has(task.status)) {
       return false;
     }
 
-    // Persist the terminal state first. Any queued Promise rejection or asynchronous
-    // pipeline unwind that follows must observe cancellation and must not overwrite it
-    // with `failed`.
+    // Make the transition itself atomic. A stale pre-check must not allow a cancel
+    // request to overwrite a terminal completion that won the race in SQLite.
     const now = new Date().toISOString();
-    await db.run(
-      `UPDATE generation_task SET status = 'cancelled', stage = 'cancelled', error = 'Cancelled by user', updated_at = ? WHERE task_id = ?`,
+    const cancelUpdate = await db.run(
+      `UPDATE generation_task
+       SET status = 'cancelled', stage = 'cancelled', error = 'Cancelled by user', updated_at = ?
+       WHERE task_id = ? AND status = 'processing'`,
       now,
       taskId
     );
+    if ((cancelUpdate?.changes ?? 0) === 0) {
+      return false;
+    }
 
     const publisher = createProgressPublisher(taskId, null);
     await publisher('cancelled', { phase: 'cancelled', message: 'Task cancelled by user' });
@@ -541,6 +560,13 @@ export class VideoGenerationService {
     };
 
     const emitEvent = async (stage: VideoTaskStage, data: Record<string, any> = {}) => {
+      // Suppress stale non-terminal progress after any terminal DB transition. This
+      // keeps SSE/poll semantics monotonic in the same way as lifecycle writes below.
+      if (!TERMINAL_TASK_STAGES.has(stage)) {
+        const current = await this.getTask(taskId);
+        if (!current || TERMINAL_TASK_STATUSES.has(current.status)) return;
+      }
+
       const status = stage === 'completed' ? 'completed'
         : stage === 'review_required' ? 'review_required'
         : stage === 'rejected' ? 'rejected'
@@ -589,7 +615,12 @@ export class VideoGenerationService {
         message: 'Validating inputs and preparing model specs...',
         message_zh: '正在校验输入资产与编译生成规范...'
       });
-      await db.run(`UPDATE generation_task SET stage = 'preflight', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
+      await db.run(
+        `UPDATE generation_task SET stage = 'preflight', updated_at = ?
+         WHERE task_id = ? AND status = 'processing'`,
+        new Date().toISOString(),
+        taskId
+      );
 
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
@@ -619,7 +650,12 @@ export class VideoGenerationService {
         message_zh: '显存就绪，正在暂存参考资产...'
       });
 
-      await db.run(`UPDATE generation_task SET stage = 'staging_refs', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
+      await db.run(
+        `UPDATE generation_task SET stage = 'staging_refs', updated_at = ?
+         WHERE task_id = ? AND status = 'processing'`,
+        new Date().toISOString(),
+        taskId
+      );
       const keyframeAsset = (await MediaAssetService.getAssetById(request.keyframe_asset_id))!;
       const stagedKf = await MediaAssetService.stageAssetForComfy(keyframeAsset);
 
@@ -674,7 +710,18 @@ export class VideoGenerationService {
         message: 'Submitting H3 workflow to ComfyUI...',
         message_zh: '正在提交工作流至 ComfyUI 并加载权重...'
       });
-      await db.run(`UPDATE generation_task SET stage = 'generating', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
+      await db.run(
+        `UPDATE generation_task SET stage = 'generating', updated_at = ?
+         WHERE task_id = ? AND status = 'processing'`,
+        new Date().toISOString(),
+        taskId
+      );
+
+      if (await isCancelled()) {
+        stopLeaseHeartbeat();
+        if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
+        return;
+      }
 
       const comfyProvider = new ComfyH3Provider();
       const executionResult = await comfyProvider.executeWorkflow(compiledWorkflow.workflow, {
@@ -758,7 +805,14 @@ export class VideoGenerationService {
         message: 'Applying video postprocessing & LoopCloser...',
         message_zh: '正在执行视频标准化转码与闭环接缝修复...'
       });
-      await db.run(`UPDATE generation_task SET stage = 'postprocessing', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
+      await db.run(
+        `UPDATE generation_task SET stage = 'postprocessing', updated_at = ?
+         WHERE task_id = ? AND status = 'processing'`,
+        new Date().toISOString(),
+        taskId
+      );
+
+      if (await isCancelled()) return;
 
       const processRes = await LoopCloser.process({
         taskId,
@@ -792,7 +846,7 @@ export class VideoGenerationService {
       if (await isCancelled()) return;
 
       const { disposition, finalAsset } = persisted;
-      await db.run(
+      const finalizeUpdate = await db.run(
         `UPDATE generation_task SET
           status = ?,
           stage = ?,
@@ -800,7 +854,7 @@ export class VideoGenerationService {
           metadata_json = ?,
           completed_at = ?,
           updated_at = ?
-         WHERE task_id = ?`,
+         WHERE task_id = ? AND status = 'processing'`,
         disposition.taskStatus,
         disposition.taskStage,
         finalAsset.url,
@@ -815,6 +869,10 @@ export class VideoGenerationService {
         new Date().toISOString(),
         taskId
       );
+      if ((finalizeUpdate?.changes ?? 0) === 0) {
+        logger.info(`Task ${taskId} finalization skipped because another terminal transition won.`);
+        return;
+      }
 
       const isPass = disposition.taskStatus === 'completed';
       const isReview = disposition.taskStatus === 'review_required';
@@ -846,12 +904,18 @@ export class VideoGenerationService {
       if (lease) {
         GpuLeaseService.releaseLease(lease.lease_id, taskId);
       }
-      await db.run(
-        `UPDATE generation_task SET status = 'failed', stage = 'failed', error = ?, updated_at = ? WHERE task_id = ?`,
+      const failureUpdate = await db.run(
+        `UPDATE generation_task
+         SET status = 'failed', stage = 'failed', error = ?, updated_at = ?
+         WHERE task_id = ? AND status = 'processing'`,
         String(err?.message || err),
         new Date().toISOString(),
         taskId
       );
+      if ((failureUpdate?.changes ?? 0) === 0) {
+        logger.info(`Task ${taskId} failure transition skipped because another terminal transition won.`);
+        return;
+      }
       await emitEvent('failed', {
         error: String(err?.message || err),
         message: `Video generation failed: ${err?.message || err}`,
@@ -916,7 +980,9 @@ export class VideoGenerationService {
 
         logger.warn(`[Recovery] Task ${taskId} cannot be resumed (stage=${stage}, comfyPromptId=${comfyPromptId}); marking interrupted.`);
         await db.run(
-          `UPDATE generation_task SET status = 'interrupted', stage = 'interrupted', error = 'Server restarted while task was in progress', updated_at = ? WHERE task_id = ?`,
+          `UPDATE generation_task
+           SET status = 'interrupted', stage = 'interrupted', error = 'Server restarted while task was in progress', updated_at = ?
+           WHERE task_id = ? AND status = 'processing'`,
           new Date().toISOString(),
           taskId
         );
@@ -935,6 +1001,12 @@ export class VideoGenerationService {
     rawVideoPath: string,
     taskAssetDir: string
   ): Promise<void> {
+    const initialState = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
+    if (initialState?.status !== 'processing') {
+      logger.info(`[Recovery] Skipping postprocess for ${taskId}: status=${initialState?.status || 'missing'}.`);
+      return;
+    }
+
     const publisher: ProgressPublisher = createProgressPublisher(taskId, null);
     await publisher('postprocessing', {
       task_id: taskId,
@@ -975,6 +1047,12 @@ export class VideoGenerationService {
       runLoopCloser: request.run_loop_closer,
       metadata: { recovered: true, request }
     });
+
+    const stateAfterProcess = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
+    if (stateAfterProcess?.status !== 'processing') {
+      logger.info(`[Recovery] Aborting postprocess finalization for ${taskId}: status=${stateAfterProcess?.status || 'missing'}.`);
+      return;
+    }
 
     const expectedFinalUrl = `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/final.mp4`;
     const existingFinalRow = await db.get(
@@ -1019,8 +1097,10 @@ export class VideoGenerationService {
       });
     }
 
-    await db.run(
-      `UPDATE generation_task SET status = ?, stage = ?, output_url = ?, metadata_json = ?, completed_at = ?, updated_at = ? WHERE task_id = ?`,
+    const recoveryFinalize = await db.run(
+      `UPDATE generation_task
+       SET status = ?, stage = ?, output_url = ?, metadata_json = ?, completed_at = ?, updated_at = ?
+       WHERE task_id = ? AND status = 'processing'`,
       persisted.disposition.taskStatus,
       persisted.disposition.taskStage,
       persisted.finalAsset.url,
@@ -1033,6 +1113,10 @@ export class VideoGenerationService {
       new Date().toISOString(),
       taskId
     );
+    if ((recoveryFinalize?.changes ?? 0) === 0) {
+      logger.info(`[Recovery] Finalization skipped for ${taskId}: another terminal transition won.`);
+      return;
+    }
 
     await publisher(persisted.disposition.taskStage, {
       task_id: taskId,
