@@ -1,18 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Play, 
-  Pause, 
-  Repeat, 
-  RotateCcw, 
-  CheckCircle, 
-  AlertTriangle, 
-  ShieldCheck, 
-  ExternalLink, 
-  Loader2, 
-  Video, 
+import {
+  Play,
+  Pause,
+  Repeat,
+  RotateCcw,
+  CheckCircle,
+  ShieldCheck,
+  ExternalLink,
+  Loader2,
+  Video,
   Sparkles,
-  Award,
-  Sliders,
   Check
 } from 'lucide-react';
 import { Scene, MediaAsset, VideoTaskState, VideoQAReport } from '../../types';
@@ -28,6 +25,9 @@ interface SceneVideoPlayerProps {
   onReprocessAsset?: (assetId: number) => void;
   onCancelTask?: (taskId: string) => void;
 }
+
+const isFinalVideo = (asset?: MediaAsset | null) =>
+  Boolean(asset && (asset.role === 'loop_master' || asset.role === 'narrative_final'));
 
 export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   scene,
@@ -47,21 +47,31 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showQADetails, setShowQADetails] = useState(false);
 
-  // Filter video assets for this scene
-  const videoAssets = mediaAssets.filter(
-    (a) => a.media_type === 'video' || a.role === 'loop_master' || a.role === 'narrative_final' || a.role === 'raw_video'
-  );
+  const videoAssets = mediaAssets.filter((asset) => asset.media_type === 'video');
+  const finalVideoAssets = videoAssets.filter((asset) => isFinalVideo(asset));
 
-  // Preferred / promoted video asset or latest
-  const activeAsset = videoAssets.find((a) => (selectedAssetId ? a.id === selectedAssetId : a.status === 'ready')) 
+  const selectedAsset = selectedAssetId != null
+    ? videoAssets.find((asset) => asset.id === selectedAssetId)
+    : undefined;
+
+  // Prefer an explicitly promoted final. Otherwise expose the latest QA candidate
+  // before falling back to raw evidence. A passing candidate is intentionally draft
+  // until the user promotes it.
+  const preferredAsset =
+    finalVideoAssets.find((asset) => asset.status === 'ready')
+    || finalVideoAssets.find((asset) => asset.status === 'review_required')
+    || finalVideoAssets.find((asset) => asset.status === 'draft')
+    || finalVideoAssets.find((asset) => asset.status === 'rejected')
+    || videoAssets.find((asset) => asset.role === 'raw_video')
     || videoAssets[0];
 
+  const activeAsset = selectedAsset || preferredAsset;
+
   useEffect(() => {
-    if (videoAssets.length > 0 && !selectedAssetId) {
-      const readyAsset = videoAssets.find((a) => a.status === 'ready');
-      if (readyAsset) setSelectedAssetId(readyAsset.id);
+    if (selectedAssetId == null && preferredAsset?.id != null) {
+      setSelectedAssetId(preferredAsset.id);
     }
-  }, [videoAssets, selectedAssetId]);
+  }, [selectedAssetId, preferredAsset?.id]);
 
   const handleTogglePlay = () => {
     if (!videoRef.current) return;
@@ -89,7 +99,6 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     }
   };
 
-  // Resolve absolute video and poster URLs
   const formatMediaUrl = (url?: string | null) => {
     if (!url) return '';
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
@@ -97,42 +106,40 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   };
 
   const videoUrl = formatMediaUrl(activeAsset?.url || taskState?.output_url || taskState?.raw_video_url);
-  const posterAsset = mediaAssets.find((a) => a.role === 'poster');
+  const posterAsset = activeAsset?.id
+    ? mediaAssets.find((asset) => asset.role === 'poster' && asset.parent_asset_id === activeAsset.id)
+    : undefined;
   const posterUrl = formatMediaUrl(posterAsset?.url || taskState?.poster_url || scene.asset_url);
 
-  // Parse QA report if available
   let qaReport: VideoQAReport | null = null;
   if (activeAsset?.metadata_json) {
     try {
       const meta = JSON.parse(activeAsset.metadata_json);
-      if (meta?.qa_report) {
-        qaReport = meta.qa_report;
-      }
+      if (meta?.qa_report) qaReport = meta.qa_report;
     } catch (_) {}
   }
-  if (!qaReport && taskState?.qa_report) {
-    qaReport = taskState.qa_report;
-  }
+  if (!qaReport && taskState?.qa_report) qaReport = taskState.qa_report;
 
-  const isGenerating = taskState && (taskState.status === 'queued' || taskState.status === 'processing');
+  const isGenerating = Boolean(
+    taskState && (taskState.status === 'queued' || taskState.status === 'processing')
+  );
 
-  // Helper for QA score display
   const getQABadge = (report?: VideoQAReport | null) => {
     if (!report) return null;
     const score = report.continuity_scores?.normalized_score;
     const grade = report.quality_grade;
     let badgeColor = 'bg-emerald-950/80 border-emerald-600/70 text-emerald-300';
-    let label = 'Grade S';
+    let label = 'Grade A';
 
     if (grade === 'reject') {
       badgeColor = 'bg-rose-950/80 border-rose-600/70 text-rose-300';
       label = 'Grade F';
     } else if (grade === 'manual_review') {
       badgeColor = 'bg-amber-950/80 border-amber-600/70 text-amber-300';
-      label = 'Grade B';
+      label = 'Review';
     } else if (typeof score === 'number') {
-      if (score >= 0.95) label = 'Grade S';
-      else if (score >= 0.85) label = 'Grade A';
+      if (score >= 95) label = 'Grade S';
+      else if (score >= 85) label = 'Grade A';
       else label = 'Grade B';
     }
 
@@ -148,36 +155,37 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       >
         <ShieldCheck size={11} />
         <span>{label}</span>
-        {typeof score === 'number' && <span className="opacity-80">({score.toFixed(2)})</span>}
+        {typeof score === 'number' && <span className="opacity-80">({score.toFixed(0)})</span>}
       </button>
     );
   };
 
-  // If task is generating
   if (isGenerating) {
-    const stage = taskState.stage || 'sampling';
+    const stage = taskState?.stage || 'generating';
     const stageLabels: Record<string, string> = {
       queued: '排队等待 GPU',
+      preflight: '输入与运行前检查',
       vram_tuning: '显存调优 (VRAM Tuning)',
-      sampling: 'H3 采样生成中 (Sampling)',
-      postprocessing: '视频标准化 (Postprocess)',
-      loop_closing: 'LoopCloser 闭环分析'
+      vram_ready: '显存已就绪',
+      staging_refs: '暂存参考素材',
+      model_loading: '加载 H3 工作流',
+      generating: 'H3 采样生成中 (Sampling)',
+      collecting: '收取原始视频',
+      postprocessing: '视频标准化 / LoopCloser',
+      qa_running: '连续性 QA'
     };
 
     return (
       <div className="w-full h-full min-h-[220px] bg-slate-950 flex flex-col items-center justify-center p-4 text-center select-none relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-950/30 to-purple-950/30 animate-pulse pointer-events-none" />
         <Loader2 className="animate-spin text-indigo-400 mb-3" size={32} />
-        
         <span className="text-xs font-semibold text-indigo-200 mb-1">
           {t('director.generating_video_status', 'H3 视频生成中...')}
         </span>
-
         <span className="text-[11px] font-mono px-2.5 py-1 rounded bg-indigo-950/80 border border-indigo-700/50 text-indigo-300 mb-3">
           {stageLabels[stage] || stage}
         </span>
-
-        {taskState.task_id && onCancelTask && (
+        {taskState?.task_id && onCancelTask && (
           <button
             type="button"
             onClick={() => onCancelTask(taskState.task_id)}
@@ -190,7 +198,6 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     );
   }
 
-  // If no video generated yet
   if (!videoUrl) {
     return (
       <div className="w-full h-full min-h-[220px] bg-slate-950/90 flex flex-col items-center justify-center p-4 text-center select-none border-b border-slate-800">
@@ -200,10 +207,9 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
         <p className="text-xs text-slate-300 font-medium mb-1">
           {t('director.no_video_yet', '暂未生成 H3 视频镜头')}
         </p>
-        <p className="text-[10px] text-slate-500 mb-3 max-w-[200px]">
-          5.0s / 120帧 / 24fps 电影级动态生成与 LoopCloser 闭环
+        <p className="text-[10px] text-slate-500 mb-3 max-w-[220px]">
+          H3 模型按 124 帧生成，交付标准化为 5.0s / 120帧 / 24fps
         </p>
-
         {onGenerateVideo && (
           <button
             type="button"
@@ -218,9 +224,29 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     );
   }
 
+  const canPromote = Boolean(
+    activeAsset
+    && isFinalVideo(activeAsset)
+    && (activeAsset.status === 'draft' || activeAsset.status === 'review_required')
+  );
+  const canReprocess = Boolean(
+    activeAsset
+    && activeAsset.profile === 'character_loop'
+    && (activeAsset.role === 'raw_video' || isFinalVideo(activeAsset))
+  );
+
+  const assetBadge = activeAsset?.status === 'ready'
+    ? { label: t('director.promoted_badge', '成片'), cls: 'bg-indigo-950/90 border-indigo-600 text-indigo-300' }
+    : activeAsset?.status === 'review_required'
+      ? { label: '待人工复核', cls: 'bg-amber-950/90 border-amber-600 text-amber-300' }
+      : activeAsset?.status === 'rejected'
+        ? { label: 'QA 淘汰', cls: 'bg-rose-950/90 border-rose-700 text-rose-300' }
+        : activeAsset?.role === 'raw_video'
+          ? { label: 'RAW', cls: 'bg-slate-950/90 border-slate-600 text-slate-300' }
+          : { label: 'QA 候选', cls: 'bg-sky-950/90 border-sky-700 text-sky-300' };
+
   return (
     <div className="w-full flex flex-col bg-black relative group/player overflow-hidden select-none">
-      {/* Video Viewport */}
       <div className="relative aspect-video bg-black flex items-center justify-center">
         <video
           ref={videoRef}
@@ -238,13 +264,12 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
           onClick={handleTogglePlay}
         />
 
-        {/* Floating Top Bar (QA badge, candidate selector, promoted indicator) */}
         <div className="absolute top-2 inset-x-2 flex items-center justify-between gap-1 pointer-events-none z-10">
           <div className="flex items-center gap-1 pointer-events-auto">
-            {activeAsset?.status === 'ready' && (
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950/90 border border-indigo-600 text-indigo-300 flex items-center gap-1 shadow">
-                <Check size={10} />
-                <span>{t('director.promoted_badge', '成片')}</span>
+            {activeAsset && (
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 shadow ${assetBadge.cls}`}>
+                {activeAsset.status === 'ready' && <Check size={10} />}
+                <span>{assetBadge.label}</span>
               </span>
             )}
             {activeAsset?.profile && (
@@ -253,13 +278,11 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
               </span>
             )}
           </div>
-
           <div className="flex items-center gap-1 pointer-events-auto">
             {getQABadge(qaReport)}
           </div>
         </div>
 
-        {/* Center Play Overlay Icon when paused */}
         {!isPlaying && (
           <button
             type="button"
@@ -270,103 +293,102 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
           </button>
         )}
 
-        {/* Video Candidate Switcher (if > 1 video) */}
         {videoAssets.length > 1 && (
-          <div className="absolute bottom-11 left-2 flex items-center gap-1 z-10 pointer-events-auto">
-            {videoAssets.map((asset, i) => (
-              <button
-                key={asset.id}
-                type="button"
-                onClick={() => setSelectedAssetId(asset.id)}
-                className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-medium transition-all ${
-                  (selectedAssetId ? selectedAssetId === asset.id : i === 0)
-                    ? 'bg-indigo-600 text-white border border-indigo-400 shadow'
-                    : 'bg-slate-900/80 text-slate-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                #{i + 1}
-              </button>
-            ))}
+          <div className="absolute bottom-11 left-2 flex items-center gap-1 z-10 pointer-events-auto max-w-[90%] overflow-x-auto">
+            {videoAssets.map((asset, i) => {
+              const label = asset.role === 'raw_video'
+                ? 'RAW'
+                : asset.status === 'ready'
+                  ? `成片${i + 1}`
+                  : asset.status === 'review_required'
+                    ? `复核${i + 1}`
+                    : asset.status === 'rejected'
+                      ? `淘汰${i + 1}`
+                      : `候选${i + 1}`;
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => setSelectedAssetId(asset.id)}
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-medium transition-all whitespace-nowrap ${
+                    activeAsset?.id === asset.id
+                      ? 'bg-indigo-600 text-white border border-indigo-400 shadow'
+                      : 'bg-slate-900/80 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
 
-        {/* Bottom Control Bar */}
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2 flex items-center justify-between gap-1 z-10">
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={handleTogglePlay}
               className="p-1 rounded hover:bg-slate-800 text-white transition-colors"
-              title={isPlaying ? "暂停" : "播放"}
+              title={isPlaying ? '暂停' : '播放'}
             >
               {isPlaying ? <Pause size={14} /> : <Play size={14} />}
             </button>
-
-            {/* Loop Toggle */}
             <button
               type="button"
               onClick={handleToggleLoop}
               className={`p-1 rounded text-[10px] flex items-center gap-0.5 font-mono transition-colors ${
                 isLooping ? 'text-indigo-400 bg-indigo-950/80 border border-indigo-800/60' : 'text-slate-400 hover:text-white'
               }`}
-              title={isLooping ? "已开启循环播放" : "单次播放"}
+              title={isLooping ? '已开启循环播放' : '单次播放'}
             >
               <Repeat size={12} />
               <span className="text-[9px]">{t('director.loop_toggle', '循环')}</span>
             </button>
-
-            {/* Speed Switcher */}
             <div className="flex items-center bg-slate-900/90 rounded border border-slate-800 p-0.5">
-              {[0.5, 1.0, 2.0].map((s) => (
+              {[0.5, 1.0, 2.0].map((speed) => (
                 <button
-                  key={s}
+                  key={speed}
                   type="button"
-                  onClick={() => handleChangeSpeed(s)}
+                  onClick={() => handleChangeSpeed(speed)}
                   className={`px-1 py-0.2 text-[9px] font-mono rounded ${
-                    playbackRate === s
-                      ? 'bg-indigo-600 text-white font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
+                    playbackRate === speed ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {s}x
+                  {speed}x
                 </button>
               ))}
             </div>
           </div>
-
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => window.open(videoUrl, '_blank')}
-              className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
-              title="在新标签页中打开原始视频"
-            >
-              <ExternalLink size={13} />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => window.open(videoUrl, '_blank')}
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
+            title="在新标签页中打开当前视频"
+          >
+            <ExternalLink size={13} />
+          </button>
         </div>
       </div>
 
-      {/* Actions Toolbar Below Player */}
       <div className="p-2 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between gap-1 text-xs">
-        {activeAsset && activeAsset.status !== 'ready' && onPromoteAsset && (
+        {canPromote && onPromoteAsset && activeAsset && (
           <button
             type="button"
             onClick={() => onPromoteAsset(activeAsset.id)}
             className="flex-1 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/50 text-indigo-200 py-1 px-2 rounded text-[11px] font-semibold flex items-center justify-center gap-1 transition-all"
-            title="将此视频设为本场景的正式成片"
+            title={activeAsset.status === 'review_required' ? '人工确认后将此候选设为正式成片' : '将已通过自动 QA 的候选设为正式成片'}
           >
             <CheckCircle size={12} />
-            <span>{t('director.promote_video', '设为成片')}</span>
+            <span>{activeAsset.status === 'review_required' ? '复核通过并设为成片' : t('director.promote_video', '设为成片')}</span>
           </button>
         )}
 
-        {activeAsset?.profile === 'character_loop' && onReprocessAsset && (
+        {canReprocess && onReprocessAsset && activeAsset && (
           <button
             type="button"
             onClick={() => onReprocessAsset(activeAsset.id)}
             className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 px-2 rounded text-[11px] flex items-center justify-center gap-1 border border-slate-700 transition-colors"
-            title="应用 LoopCloser 8帧融合重新闭环"
+            title="从 immutable raw 创建新的 8 帧闭环候选，不覆盖当前版本"
           >
             <RotateCcw size={11} />
             <span>{t('director.reprocess_loop', '重新闭环')}</span>
@@ -386,7 +408,6 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
         )}
       </div>
 
-      {/* QA Details Dropdown/Drawer */}
       {showQADetails && qaReport && (
         <div className="p-3 bg-slate-900 border-t border-slate-800 text-[11px] text-slate-300 space-y-2 animate-in slide-in-from-top-2 duration-150">
           <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
@@ -401,27 +422,39 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
           <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
             <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
-              <span className="text-slate-500 block">连续性总分:</span>
+              <span className="text-slate-500 block">连续性总分 (0-100):</span>
               <span className="font-bold text-emerald-400 text-xs">
-                {(qaReport.continuity_scores?.normalized_score ?? 0).toFixed(3)}
+                {(qaReport.continuity_scores?.normalized_score ?? 0).toFixed(0)}
+              </span>
+            </div>
+            <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
+              <span className="text-slate-500 block">接缝成本:</span>
+              <span className="text-rose-300">
+                {(qaReport.continuity_scores?.seam_cost ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
               <span className="text-slate-500 block">外观误差:</span>
               <span className="text-indigo-300">
-                {(qaReport.continuity_scores?.appearance_error ?? 0).toFixed(4)}
+                {(qaReport.continuity_scores?.appearance_error ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
-              <span className="text-slate-500 block">运动漂移:</span>
+              <span className="text-slate-500 block">运动边界误差:</span>
               <span className="text-amber-300">
-                {(qaReport.continuity_scores?.motion_error ?? 0).toFixed(4)}
+                {(qaReport.continuity_scores?.motion_error ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
-              <span className="text-slate-500 block">画面闪烁:</span>
+              <span className="text-slate-500 block">亮度闪烁:</span>
               <span className="text-sky-300">
-                {(qaReport.continuity_scores?.flicker_error ?? 0).toFixed(4)}
+                {(qaReport.continuity_scores?.flicker_error ?? 0).toFixed(2)}
+              </span>
+            </div>
+            <div className="bg-slate-950 p-1.5 rounded border border-slate-800">
+              <span className="text-slate-500 block">质量门:</span>
+              <span className={qaReport.quality_grade === 'pass' ? 'text-emerald-300' : qaReport.quality_grade === 'manual_review' ? 'text-amber-300' : 'text-rose-300'}>
+                {qaReport.quality_grade}
               </span>
             </div>
           </div>
@@ -430,9 +463,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
             <div className="text-[10px] text-slate-400 bg-slate-950 p-1.5 rounded border border-slate-800">
               <span className="text-slate-500 font-semibold block mb-0.5">评估备注:</span>
               <ul className="list-disc list-inside space-y-0.5">
-                {qaReport.reasons.map((r, idx) => (
-                  <li key={idx}>{r}</li>
-                ))}
+                {qaReport.reasons.map((reason, idx) => <li key={idx}>{reason}</li>)}
               </ul>
             </div>
           )}
