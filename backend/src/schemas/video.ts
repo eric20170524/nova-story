@@ -36,6 +36,7 @@ export type VideoTaskStage = z.infer<typeof VideoTaskStageSchema>;
 
 export const MediaAssetRoleSchema = z.enum([
   'video_keyframe',
+  'last_frame_reference',
   'character_reference',
   'motion_reference',
   'raw_video',
