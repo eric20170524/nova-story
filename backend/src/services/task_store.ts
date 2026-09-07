@@ -211,13 +211,16 @@ export const AssetTaskStore = {
   },
 
   /**
-   * After process restart, in-flight rows cannot be resumed (no worker queue).
-   * Mark them interrupted so clients stop polling forever as "processing".
+   * After process restart, generic/image in-flight rows cannot be resumed because
+   * there is no durable worker queue. Video rows are intentionally excluded here:
+   * VideoGenerationService owns their raw/history recovery and Comfy prompt handling.
    */
   async markOrphanedProcessingInterrupted(): Promise<number> {
     try {
       const rows = await db.all(
-        `SELECT task_id, scene_id FROM generation_task WHERE status = 'processing'`
+        `SELECT task_id, scene_id FROM generation_task
+         WHERE status = 'processing'
+           AND COALESCE(kind, 'image') <> 'video'`
       );
       let n = 0;
       for (const row of rows as any[]) {
@@ -237,7 +240,7 @@ export const AssetTaskStore = {
         n += 1;
       }
       if (n > 0) {
-        logger.info(`Marked ${n} orphaned generation_task row(s) as interrupted`);
+        logger.info(`Marked ${n} orphaned non-video generation_task row(s) as interrupted`);
       }
       return n;
     } catch (err: any) {
