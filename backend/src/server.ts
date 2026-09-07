@@ -25,6 +25,7 @@ import { coverageRoutes } from './routes/coverage';
 import { videoRoutes } from './routes/videos';
 import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
+import { VideoStartupRecoveryService } from './services/video/video_startup_recovery';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
   const app = Fastify({
@@ -124,11 +125,15 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(coverageRoutes, { prefix: '/api' });
   await app.register(videoRoutes, { prefix: '/api/videos' });
 
-  // After DB migrations (import of routes/db already ran them via proxy),
-  // mark orphaned processing tasks so clients don't hang after restart.
+  // Recovery order is intentional:
+  // 1) restore exclusive GPU ownership for any Comfy prompt that may have survived
+  //    the NovaStory process;
+  // 2) let video-specific recovery resume raw/history-backed work;
+  // 3) only then interrupt generic/image tasks that have no durable worker.
   try {
-    await AssetTaskStore.markOrphanedProcessingInterrupted();
+    await VideoStartupRecoveryService.reconcileActivePromptsOnStartup();
     await VideoGenerationService.markOrphanedTasks();
+    await AssetTaskStore.markOrphanedProcessingInterrupted();
   } catch {
     /* table may not exist in pure unit tests without full migrate */
   }
