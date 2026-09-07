@@ -48,13 +48,10 @@ export class VideoGenerationService {
         taskStage: 'review_required'
       };
     }
-    // A passing render is still a candidate until the user explicitly promotes it.
     return { assetStatus: 'draft', taskStatus: 'completed', taskStage: 'completed' };
   }
 
   private static async resolveCharacterForRequest(request: VideoGenerationRequest, projectId: number): Promise<any | null> {
-    // Prefer the explicit character binding carried by reference assets. This keeps
-    // prompt identity aligned with the images actually sent to H3.
     for (const assetId of request.character_reference_asset_ids || []) {
       const asset = await MediaAssetService.getAssetById(assetId);
       if (asset?.character_id) {
@@ -67,8 +64,6 @@ export class VideoGenerationService {
       }
     }
 
-    // A single-character project is an unambiguous fallback. For multi-character
-    // projects, returning null is safer than injecting the wrong person's identity.
     const characters = await db.all('SELECT * FROM character WHERE project_id = ? ORDER BY id ASC', projectId);
     return characters.length === 1 ? characters[0] : null;
   }
@@ -158,8 +153,6 @@ export class VideoGenerationService {
     let h3WorkflowReady = fs.existsSync(manifestPath) && fs.existsSync(apiPath);
 
     const missingComponents: string[] = [];
-
-    // Gate G0 is an actual execution gate, not just a UI hint.
     const featureEnabled = this.isFeatureEnabled();
     if (!featureEnabled) {
       missingComponents.push('Video generation feature is disabled by default (Gate G0)');
@@ -170,7 +163,6 @@ export class VideoGenerationService {
     if (!comfyOnline) {
       missingComponents.push('ComfyUI server is offline');
     } else {
-      // Validate workflow against ComfyUI object_info, including exact model names.
       try {
         const objectInfo = await comfyProvider.getObjectInfo();
         const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
@@ -215,12 +207,12 @@ export class VideoGenerationService {
   static async preflight(request: VideoGenerationRequest): Promise<VideoPreflightResponse> {
     const blockers: string[] = [];
     const warnings: string[] = [];
+    const usesReferenceControl = request.workflow_id !== 'minimax_h3_fl2va_official_12gb';
 
     if (!this.isFeatureEnabled()) {
       blockers.push('Video generation is disabled by Gate G0. Set NOVASTORY_ENABLE_VIDEO=true to enable it.');
     }
 
-    // 1. Check Scene Existence
     const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
     if (!scene) {
       blockers.push(`Scene ID ${request.scene_id} does not exist`);
@@ -231,7 +223,6 @@ export class VideoGenerationService {
       : null;
     const projectId = chapter?.project_id ? Number(chapter.project_id) : null;
 
-    // 2. Check Scene Version
     if (scene) {
       const targetVersion = request.scene_version || scene.active_version || 1;
       const versionRow = await db.get(
@@ -244,7 +235,6 @@ export class VideoGenerationService {
       }
     }
 
-    // 3. Check Keyframe Asset
     let keyframeAsset = request.keyframe_asset_id ? await MediaAssetService.getAssetById(request.keyframe_asset_id) : null;
     if (!keyframeAsset && scene?.asset_url) {
       const existing = await db.get('SELECT * FROM media_asset WHERE url = ?', scene.asset_url);
@@ -279,7 +269,6 @@ export class VideoGenerationService {
       }
     }
 
-    // 4. Check explicit Last Frame. If omitted, character_loop intentionally uses K -> K.
     if (request.last_frame_asset_id) {
       const lastFrameAsset = await MediaAssetService.getAssetById(request.last_frame_asset_id);
       if (!lastFrameAsset) {
@@ -296,14 +285,10 @@ export class VideoGenerationService {
       }
     }
 
-    // 5. Check Character References
-    if (request.profile === 'character_loop') {
-      if (!request.character_reference_asset_ids || request.character_reference_asset_ids.length === 0) {
-        blockers.push('character_loop profile requires 1 to 3 character_reference_asset_ids');
-      }
-    }
-
-    if (request.character_reference_asset_ids && request.character_reference_asset_ids.length > 0) {
+    // Strategy-required presence constraints are owned by VideoGenerationRequestSchema.
+    // The service only validates supplied reference assets, avoiding contradictory
+    // rules such as requiring Ref2VA inputs for the FL2VA boundary workflow.
+    if (usesReferenceControl && request.character_reference_asset_ids?.length) {
       for (const charAssetId of request.character_reference_asset_ids) {
         const asset = await MediaAssetService.getAssetById(charAssetId);
         if (!asset) {
@@ -316,21 +301,7 @@ export class VideoGenerationService {
       }
     }
 
-    // 6. Check Motion Reference
-    if (request.profile === 'character_loop') {
-      if (!request.motion_reference_asset_id) {
-        blockers.push('character_loop profile requires exactly 1 motion_reference_asset_id');
-      } else {
-        const motionAsset = await MediaAssetService.getAssetById(request.motion_reference_asset_id);
-        if (!motionAsset) {
-          blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} does not exist.`);
-        } else if (motionAsset.media_type !== 'video') {
-          blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} must be a video.`);
-        } else if (projectId && motionAsset.project_id !== projectId) {
-          blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} belongs to a different project.`);
-        }
-      }
-    } else if (request.motion_reference_asset_id) {
+    if (usesReferenceControl && request.motion_reference_asset_id) {
       const motionAsset = await MediaAssetService.getAssetById(request.motion_reference_asset_id);
       if (!motionAsset) {
         blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} does not exist.`);
@@ -347,15 +318,10 @@ export class VideoGenerationService {
 
     let compiledSpec;
     if (blockers.length === 0 && scene) {
-      compiledSpec = VideoSpecCompiler.compile({
-        request,
-        scene,
-        character
-      });
+      compiledSpec = VideoSpecCompiler.compile({ request, scene, character });
     }
 
     const estSeconds = request.preset === 'preview_480p_5s' ? 360 : 720;
-
     return {
       ready: blockers.length === 0,
       profile: request.profile,
@@ -388,8 +354,6 @@ export class VideoGenerationService {
     );
 
     const queuePos = GpuLeaseService.getQueuePosition(taskId);
-
-    // Launch worker without waiting
     this.runTaskPipeline(taskId, request).catch((err) => {
       logger.error(`Video generation pipeline error for ${taskId}: ${err}`);
     });
@@ -573,7 +537,6 @@ export class VideoGenerationService {
         message_zh: '任务已进入队列，等待显卡资源...'
       });
 
-      // 1. Acquire GPU Lease
       lease = await GpuLeaseService.acquireLease(taskId, 'video');
       leaseHeartbeat = setInterval(() => {
         if (!lease) return;
@@ -598,7 +561,6 @@ export class VideoGenerationService {
       });
       await db.run(`UPDATE generation_task SET stage = 'preflight', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
 
-      // Load DB records
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
       const projectId = Number(chapter?.project_id || 1);
@@ -610,7 +572,6 @@ export class VideoGenerationService {
         return;
       }
 
-      // 2. VRAM Handoff / Tuning
       await emitEvent('vram_tuning', {
         message: 'Freeing resident models for H3 generation...',
         message_zh: '正在调优显存环境以加载 H3 模型...'
@@ -628,7 +589,6 @@ export class VideoGenerationService {
         message_zh: '显存就绪，正在暂存参考资产...'
       });
 
-      // 3. Staging References
       await db.run(`UPDATE generation_task SET stage = 'staging_refs', updated_at = ? WHERE task_id = ?`, new Date().toISOString(), taskId);
       const keyframeAsset = (await MediaAssetService.getAssetById(request.keyframe_asset_id))!;
       const stagedKf = await MediaAssetService.stageAssetForComfy(keyframeAsset);
@@ -667,13 +627,7 @@ export class VideoGenerationService {
         return;
       }
 
-      // 4. Compile Spec & Workflow
-      const spec = VideoSpecCompiler.compile({
-        request,
-        scene,
-        character
-      });
-
+      const spec = VideoSpecCompiler.compile({ request, scene, character });
       const compiledWorkflow = VideoWorkflowCompiler.compile({
         spec,
         stagedFiles: {
@@ -686,7 +640,6 @@ export class VideoGenerationService {
         outputPrefix: `H3_${projectId}_${request.scene_id}_${taskId.slice(-6)}`
       });
 
-      // 5. Submit to ComfyUI
       await emitEvent('model_loading', {
         message: 'Submitting H3 workflow to ComfyUI...',
         message_zh: '正在提交工作流至 ComfyUI 并加载权重...'
@@ -724,7 +677,6 @@ export class VideoGenerationService {
         throw new Error(executionResult.error || 'ComfyUI did not produce video outputs');
       }
 
-      // 6. Collecting raw output
       await emitEvent('collecting', {
         message: 'Collecting raw video output...',
         message_zh: '正在收取原始视频产物...'
@@ -736,7 +688,6 @@ export class VideoGenerationService {
       const rawVideoPath = path.join(taskAssetDir, 'raw.mp4');
       fs.writeFileSync(rawVideoPath, rawBuffer);
 
-      // Create Raw Video Media Asset
       const rawSha = MediaAssetService.computeBufferSha256(rawBuffer);
       const rawAsset = await MediaAssetService.createAsset({
         project_id: projectId,
@@ -751,7 +702,6 @@ export class VideoGenerationService {
         sha256: rawSha
       });
 
-      // Release GPU lease early so next task can start generating
       if (lease) {
         stopLeaseHeartbeat();
         GpuLeaseService.releaseLease(lease.lease_id, taskId);
@@ -760,7 +710,6 @@ export class VideoGenerationService {
 
       if (await isCancelled()) return;
 
-      // 7. Postprocessing & Loop Closing
       await emitEvent('postprocessing', {
         message: 'Applying video postprocessing & LoopCloser...',
         message_zh: '正在执行视频标准化转码与闭环接缝修复...'
@@ -794,7 +743,6 @@ export class VideoGenerationService {
         }
       });
 
-      // 8. Finalize Task Status. manual_review is terminal but not success-ready.
       const { disposition, finalAsset } = persisted;
       await db.run(
         `UPDATE generation_task SET
@@ -890,7 +838,6 @@ export class VideoGenerationService {
         );
         const rawVideoPath = path.join(taskAssetDir, 'raw.mp4');
 
-        // Case 1: If raw.mp4 already exists, resume from postprocessing / QA idempotently
         if (fs.existsSync(rawVideoPath) && request) {
           logger.info(`[Recovery] Resuming postprocessing for task ${taskId} from existing raw.mp4`);
           this.resumePostprocessFromRaw(taskId, request, projectId, rawVideoPath, taskAssetDir).catch((err) => {
@@ -900,7 +847,6 @@ export class VideoGenerationService {
           continue;
         }
 
-        // Case 2: Generating stage with comfy_prompt_id and ComfyUI is online
         if (stage === 'generating' && comfyPromptId && isComfyOnline && request) {
           const history = await comfyProvider.getHistory(comfyPromptId);
           if (history && history[comfyPromptId]?.outputs) {
@@ -913,7 +859,6 @@ export class VideoGenerationService {
           }
         }
 
-        // Otherwise, mark interrupted
         logger.warn(`[Recovery] Task ${taskId} cannot be resumed (stage=${stage}, comfyPromptId=${comfyPromptId}); marking interrupted.`);
         await db.run(
           `UPDATE generation_task SET status = 'interrupted', stage = 'interrupted', error = 'Server restarted while task was in progress', updated_at = ? WHERE task_id = ?`,
@@ -976,8 +921,6 @@ export class VideoGenerationService {
       metadata: { recovered: true, request }
     });
 
-    // Recovery may be retried; reuse the same final row for this task URL if it
-    // already exists instead of multiplying derivatives on every restart.
     const expectedFinalUrl = `/static/generated/videos/${projectId}/${request.scene_id}/${taskId}/final.mp4`;
     const existingFinalRow = await db.get(
       'SELECT id FROM media_asset WHERE parent_asset_id = ? AND url = ? ORDER BY id DESC LIMIT 1',
