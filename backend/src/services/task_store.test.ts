@@ -42,3 +42,37 @@ test('AssetTaskStore progress persistence never revives a stale terminal state',
     await db.run('DELETE FROM generation_task WHERE task_id = ?', taskId);
   }
 });
+
+test('generic orphan cleanup leaves processing video rows for specialized recovery', async () => {
+  const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
+  const imageTaskId = `test_orphan_image_${suffix}`;
+  const videoTaskId = `test_orphan_video_${suffix}`;
+  const now = new Date().toISOString();
+
+  try {
+    await db.run(
+      `INSERT INTO generation_task (task_id, scene_id, kind, status, stage, created_at, updated_at)
+       VALUES (?, 0, 'image', 'processing', 'queued', ?, ?)`,
+      imageTaskId,
+      now,
+      now
+    );
+    await db.run(
+      `INSERT INTO generation_task (task_id, scene_id, kind, status, stage, created_at, updated_at)
+       VALUES (?, 0, 'video', 'processing', 'generating', ?, ?)`,
+      videoTaskId,
+      now,
+      now
+    );
+
+    const interrupted = await AssetTaskStore.markOrphanedProcessingInterrupted();
+    assert.ok(interrupted >= 1);
+
+    const imageRow = await db.get('SELECT status FROM generation_task WHERE task_id = ?', imageTaskId);
+    const videoRow = await db.get('SELECT status FROM generation_task WHERE task_id = ?', videoTaskId);
+    assert.equal(imageRow.status, 'interrupted');
+    assert.equal(videoRow.status, 'processing');
+  } finally {
+    await db.run('DELETE FROM generation_task WHERE task_id IN (?, ?)', imageTaskId, videoTaskId);
+  }
+});
