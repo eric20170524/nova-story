@@ -37,10 +37,17 @@ export const shouldUseHttpReferenceTransport = (options: {
   mode: ComfyReferenceTransportMode;
   baseUrl: string;
   filesystemAvailable: boolean;
+  comfyEnabled?: boolean;
 }): boolean => {
   if (options.mode === 'http') return true;
   if (options.mode === 'filesystem') return false;
-  return !options.filesystemAvailable && !isLoopbackComfyUrl(options.baseUrl);
+  if (options.filesystemAvailable) return false;
+
+  // Remote hosts cannot see NovaStory's local staging directory, so auto mode must
+  // upload. For loopback, HTTP is used when Comfy is explicitly enabled; when it is
+  // disabled (notably unit tests/offline development) retain the legacy local staging
+  // path without injecting a network wait into unrelated flows.
+  return !isLoopbackComfyUrl(options.baseUrl) || Boolean(options.comfyEnabled);
 };
 
 const withTimeout = async <T>(
