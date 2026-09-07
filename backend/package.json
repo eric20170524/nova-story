@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "video:benchmark": "tsx scripts/video-benchmark.ts",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','logs','.pytest_cache']) { try { fs.rmSync(p,{recursive:true,force:true}); console.log('removed',p); } catch {} }\""
   },
   "keywords": [
