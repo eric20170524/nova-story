@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getVideoWorkflowsDirectory } from '../../core/paths';
-import { DEFAULT_VIDEO_WORKFLOW_ID, VideoSpec } from '../../schemas/video';
+import {
+  DEFAULT_VIDEO_WORKFLOW_ID,
+  VideoSpec,
+  VideoWorkflowId
+} from '../../schemas/video';
 
 export interface WorkflowManifestSlot {
   node: string;
@@ -41,7 +45,7 @@ export interface WorkflowManifest {
 }
 
 export interface CompileWorkflowInputs {
-  workflowId?: string;
+  workflowId?: VideoWorkflowId;
   spec: VideoSpec;
   stagedFiles: {
     firstFrameFilename: string;
@@ -54,7 +58,7 @@ export interface CompileWorkflowInputs {
 }
 
 export class VideoWorkflowCompiler {
-  static loadWorkflowBundle(workflowId = DEFAULT_VIDEO_WORKFLOW_ID): {
+  static loadWorkflowBundle(workflowId: VideoWorkflowId = DEFAULT_VIDEO_WORKFLOW_ID): {
     manifest: WorkflowManifest;
     workflow: Record<string, any>;
   } {
@@ -89,7 +93,7 @@ export class VideoWorkflowCompiler {
     manifest: WorkflowManifest;
     appliedParams: Record<string, any>;
   } {
-    const workflowId = inputs.workflowId || inputs.spec.workflow_id || DEFAULT_VIDEO_WORKFLOW_ID;
+    const workflowId: VideoWorkflowId = inputs.workflowId || inputs.spec.workflow_id || DEFAULT_VIDEO_WORKFLOW_ID;
     const { manifest, workflow: template } = this.loadWorkflowBundle(workflowId);
 
     const workflow = JSON.parse(JSON.stringify(template));
