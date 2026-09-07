@@ -145,6 +145,7 @@ export type VideoTaskStage =
 
 export type MediaAssetRole =
   | 'video_keyframe'
+  | 'last_frame_reference'
   | 'character_reference'
   | 'motion_reference'
   | 'raw_video'
