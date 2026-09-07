@@ -1,4 +1,4 @@
-# H3 生视频 P0/P1 修复状态（2026-09-07）
+# H3 生视频 P0/P1 修复状态（2026-09-07，09-08 更新）
 
 > 分支：`fix/video-h3-p0-foundation-20260906`  
 > PR：#13 `fix(video): close H3 P0 foundation gaps`  
@@ -6,7 +6,7 @@
 
 ## 1. 当前阶段结论
 
-生视频链路已从“应用层集成原型”推进到“**有显式模型策略、真实 runtime gate、真实轻量 Loop QA、不可变资产血缘的候选实现**”。
+生视频链路已从“应用层集成原型”推进到“**有显式模型策略、真实 runtime gate、真实轻量 Loop QA、不可变资产血缘、单 GPU 崩溃恢复保护的候选实现**”。
 
 仍不应标记 Production Ready，唯一无法在 GitHub CI 中替代的核心门是：
 
@@ -50,14 +50,20 @@
 - [x] `/preflight` 合并输入 blocker + runtime blocker。
 - [x] `/generate` runtime 未就绪返回 503。
 
-### GPU / 长任务
+### GPU / 长任务 / 崩溃恢复
 
 - [x] image/video 共用单 GPU lease。
 - [x] video lease heartbeat。
 - [x] queued lease 取消后 Promise 会 reject，不再永久悬挂。
 - [x] 同 task 重复 acquire 不生成重复 queue slot。
+- [x] `createTask()` 在返回 202 前预留 GPU slot，`queue_position` 对应真实提交位置。
 - [x] H3 provider overall deadline：默认 30 分钟。
 - [x] Comfy cancel scoped：pending 只 delete；仅 owned prompt 是唯一 running prompt 时才全局 interrupt。
+- [x] cancel 网络请求独立有界；deadline 不再等待无限期 `/interrupt`。
+- [x] Comfy prompt accepted 后绑定 GPU prompt guard；未确认停止时拒绝释放 lease。
+- [x] `cancelled` 为单调终态：queued rejection、pipeline catch、postprocess 完成都不能再覆盖成 `failed/completed`。
+- [x] 启动时先做 orphan Comfy prompt reconciliation：进程重启后若旧 prompt 仍活跃/所有权未知，先抢占 synthetic recovery lease，直到 prompt 被确认清除。
+- [x] 通用 AssetTaskStore orphan cleanup 排除 video，避免提前把可从 `raw.mp4` / Comfy history 恢复的视频任务改成 `interrupted`。
 
 ### Loop / QA
 
@@ -168,8 +174,8 @@ error / blockers
 
 ### P1 / 调度
 
-- [ ] `createTask()` 在返回 202 前完成 GPU queue reservation，使 `queue_position` 为真实提交位置。
-- [ ] 将当前进程内 queue 进一步持久化（仅在需要跨进程 worker 时）。
+- [x] `createTask()` 在返回 202 前完成 GPU queue reservation，使 `queue_position` 为真实提交位置。
+- [ ] 将当前进程内 queue 持久化（只有未来引入多进程/独立 worker 时才需要；单进程重启的外部 Comfy GPU ownership 已由 startup reconciliation 保护）。
 
 ### P1 / 部署
 
