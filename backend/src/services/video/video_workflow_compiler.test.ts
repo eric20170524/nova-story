@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { VideoSpecCompiler } from './video_spec_compiler';
 
-test('VideoWorkflowCompiler loads manifest and workflow template correctly', () => {
+test('VideoWorkflowCompiler loads experimental Hybrid manifest correctly', () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
   assert.equal(bundle.manifest.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
   assert.equal(bundle.manifest.stability, 'experimental');
@@ -12,12 +12,13 @@ test('VideoWorkflowCompiler loads manifest and workflow template correctly', () 
   assert.equal(bundle.workflow['30'].inputs.length, 124);
 });
 
-test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed into slots', () => {
+test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed into experimental Hybrid', () => {
   const spec = VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
       profile: 'character_loop',
+      workflow_id: 'minimax_h3_hongchao_a2a_12gb',
       keyframe_asset_id: 10,
       character_reference_asset_ids: [100],
       motion_reference_asset_id: 200,
@@ -54,8 +55,6 @@ test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed int
   assert.equal(wf['10'].inputs.image, 'sha_first_frame.png');
   assert.equal(wf['11'].inputs.image, 'sha_last_frame.png');
   assert.equal(wf['12'].inputs.image, 'sha_char1.png');
-  // Fixed-socket experimental graph repeats the primary identity ref instead of
-  // polluting unused identity sockets with the scene keyframe.
   assert.equal(wf['13'].inputs.image, 'sha_char1.png');
   assert.equal(wf['14'].inputs.image, 'sha_char1.png');
   assert.equal(wf['20'].inputs.video, 'sha_motion.mp4');
@@ -66,6 +65,7 @@ test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed int
   assert.equal(wf['3'].inputs.seed, 123456);
   assert.equal(wf['40'].inputs.filename_prefix, 'Test_H3_Output');
   assert.equal(compiled.appliedParams.delivery_frames, 120);
+  assert.equal(compiled.appliedParams.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
 });
 
 test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is omitted', () => {
@@ -74,6 +74,7 @@ test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is om
       scene_id: 1,
       scene_version: 1,
       profile: 'character_loop',
+      workflow_id: 'minimax_h3_hongchao_a2a_12gb',
       keyframe_asset_id: 10,
       character_reference_asset_ids: [100],
       motion_reference_asset_id: 200,
@@ -95,6 +96,78 @@ test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is om
 
   assert.equal(compiled.workflow['10'].inputs.image, 'same_anchor.png');
   assert.equal(compiled.workflow['11'].inputs.image, 'same_anchor.png');
+});
+
+test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 2,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      motion_reference_asset_id: 200,
+      preset: 'preview_480p_5s',
+      run_loop_closer: false
+    },
+    scene: { id: 2, visual_prompt: 'walk forward slowly' },
+    character: { name: 'Lu Xueqi' }
+  });
+
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: {
+      firstFrameFilename: 'scene.png',
+      characterRefFilenames: ['identity.png'],
+      motionRefFilename: 'motion.mp4'
+    },
+    seed: 7
+  });
+
+  assert.equal(compiled.manifest.workflow_family, 'ref2va');
+  assert.equal(compiled.appliedParams.workflow_id, 'minimax_h3_ref2va_official_12gb');
+  assert.equal(compiled.appliedParams.steps, 20);
+  assert.equal(compiled.workflow['10'].class_type, 'MiniMaxH3ReferenceToVideo');
+  assert.equal(compiled.workflow['10'].inputs.length, 124);
+  assert.equal(compiled.workflow['4'].inputs.image, 'scene.png');
+  assert.equal(compiled.workflow['5'].inputs.image, 'identity.png');
+  assert.equal(compiled.workflow['8'].inputs.video, 'motion.mp4');
+});
+
+test('VideoWorkflowCompiler selects Official FL2VA and injects distinct boundary frames', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 3,
+      scene_version: 1,
+      profile: 'character_loop',
+      workflow_id: 'minimax_h3_fl2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [],
+      last_frame_asset_id: 11,
+      preset: 'preview_480p_5s',
+      run_loop_closer: true
+    },
+    scene: { id: 3, visual_prompt: 'subtle breathing' },
+    character: null
+  });
+
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: {
+      firstFrameFilename: 'first.png',
+      lastFrameFilename: 'last.png'
+    },
+    seed: 9
+  });
+
+  assert.equal(compiled.manifest.workflow_family, 'fl2va');
+  assert.equal(compiled.appliedParams.workflow_id, 'minimax_h3_fl2va_official_12gb');
+  assert.equal(compiled.workflow['10'].class_type, 'MiniMaxH3ImageToVideo');
+  assert.equal(compiled.workflow['4'].inputs.image, 'first.png');
+  assert.equal(compiled.workflow['5'].inputs.image, 'last.png');
+  assert.equal(compiled.workflow['10'].inputs.length, 124);
+  assert.equal(compiled.workflow['11'].inputs.noise_seed, 9);
 });
 
 test('VideoWorkflowCompiler validates exact model availability from Comfy object_info', () => {
