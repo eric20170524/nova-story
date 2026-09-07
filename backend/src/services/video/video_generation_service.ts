@@ -17,7 +17,7 @@ import {
 import { VideoSpecCompiler } from './video_spec_compiler';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
-import { GpuLeaseService, type GpuLease } from '../gpu_lease_service';
+import { GpuLeaseCancelledError, GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
 import { LoopCloser, type ProcessVideoResult } from './loop_closer';
@@ -353,7 +353,16 @@ export class VideoGenerationService {
       now
     );
 
+    // acquireLease mutates the in-process reservation synchronously before returning
+    // its Promise. Reserve before the 202 response so queue_position is the actual
+    // submission position rather than the old always-zero race with runTaskPipeline.
+    void GpuLeaseService.acquireLease(taskId, 'video').catch((err) => {
+      if (!(err instanceof GpuLeaseCancelledError)) {
+        logger.error(`GPU reservation failed for video task ${taskId}: ${err}`);
+      }
+    });
     const queuePos = GpuLeaseService.getQueuePosition(taskId);
+
     this.runTaskPipeline(taskId, request).catch((err) => {
       logger.error(`Video generation pipeline error for ${taskId}: ${err}`);
     });
@@ -414,13 +423,9 @@ export class VideoGenerationService {
       return false;
     }
 
-    const running = this.runningTasks.get(taskId);
-    if (running?.promptId) {
-      const provider = new ComfyH3Provider();
-      await provider.cancelPrompt(running.promptId);
-    }
-    GpuLeaseService.releaseLease('', taskId);
-
+    // Persist the terminal state first. Any queued Promise rejection or asynchronous
+    // pipeline unwind that follows must observe cancellation and must not overwrite it
+    // with `failed`.
     const now = new Date().toISOString();
     await db.run(
       `UPDATE generation_task SET status = 'cancelled', stage = 'cancelled', error = 'Cancelled by user', updated_at = ? WHERE task_id = ?`,
@@ -430,7 +435,32 @@ export class VideoGenerationService {
 
     const publisher = createProgressPublisher(taskId, null);
     await publisher('cancelled', { phase: 'cancelled', message: 'Task cancelled by user' });
-    this.runningTasks.delete(taskId);
+
+    if (GpuLeaseService.isQueued(taskId)) {
+      GpuLeaseService.cancelQueuedTask(taskId);
+    }
+
+    const running = this.runningTasks.get(taskId);
+    if (running?.promptId) {
+      const provider = new ComfyH3Provider();
+      const stopped = await provider.cancelPrompt(running.promptId);
+      if (!stopped) {
+        logger.warn(
+          `Cancellation accepted for ${taskId}, but Comfy prompt ${running.promptId} is still active; GPU guard remains held.`
+        );
+      } else {
+        const currentLease = GpuLeaseService.getCurrentLease();
+        if (currentLease?.owner_task_id === taskId) {
+          GpuLeaseService.releaseLease(currentLease.lease_id, taskId);
+        }
+      }
+    }
+
+    // Do not release a currently-owned, not-yet-submitted lease here. There is a
+    // small but real race between the pipeline's last cancellation checkpoint and
+    // Comfy /prompt submission. Keeping ownership until the pipeline observes the DB
+    // terminal state prevents a cancelled task from submitting work under the next
+    // task's GPU lease.
     return true;
   }
 
@@ -650,12 +680,26 @@ export class VideoGenerationService {
       const executionResult = await comfyProvider.executeWorkflow(compiledWorkflow.workflow, {
         onPromptQueued: async (promptId) => {
           this.runningTasks.set(taskId, { promptId });
+          GpuLeaseService.guardLeaseForPrompt(taskId, promptId);
           await db.run(
             `UPDATE generation_task SET comfy_prompt_id = ?, updated_at = ? WHERE task_id = ?`,
             promptId,
             new Date().toISOString(),
             taskId
           );
+
+          // Cancellation can race the tiny window after the final pre-submit check.
+          // Keep this task's lease, guard the accepted prompt, then cancel only after
+          // executeWorkflow has returned from this callback and attached its listeners.
+          if (await isCancelled()) {
+            setTimeout(() => {
+              void comfyProvider.cancelPrompt(promptId, 5000).then((stopped) => {
+                if (!stopped) {
+                  logger.warn(`Late-cancel prompt ${promptId} remains active; GPU guard retained.`);
+                }
+              });
+            }, 0);
+          }
         },
         onProgress: async (p) => {
           await emitEvent('generating', {
@@ -729,6 +773,8 @@ export class VideoGenerationService {
         }
       });
 
+      if (await isCancelled()) return;
+
       const persisted = await this.persistProcessedAssets({
         projectId,
         sceneId: request.scene_id,
@@ -742,6 +788,8 @@ export class VideoGenerationService {
           compiled_params: compiledWorkflow.appliedParams
         }
       });
+
+      if (await isCancelled()) return;
 
       const { disposition, finalAsset } = persisted;
       await db.run(
@@ -786,8 +834,15 @@ export class VideoGenerationService {
       });
 
     } catch (err: any) {
-      logger.error(`Task ${taskId} failed: ${err?.message || err}`);
       stopLeaseHeartbeat();
+      const cancelled = err instanceof GpuLeaseCancelledError || await isCancelled();
+      if (cancelled) {
+        if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
+        logger.info(`Task ${taskId} pipeline unwound after cancellation.`);
+        return;
+      }
+
+      logger.error(`Task ${taskId} failed: ${err?.message || err}`);
       if (lease) {
         GpuLeaseService.releaseLease(lease.lease_id, taskId);
       }
