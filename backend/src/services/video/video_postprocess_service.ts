@@ -132,4 +132,55 @@ export class VideoPostprocessService {
     const probe = await this.probeVideo(outputPath);
     return { outputPath, probe };
   }
+
+  static async generateCinematicKeyframeVideo(options: {
+    inputImagePath: string;
+    outputPath: string;
+    cameraMovement?: string;
+    targetWidth?: number;
+    targetHeight?: number;
+    targetFps?: number;
+    durationSeconds?: number;
+  }): Promise<string> {
+    const {
+      inputImagePath,
+      outputPath,
+      cameraMovement = 'Zoom In',
+      targetWidth = 1280,
+      targetHeight = 720,
+      targetFps = 24,
+      durationSeconds = 5.0
+    } = options;
+
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const frames = Math.round(targetFps * durationSeconds);
+
+    let zoompanFilter = `zoompan=z='min(zoom+0.0015,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${targetWidth}x${targetHeight}:fps=${targetFps}`;
+
+    const move = (cameraMovement || '').toLowerCase();
+    if (move.includes('out')) {
+      zoompanFilter = `zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0015))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${targetWidth}x${targetHeight}:fps=${targetFps}`;
+    } else if (move.includes('pan') || move.includes('track')) {
+      zoompanFilter = `zoompan=z=1.12:x='if(lte(on,1),(iw-iw/zoom)/2,x+0.8)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${targetWidth}x${targetHeight}:fps=${targetFps}`;
+    } else if (move.includes('tilt')) {
+      zoompanFilter = `zoompan=z=1.12:x='iw/2-(iw/zoom/2)':y='if(lte(on,1),0,y+0.6)':d=${frames}:s=${targetWidth}x${targetHeight}:fps=${targetFps}`;
+    }
+
+    const vf = `scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},${zoompanFilter}`;
+
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-loop', '1',
+      '-i', inputImagePath,
+      '-vf', vf,
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-t', String(durationSeconds),
+      '-r', String(targetFps),
+      '-an',
+      outputPath
+    ]);
+
+    return outputPath;
+  }
 }
