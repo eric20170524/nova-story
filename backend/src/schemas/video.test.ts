@@ -114,3 +114,17 @@ test('MediaAssetSchema accepts review_required final candidates', () => {
   assert.equal(asset.role, 'loop_master');
   assert.equal(asset.status, 'review_required');
 });
+
+test('MediaAssetSchema accepts explicit last-frame reference assets', () => {
+  const asset = MediaAssetSchema.parse({
+    project_id: 1,
+    scene_id: 2,
+    scene_version: 1,
+    media_type: 'image',
+    role: 'last_frame_reference',
+    status: 'ready',
+    url: '/static/generated/references/1/last-frame.png'
+  });
+  assert.equal(asset.role, 'last_frame_reference');
+  assert.equal(asset.media_type, 'image');
+});
