@@ -333,7 +333,6 @@ export const DirectorMode: React.FC = () => {
             asset_status: s.asset_status || 'idle' 
           }));
           setTimeline(scenes);
-          // Load media assets for all scenes
           scenes.forEach((s: Scene) => {
             loadSceneMedia(s.id, s.active_version);
           });
@@ -1032,10 +1031,12 @@ export const DirectorMode: React.FC = () => {
     };
 
     try {
-      // 1. Run Preflight Check
       const preflight = await api.preflightVideo(request);
       if (!preflight.ready && preflight.blockers && preflight.blockers.length > 0) {
         showToast(`前置检查未通过: ${preflight.blockers.join('; ')}`, 'error');
+        return;
+      }
+      if (options.batchRun && stopBatchVideoRef.current) {
         return;
       }
 
@@ -1069,6 +1070,26 @@ export const DirectorMode: React.FC = () => {
           queue_position: response.queue_position
         }
       }));
+
+      if (options.batchRun && stopBatchVideoRef.current) {
+        try {
+          await api.cancelVideoTask(taskId);
+        } finally {
+          activeBatchVideoTaskIdRef.current = null;
+          setVideoTasksByScene((prev) => ({
+            ...prev,
+            [sceneId]: {
+              ...prev[sceneId],
+              task_id: taskId,
+              scene_id: numericSceneId,
+              status: 'cancelled',
+              stage: 'cancelled'
+            }
+          }));
+          clearVramSchedulerPhase();
+        }
+        return;
+      }
 
       return new Promise<void>((resolve) => {
         let isDone = false;
@@ -1210,25 +1231,13 @@ export const DirectorMode: React.FC = () => {
   const handleStopBatchGenerateVideo = async () => {
     stopBatchVideoRef.current = true;
     const activeTaskId = activeBatchVideoTaskIdRef.current;
-    activeBatchVideoTaskIdRef.current = null;
 
+    // Keep the task SSE alive while cancellation is in flight. The terminal
+    // `cancelled` event (or poll fallback) must resolve handleGenerateVideo's Promise;
+    // closing it here would make a stopped batch leak an await forever.
     if (activeTaskId) {
-      const src = activeVideoEvtSourcesRef.current.get(activeTaskId);
-      if (src) {
-        src.close();
-        activeVideoEvtSourcesRef.current.delete(activeTaskId);
-      }
       try {
         await api.cancelVideoTask(activeTaskId);
-        setVideoTasksByScene((prev) => {
-          const next = { ...prev };
-          for (const key of Object.keys(next)) {
-            if (next[key].task_id === activeTaskId) {
-              next[key] = { ...next[key], status: 'cancelled', stage: 'cancelled' };
-            }
-          }
-          return next;
-        });
       } catch (error) {
         console.error('Failed to cancel active batch video task:', error);
       }
@@ -1240,28 +1249,18 @@ export const DirectorMode: React.FC = () => {
   };
 
   const handleCancelVideoTask = async (taskId: string) => {
-    const src = activeVideoEvtSourcesRef.current.get(taskId);
-    if (src) {
-      src.close();
-      activeVideoEvtSourcesRef.current.delete(taskId);
-    }
     if (activeBatchVideoTaskIdRef.current === taskId) {
-      activeBatchVideoTaskIdRef.current = null;
       stopBatchVideoRef.current = true;
     }
     try {
+      // Deliberately keep SSE/polling alive until the backend publishes the terminal
+      // cancellation state. That guarantees any caller awaiting handleGenerateVideo
+      // (including batch mode) unwinds instead of hanging on a manually closed stream.
       await api.cancelVideoTask(taskId);
-      setVideoTasksByScene((prev) => {
-        const next = { ...prev };
-        for (const k of Object.keys(next)) {
-          if (next[k].task_id === taskId) {
-            next[k] = { ...next[k], status: 'cancelled', stage: 'cancelled' };
-          }
-        }
-        return next;
-      });
-      showToast('视频生成任务已取消', 'info');
-    } catch (_) {}
+      showToast('视频取消请求已发送', 'info');
+    } catch (error) {
+      console.error('Failed to cancel video task:', error);
+    }
   };
 
   const handlePromoteVideoAsset = async (assetId: number) => {
@@ -1309,14 +1308,12 @@ export const DirectorMode: React.FC = () => {
 
   return (
     <div className="flex-1 flex overflow-hidden bg-slate-950 text-slate-100 h-full w-full min-h-0">
-      {/* Sidebar: Chapters */}
       <DirectorSidebar
         chapters={chapters}
         selectedChapterId={selectedChapterId}
         onSelectChapter={setSelectedChapterId}
       />
 
-      {/* Main Content Area: Timeline */}
       <DirectorTimeline
         timeline={timeline}
         loading={loading}
@@ -1340,7 +1337,6 @@ export const DirectorMode: React.FC = () => {
         onCancelVideoTask={handleCancelVideoTask}
       />
 
-      {/* Right Drawer: Style, Asset Mode, Production, Video Controls */}
       <DirectorRightPanel
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
@@ -1377,7 +1373,6 @@ export const DirectorMode: React.FC = () => {
         onStopBatchGenerateVideo={handleStopBatchGenerateVideo}
       />
 
-      {/* Re-storyboard Confirmation Modal */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
@@ -1411,7 +1406,6 @@ export const DirectorMode: React.FC = () => {
         </div>
       )}
 
-      {/* Comic Viewer Modal */}
       {showComicViewer && (
         <ComicViewer
           pages={comicPages}
