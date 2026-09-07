@@ -18,15 +18,18 @@ export class GpuLeaseCancelledError extends Error {
   }
 }
 
+type GpuLeaseWaiter = {
+  taskId: string;
+  kind: 'image' | 'video';
+  timeoutMs: number;
+  promise: Promise<GpuLease>;
+  resolve: (lease: GpuLease) => void;
+  reject: (err: Error) => void;
+};
+
 export class GpuLeaseService {
   private static currentLease: GpuLease | null = null;
-  private static waitQueue: Array<{
-    taskId: string;
-    kind: 'image' | 'video';
-    timeoutMs: number;
-    resolve: (lease: GpuLease) => void;
-    reject: (err: Error) => void;
-  }> = [];
+  private static waitQueue: GpuLeaseWaiter[] = [];
 
   static isAvailable(): boolean {
     if (!this.currentLease) return true;
@@ -42,7 +45,7 @@ export class GpuLeaseService {
   }
 
   static getCurrentLease(): GpuLease | null {
-    if (this.currentLease && !this.isAvailable()) return this.currentLease;
+    this.isAvailable();
     return this.currentLease;
   }
 
@@ -75,9 +78,9 @@ export class GpuLeaseService {
   }
 
   /**
-   * Important: this method mutates the current lease / wait queue synchronously
-   * before returning its Promise. Callers can therefore start `acquireLease()` and
-   * immediately read `getQueuePosition(taskId)` for an accurate submission snapshot.
+   * Mutates the lease/queue synchronously before returning. Repeated acquisition by
+   * the same task is idempotent: the current lease or the exact same queued Promise
+   * is returned instead of creating duplicate queue entries.
    */
   static async acquireLease(
     taskId: string,
@@ -87,23 +90,12 @@ export class GpuLeaseService {
     const defaultTimeout = kind === 'video' ? 25 * 60 * 1000 : 5 * 60 * 1000;
     const effectiveTimeout = timeoutMs || defaultTimeout;
 
-    // Idempotent protection: the same task must not occupy multiple queue slots.
-    if (this.currentLease?.owner_task_id === taskId) return this.currentLease;
-    const existing = this.waitQueue.find((item) => item.taskId === taskId);
-    if (existing) {
-      return new Promise<GpuLease>((resolve, reject) => {
-        const originalResolve = existing.resolve;
-        const originalReject = existing.reject;
-        existing.resolve = (lease) => {
-          originalResolve(lease);
-          resolve(lease);
-        };
-        existing.reject = (err) => {
-          originalReject(err);
-          reject(err);
-        };
-      });
+    if (this.currentLease?.owner_task_id === taskId) {
+      return this.currentLease;
     }
+
+    const existing = this.waitQueue.find((item) => item.taskId === taskId);
+    if (existing) return existing.promise;
 
     if (this.isAvailable()) {
       const now = new Date().toISOString();
@@ -120,16 +112,25 @@ export class GpuLeaseService {
       return lease;
     }
 
-    logger.info(`GPU busy (owner=${this.currentLease?.owner_task_id}). Enqueuing task ${taskId} (queue position ${this.waitQueue.length + 1})`);
-    return new Promise<GpuLease>((resolve, reject) => {
-      this.waitQueue.push({
-        taskId,
-        kind,
-        timeoutMs: effectiveTimeout,
-        resolve,
-        reject
-      });
+    let resolveWaiter!: (lease: GpuLease) => void;
+    let rejectWaiter!: (err: Error) => void;
+    const promise = new Promise<GpuLease>((resolve, reject) => {
+      resolveWaiter = resolve;
+      rejectWaiter = reject;
     });
+    this.waitQueue.push({
+      taskId,
+      kind,
+      timeoutMs: effectiveTimeout,
+      promise,
+      resolve: resolveWaiter,
+      reject: rejectWaiter
+    });
+    logger.info(
+      `GPU busy (owner=${this.currentLease?.owner_task_id}). Enqueuing task ${taskId} `
+      + `(queue position ${this.waitQueue.length})`
+    );
+    return promise;
   }
 
   static cancelQueuedTask(taskId: string): boolean {
@@ -149,9 +150,9 @@ export class GpuLeaseService {
       return;
     }
 
-    // Backward-compatible cleanup for callers that use releaseLease to cancel a
-    // queued request. Unlike the old filter-only path, the waiting Promise is now
-    // rejected so no worker remains suspended forever.
+    // Backward-compatible cancellation for callers that historically used
+    // releaseLease() to remove a queued task. Rejecting the waiter prevents a worker
+    // from remaining suspended forever.
     this.cancelQueuedTask(taskId);
   }
 
@@ -181,10 +182,11 @@ export class GpuLeaseService {
   }
 
   static resetForTesting(): void {
-    for (const queued of this.waitQueue) {
-      queued.reject(new GpuLeaseCancelledError(queued.taskId));
-    }
+    const queued = this.waitQueue;
     this.currentLease = null;
     this.waitQueue = [];
+    for (const waiter of queued) {
+      waiter.reject(new GpuLeaseCancelledError(waiter.taskId));
+    }
   }
 }
