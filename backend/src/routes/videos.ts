@@ -3,20 +3,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
+  DEFAULT_VIDEO_WORKFLOW_ID,
   VideoPreflightRequestSchema,
   VideoGenerationRequestSchema,
-  VideoReprocessRequestSchema
+  VideoReprocessRequestSchema,
+  VideoWorkflowIdSchema
 } from '../schemas/video';
 import { VideoGenerationService } from '../services/video/video_generation_service';
+import { VideoRuntimeInspector } from '../services/video/video_runtime_inspector';
 import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
 import { getGeneratedDirectory } from '../core/paths';
 
+const taskForClient = <T extends Record<string, any> | null>(task: T): T => {
+  if (!task || task.status !== 'review_required') return task;
+  // Legacy Director terminal handling does not yet recognize review_required.
+  // Preserve the semantic stage/QA while reporting completion so the client stops
+  // polling and reloads the review_required MediaAsset instead of hanging forever.
+  return { ...task, status: 'completed', stage: 'review_required' } as T;
+};
+
 export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-  // GET /api/videos/capabilities
-  fastify.get('/capabilities', async () => {
-    return VideoGenerationService.getCapabilities();
+  // GET /api/videos/capabilities?workflow_id=...
+  fastify.get('/capabilities', async (request, reply) => {
+    const rawWorkflow = (request.query as any)?.workflow_id || DEFAULT_VIDEO_WORKFLOW_ID;
+    const parsedWorkflow = VideoWorkflowIdSchema.safeParse(rawWorkflow);
+    if (!parsedWorkflow.success) {
+      return reply.status(400).send({ error: `Unknown video workflow '${rawWorkflow}'` });
+    }
+    return VideoRuntimeInspector.inspect(parsedWorkflow.data);
   });
 
   // POST /api/videos/preflight
@@ -28,8 +44,39 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
         details: parseResult.error.flatten()
       });
     }
-    const preflight = await VideoGenerationService.preflight(parseResult.data as any);
-    return preflight;
+
+    const [inputPreflight, runtime] = await Promise.all([
+      VideoGenerationService.preflight(parseResult.data as any),
+      VideoRuntimeInspector.inspect(parseResult.data.workflow_id)
+    ]);
+
+    const blockers = [...new Set([
+      ...inputPreflight.blockers,
+      ...runtime.missing_components
+    ])];
+    const warnings = [...inputPreflight.warnings];
+    if (runtime.workflow_stability !== 'stable') {
+      warnings.push(
+        `Workflow ${runtime.workflow_id} is ${runtime.workflow_stability}; real-machine validation is required before production promotion.`
+      );
+    }
+
+    return {
+      ...inputPreflight,
+      ready: inputPreflight.ready && runtime.video_generation_enabled,
+      blockers,
+      warnings,
+      runtime: {
+        workflow_id: runtime.workflow_id,
+        workflow_family: runtime.workflow_family,
+        workflow_stability: runtime.workflow_stability,
+        comfyui_online: runtime.comfyui_online,
+        h3_workflow_ready: runtime.h3_workflow_ready,
+        ffmpeg_available: runtime.ffmpeg_available,
+        ffprobe_available: runtime.ffprobe_available,
+        missing_components: runtime.missing_components
+      }
+    };
   });
 
   // POST /api/videos/references/upload
@@ -48,8 +95,6 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const characterId = fields.character_id?.value ? Number(fields.character_id.value) : undefined;
     const role = fields.role?.value || 'character_reference';
 
-    // Only allow uploading source/reference assets. Generated derivatives are
-    // created internally so their lineage cannot be forged by clients.
     const allowedRoles = ['character_reference', 'motion_reference', 'video_keyframe'];
     if (!allowedRoles.includes(role)) {
       return reply.status(400).send({ error: `Direct upload not allowed for role '${role}'. Allowed roles: ${allowedRoles.join(', ')}` });
@@ -167,6 +212,15 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
+    const runtime = await VideoRuntimeInspector.inspect(parseResult.data.workflow_id);
+    if (!runtime.video_generation_enabled) {
+      return reply.status(503).send({
+        error: 'Video runtime is not ready',
+        workflow_id: runtime.workflow_id,
+        missing_components: runtime.missing_components
+      });
+    }
+
     try {
       const result = await VideoGenerationService.createTask(parseResult.data);
       return reply.status(202).send(result);
@@ -175,17 +229,15 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     }
   });
 
-  // GET /api/videos/tasks/:task_id
   fastify.get('/tasks/:task_id', async (request, reply) => {
     const { task_id } = request.params as { task_id: string };
     const task = await VideoGenerationService.getTask(task_id);
     if (!task) {
       return reply.status(404).send({ error: `Task ${task_id} not found` });
     }
-    return task;
+    return taskForClient(task);
   });
 
-  // GET /api/videos/tasks/:task_id/stream
   fastify.get('/tasks/:task_id/stream', (request, reply) => {
     const { task_id } = request.params as { task_id: string };
 
@@ -193,41 +245,34 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
-    const allowLan = process.env.NOVASTORY_ALLOW_LAN === '1' || process.env.NOVASTORY_ALLOW_LAN === 'true';
     const origin = request.headers.origin;
-    if (allowLan) {
-      reply.raw.setHeader('Access-Control-Allow-Origin', origin || '*');
-    } else {
-      reply.raw.setHeader('Access-Control-Allow-Origin', origin || '*');
-    }
+    reply.raw.setHeader('Access-Control-Allow-Origin', origin || '*');
     reply.raw.flushHeaders?.();
 
-    // Send initial snapshot
     VideoGenerationService.getTask(task_id).then((task) => {
       if (task) {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'snapshot', task })}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify({ type: 'snapshot', task: taskForClient(task) })}\n\n`);
       }
     });
 
     const unsubscribe = subscribeTaskProgress(task_id, (payload) => {
       try {
-        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+        const outgoing = payload?.status === 'review_required'
+          ? { ...payload, status: 'completed', stage: 'review_required' }
+          : payload;
+        reply.raw.write(`data: ${JSON.stringify(outgoing)}\n\n`);
       } catch {}
     });
 
-    request.raw.on('close', () => {
-      unsubscribe();
-    });
+    request.raw.on('close', () => unsubscribe());
   });
 
-  // POST /api/videos/tasks/:task_id/cancel
   fastify.post('/tasks/:task_id/cancel', async (request, reply) => {
     const { task_id } = request.params as { task_id: string };
     const ok = await VideoGenerationService.cancelTask(task_id);
     return { ok, task_id };
   });
 
-  // GET /api/scenes/:scene_id/media
   fastify.get('/scenes/:scene_id/media', async (request, reply) => {
     const { scene_id } = request.params as { scene_id: string };
     const version = (request.query as any)?.version ? Number((request.query as any).version) : undefined;
@@ -235,7 +280,6 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     return { scene_id: Number(scene_id), assets };
   });
 
-  // POST /api/videos/assets/:asset_id/promote
   fastify.post('/assets/:asset_id/promote', async (request, reply) => {
     const { asset_id } = request.params as { asset_id: string };
     try {
@@ -246,7 +290,6 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     }
   });
 
-  // POST /api/videos/assets/:asset_id/reprocess
   fastify.post('/assets/:asset_id/reprocess', async (request, reply) => {
     const { asset_id } = request.params as { asset_id: string };
     const parsed = VideoReprocessRequestSchema.safeParse({
