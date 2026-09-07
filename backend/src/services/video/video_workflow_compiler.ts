@@ -124,10 +124,6 @@ export class VideoWorkflowCompiler {
       workflow[slots.last_frame.node].inputs[slots.last_frame.input] = lastFrame;
     }
 
-    // Fixed-socket graphs need every declared loader populated. Candidate official
-    // Ref2VA currently repeats the primary identity ref when fewer than the declared
-    // loaders are supplied; it remains non-stable until real-machine A/B proves this
-    // fallback harmless or dynamic optional refs replace it.
     if (slots.character_refs && Array.isArray(slots.character_refs)) {
       const refs = stagedFiles.characterRefFilenames || [];
       slots.character_refs.forEach((slot, idx) => {
@@ -150,12 +146,16 @@ export class VideoWorkflowCompiler {
     if (slots.frames) workflow[slots.frames.node].inputs[slots.frames.input] = contract.frames;
     if (slots.fps) workflow[slots.fps.node].inputs[slots.fps.input] = contract.fps;
 
-    const manifestSteps = Number(manifest.default_params?.steps);
-    const steps = Number.isFinite(manifestSteps) && manifestSteps > 0
-      ? manifestSteps
-      : workflowId === DEFAULT_VIDEO_WORKFLOW_ID
-        ? (spec.preset === 'preview_480p_5s' ? 6 : 10)
-        : 20;
+    // Preserve the original experimental tuning while the official candidates use
+    // their Golden baseline step count. This keeps strategy selection from silently
+    // changing established output behavior.
+    let steps: number;
+    if (workflowId === DEFAULT_VIDEO_WORKFLOW_ID) {
+      steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
+    } else {
+      const manifestSteps = Number(manifest.default_params?.steps);
+      steps = Number.isFinite(manifestSteps) && manifestSteps > 0 ? manifestSteps : 20;
+    }
     if (slots.steps) workflow[slots.steps.node].inputs[slots.steps.input] = steps;
 
     const seed = inputs.seed != null ? inputs.seed : Math.floor(Math.random() * 100000000);
