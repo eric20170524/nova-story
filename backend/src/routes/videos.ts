@@ -31,6 +31,12 @@ const REFERENCE_UPLOAD_ROLES = [
   'last_frame_reference'
 ] as const;
 
+const normalizeReferenceMediaType = (mimetype: string): 'image' | 'video' | null => {
+  if (mimetype.startsWith('image/')) return 'image';
+  if (mimetype.startsWith('video/')) return 'video';
+  return null;
+};
+
 export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   // GET /api/videos/capabilities?workflow_id=...
   fastify.get('/capabilities', async (request, reply) => {
@@ -108,7 +114,13 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
-    const mediaType = data.mimetype.startsWith('video/') ? 'video' : 'image';
+    const mediaType = normalizeReferenceMediaType(data.mimetype);
+    if (!mediaType) {
+      return reply.status(400).send({
+        error: `Unsupported reference MIME type '${data.mimetype}'. Only image/* and video/* are accepted.`
+      });
+    }
+
     const requiredMediaType = role === 'motion_reference' ? 'video' : 'image';
     if (mediaType !== requiredMediaType) {
       return reply.status(400).send({
@@ -116,7 +128,13 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
-    const ext = path.extname(data.filename) || (mediaType === 'video' ? '.mp4' : '.png');
+    const originalExt = path.extname(data.filename).toLowerCase();
+    const allowedExts = mediaType === 'video'
+      ? new Set(['.mp4', '.mov', '.m4v', '.webm'])
+      : new Set(['.png', '.jpg', '.jpeg', '.webp']);
+    const ext = allowedExts.has(originalExt)
+      ? originalExt
+      : (mediaType === 'video' ? '.mp4' : '.png');
     const safeBase = `ref_${randomUUID().slice(0, 12)}${ext}`;
     const uploadDir = path.join(getGeneratedDirectory(), 'references', String(projectId));
     fs.mkdirSync(uploadDir, { recursive: true });
