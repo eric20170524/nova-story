@@ -110,13 +110,45 @@ export const AssetTaskStore = {
   },
 
   async setProgress(taskId: string, progress: Record<string, unknown>) {
-    const existing = memory.get(taskId) || (await AssetTaskStore.get(taskId));
+    const progressJson = JSON.stringify(progress);
+    const updated = nowIso();
+
+    // Progress publication must never rewrite lifecycle fields from a stale in-memory
+    // snapshot. Video cancellation exposed this when a cached `processing` state was
+    // UPSERTed after the database row had already transitioned to `cancelled`.
+    try {
+      await db.run(
+        `UPDATE generation_task
+         SET progress_json = ?, updated_at = ?
+         WHERE task_id = ?`,
+        progressJson,
+        updated,
+        taskId
+      );
+      const row = await db.get(
+        'SELECT * FROM generation_task WHERE task_id = ?',
+        taskId
+      );
+      if (row) {
+        const canonical = rowToState(row);
+        memory.set(taskId, canonical);
+        return canonical;
+      }
+    } catch (err: any) {
+      logger.warn(`generation_task progress persist failed: ${err?.message || err}`);
+    }
+
+    // Early-boot fallback: preserve the hot-path state without touching lifecycle
+    // fields when SQLite is not available yet.
+    const existing = memory.get(taskId);
     if (!existing) return null;
-    return persist({
+    const next = {
       ...existing,
-      progress_json: JSON.stringify(progress),
-      updated_at: nowIso()
-    });
+      progress_json: progressJson,
+      updated_at: updated
+    };
+    memory.set(taskId, next);
+    return next;
   },
 
   async completed(taskId: string, sceneId: number, imageUrl: string) {
