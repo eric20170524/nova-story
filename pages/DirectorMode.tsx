@@ -10,6 +10,7 @@ import {
   ImageOutputSpec,
   VideoProfile,
   VideoPreset,
+  VideoWorkflowId,
   MediaAsset,
   VideoTaskState,
   VideoGenerationRequest
@@ -64,6 +65,23 @@ const isNonhumanCharacter = (char: any): boolean => {
 const HUMAN_IDENTITY_NEGATIVE_RE =
   /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
 
+const VIDEO_WORKFLOW_IDS: VideoWorkflowId[] = [
+  'minimax_h3_hongchao_a2a_12gb',
+  'minimax_h3_ref2va_official_12gb',
+  'minimax_h3_fl2va_official_12gb'
+];
+
+const getStoredVideoWorkflowId = (): VideoWorkflowId => {
+  try {
+    const saved = localStorage.getItem('director_videoWorkflowId') as VideoWorkflowId | null;
+    if (saved && VIDEO_WORKFLOW_IDS.includes(saved)) return saved;
+  } catch {}
+  return 'minimax_h3_hongchao_a2a_12gb';
+};
+
+const isTerminalVideoStatus = (status?: string) =>
+  ['completed', 'review_required', 'rejected', 'failed', 'cancelled', 'interrupted'].includes(String(status || ''));
+
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
@@ -106,6 +124,7 @@ export const DirectorMode: React.FC = () => {
   const [isBatchGeneratingVideo, setIsBatchGeneratingVideo] = useState<boolean>(false);
   const stopBatchVideoRef = React.useRef<boolean>(false);
   const activeVideoEvtSourcesRef = React.useRef<Map<string, EventSource>>(new Map());
+  const activeBatchVideoTaskIdRef = React.useRef<string | null>(null);
 
   // Re-storyboard Confirmation Modal
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -944,10 +963,13 @@ export const DirectorMode: React.FC = () => {
     options: {
       profile?: VideoProfile;
       preset?: VideoPreset;
+      workflowId?: VideoWorkflowId;
       prompt?: string;
       keyframeAssetId?: number;
+      lastFrameAssetId?: number;
       characterRefAssetIds?: number[];
       motionRefAssetId?: number;
+      batchRun?: boolean;
     } = {}
   ) => {
     const scene = timeline.find((s) => s.id === sceneId);
@@ -955,24 +977,43 @@ export const DirectorMode: React.FC = () => {
 
     const profile = options.profile || videoProfile;
     const preset = options.preset || videoPreset;
+    const workflowId = options.workflowId || getStoredVideoWorkflowId();
     const numericSceneId = Number(sceneId);
+    const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
+    const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
 
     const sceneAssets = mediaAssetsByScene[sceneId] || [];
-    const existingKeyframe = sceneAssets.find((a) => a.role === 'video_keyframe');
-    const keyframeAssetId = options.keyframeAssetId || existingKeyframe?.id || 0;
+    const existingKeyframe = [...sceneAssets]
+      .filter((a) => a.role === 'video_keyframe')
+      .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+    const keyframeAssetId = options.keyframeAssetId ?? existingKeyframe?.id ?? 0;
+
+    let lastFrameId = options.lastFrameAssetId;
+    if (lastFrameId === undefined && !isRef2va) {
+      const lastFrameAsset = [...sceneAssets]
+        .filter((a) => a.role === 'last_frame_reference' && a.id)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      lastFrameId = lastFrameAsset?.id;
+    }
 
     let characterRefIds = options.characterRefAssetIds;
-    if (!characterRefIds || characterRefIds.length === 0) {
+    if (characterRefIds === undefined) {
       characterRefIds = sceneAssets
         .filter((a) => a.role === 'character_reference' && a.id)
-        .map((a) => a.id!);
+        .map((a) => a.id!)
+        .slice(-3);
     }
+    if (isFl2va) characterRefIds = [];
 
     let motionRefId = options.motionRefAssetId;
-    if (!motionRefId) {
-      const motionAsset = sceneAssets.find((a) => a.role === 'motion_reference' && a.id);
+    if (motionRefId === undefined && !isFl2va) {
+      const motionAsset = [...sceneAssets]
+        .filter((a) => a.role === 'motion_reference' && a.id)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
       motionRefId = motionAsset?.id;
     }
+    if (isFl2va) motionRefId = undefined;
+    if (isRef2va) lastFrameId = undefined;
 
     const motionPromptText = options.prompt || (videoMotionPrompt ? `${scene.visual_prompt || ''}, ${videoMotionPrompt}` : undefined);
 
@@ -980,8 +1021,10 @@ export const DirectorMode: React.FC = () => {
       scene_id: numericSceneId,
       scene_version: scene.active_version || 1,
       profile,
+      workflow_id: workflowId,
       preset,
       keyframe_asset_id: keyframeAssetId,
+      last_frame_asset_id: lastFrameId,
       character_reference_asset_ids: characterRefIds,
       motion_reference_asset_id: motionRefId,
       prompt_override: motionPromptText,
@@ -1014,6 +1057,7 @@ export const DirectorMode: React.FC = () => {
 
       const response = await api.generateVideo(request);
       const taskId = response.task_id;
+      if (options.batchRun) activeBatchVideoTaskIdRef.current = taskId;
 
       setVideoTasksByScene((prev) => ({
         ...prev,
@@ -1028,7 +1072,7 @@ export const DirectorMode: React.FC = () => {
 
       return new Promise<void>((resolve) => {
         let isDone = false;
-        let pollInterval: NodeJS.Timeout | null = null;
+        let pollInterval: ReturnType<typeof setInterval> | null = null;
 
         const cleanup = () => {
           if (pollInterval) {
@@ -1040,6 +1084,9 @@ export const DirectorMode: React.FC = () => {
             src.close();
             activeVideoEvtSourcesRef.current.delete(taskId);
           }
+          if (activeBatchVideoTaskIdRef.current === taskId) {
+            activeBatchVideoTaskIdRef.current = null;
+          }
           clearVramSchedulerPhase();
         };
 
@@ -1048,9 +1095,16 @@ export const DirectorMode: React.FC = () => {
           isDone = true;
           cleanup();
 
-          if (status === 'completed') {
+          if (status === 'completed' || status === 'review_required') {
             loadSceneMedia(sceneId);
-            showToast(t('director.video_completed', 'H3 视频生成完成！'), 'success');
+            showToast(
+              status === 'review_required'
+                ? '视频已生成，需人工复核后再设为成片'
+                : t('director.video_completed', 'H3 视频生成完成！'),
+              status === 'review_required' ? 'warning' : 'success'
+            );
+          } else if (status === 'cancelled') {
+            showToast('视频生成任务已取消', 'info');
           } else {
             showToast(errorMsg || t('director.video_failed', '视频生成失败'), 'error');
           }
@@ -1067,8 +1121,8 @@ export const DirectorMode: React.FC = () => {
                   ...prev,
                   [sceneId]: { ...prev[sceneId], ...taskState }
                 }));
-                if (taskState.status === 'completed' || taskState.status === 'failed' || taskState.status === 'rejected' || taskState.status === 'cancelled') {
-                  onTaskFinished(taskState.status, taskState.output_url, taskState.error, taskState.qa_report);
+                if (isTerminalVideoStatus(taskState.status)) {
+                  onTaskFinished(taskState.status, taskState.output_url || undefined, taskState.error || undefined, taskState.qa_report);
                 }
               }
             } catch (_) {}
@@ -1086,7 +1140,7 @@ export const DirectorMode: React.FC = () => {
                 ...prev,
                 [sceneId]: { ...prev[sceneId], ...data.task }
               }));
-              if (data.task.status === 'completed' || data.task.status === 'failed' || data.task.status === 'rejected' || data.task.status === 'cancelled') {
+              if (isTerminalVideoStatus(data.task.status)) {
                 onTaskFinished(data.task.status, data.task.output_url, data.task.error, data.task.qa_report);
               }
             } else if (data.stage || data.status || data.phase) {
@@ -1104,7 +1158,7 @@ export const DirectorMode: React.FC = () => {
                 }
               }));
 
-              if (updatedStatus === 'completed' || updatedStatus === 'failed' || updatedStatus === 'rejected' || updatedStatus === 'cancelled') {
+              if (isTerminalVideoStatus(updatedStatus)) {
                 onTaskFinished(updatedStatus, data.output_url, data.error, data.qa_report);
               }
             }
@@ -1117,6 +1171,7 @@ export const DirectorMode: React.FC = () => {
       });
     } catch (err: any) {
       clearVramSchedulerPhase();
+      if (options.batchRun) activeBatchVideoTaskIdRef.current = null;
       setVideoTasksByScene((prev) => ({
         ...prev,
         [sceneId]: { task_id: '', scene_id: numericSceneId, status: 'failed', error: err.message }
@@ -1129,12 +1184,13 @@ export const DirectorMode: React.FC = () => {
     if (isBatchGeneratingVideo || timeline.length === 0) return;
 
     stopBatchVideoRef.current = false;
+    activeBatchVideoTaskIdRef.current = null;
     setIsBatchGeneratingVideo(true);
     showToast(t('director.batch_started', 'Sequential batch video generation started'), 'info');
 
     for (const scene of timeline) {
       if (stopBatchVideoRef.current) break;
-      await handleGenerateVideo(scene.id);
+      await handleGenerateVideo(scene.id, { batchRun: true });
       if (stopBatchVideoRef.current) break;
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -1142,6 +1198,7 @@ export const DirectorMode: React.FC = () => {
     const wasStopped = stopBatchVideoRef.current;
     setIsBatchGeneratingVideo(false);
     stopBatchVideoRef.current = false;
+    activeBatchVideoTaskIdRef.current = null;
 
     if (wasStopped) {
       showToast(t('director.batch_stopped', 'Batch video generation stopped'), 'warning');
@@ -1152,9 +1209,33 @@ export const DirectorMode: React.FC = () => {
 
   const handleStopBatchGenerateVideo = async () => {
     stopBatchVideoRef.current = true;
-    activeVideoEvtSourcesRef.current.forEach((src) => src.close());
-    activeVideoEvtSourcesRef.current.clear();
+    const activeTaskId = activeBatchVideoTaskIdRef.current;
+    activeBatchVideoTaskIdRef.current = null;
+
+    if (activeTaskId) {
+      const src = activeVideoEvtSourcesRef.current.get(activeTaskId);
+      if (src) {
+        src.close();
+        activeVideoEvtSourcesRef.current.delete(activeTaskId);
+      }
+      try {
+        await api.cancelVideoTask(activeTaskId);
+        setVideoTasksByScene((prev) => {
+          const next = { ...prev };
+          for (const key of Object.keys(next)) {
+            if (next[key].task_id === activeTaskId) {
+              next[key] = { ...next[key], status: 'cancelled', stage: 'cancelled' };
+            }
+          }
+          return next;
+        });
+      } catch (error) {
+        console.error('Failed to cancel active batch video task:', error);
+      }
+    }
+
     setIsBatchGeneratingVideo(false);
+    clearVramSchedulerPhase();
     showToast(t('director.batch_stopped', 'Batch generation stopped'), 'warning');
   };
 
@@ -1164,13 +1245,17 @@ export const DirectorMode: React.FC = () => {
       src.close();
       activeVideoEvtSourcesRef.current.delete(taskId);
     }
+    if (activeBatchVideoTaskIdRef.current === taskId) {
+      activeBatchVideoTaskIdRef.current = null;
+      stopBatchVideoRef.current = true;
+    }
     try {
       await api.cancelVideoTask(taskId);
       setVideoTasksByScene((prev) => {
         const next = { ...prev };
         for (const k of Object.keys(next)) {
           if (next[k].task_id === taskId) {
-            next[k] = { ...next[k], status: 'cancelled' };
+            next[k] = { ...next[k], status: 'cancelled', stage: 'cancelled' };
           }
         }
         return next;
