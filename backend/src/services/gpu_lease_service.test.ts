@@ -110,7 +110,7 @@ test('GpuLeaseService defers release until a guarded Comfy prompt is confirmed s
   assert.equal(GpuLeaseService.isAvailable(), true);
 });
 
-test('blank release hints do not preempt an active lease or reject a queued waiter', async () => {
+test('blank release hints do not preempt an active video lease or reject a queued waiter', async () => {
   GpuLeaseService.resetForTesting();
 
   const lease1 = await GpuLeaseService.acquireLease('task_active', 'video');
@@ -126,4 +126,42 @@ test('blank release hints do not preempt an active lease or reject a queued wait
   const lease2 = await queued;
   assert.equal(lease2.owner_task_id, 'task_queued');
   GpuLeaseService.releaseLease(lease2.lease_id, 'task_queued');
+});
+
+test('legacy blank image release only releases the current image owner', async () => {
+  GpuLeaseService.resetForTesting();
+
+  await GpuLeaseService.acquireLease('image_owner', 'image');
+  const queued = GpuLeaseService.acquireLease('video_next', 'video');
+
+  GpuLeaseService.releaseLease('', 'other_task');
+  assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, 'image_owner');
+
+  GpuLeaseService.releaseLease('', 'image_owner');
+  const next = await queued;
+  assert.equal(next.owner_task_id, 'video_next');
+  GpuLeaseService.releaseLease(next.lease_id, 'video_next');
+});
+
+test('legacy blank image release is deferred while its Comfy prompt is guarded', async () => {
+  GpuLeaseService.resetForTesting();
+
+  await GpuLeaseService.acquireLease('image_guarded', 'image');
+  assert.equal(GpuLeaseService.guardLeaseForPrompt('image_guarded', 'image_prompt'), true);
+
+  let nextGranted = false;
+  const queued = GpuLeaseService.acquireLease('video_after_image', 'video').then((lease) => {
+    nextGranted = true;
+    return lease;
+  });
+
+  GpuLeaseService.releaseLease('', 'image_guarded');
+  assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, 'image_guarded');
+  assert.equal(nextGranted, false);
+
+  GpuLeaseService.confirmPromptStopped('image_prompt');
+  const next = await queued;
+  assert.equal(next.owner_task_id, 'video_after_image');
+  assert.equal(nextGranted, true);
+  GpuLeaseService.releaseLease(next.lease_id, 'video_after_image');
 });
