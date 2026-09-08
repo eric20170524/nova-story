@@ -230,6 +230,10 @@ export class MediaAssetService {
    * Scene media plus reusable project-level Character Center references. Syncing the
    * adapter here makes existing projects self-healing without copying their images or
    * requiring a one-off migration command.
+   *
+   * Directly uploaded references are scene-global unless a scene_version was supplied
+   * explicitly. Keep those `scene_version IS NULL` rows visible even when Director is
+   * viewing a concrete scene version; otherwise a reference disappears after reload.
    */
   static async listSceneContextAssets(sceneId: number, sceneVersion?: number): Promise<MediaAsset[]> {
     const scene = await db.get(
@@ -241,7 +245,24 @@ export class MediaAssetService {
     );
 
     const sceneAssets = await this.listAssetsByScene(sceneId, sceneVersion);
-    if (!scene?.project_id) return sceneAssets;
+    const sceneGlobalReferenceRows = await db.all(
+      `SELECT * FROM media_asset
+       WHERE scene_id = ?
+         AND scene_version IS NULL
+         AND role IN ('video_keyframe', 'last_frame_reference', 'character_reference', 'motion_reference')
+         AND status != 'archived'
+       ORDER BY id ASC`,
+      sceneId
+    ) as any[];
+    const sceneGlobalReferences = sceneGlobalReferenceRows.map(normalizeMediaAssetRow);
+
+    if (!scene?.project_id) {
+      const byId = new Map<number, MediaAsset>();
+      for (const asset of [...sceneAssets, ...sceneGlobalReferences]) {
+        if (asset.id != null) byId.set(Number(asset.id), asset);
+      }
+      return Array.from(byId.values());
+    }
 
     const characters = await db.all(
       'SELECT id FROM character WHERE project_id = ? ORDER BY id ASC',
@@ -267,7 +288,11 @@ export class MediaAssetService {
     ) as any[];
 
     const byId = new Map<number, MediaAsset>();
-    for (const asset of [...sceneAssets, ...referenceRows.map(normalizeMediaAssetRow)]) {
+    for (const asset of [
+      ...sceneAssets,
+      ...sceneGlobalReferences,
+      ...referenceRows.map(normalizeMediaAssetRow)
+    ]) {
       if (asset.id != null) byId.set(Number(asset.id), asset);
     }
     return Array.from(byId.values());
