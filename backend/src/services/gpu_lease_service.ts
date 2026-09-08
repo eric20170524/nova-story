@@ -153,8 +153,8 @@ export class GpuLeaseService {
   }
 
   /**
-   * Bind the currently owned video lease to the Comfy prompt that actually occupies
-   * the GPU. While guarded, normal release calls and heartbeat expiry are deferred.
+   * Bind the currently owned Comfy lease to the prompt that actually occupies the
+   * GPU. While guarded, normal release calls and heartbeat expiry are deferred.
    */
   static guardLeaseForPrompt(taskId: string, promptId: string): boolean {
     if (!this.currentLease || this.currentLease.owner_task_id !== taskId) {
@@ -193,11 +193,41 @@ export class GpuLeaseService {
   }
 
   static releaseLease(leaseId: string, taskId: string): void {
-    // Historical cancellation code passes an empty lease id. Treat that as a
-    // cancellation hint only: it must never pre-empt an active GPU owner, and it must
-    // not reject a queued worker before the task row has reached its cancelled state.
+    // Legacy static-image GenerationService still releases from finally without
+    // retaining the acquired lease id. Keep that path safe and narrowly scoped:
+    // only the current image owner may release via a blank id, and a live/unknown
+    // Comfy prompt still defers the release. Blank video cancellation hints remain
+    // non-authoritative and can never pre-empt H3 ownership.
     if (!leaseId) {
-      logger.info(`Ignoring blank GPU lease release hint for task ${taskId}; pipeline ownership will unwind safely.`);
+      if (
+        this.currentLease
+        && this.currentLease.owner_task_id === taskId
+        && this.currentLease.kind === 'image'
+      ) {
+        const guardedPromptId = this.guardedPrompts.get(taskId);
+        if (guardedPromptId) {
+          this.pendingReleases.add(taskId);
+          logger.warn(
+            `Deferring legacy image GPU lease release for task ${taskId}: `
+            + `Comfy prompt ${guardedPromptId} is not confirmed stopped.`
+          );
+          return;
+        }
+
+        const activeLeaseId = this.currentLease.lease_id;
+        logger.info(
+          `GPU lease released by legacy image owner ${taskId} (leaseId=${activeLeaseId}).`
+        );
+        this.pendingReleases.delete(taskId);
+        this.currentLease = null;
+        this.processNextInQueue();
+        return;
+      }
+
+      logger.info(
+        `Ignoring blank GPU lease release hint for task ${taskId}; `
+        + `it is not the current image owner.`
+      );
       return;
     }
 
