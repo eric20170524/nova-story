@@ -11,6 +11,7 @@ import {
 } from '../schemas/video';
 import { VideoGenerationService } from '../services/video/video_generation_service';
 import { VideoRuntimeInspector } from '../services/video/video_runtime_inspector';
+import { VideoReferenceIdentityService } from '../services/video/video_reference_identity_service';
 import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
@@ -58,13 +59,15 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
-    const [inputPreflight, runtime] = await Promise.all([
+    const [inputPreflight, runtime, identityValidation] = await Promise.all([
       VideoGenerationService.preflight(parseResult.data as any),
-      VideoRuntimeInspector.inspect(parseResult.data.workflow_id)
+      VideoRuntimeInspector.inspect(parseResult.data.workflow_id),
+      VideoReferenceIdentityService.validate(parseResult.data as any)
     ]);
 
     const blockers = [...new Set([
       ...inputPreflight.blockers,
+      ...identityValidation.blockers,
       ...runtime.missing_components
     ])];
     const warnings = [...inputPreflight.warnings];
@@ -76,7 +79,9 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
 
     return {
       ...inputPreflight,
-      ready: inputPreflight.ready && runtime.video_generation_enabled,
+      ready: inputPreflight.ready
+        && identityValidation.blockers.length === 0
+        && runtime.video_generation_enabled,
       blockers,
       warnings,
       runtime: {
@@ -237,6 +242,14 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
+    const identityValidation = await VideoReferenceIdentityService.validate(parseResult.data);
+    if (identityValidation.blockers.length > 0) {
+      return reply.status(400).send({
+        error: 'Invalid character reference identity',
+        blockers: identityValidation.blockers
+      });
+    }
+
     const runtime = await VideoRuntimeInspector.inspect(parseResult.data.workflow_id);
     if (!runtime.video_generation_enabled) {
       return reply.status(503).send({
@@ -296,13 +309,6 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const { task_id } = request.params as { task_id: string };
     const ok = await VideoGenerationService.cancelTask(task_id);
     return { ok, task_id };
-  });
-
-  fastify.get('/scenes/:scene_id/media', async (request, reply) => {
-    const { scene_id } = request.params as { scene_id: string };
-    const version = (request.query as any)?.version ? Number((request.query as any).version) : undefined;
-    const assets = await MediaAssetService.listSceneContextAssets(Number(scene_id), version);
-    return { scene_id: Number(scene_id), assets };
   });
 
   fastify.post('/assets/:asset_id/promote', async (request, reply) => {
