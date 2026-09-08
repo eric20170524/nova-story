@@ -193,19 +193,28 @@ export class ComfyUIService {
         try {
             let promptId: string | null = null;
 
-            // Cancellation may happen while an image task is waiting for GPU, freeing
-            // VRAM, or compiling its workflow. Check canonical task state immediately
-            // before /prompt so a cancelled task can never create new Comfy work.
+            // Image Comfy submission is only legal while a canonical processing task
+            // owns the single shared GPU lease. This fails closed if a cancellation or
+            // ownership handoff happened earlier in the pipeline.
             const activeLeaseBeforeSubmit = GpuLeaseService.getCurrentLease();
-            if (activeLeaseBeforeSubmit?.kind === 'image') {
-                const task = await AssetTaskStore.get(activeLeaseBeforeSubmit.owner_task_id);
-                if (task && task.status !== 'processing') {
-                    ws.close();
-                    return {
-                        status: 'error',
-                        message: `Image task ${task.task_id} is ${task.status}; refusing ComfyUI prompt submission`
-                    };
-                }
+            if (!activeLeaseBeforeSubmit || activeLeaseBeforeSubmit.kind !== 'image') {
+                ws.close();
+                return {
+                    status: 'error',
+                    message: 'Refusing ComfyUI image prompt submission without an active image GPU lease'
+                };
+            }
+
+            const ownerTaskId = activeLeaseBeforeSubmit.owner_task_id;
+            const taskBeforeSubmit = await AssetTaskStore.get(ownerTaskId);
+            if (!taskBeforeSubmit || taskBeforeSubmit.status !== 'processing') {
+                ws.close();
+                return {
+                    status: 'error',
+                    message: taskBeforeSubmit
+                        ? `Image task ${taskBeforeSubmit.task_id} is ${taskBeforeSubmit.status}; refusing ComfyUI prompt submission`
+                        : `Image GPU owner ${ownerTaskId} has no canonical generation_task; refusing ComfyUI prompt submission`
+                };
             }
 
             const response = await this.fetchWithTimeout(`${this.baseUrl}/prompt`, {
@@ -231,9 +240,26 @@ export class ComfyUIService {
             }
 
             const activeLease = GpuLeaseService.getCurrentLease();
-            if (activeLease?.kind === 'image') {
-                GpuLeaseService.guardLeaseForPrompt(activeLease.owner_task_id, promptId);
+            if (
+                !activeLease
+                || activeLease.kind !== 'image'
+                || activeLease.owner_task_id !== ownerTaskId
+            ) {
+                // The request reached Comfy but ownership changed before prompt_id was
+                // returned. We cannot let this orphan prompt run unguarded. Cancel it
+                // scoped by id and fail closed; if stop cannot be confirmed, the
+                // provider watcher continues observing it.
+                const cancellation = await this.cancelExecution(promptId, 5000);
+                if (!cancellation.ok) this.watchPromptUntilStopped(promptId);
+                ws.close();
+                return {
+                    status: 'error',
+                    prompt_id: promptId,
+                    message: `GPU ownership changed while submitting image prompt ${promptId}; prompt cancellation ${cancellation.ok ? 'confirmed' : 'not confirmed'}`
+                };
             }
+
+            GpuLeaseService.guardLeaseForPrompt(ownerTaskId, promptId);
 
             try {
                 await options?.onPromptQueued?.(promptId);
@@ -241,6 +267,24 @@ export class ComfyUIService {
                 // The prompt already exists. Keep ownership guarded even if metadata
                 // persistence fails; cancellation/recovery must still own the GPU.
                 logger.warn(`onPromptQueued hook failed: ${e}`);
+            }
+
+            // Cancellation can land while POST /prompt is in flight, before the
+            // prompt_id callback is persisted. The route intentionally retains the
+            // image lease in that window. Re-check canonical lifecycle now that the
+            // real prompt id is known and cancel that exact prompt if necessary.
+            const taskAfterSubmit = await AssetTaskStore.get(ownerTaskId);
+            if (!taskAfterSubmit || taskAfterSubmit.status !== 'processing') {
+                const cancellation = await this.cancelExecution(promptId, 5000);
+                if (!cancellation.ok) this.watchPromptUntilStopped(promptId);
+                ws.close();
+                return {
+                    status: 'error',
+                    prompt_id: promptId,
+                    message: taskAfterSubmit
+                        ? `Image task ${ownerTaskId} became ${taskAfterSubmit.status} during prompt submission; prompt cancellation ${cancellation.ok ? 'confirmed' : 'not confirmed'}`
+                        : `Image task ${ownerTaskId} disappeared during prompt submission; prompt cancellation ${cancellation.ok ? 'confirmed' : 'not confirmed'}`
+                };
             }
 
             const generatedImages: any[] = [];
