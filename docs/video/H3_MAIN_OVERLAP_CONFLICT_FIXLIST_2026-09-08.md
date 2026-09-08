@@ -6,9 +6,9 @@
 
 - Git 关系：H3 分支完整包含当前 `main`，不存在需要“双向合并”的 main 新增提交。
 - 产品功能：RedCraft/Krea2 静态生图与 H3 生视频是上下游关系，不是重复功能。
-- P0 跨引擎安全问题已经关闭；P1-1 启动恢复也已关闭。
-- 当前剩余工作主要是架构收敛（P1-2）和资产模型统一（P1-3），不再是已知的 GPU 并发 / 误取消 blocker。
-- 代码验证基线：CI #181，backend 259/259 tests 通过，frontend/backend typecheck 通过，production build 通过。
+- P0 跨引擎安全问题已经关闭；P1-1 启动恢复和 P1-2 Comfy ownership primitive 收敛也已关闭。
+- 当前剩余工作主要是资产模型统一（P1-3）、image lease 显式 ID 清理，以及 RTX 3060 12GB 实机 Gate；已知 GPU 并发 / 误取消 blocker 已关闭。
+- 代码验证基线：CI #186，frontend/backend typecheck、backend tests、production build 全部通过。
 
 ## P0 — 合并前必须关闭
 
@@ -89,7 +89,7 @@ Director `handleStopBatchGenerate()` 调用 `api.cancelAssetGeneration()`，没�
 - 停止未确认时保持 prompt guard / background watcher，GPU 不开放给下一 H3；
 - image execution 增加 bounded deadline，deadline 后同样不以“API 返回”冒充 prompt 已停止。
 
-## P1 — 建议在 H3 合入 main 前继续收敛
+## P1 — 合入 main 前的架构收敛
 
 ### P1-1 image 启动恢复没有 Comfy orphan ownership reconciliation — ✅ 已关闭
 
@@ -107,25 +107,37 @@ generic image restart recovery 会把 `processing` 标为 `interrupted`，但不
 - inactive video prompt 仍留给 raw/history 专用恢复判断；
 - 测试覆盖 active video、active image、Comfy offline image、inactive video history candidate。
 
-### P1-2 两套 Comfy client 仍有代码重复 — 🟡 待架构收敛
+### P1-2 两套 Comfy client 的 ownership/cancel 语义重复 — ✅ 核心收敛完成
+
+**原问题**
 
 - image：`ComfyUIService`
 - video：`ComfyH3Provider`
 
-当前二者的关键安全语义已经对齐：bounded queue observation、prompt guard、scoped pending delete、sole-running interrupt gate、stop confirmation、fail-closed ownership。
+二者曾各自实现 `/queue` 解析、prompt active 判断、pending delete、running interrupt、stop confirmation / watcher，存在安全语义再次漂移的风险。
 
-**剩余问题**：这些 primitive 仍各自实现，未来修改一边可能再次语义漂移。
+**已实现**
 
-**下一步建议**：最小抽取共享 `ComfyPromptOwnershipService`，仅负责：
+新增最小共享 `ComfyPromptOwnershipService`，统一负责：
 
 1. bounded queue snapshot；
 2. prompt active/absent 判断；
-3. pending delete；
-4. sole-running interrupt gate；
-5. stop confirmation / watcher；
-6. startup orphan ownership observation。
+3. pending prompt scoped delete；
+4. sole-running global `/interrupt` gate；
+5. bounded stop confirmation；
+6. GPU prompt guard stop confirmation；
+7. execution ownership 已丢失时的 opt-in background stop watcher。
 
-暂不把 image/video workflow 输出解析、WS 事件解释等强行合成一个大 Provider，避免过度重构。
+`ComfyUIService` 与 `ComfyH3Provider` 均已删除上述重复 primitive，统一委托共享 service。
+
+**刻意保留的差异**：
+
+- image/video 的 `/prompt` 提交流程、workflow 语义不同；
+- WS 事件解释和产物解析不同；
+- image 输出图片，H3 输出视频/history 处理不同；
+- 因此不继续强行合并成一个“大一统 Comfy Provider”，避免过度抽象。
+
+**结论**：安全关键的 ownership/cancel primitive 已单源化；Provider 只保留媒体领域差异。
 
 ### P1-3 Character Center reference 与 Video MediaAsset reference 重复建模 — 🟡 待处理
 
@@ -151,18 +163,18 @@ generic image restart recovery 会把 `processing` 标为 `interrupted`，但不
 | running image 只有确认 prompt stopped 才释放 GPU | ✅ |
 | cancelled 不会被迟到 worker 状态复活 | ✅ |
 | orphan image/video prompt 启动时阻塞新 GPU 工作直到清理 | ✅ |
+| image/video 共用单一 Comfy ownership/cancel primitive | ✅ |
 | no-owner / pending / sole-running / multiple-running cancel tests | ✅ |
-| backend tests | ✅ CI #181：259/259 |
-| frontend/backend typecheck | ✅ CI #181 |
-| production build | ✅ CI #181 |
+| backend tests | ✅ CI #186 |
+| frontend/backend typecheck | ✅ CI #186 |
+| production build | ✅ CI #186 |
 | RTX 3060 12GB：RedCraft -> H3 | ⏳ 实机 Gate |
 | RTX 3060 12GB：H3 -> RedCraft | ⏳ 实机 Gate |
 | RTX 3060 12GB：运行中取消 / 重启恢复 / 连续切换 | ⏳ 实机 Gate |
 
 ## 下一批次建议顺序
 
-1. **P1-2**：抽取最小共享 `ComfyPromptOwnershipService`，删除 image/video 重复 cancel/queue ownership primitive；
-2. **P1-3**：Reference Manager 与 Character Center 做 MediaAsset adapter，避免参考图重复注册/上传；
-3. 清理 legacy `releaseLease('', taskId)`，让 image pipeline 显式持有真实 lease id；
-4. RTX 3060 12GB 三组实机 Gate；
-5. Gate 全绿后把 PR #13 从 Draft 推进到 merge-ready。
+1. **P1-3**：Reference Manager 与 Character Center 做 MediaAsset adapter，避免参考图重复注册/上传；
+2. 清理 legacy `releaseLease('', taskId)`，让 image pipeline 显式持有真实 lease id，并删除 blank-image compatibility path；
+3. RTX 3060 12GB 三组实机 Gate；
+4. Gate 全绿后把 PR #13 从 Draft 推进到 merge-ready。
