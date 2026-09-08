@@ -3,7 +3,9 @@ import { logger } from '../../core/logging';
 import { GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 
-export const VIDEO_ORPHAN_RECOVERY_TASK_ID = '__video_orphan_recovery__';
+export const COMFY_ORPHAN_RECOVERY_TASK_ID = '__comfy_orphan_recovery__';
+// Backward-compatible export for existing video recovery tests/callers.
+export const VIDEO_ORPHAN_RECOVERY_TASK_ID = COMFY_ORPHAN_RECOVERY_TASK_ID;
 
 export type ComfyRecoveryProvider = {
   getQueue(timeoutMs?: number): Promise<{ running: any[]; pending: any[] } | null>;
@@ -12,6 +14,7 @@ export type ComfyRecoveryProvider = {
 
 type OrphanPromptRow = {
   task_id: string;
+  kind?: string | null;
   stage?: string | null;
   comfy_prompt_id?: string | null;
 };
@@ -37,15 +40,17 @@ const promptIsActive = (
   || queue.pending.some((entry) => queueEntryContainsPromptId(entry, promptId));
 
 /**
- * Startup-only safety reconciliation for video tasks whose worker process disappeared
- * while ComfyUI may still own GPU work.
+ * Startup-only safety reconciliation for any generation task whose NovaStory worker
+ * disappeared while ComfyUI may still own GPU work.
  *
- * The normal VideoGenerationService recovery can resume from raw.mp4 or completed
- * Comfy history. This service handles the harder case: a prompt is still active (or
- * Comfy is temporarily unreachable, so ownership cannot be disproved). It acquires a
- * synthetic recovery lease before requests are served, marks the abandoned task
- * interrupted, and retains the GPU exclusively until every owned prompt is confirmed
- * gone. This turns the single-GPU invariant into a process-restart invariant as well.
+ * The class keeps its historical VideoStartupRecoveryService name to avoid a broad
+ * rename, but ownership is intentionally media-agnostic now. Video tasks may still
+ * be resumed later from raw.mp4/history by VideoGenerationService. Static-image tasks
+ * have no durable worker, so the generic task recovery will leave them interrupted.
+ *
+ * If a prompt is still active—or Comfy is unreachable and external ownership cannot
+ * be disproved—the service acquires one synthetic recovery lease before new work is
+ * admitted and retains the GPU until every owned prompt is confirmed gone.
  */
 export class VideoStartupRecoveryService {
   private static reconciliationPromise: Promise<void> | null = null;
@@ -54,15 +59,14 @@ export class VideoStartupRecoveryService {
     provider: ComfyRecoveryProvider = new ComfyH3Provider()
   ): Promise<number> {
     if (this.reconciliationPromise) {
-      logger.info('[Recovery] Video orphan prompt reconciliation is already active.');
+      logger.info('[Recovery] Comfy orphan prompt reconciliation is already active.');
       return 0;
     }
 
     const rows = await db.all(
-      `SELECT task_id, stage, comfy_prompt_id
+      `SELECT task_id, kind, stage, comfy_prompt_id
        FROM generation_task
-       WHERE kind = 'video'
-         AND status = 'processing'
+       WHERE status = 'processing'
          AND comfy_prompt_id IS NOT NULL
          AND comfy_prompt_id <> ''`
     ) as OrphanPromptRow[];
@@ -78,15 +82,17 @@ export class VideoStartupRecoveryService {
         return promptIsActive(queue, promptId);
       }
 
-      // When Comfy cannot be reached, a task that had reached `generating` still has
-      // unresolved external GPU ownership. Fail closed until queue state is observable.
-      return row.stage === 'generating';
+      // For video, only the generating stage implies unresolved Comfy GPU ownership;
+      // postprocessing can legitimately retain a historical prompt id after GPU
+      // release. Static image tasks have no equivalent durable postprocess stage, so
+      // a persisted prompt id is enough to fail closed until Comfy is observable.
+      return row.kind === 'video' ? row.stage === 'generating' : true;
     });
 
     if (guardedRows.length === 0) return 0;
 
     const lease = await GpuLeaseService.acquireLease(
-      VIDEO_ORPHAN_RECOVERY_TASK_ID,
+      COMFY_ORPHAN_RECOVERY_TASK_ID,
       'video',
       60 * 60 * 1000
     );
@@ -113,12 +119,12 @@ export class VideoStartupRecoveryService {
     );
 
     logger.warn(
-      `[Recovery] Holding GPU for ${promptIds.size} orphaned Comfy video prompt(s): ${Array.from(promptIds).join(', ')}`
+      `[Recovery] Holding GPU for ${promptIds.size} orphaned Comfy prompt(s): ${Array.from(promptIds).join(', ')}`
     );
 
     this.reconciliationPromise = this.monitorAndDrain(provider, lease, promptIds)
       .catch((err) => {
-        logger.error(`[Recovery] Video orphan reconciliation failed: ${err}`);
+        logger.error(`[Recovery] Comfy orphan reconciliation failed: ${err}`);
       })
       .finally(() => {
         this.reconciliationPromise = null;
@@ -133,7 +139,7 @@ export class VideoStartupRecoveryService {
     promptIds: Set<string>
   ): Promise<void> {
     const heartbeat = setInterval(() => {
-      GpuLeaseService.heartbeat(lease.lease_id, VIDEO_ORPHAN_RECOVERY_TASK_ID);
+      GpuLeaseService.heartbeat(lease.lease_id, COMFY_ORPHAN_RECOVERY_TASK_ID);
     }, 20_000);
 
     try {
@@ -141,8 +147,8 @@ export class VideoStartupRecoveryService {
         for (const promptId of Array.from(promptIds)) {
           try {
             // Retry scoped cancellation. With multiple running prompts Comfy's global
-            // interrupt is intentionally refused; later passes will retry after queue
-            // state changes instead of risking an unrelated prompt.
+            // interrupt is intentionally refused; later passes retry after queue state
+            // changes instead of risking an unrelated prompt.
             const stopped = await provider.cancelPrompt(promptId, 2500);
             if (stopped) promptIds.delete(promptId);
           } catch (err) {
@@ -165,10 +171,10 @@ export class VideoStartupRecoveryService {
         if (promptIds.size > 0) await sleep(2000);
       }
 
-      logger.info('[Recovery] All orphaned Comfy video prompts are cleared; releasing recovery GPU lease.');
+      logger.info('[Recovery] All orphaned Comfy prompts are cleared; releasing recovery GPU lease.');
     } finally {
       clearInterval(heartbeat);
-      GpuLeaseService.releaseLease(lease.lease_id, VIDEO_ORPHAN_RECOVERY_TASK_ID);
+      GpuLeaseService.releaseLease(lease.lease_id, COMFY_ORPHAN_RECOVERY_TASK_ID);
     }
   }
 
