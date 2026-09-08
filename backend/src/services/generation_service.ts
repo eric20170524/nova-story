@@ -886,6 +886,7 @@ export class GenerationService {
         }
 
         let redis: Redis | null = null;
+        let gpuLease: Awaited<ReturnType<typeof GpuLeaseService.acquireLease>> | null = null;
         const redisUrl = process.env.REDIS_URL;
         if (redisUrl) {
             try {
@@ -1052,8 +1053,9 @@ export class GenerationService {
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
 
-                // Acquire GPU lease to ensure single concurrent access to GPU
-                await GpuLeaseService.acquireLease(taskId, 'image');
+                // Acquire GPU lease to ensure single concurrent access to GPU and retain
+                // the exact lease identity until the pipeline fully unwinds.
+                gpuLease = await GpuLeaseService.acquireLease(taskId, 'image');
 
                 // Plan 1: auto VRAM handoff — unload Ollama before Pony/SDXL claims GPU
                 await runVramHandoffForImageGen(progressHandler);
@@ -1209,7 +1211,9 @@ export class GenerationService {
                 });
             } catch (e) {}
         } finally {
-            GpuLeaseService.releaseLease('', taskId);
+            if (gpuLease) {
+                GpuLeaseService.releaseLease(gpuLease.lease_id, taskId);
+            }
             if (redis) redis.disconnect();
         }
     }
