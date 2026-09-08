@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../../db/database';
 import { GpuLeaseService } from '../gpu_lease_service';
 import {
+  COMFY_ORPHAN_RECOVERY_TASK_ID,
   VIDEO_ORPHAN_RECOVERY_TASK_ID,
   VideoStartupRecoveryService,
   type ComfyRecoveryProvider
@@ -69,7 +70,111 @@ test('startup recovery holds GPU until an active orphan Comfy prompt is confirme
   }
 });
 
-test('startup reconciliation leaves inactive prompts processing so history/raw recovery can decide them', async () => {
+test('startup recovery also guards a static image prompt that survived NovaStory restart', async () => {
+  GpuLeaseService.resetForTesting();
+  const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
+  const taskId = `test_image_orphan_${suffix}`;
+  const promptId = `image_prompt_${suffix}`;
+  const now = new Date().toISOString();
+
+  let resolveCancel!: (value: boolean) => void;
+  const cancelGate = new Promise<boolean>((resolve) => {
+    resolveCancel = resolve;
+  });
+
+  const provider: ComfyRecoveryProvider = {
+    async getQueue() {
+      return {
+        running: [[1, promptId, {}]],
+        pending: []
+      };
+    },
+    async cancelPrompt() {
+      return cancelGate;
+    }
+  };
+
+  try {
+    await db.run(
+      `INSERT INTO generation_task (
+        task_id, scene_id, kind, status, stage, comfy_prompt_id, created_at, updated_at
+      ) VALUES (?, 0, 'image', 'processing', 'generating', ?, ?, ?)`,
+      taskId,
+      promptId,
+      now,
+      now
+    );
+
+    const recovered = await VideoStartupRecoveryService.reconcileActivePromptsOnStartup(provider);
+    assert.equal(recovered, 1);
+
+    const row = await db.get('SELECT status, stage, error FROM generation_task WHERE task_id = ?', taskId);
+    assert.equal(row.status, 'interrupted');
+    assert.equal(row.stage, 'interrupted');
+    assert.match(String(row.error || ''), new RegExp(promptId));
+
+    const heldLease = GpuLeaseService.getCurrentLease();
+    assert.equal(heldLease?.owner_task_id, COMFY_ORPHAN_RECOVERY_TASK_ID);
+    assert.equal(GpuLeaseService.isAvailable(), false);
+
+    resolveCancel(true);
+    await VideoStartupRecoveryService.waitForIdleForTesting();
+    assert.equal(GpuLeaseService.getCurrentLease(), null);
+  } finally {
+    resolveCancel(true);
+    await VideoStartupRecoveryService.waitForIdleForTesting();
+    GpuLeaseService.resetForTesting();
+    await db.run('DELETE FROM generation_task WHERE task_id = ?', taskId);
+  }
+});
+
+test('static image orphan fails closed while Comfy queue state is unreachable', async () => {
+  GpuLeaseService.resetForTesting();
+  const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
+  const taskId = `test_image_offline_orphan_${suffix}`;
+  const promptId = `offline_image_prompt_${suffix}`;
+  const now = new Date().toISOString();
+  let comfyObservable = false;
+
+  const provider: ComfyRecoveryProvider = {
+    async getQueue() {
+      return comfyObservable ? { running: [], pending: [] } : null;
+    },
+    async cancelPrompt() {
+      return false;
+    }
+  };
+
+  try {
+    await db.run(
+      `INSERT INTO generation_task (
+        task_id, scene_id, kind, status, stage, comfy_prompt_id, created_at, updated_at
+      ) VALUES (?, 0, 'image', 'processing', 'generating', ?, ?, ?)`,
+      taskId,
+      promptId,
+      now,
+      now
+    );
+
+    const recovered = await VideoStartupRecoveryService.reconcileActivePromptsOnStartup(provider);
+    assert.equal(recovered, 1);
+    assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, COMFY_ORPHAN_RECOVERY_TASK_ID);
+    assert.equal((await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId)).status, 'interrupted');
+
+    // Once Comfy is observable and proves the prompt absent, the synthetic recovery
+    // lease may be released and normal image/H3 scheduling can resume.
+    comfyObservable = true;
+    await VideoStartupRecoveryService.waitForIdleForTesting();
+    assert.equal(GpuLeaseService.getCurrentLease(), null);
+  } finally {
+    comfyObservable = true;
+    await VideoStartupRecoveryService.waitForIdleForTesting();
+    GpuLeaseService.resetForTesting();
+    await db.run('DELETE FROM generation_task WHERE task_id = ?', taskId);
+  }
+});
+
+test('startup reconciliation leaves inactive video prompts processing so history/raw recovery can decide them', async () => {
   GpuLeaseService.resetForTesting();
   const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const taskId = `test_video_history_candidate_${suffix}`;
