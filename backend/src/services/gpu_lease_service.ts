@@ -192,46 +192,23 @@ export class GpuLeaseService {
     }
   }
 
+  /**
+   * Release requires the exact capability pair returned by acquireLease: both
+   * lease_id and owner_task_id must match the current lease. A blank/stale/fabricated
+   * lease id is never interpreted as permission to release active GPU ownership or to
+   * cancel a queue waiter. Queued cancellation has its own explicit API.
+   */
   static releaseLease(leaseId: string, taskId: string): void {
-    // Legacy static-image GenerationService still releases from finally without
-    // retaining the acquired lease id. Keep that path safe and narrowly scoped:
-    // only the current image owner may release via a blank id, and a live/unknown
-    // Comfy prompt still defers the release. Blank video cancellation hints remain
-    // non-authoritative and can never pre-empt H3 ownership.
     if (!leaseId) {
-      if (
-        this.currentLease
-        && this.currentLease.owner_task_id === taskId
-        && this.currentLease.kind === 'image'
-      ) {
-        const guardedPromptId = this.guardedPrompts.get(taskId);
-        if (guardedPromptId) {
-          this.pendingReleases.add(taskId);
-          logger.warn(
-            `Deferring legacy image GPU lease release for task ${taskId}: `
-            + `Comfy prompt ${guardedPromptId} is not confirmed stopped.`
-          );
-          return;
-        }
-
-        const activeLeaseId = this.currentLease.lease_id;
-        logger.info(
-          `GPU lease released by legacy image owner ${taskId} (leaseId=${activeLeaseId}).`
-        );
-        this.pendingReleases.delete(taskId);
-        this.currentLease = null;
-        this.processNextInQueue();
-        return;
-      }
-
-      logger.info(
-        `Ignoring blank GPU lease release hint for task ${taskId}; `
-        + `it is not the current image owner.`
-      );
+      logger.warn(`Ignoring blank GPU lease release for task ${taskId}; exact lease_id is required.`);
       return;
     }
 
-    if (this.currentLease && (this.currentLease.lease_id === leaseId || this.currentLease.owner_task_id === taskId)) {
+    if (
+      this.currentLease
+      && this.currentLease.lease_id === leaseId
+      && this.currentLease.owner_task_id === taskId
+    ) {
       const guardedPromptId = this.guardedPrompts.get(taskId);
       if (guardedPromptId) {
         this.pendingReleases.add(taskId);
@@ -248,10 +225,10 @@ export class GpuLeaseService {
       return;
     }
 
-    // Backward-compatible explicit cancellation for callers that pass a non-empty
-    // lease id while removing a queued task. Rejecting the waiter prevents a worker
-    // from remaining suspended forever.
-    this.cancelQueuedTask(taskId);
+    logger.warn(
+      `Ignoring GPU lease release for task ${taskId} (leaseId=${leaseId}); `
+      + 'exact current lease ownership did not match.'
+    );
   }
 
   static heartbeat(leaseId: string, taskId: string): void {
