@@ -23,6 +23,41 @@ const inferReferenceMimeType = (asset: MediaAsset, sourcePath: string): string =
   return asset.media_type === 'video' ? 'video/mp4' : 'application/octet-stream';
 };
 
+const inferImageMimeTypeFromPath = (sourcePath: string): string | undefined => {
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  return undefined;
+};
+
+const normalizeMediaAssetRow = (row: any): MediaAsset => ({
+  ...row,
+  id: Number(row.id),
+  project_id: Number(row.project_id),
+  scene_id: row.scene_id != null ? Number(row.scene_id) : null,
+  scene_version: row.scene_version != null ? Number(row.scene_version) : null,
+  character_id: row.character_id != null ? Number(row.character_id) : null,
+  parent_asset_id: row.parent_asset_id != null ? Number(row.parent_asset_id) : null,
+  width: row.width != null ? Number(row.width) : null,
+  height: row.height != null ? Number(row.height) : null,
+  fps: row.fps != null ? Number(row.fps) : null,
+  frame_count: row.frame_count != null ? Number(row.frame_count) : null,
+  duration_ms: row.duration_ms != null ? Number(row.duration_ms) : null
+});
+
+const parseMetadata = (raw?: string | null): Record<string, any> => {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const CHARACTER_CENTER_ADAPTER_SOURCE = 'character_center_adapter';
+
 export class MediaAssetService {
   static computeSha256(filePath: string): string {
     const buffer = fs.readFileSync(filePath);
@@ -47,6 +82,195 @@ export class MediaAssetService {
       throw new Error(`Path traversal detected for asset path: ${relativeOrUrl}`);
     }
     return absolute;
+  }
+
+  /**
+   * Build/reuse project-level `character_reference` MediaAsset identities for the
+   * Character Center's existing avatar/face/turnaround URLs.
+   *
+   * This is deliberately a metadata adapter, not an upload/copy operation. The
+   * physical Character Center image remains canonical at its current /static URL;
+   * only the MediaAsset identity/ownership layer is unified for H3. A later Comfy
+   * staging step may copy/upload bytes transiently as required by that transport.
+   */
+  static async syncCharacterReferenceAssets(characterId: number): Promise<MediaAsset[]> {
+    const character = await db.get(
+      'SELECT id, project_id, name, visual_tags FROM character WHERE id = ?',
+      characterId
+    );
+    if (!character) {
+      throw new Error(`Character ${characterId} not found`);
+    }
+
+    let visualTags: Record<string, any> = {};
+    try {
+      visualTags = typeof character.visual_tags === 'string'
+        ? JSON.parse(character.visual_tags || '{}')
+        : (character.visual_tags || {});
+    } catch {
+      visualTags = {};
+    }
+
+    const assets = visualTags?.assets || {};
+    // Face is the strongest identity signal, then avatar, then turnaround. Deduplicate
+    // exact URLs so one physical image never produces duplicate MediaAsset rows merely
+    // because Character Center exposes it through multiple slots.
+    const orderedCandidates: Array<{ slot: string; url: string }> = [
+      { slot: 'face_url', url: String(assets.face_url || visualTags.face_url || '').trim() },
+      { slot: 'avatar_url', url: String(assets.avatar_url || visualTags.avatar_url || '').trim() },
+      { slot: 'turnaround_url', url: String(assets.turnaround_url || visualTags.turnaround_url || '').trim() }
+    ];
+    const seenUrls = new Set<string>();
+    const candidates = orderedCandidates.filter((candidate) => {
+      if (!candidate.url || seenUrls.has(candidate.url)) return false;
+      seenUrls.add(candidate.url);
+      return true;
+    });
+
+    const existingRows = await db.all(
+      `SELECT * FROM media_asset
+       WHERE project_id = ?
+         AND character_id = ?
+         AND scene_id IS NULL
+         AND role = 'character_reference'
+       ORDER BY id DESC`,
+      Number(character.project_id),
+      Number(character.id)
+    ) as any[];
+
+    const currentUrls = new Set(candidates.map((candidate) => candidate.url));
+    for (const row of existingRows) {
+      const metadata = parseMetadata(row.metadata_json);
+      if (
+        metadata.source === CHARACTER_CENTER_ADAPTER_SOURCE
+        && !currentUrls.has(String(row.url || ''))
+        && row.status !== 'archived'
+      ) {
+        await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'archived', row.id);
+      }
+    }
+
+    const synced: MediaAsset[] = [];
+    for (const candidate of candidates) {
+      let sourcePath: string;
+      try {
+        sourcePath = this.resolveSafePath(candidate.url);
+      } catch (err) {
+        logger.warn(
+          `Skipping Character Center ${candidate.slot} for character ${character.id}: `
+          + `H3 MediaAsset adapter only accepts NovaStory /static assets (${err})`
+        );
+        continue;
+      }
+
+      if (!fs.existsSync(sourcePath)) {
+        logger.warn(
+          `Skipping Character Center ${candidate.slot} for character ${character.id}: `
+          + `source file does not exist at ${sourcePath}`
+        );
+        continue;
+      }
+
+      const metadataJson = JSON.stringify({
+        source: CHARACTER_CENTER_ADAPTER_SOURCE,
+        adapter_version: 1,
+        source_slot: candidate.slot,
+        character_name: character.name || null,
+        no_copy: true
+      });
+      const sha256 = this.computeSha256(sourcePath);
+      const mimeType = inferImageMimeTypeFromPath(sourcePath);
+
+      const existing = existingRows.find(
+        (row) => String(row.url || '') === candidate.url && row.status !== 'archived'
+      ) || existingRows.find((row) => {
+        const metadata = parseMetadata(row.metadata_json);
+        return String(row.url || '') === candidate.url
+          && metadata.source === CHARACTER_CENTER_ADAPTER_SOURCE;
+      });
+
+      if (existing) {
+        const metadata = parseMetadata(existing.metadata_json);
+        if (metadata.source === CHARACTER_CENTER_ADAPTER_SOURCE) {
+          await db.run(
+            `UPDATE media_asset
+             SET status = 'ready', mime_type = ?, sha256 = ?, metadata_json = ?
+             WHERE id = ?`,
+            mimeType ?? null,
+            sha256,
+            metadataJson,
+            existing.id
+          );
+        }
+        const refreshed = await this.getAssetById(Number(existing.id));
+        if (refreshed && refreshed.status !== 'archived') synced.push(refreshed);
+        continue;
+      }
+
+      const created = await this.createAsset({
+        project_id: Number(character.project_id),
+        scene_id: null,
+        scene_version: null,
+        character_id: Number(character.id),
+        media_type: 'image',
+        role: 'character_reference',
+        status: 'ready',
+        url: candidate.url,
+        mime_type: mimeType,
+        sha256,
+        metadata_json: metadataJson
+      });
+      synced.push(created);
+    }
+
+    return synced;
+  }
+
+  /**
+   * Scene media plus reusable project-level Character Center references. Syncing the
+   * adapter here makes existing projects self-healing without copying their images or
+   * requiring a one-off migration command.
+   */
+  static async listSceneContextAssets(sceneId: number, sceneVersion?: number): Promise<MediaAsset[]> {
+    const scene = await db.get(
+      `SELECT s.id, c.project_id
+       FROM scene s
+       JOIN chapter c ON c.id = s.chapter_id
+       WHERE s.id = ?`,
+      sceneId
+    );
+
+    const sceneAssets = await this.listAssetsByScene(sceneId, sceneVersion);
+    if (!scene?.project_id) return sceneAssets;
+
+    const characters = await db.all(
+      'SELECT id FROM character WHERE project_id = ? ORDER BY id ASC',
+      Number(scene.project_id)
+    ) as Array<{ id: number }>;
+    for (const character of characters) {
+      try {
+        await this.syncCharacterReferenceAssets(Number(character.id));
+      } catch (err) {
+        logger.warn(`Could not sync Character Center MediaAsset adapter for character ${character.id}: ${err}`);
+      }
+    }
+
+    const referenceRows = await db.all(
+      `SELECT * FROM media_asset
+       WHERE project_id = ?
+         AND scene_id IS NULL
+         AND media_type = 'image'
+         AND role = 'character_reference'
+         AND status = 'ready'
+       ORDER BY id ASC`,
+      Number(scene.project_id)
+    ) as any[];
+
+    const byId = new Map<number, MediaAsset>();
+    for (const asset of [...sceneAssets, ...referenceRows.map(normalizeMediaAssetRow)]) {
+      if (asset.id != null) byId.set(Number(asset.id), asset);
+    }
+    return Array.from(byId.values());
   }
 
   static async stageAssetForComfy(asset: MediaAsset, comfyInputDir?: string): Promise<{ stagedFilename: string; stagedPath: string }> {
@@ -185,20 +409,7 @@ export class MediaAssetService {
   static async getAssetById(id: number): Promise<MediaAsset | null> {
     const row = await db.get('SELECT * FROM media_asset WHERE id = ?', id);
     if (!row) return null;
-    return {
-      ...row,
-      id: Number(row.id),
-      project_id: Number(row.project_id),
-      scene_id: row.scene_id != null ? Number(row.scene_id) : null,
-      scene_version: row.scene_version != null ? Number(row.scene_version) : null,
-      character_id: row.character_id != null ? Number(row.character_id) : null,
-      parent_asset_id: row.parent_asset_id != null ? Number(row.parent_asset_id) : null,
-      width: row.width != null ? Number(row.width) : null,
-      height: row.height != null ? Number(row.height) : null,
-      fps: row.fps != null ? Number(row.fps) : null,
-      frame_count: row.frame_count != null ? Number(row.frame_count) : null,
-      duration_ms: row.duration_ms != null ? Number(row.duration_ms) : null
-    };
+    return normalizeMediaAssetRow(row);
   }
 
   static async listAssetsByScene(sceneId: number, sceneVersion?: number): Promise<MediaAsset[]> {
@@ -210,20 +421,7 @@ export class MediaAssetService {
     }
     sql += ' ORDER BY created_at DESC, id DESC';
     const rows = await db.all(sql, ...params);
-    return (rows as any[]).map((row) => ({
-      ...row,
-      id: Number(row.id),
-      project_id: Number(row.project_id),
-      scene_id: row.scene_id != null ? Number(row.scene_id) : null,
-      scene_version: row.scene_version != null ? Number(row.scene_version) : null,
-      character_id: row.character_id != null ? Number(row.character_id) : null,
-      parent_asset_id: row.parent_asset_id != null ? Number(row.parent_asset_id) : null,
-      width: row.width != null ? Number(row.width) : null,
-      height: row.height != null ? Number(row.height) : null,
-      fps: row.fps != null ? Number(row.fps) : null,
-      frame_count: row.frame_count != null ? Number(row.frame_count) : null,
-      duration_ms: row.duration_ms != null ? Number(row.duration_ms) : null
-    }));
+    return (rows as any[]).map(normalizeMediaAssetRow);
   }
 
   /** Resolve either a raw video or a final derivative back to its immutable raw parent. */
