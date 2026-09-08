@@ -185,7 +185,23 @@ test('Character Center images become reusable no-copy MediaAsset references idem
       })
     );
 
+    const sceneGlobalMotion = await MediaAssetService.createAsset({
+      project_id: projectId,
+      scene_id: sceneId,
+      scene_version: null,
+      media_type: 'video',
+      role: 'motion_reference',
+      status: 'ready',
+      url: '/static/generated/scene_global_motion.mp4',
+      mime_type: 'video/mp4'
+    });
+
     const first = await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    assert.ok(
+      first.some((asset) => asset.id === sceneGlobalMotion.id),
+      'scene-global references with scene_version=NULL must remain visible for versioned scene loads'
+    );
+
     const refs = first.filter((asset) => asset.role === 'character_reference');
     assert.equal(refs.length, 2);
     assert.deepEqual(new Set(refs.map((asset) => asset.url)), new Set([faceUrl, turnaroundUrl]));
@@ -218,7 +234,7 @@ test('Character Center images become reusable no-copy MediaAsset references idem
     const afterChange = await MediaAssetService.listSceneContextAssets(sceneId, 1);
     const activeRefs = afterChange.filter((asset) => asset.role === 'character_reference');
     assert.equal(activeRefs.length, 1);
-    assert.equal(activeRefs[0].url, turnaroundUrl);
+    assert.equal(activeRefs[0]!.url, turnaroundUrl);
 
     const archived = await db.get(
       `SELECT COUNT(*) AS count
