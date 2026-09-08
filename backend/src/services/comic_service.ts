@@ -3,7 +3,13 @@ import sharp from 'sharp';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db } from '../db/database';
-import { getStaticDirectory } from '../core/paths';
+import {
+  getComicChapterAssetPath,
+  getComicProjectAssetPath,
+  getComicSceneAssetPath,
+  getStaticDirectory,
+  resolveStaticAssetPath,
+} from '../core/paths';
 
 export class ComicServiceError extends Error {
   constructor(
@@ -72,7 +78,7 @@ const wrapSubtitle = (text: string, charactersPerLine: number) => {
 const safeFilenamePart = (value: string | number) =>
   String(value).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 160) || 'item';
 
-const loadImage = async (assetUrl: string, staticDirectory: string) => {
+const loadImage = async (assetUrl: string, _staticDirectory?: string) => {
   if (/^https?:\/\//i.test(assetUrl)) {
     const response = await fetch(assetUrl, {
       signal: AbortSignal.timeout(60_000)
@@ -83,11 +89,7 @@ const loadImage = async (assetUrl: string, staticDirectory: string) => {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  const localPath = assetUrl.startsWith('/static/')
-    ? path.join(staticDirectory, assetUrl.slice('/static/'.length))
-    : path.isAbsolute(assetUrl)
-      ? assetUrl
-      : path.join(staticDirectory, assetUrl);
+  const localPath = resolveStaticAssetPath(assetUrl);
   return fs.promises.readFile(localPath);
 };
 
@@ -95,10 +97,22 @@ export const renderComicPage = async (
   sceneId: number,
   assetUrl: string,
   text: string | { narration?: string | null; dialogue?: string | null },
-  staticDirectory: string,
-  comicDirectory: string
+  optionsOrStaticDir?: string | {
+    projectId?: number | string | null;
+    chapterId?: string | null;
+    staticDirectory?: string;
+    comicDirectory?: string;
+  },
+  _legacyComicDir?: string
 ) => {
-  const input = await loadImage(assetUrl, staticDirectory);
+  const options = typeof optionsOrStaticDir === 'object' && optionsOrStaticDir !== null
+    ? optionsOrStaticDir
+    : {};
+  const staticDir = typeof optionsOrStaticDir === 'string'
+    ? optionsOrStaticDir
+    : options.staticDirectory || getStaticDirectory();
+
+  const input = await loadImage(assetUrl, staticDir);
   const image = sharp(input).rotate();
   const metadata = await image.metadata();
   const width = metadata.width || 1024;
@@ -158,12 +172,15 @@ export const renderComicPage = async (
     output = image.composite(overlays);
   }
 
-  const filename = `comic_scene_${safeFilenamePart(sceneId)}.jpg`;
-  const filePath = path.join(comicDirectory, filename);
-  await output.jpeg({ quality: 90 }).toFile(filePath);
+  const pathResult = getComicSceneAssetPath({
+    projectId: options.projectId,
+    chapterId: options.chapterId,
+    sceneId,
+  });
+  await output.jpeg({ quality: 90 }).toFile(pathResult.filepath);
   return {
-    url: `/static/comics/${filename}`,
-    filePath,
+    url: pathResult.url,
+    filePath: pathResult.filepath,
     width,
     height
   };
@@ -190,13 +207,6 @@ const writeComicPdf = async (
     stream.on('finish', () => resolve());
     stream.on('error', reject);
   });
-};
-
-const ensureComicDirectory = () => {
-  const staticDirectory = getStaticDirectory();
-  const comicDirectory = path.join(staticDirectory, 'comics');
-  fs.mkdirSync(comicDirectory, { recursive: true });
-  return { staticDirectory, comicDirectory };
 };
 
 export const generateChapterComic = async (
@@ -245,7 +255,6 @@ export const generateChapterComic = async (
     );
   }
 
-  const { staticDirectory, comicDirectory } = ensureComicDirectory();
   const pages: ComicPageResult[] = [];
   for (const scene of validScenes) {
     try {
@@ -253,8 +262,7 @@ export const generateChapterComic = async (
         Number(scene.id),
         scene.asset_url,
         { narration: scene.narration || '', dialogue: scene.dialogue || '' },
-        staticDirectory,
-        comicDirectory
+        { projectId: chapter.project_id, chapterId }
       );
       pages.push({ scene_id: Number(scene.id), chapter_id: chapterId, ...page });
     } catch (error) {
@@ -273,8 +281,11 @@ export const generateChapterComic = async (
     throw new ComicServiceError('Failed to generate any comic pages', 500);
   }
 
-  const pdfFilename = `chapter_${safeFilenamePart(chapterId)}_comic.pdf`;
-  await writeComicPdf(pages, path.join(comicDirectory, pdfFilename));
+  const pdfPathResult = getComicChapterAssetPath({
+    projectId: chapter.project_id,
+    chapterId,
+  });
+  await writeComicPdf(pages, pdfPathResult.filepath);
 
   return {
     status: 'completed' as const,
@@ -282,7 +293,7 @@ export const generateChapterComic = async (
     total_scenes: scenes.length,
     generated_count: pages.length,
     pages: pages.map(({ scene_id, url }) => ({ scene_id, url })),
-    pdf_url: `/static/comics/${pdfFilename}`
+    pdf_url: pdfPathResult.url
   };
 };
 
@@ -369,7 +380,6 @@ export const generateProjectComic = async (projectId: number) => {
     'SELECT id, "index", title FROM chapter WHERE project_id = ? ORDER BY "index" ASC',
     projectId
   );
-  const { staticDirectory, comicDirectory } = ensureComicDirectory();
   const pages: ComicPageResult[] = [];
   const chapterResults: Array<{
     chapter_id: string;
@@ -398,8 +408,7 @@ export const generateProjectComic = async (projectId: number) => {
           Number(scene.id),
           scene.asset_url,
           { narration: scene.narration || '', dialogue: scene.dialogue || '' },
-          staticDirectory,
-          comicDirectory
+          { projectId, chapterId: chapter.id }
         );
         pages.push({
           scene_id: Number(scene.id),
@@ -449,8 +458,8 @@ export const generateProjectComic = async (projectId: number) => {
     );
   }
 
-  const pdfFilename = `project_${safeFilenamePart(projectId)}_comic.pdf`;
-  await writeComicPdf(pages, path.join(comicDirectory, pdfFilename));
+  const projectPdfPathResult = getComicProjectAssetPath({ projectId });
+  await writeComicPdf(pages, projectPdfPathResult.filepath);
 
   return {
     status: 'completed' as const,
@@ -465,6 +474,6 @@ export const generateProjectComic = async (projectId: number) => {
       scene_id,
       url
     })),
-    pdf_url: `/static/comics/${pdfFilename}`
+    pdf_url: projectPdfPathResult.url
   };
 };

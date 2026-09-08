@@ -6,7 +6,12 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { LLMService } from '../services/llm';
-import { getGeneratedDirectory } from '../core/paths';
+import {
+  getGeneratedDirectory,
+  getCharacterAssetPath,
+  getUploadAssetPath,
+  resolveStaticAssetPath
+} from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
 import {
   buildCharacterPromptHeader,
@@ -397,8 +402,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const staticDir = getGeneratedDirectory();
-    const filename = path.basename(srcUrl);
-    const filepath = path.join(staticDir, filename);
+    const filepath = resolveStaticAssetPath(srcUrl);
 
     if (!fs.existsSync(filepath)) {
       assets.face_url = srcUrl;
@@ -418,13 +422,18 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         const height = Math.floor(metadata.height * 0.40);
 
         const faceFilename = `face_${id}_${crypto.randomUUID().substring(0, 8)}.png`;
-        const faceFilepath = path.join(staticDir, faceFilename);
+        const pathResult = getCharacterAssetPath({
+          projectId: dbChar.project_id,
+          characterId: id,
+          version: dbChar.active_version || 1,
+          filename: faceFilename
+        });
 
         await sharp(filepath)
           .extract({ left, top, width, height })
-          .toFile(faceFilepath);
+          .toFile(pathResult.filepath);
 
-        assets.face_url = `/static/generated/${faceFilename}`;
+        assets.face_url = pathResult.url;
         tags.assets = assets;
         await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
       }
@@ -477,18 +486,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ detail: `Invalid file extension '${ext}'. Allowed: .png, .jpg, .jpeg, .webp` });
     }
 
-    const staticDir = getGeneratedDirectory();
-    if (!fs.existsSync(staticDir)) {
-      fs.mkdirSync(staticDir, { recursive: true });
-    }
-
     const filename = `upload_${crypto.randomUUID().substring(0, 10)}${ext}`;
-    const filepath = path.join(staticDir, filename);
+    const pathResult = getUploadAssetPath(filename);
 
     const buffer = await data.toBuffer();
-    await fs.promises.writeFile(filepath, buffer);
+    await fs.promises.writeFile(pathResult.filepath, buffer);
 
-    return { url: `/static/generated/${filename}` };
+    return { url: pathResult.url };
   });
 
   app.post('/:id/upload-asset', async (request, reply) => {
@@ -498,11 +502,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
     if (!dbChar) {
       return reply.status(404).send({ detail: 'Character not found' });
-    }
-
-    const staticDir = getGeneratedDirectory();
-    if (!fs.existsSync(staticDir)) {
-      fs.mkdirSync(staticDir, { recursive: true });
     }
 
     const parts = request.parts();
@@ -533,10 +532,15 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const filename = `upload_${assetType}_${id}_${crypto.randomUUID().substring(0, 8)}${ext}`;
-    const filepath = path.join(staticDir, filename);
-    await fs.promises.writeFile(filepath, buffer);
+    const pathResult = getCharacterAssetPath({
+      projectId: dbChar.project_id,
+      characterId: id,
+      version: dbChar.active_version || 1,
+      filename
+    });
+    await fs.promises.writeFile(pathResult.filepath, buffer);
 
-    const assetUrl = `/static/generated/${filename}`;
+    const assetUrl = pathResult.url;
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
     const assets = tags.assets || {};
 

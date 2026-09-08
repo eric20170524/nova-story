@@ -40,10 +40,11 @@ test('generates rasterized subtitle pages and a PDF from local scene images', as
   const project = await db.run(
     "INSERT INTO project (title) VALUES ('Comic')"
   );
+  const projectId = Number(project.lastID);
   await db.run(
     `INSERT INTO chapter (id, project_id, "index", title, content)
      VALUES ('comic-chapter', ?, 1, 'Comic Chapter', 'Content')`,
-    project.lastID
+    projectId
   );
   await db.run(
     `INSERT INTO scene (
@@ -66,14 +67,33 @@ test('generates rasterized subtitle pages and a PDF from local scene images', as
   assert.equal(response.json().generated_count, 1);
   assert.equal(
     response.json().pages[0].url,
-    '/static/comics/comic_scene_1.jpg'
-  );
-  assert.ok(
-    fs.existsSync(path.join(staticDirectory, 'comics', 'comic_scene_1.jpg'))
+    `/static/comics/projects/${projectId}/chapters/comic-chapter/scenes/comic_scene_1.jpg`
   );
   assert.ok(
     fs.existsSync(
-      path.join(staticDirectory, 'comics', 'chapter_comic-chapter_comic.pdf')
+      path.join(
+        staticDirectory,
+        'comics',
+        'projects',
+        String(projectId),
+        'chapters',
+        'comic-chapter',
+        'scenes',
+        'comic_scene_1.jpg'
+      )
+    )
+  );
+  assert.ok(
+    fs.existsSync(
+      path.join(
+        staticDirectory,
+        'comics',
+        'projects',
+        String(projectId),
+        'chapters',
+        'comic-chapter',
+        'chapter_comic-chapter_comic.pdf'
+      )
     )
   );
 
@@ -185,9 +205,9 @@ test('project comic status blocks incomplete books and generates one strict full
       ['book-chapter-2', 1],
     ]
   );
-  assert.equal(body.pdf_url, `/static/comics/project_${projectId}_comic.pdf`);
+  assert.equal(body.pdf_url, `/static/comics/projects/${projectId}/project_${projectId}_comic.pdf`);
   assert.ok(
-    fs.existsSync(path.join(staticDirectory, 'comics', `project_${projectId}_comic.pdf`))
+    fs.existsSync(path.join(staticDirectory, 'comics', 'projects', String(projectId), `project_${projectId}_comic.pdf`))
   );
 
   await app.close();

@@ -11,7 +11,12 @@ import { randomUUID } from 'crypto';
 import sharp, { type OverlayOptions } from 'sharp';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
-import { getGeneratedDirectory } from '../core/paths';
+import { db } from '../db/database';
+import {
+  getGeneratedDirectory,
+  getSceneAssetPath,
+  getCharacterAssetPath
+} from '../core/paths';
 import { ComfyUIService } from './ai/comfyui_service';
 import {
   compileComfyWorkflow,
@@ -247,6 +252,52 @@ export async function generateTurnaroundComposite(
     );
   }
 
+  let projectId: number | null = null;
+  let characterId: number | null = null;
+  let version: number = Number(input.workflowData?.version || input.workflowData?.scene_version || 1);
+
+  if (input.sceneId < 90_000_000) {
+    const sceneRow = await db.get(
+      'SELECT chapter_id, active_version FROM scene WHERE id = ?',
+      input.sceneId
+    );
+    if (sceneRow) {
+      if (sceneRow.active_version != null) {
+        version = Number(sceneRow.active_version);
+      }
+      if (sceneRow.chapter_id) {
+        const chapterRow = await db.get(
+          'SELECT project_id FROM chapter WHERE id = ?',
+          sceneRow.chapter_id
+        );
+        if (chapterRow?.project_id) {
+          projectId = Number(chapterRow.project_id);
+        }
+      }
+    }
+  } else {
+    if (input.workflowData?.character_id) {
+      characterId = Number(input.workflowData.character_id);
+    } else {
+      for (const offset of [999990, 999991, 999992, 90000000]) {
+        if (input.sceneId > offset && input.sceneId < offset + 100000) {
+          characterId = input.sceneId - offset;
+          break;
+        }
+      }
+    }
+    if (characterId) {
+      const charRow = await db.get(
+        'SELECT id, project_id, active_version FROM character WHERE id = ?',
+        characterId
+      );
+      if (charRow) {
+        projectId = charRow.project_id != null ? Number(charRow.project_id) : null;
+        version = Number(charRow.active_version || 1);
+      }
+    }
+  }
+
   // Tier B is Pony/SDXL only
   const tierB = await resolveTierBFromSettings(settings, {
     isFlux: modelFamily !== 'pony'
@@ -342,10 +393,26 @@ export async function generateTurnaroundComposite(
       );
     }
 
-    const panelFilename = `${input.sceneId}_${input.taskId}_${view.id}.png`;
-    const panelPath = path.join(staticDir, panelFilename);
-    fs.writeFileSync(panelPath, result.images[0].data);
-    panelPaths[view.id] = `/static/generated/${panelFilename}`;
+    const panelFilename = characterId != null
+      ? `turnaround_${characterId}_${view.id}_${input.taskId}.png`
+      : `${input.sceneId}_${input.taskId}_${view.id}.png`;
+
+    const panelPathResult = characterId != null
+      ? getCharacterAssetPath({
+          projectId,
+          characterId,
+          version,
+          filename: panelFilename
+        })
+      : getSceneAssetPath({
+          projectId,
+          sceneId: input.sceneId,
+          version,
+          filename: panelFilename
+        });
+
+    fs.writeFileSync(panelPathResult.filepath, result.images[0].data);
+    panelPaths[view.id] = panelPathResult.url;
     panelBuffers.push({
       buffer: result.images[0].data as Buffer,
       label: view.label,
@@ -360,10 +427,27 @@ export async function generateTurnaroundComposite(
     panelBuffers.map((p) => ({ buffer: p.buffer, label: p.label }))
   );
 
-  const sheetFilename = `${input.sceneId}_${input.taskId}_turnaround.png`;
-  const sheetPath = path.join(staticDir, sheetFilename);
-  fs.writeFileSync(sheetPath, sheetBuffer);
-  const sheetUrl = `/static/generated/${sheetFilename}`;
+  const sheetFilename = characterId != null
+    ? `turnaround_${characterId}_${input.taskId}.png`
+    : `${input.sceneId}_${input.taskId}_turnaround.png`;
+
+  const sheetPathResult = characterId != null
+    ? getCharacterAssetPath({
+        projectId,
+        characterId,
+        version,
+        filename: sheetFilename
+      })
+    : getSceneAssetPath({
+        projectId,
+        sceneId: input.sceneId,
+        version,
+        filename: sheetFilename
+      });
+
+  fs.writeFileSync(sheetPathResult.filepath, sheetBuffer);
+  const sheetUrl = sheetPathResult.url;
+  const sheetPath = sheetPathResult.filepath;
 
   logger.info(`[Task ${input.taskId}] Turnaround sheet saved ${sheetUrl}`);
 

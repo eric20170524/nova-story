@@ -503,4 +503,42 @@ export class MediaAssetService {
     logger.info(`Promoted asset ${assetId} as active final for scene ${asset.scene_id}`);
     return (await this.getAssetById(assetId))!;
   }
+
+  /**
+   * Clean up transient staged files in staging directory.
+   * @param options.maxAgeMs Only remove files older than this duration (default: 24h). Set 0 to clear all.
+   */
+  static async cleanupStaging(options: { maxAgeMs?: number } = {}): Promise<{ deletedCount: number; freedBytes: number }> {
+    const stagingDir = getVideoStagingDirectory();
+    if (!fs.existsSync(stagingDir)) {
+      return { deletedCount: 0, freedBytes: 0 };
+    }
+
+    const maxAgeMs = options.maxAgeMs ?? 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let deletedCount = 0;
+    let freedBytes = 0;
+
+    const files = await fs.promises.readdir(stagingDir);
+    for (const file of files) {
+      const filePath = path.join(stagingDir, file);
+      try {
+        const stats = await fs.promises.stat(filePath);
+        if (stats.isFile()) {
+          const age = now - stats.mtimeMs;
+          if (age >= maxAgeMs) {
+            freedBytes += stats.size;
+            await fs.promises.unlink(filePath);
+            deletedCount++;
+            logger.info(`Cleaned up staging file: ${file} (age: ${Math.round(age / 1000 / 60)}min, size: ${stats.size} bytes)`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`Failed to inspect or delete staging file ${filePath}: ${err}`);
+      }
+    }
+
+    return { deletedCount, freedBytes };
+  }
 }
+

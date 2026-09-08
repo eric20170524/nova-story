@@ -8,7 +8,12 @@ import fs from 'fs';
 import { logger } from '../core/logging';
 import { Prompts } from './prompts';
 import { AssetTaskStore } from './task_store';
-import { getGeneratedDirectory } from '../core/paths';
+import {
+    getGeneratedDirectory,
+    getSceneAssetPath,
+    getCharacterAssetPath,
+    resolveStaticAssetPath
+} from '../core/paths';
 import {
     applyPromptEnhancement,
     mergeClipPositivePrompt,
@@ -734,7 +739,9 @@ const copyOneReferenceImageToComfy = (
     comfyInstallPath: string
 ) => {
     const filename = path.basename(String(referenceImageUrl));
+    const resolvedPath = resolveStaticAssetPath(String(referenceImageUrl));
     const candidates = [
+        resolvedPath,
         path.join(staticDir, filename),
         // Allow absolute filesystem paths passed as ref_image_url
         String(referenceImageUrl).startsWith('/') || /^[A-Za-z]:[\\/]/.test(String(referenceImageUrl))
@@ -910,41 +917,68 @@ export class GenerationService {
             let effectiveWorkflowData = { ...workflowData };
             let sceneProjectId: number | null = null;
             let sceneChapterId: string | null = null;
+            let sceneVersion: number = Number(workflowData?.version || workflowData?.scene_version || 1);
+            let characterId: number | null = null;
+            let characterVersion: number = 1;
             try {
                 const sceneRow = await db.get(
-                    `SELECT chapter_id, visual_prompt, negative_prompt, shot_type, camera_movement, camera_angle, shot_spec
+                    `SELECT chapter_id, visual_prompt, negative_prompt, shot_type, camera_movement, camera_angle, shot_spec, active_version
                      FROM scene WHERE id = ?`,
                     sceneId
                 );
-                if (sceneRow?.chapter_id) {
-                    sceneChapterId = sceneRow.chapter_id;
-                    effectiveWorkflowData = mergeSceneGenerationContext(
-                        effectiveWorkflowData,
-                        sceneRow
-                    );
-                    const chapterRow = await db.get(
-                        'SELECT project_id FROM chapter WHERE id = ?',
-                        sceneRow.chapter_id
-                    );
-                    if (chapterRow?.project_id) {
-                        sceneProjectId = Number(chapterRow.project_id);
-                        const projectRow = await db.get(
-                            'SELECT settings FROM project WHERE id = ?',
-                            chapterRow.project_id
+                if (sceneRow) {
+                    if (sceneRow.active_version != null) {
+                        sceneVersion = Number(sceneRow.active_version);
+                    }
+                    if (sceneRow.chapter_id) {
+                        sceneChapterId = sceneRow.chapter_id;
+                        effectiveWorkflowData = mergeSceneGenerationContext(
+                            effectiveWorkflowData,
+                            sceneRow
                         );
-                        if (projectRow) {
-                            const projectSettings = parseProjectSettings(projectRow.settings);
-                            effectiveWorkflowData = {
-                                ...effectiveWorkflowData,
-                                project_settings: {
-                                    ...projectSettings,
-                                    ...(effectiveWorkflowData.project_settings || {})
-                                },
-                                style_preset:
-                                    effectiveWorkflowData.style_preset
-                                    || projectSettings.default_style
-                                    || null
-                            };
+                        const chapterRow = await db.get(
+                            'SELECT project_id FROM chapter WHERE id = ?',
+                            sceneRow.chapter_id
+                        );
+                        if (chapterRow?.project_id) {
+                            sceneProjectId = Number(chapterRow.project_id);
+                            const projectRow = await db.get(
+                                'SELECT settings FROM project WHERE id = ?',
+                                chapterRow.project_id
+                            );
+                            if (projectRow) {
+                                const projectSettings = parseProjectSettings(projectRow.settings);
+                                effectiveWorkflowData = {
+                                    ...effectiveWorkflowData,
+                                    project_settings: {
+                                        ...projectSettings,
+                                        ...(effectiveWorkflowData.project_settings || {})
+                                    },
+                                    style_preset:
+                                        effectiveWorkflowData.style_preset
+                                        || projectSettings.default_style
+                                        || null
+                                };
+                            }
+                        }
+                    }
+                } else if (sceneId >= 90_000_000 || workflowData?.character_id) {
+                    // Check if this is a character generation request
+                    if (workflowData?.character_id) {
+                        characterId = Number(workflowData.character_id);
+                    } else {
+                        for (const offset of [999990, 999991, 999992, 90000000]) {
+                            if (sceneId > offset && sceneId < offset + 100000) {
+                                characterId = sceneId - offset;
+                                break;
+                            }
+                        }
+                    }
+                    if (characterId) {
+                        const charRow = await db.get('SELECT id, project_id, active_version FROM character WHERE id = ?', characterId);
+                        if (charRow) {
+                            sceneProjectId = charRow.project_id != null ? Number(charRow.project_id) : null;
+                            characterVersion = Number(charRow.active_version || 1);
                         }
                     }
                 }
@@ -1138,10 +1172,27 @@ export class GenerationService {
 
                 if (imageData) {
                     const normalizedImage = await normalizeGeneratedImage(imageData, outputTarget);
-                    const filename = `${sceneId}_${taskId}.png`;
-                    const filepath = path.join(staticDir, filename);
-                    fs.writeFileSync(filepath, normalizedImage.buffer);
-                    assetUrl = `/static/generated/${filename}`;
+                    let pathResult: { filepath: string; url: string };
+                    if (characterId != null) {
+                        const genType = workflowData?.gen_type || 'character';
+                        const filename = `${genType}_${characterId}_${taskId}.png`;
+                        pathResult = getCharacterAssetPath({
+                            projectId: sceneProjectId,
+                            characterId,
+                            version: characterVersion,
+                            filename
+                        });
+                    } else {
+                        const filename = `${sceneId}_${taskId}.png`;
+                        pathResult = getSceneAssetPath({
+                            projectId: sceneProjectId,
+                            sceneId,
+                            version: sceneVersion,
+                            filename
+                        });
+                    }
+                    fs.writeFileSync(pathResult.filepath, normalizedImage.buffer);
+                    assetUrl = pathResult.url;
                     finalStatus = "completed";
                     if (normalizedImage.normalized) {
                         logger.warn(
@@ -1150,7 +1201,7 @@ export class GenerationService {
                         );
                     }
                     logger.info(
-                        `[Task ${taskId}] Image saved to ${filepath} `
+                        `[Task ${taskId}] Image saved to ${pathResult.filepath} `
                         + `(${normalizedImage.width}x${normalizedImage.height})`
                     );
                 }
