@@ -43,6 +43,29 @@ test('AssetTaskStore progress persistence never revives a stale terminal state',
   }
 });
 
+test('late image worker transitions cannot overwrite cancelled', async () => {
+  const taskId = `test_image_cancel_terminal_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+
+  try {
+    await AssetTaskStore.processing(taskId, 0);
+    const cancelled = await AssetTaskStore.cancelled(taskId, 0, 'Cancelled by test');
+    assert.equal(cancelled.status, 'cancelled');
+
+    // A delayed worker can hit processing() again and later report failed/completed.
+    // None of those calls may resurrect or replace the terminal cancellation.
+    assert.equal((await AssetTaskStore.processing(taskId, 0)).status, 'cancelled');
+    assert.equal((await AssetTaskStore.failed(taskId, 0, 'late failure')).status, 'cancelled');
+    assert.equal((await AssetTaskStore.completed(taskId, 0, '/late.png')).status, 'cancelled');
+
+    const row = await db.get('SELECT status, error, image_url FROM generation_task WHERE task_id = ?', taskId);
+    assert.equal(row.status, 'cancelled');
+    assert.equal(row.error, 'Cancelled by test');
+    assert.equal(row.image_url, null);
+  } finally {
+    await db.run('DELETE FROM generation_task WHERE task_id = ?', taskId);
+  }
+});
+
 test('generic orphan cleanup leaves processing video rows for specialized recovery', async () => {
   const suffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const imageTaskId = `test_orphan_image_${suffix}`;
