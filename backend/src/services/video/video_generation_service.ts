@@ -17,6 +17,7 @@ import {
 import { VideoSpecCompiler } from './video_spec_compiler';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
+import { VideoReferenceIdentityService } from './video_reference_identity_service';
 import { GpuLeaseCancelledError, GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
@@ -329,6 +330,12 @@ export class VideoGenerationService {
         blockers.push(`Motion reference asset ID ${request.motion_reference_asset_id} belongs to a different project.`);
       }
     }
+
+    // Identity ownership is a service-level invariant, not an HTTP-route concern.
+    // Any future internal caller of preflight/createTask must get the same fail-closed
+    // behavior as /api/videos/preflight and /api/videos/generate.
+    const identityValidation = await VideoReferenceIdentityService.validate(request);
+    blockers.push(...identityValidation.blockers);
 
     const character = projectId
       ? await this.resolveCharacterForRequest(request, projectId)
