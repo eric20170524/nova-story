@@ -301,7 +301,7 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   fastify.get('/scenes/:scene_id/media', async (request, reply) => {
     const { scene_id } = request.params as { scene_id: string };
     const version = (request.query as any)?.version ? Number((request.query as any).version) : undefined;
-    const assets = await MediaAssetService.listAssetsByScene(Number(scene_id), version);
+    const assets = await MediaAssetService.listSceneContextAssets(Number(scene_id), version);
     return { scene_id: Number(scene_id), assets };
   });
 
