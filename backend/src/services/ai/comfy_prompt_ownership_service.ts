@@ -39,7 +39,7 @@ export const queueEntryContainsPromptId = (entry: unknown, promptId: string): bo
  * - pending prompt deletion;
  * - global /interrupt only when the target is the sole running prompt;
  * - bounded stop confirmation;
- * - background observation that keeps the GPU guard until absence is proven.
+ * - opt-in background observation for an execution path that has already returned.
  */
 export class ComfyPromptOwnershipService {
   private static stopWatchers = new Set<string>();
@@ -104,6 +104,11 @@ export class ComfyPromptOwnershipService {
     GpuLeaseService.confirmPromptStopped(promptId);
   }
 
+  /**
+   * Use only after an execution path has lost its live worker/WS ownership (deadline,
+   * connection loss, process reconciliation). Normal route-level cancellation remains
+   * strictly bounded and does not spawn an unbounded timer loop by itself.
+   */
   watchPromptUntilStopped(promptId: string, context = 'Comfy'): void {
     const key = this.watcherKey(promptId);
     if (ComfyPromptOwnershipService.stopWatchers.has(key)) return;
@@ -129,8 +134,8 @@ export class ComfyPromptOwnershipService {
 
   /**
    * A successful result means the target prompt is confirmed absent from both
-   * queue_running and queue_pending. Any uncertainty fails closed and starts/keeps a
-   * background stop observer so a guarded GPU lease cannot be released prematurely.
+   * queue_running and queue_pending. Any uncertainty fails closed. The caller decides
+   * whether it still has a live worker or must start background stop observation.
    */
   async cancelPrompt(
     promptId?: string | null,
@@ -152,15 +157,12 @@ export class ComfyPromptOwnershipService {
     let interrupted = false;
     const notes: string[] = [];
 
-    const fail = (message: string): ComfyPromptCancelResult => {
-      this.watchPromptUntilStopped(promptId, context);
-      return {
-        ok: false,
-        deleted_from_queue: deletedFromQueue,
-        interrupted,
-        message
-      };
-    };
+    const fail = (message: string): ComfyPromptCancelResult => ({
+      ok: false,
+      deleted_from_queue: deletedFromQueue,
+      interrupted,
+      message
+    });
 
     try {
       const queue = await this.getQueue(Math.min(2000, Math.max(1, remaining())));
@@ -191,11 +193,7 @@ export class ComfyPromptOwnershipService {
         }
 
         const stopped = await this.waitForPromptToStop(promptId, remaining());
-        if (stopped) {
-          this.confirmPromptStopped(promptId);
-        } else {
-          this.watchPromptUntilStopped(promptId, context);
-        }
+        if (stopped) this.confirmPromptStopped(promptId);
         notes.push(stopped ? 'prompt stop confirmed' : 'prompt stop not yet confirmed');
         return {
           ok: stopped,
@@ -226,11 +224,7 @@ export class ComfyPromptOwnershipService {
         }
 
         const stopped = await this.waitForPromptToStop(promptId, remaining());
-        if (stopped) {
-          this.confirmPromptStopped(promptId);
-        } else {
-          this.watchPromptUntilStopped(promptId, context);
-        }
+        if (stopped) this.confirmPromptStopped(promptId);
         notes.push(stopped ? 'prompt stop confirmed' : 'prompt stop not yet confirmed');
         return {
           ok: stopped,
