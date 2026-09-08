@@ -2,109 +2,136 @@
 
 > 目标：把 H3 分支视为 `main` 现有视频子系统的整体升级，而不是第二套并行视频系统；优先消除静态图（Pony / RedCraft Krea2 / SD1.5）与 H3 共用 ComfyUI / GPU 时的资源、取消、状态机冲突。
 
-## 总结
+## 当前结论
 
-- Git 关系：H3 分支完整包含当前 `main`，当前不存在需要“双向合并”的 main 新增提交。
+- Git 关系：H3 分支完整包含当前 `main`，不存在需要“双向合并”的 main 新增提交。
 - 产品功能：RedCraft/Krea2 静态生图与 H3 生视频是上下游关系，不是重复功能。
-- 真正风险集中在共享基础设施：`GpuLeaseService`、ComfyUI prompt ownership/cancel、`generation_task` 生命周期、Director 批量停止。
+- P0 跨引擎安全问题已经关闭；P1-1 启动恢复也已关闭。
+- 当前剩余工作主要是架构收敛（P1-2）和资产模型统一（P1-3），不再是已知的 GPU 并发 / 误取消 blocker。
+- 代码验证基线：CI #181，backend 259/259 tests 通过，frontend/backend typecheck 通过，production build 通过。
 
 ## P0 — 合并前必须关闭
 
-### P0-1 静态图 GPU lease 释放失效
+### P0-1 静态图 GPU lease 释放失效 — ✅ 已关闭
 
-**现象**
+**原问题**
 
-`GenerationService` 获取 `image` lease 后，`finally` 仍调用 `releaseLease('', taskId)`；H3 安全加固后空 lease id 被忽略，导致 RedCraft/Pony/SD1.5 完成后 GPU lease 最长残留到 image timeout，阻塞下一张图或 H3。
+`GenerationService` 获取 `image` lease 后，legacy `finally` 仍调用 `releaseLease('', taskId)`；H3 安全加固后空 lease id 被忽略，导致 RedCraft/Pony/SD1.5 完成后 GPU lease 最长残留到 image timeout，阻塞下一张图或 H3。
 
-**目标**
+**已实现**
 
-- image prompt 与 lease 建立 ownership guard；
-- 正常终止后确认 prompt 已离开 Comfy queue，再释放；
-- 未确认 prompt 停止时绝不能提前开放 GPU；
-- 兼容旧 image finally 的同时，后续收敛到显式 lease id。
+- `GpuLeaseService` 对 blank release 做窄兼容：只有当前 `image` owner 可以使用，video blank hint 继续无效；
+- image prompt 提交后建立 prompt guard；
+- prompt 未确认停止时 release 被延迟；
+- prompt 确认离开 Comfy queue 后才完成 deferred release；
+- 非 owner / video 无法利用 blank id 抢占或释放当前 lease；
+- 单测覆盖 current image owner、non-owner、guarded prompt、queued video handoff。
 
-**状态**：进行中
+**后续清理**：`GenerationService` 最终应保留真实 `lease_id` 并显式释放，删除 blank-image compatibility path；这是代码收敛，不再是功能 blocker。
 
-### P0-2 `/assets/cancel` 无归属全局 `/interrupt` 可误杀 H3
+### P0-2 `/assets/cancel` 无归属全局 `/interrupt` 可误杀 H3 — ✅ 已关闭
 
-**现象**
+**原问题**
 
 旧 `ComfyUIService.cancelExecution()` 无论是否有 prompt id，最终都会 `POST /interrupt`。由于 `/interrupt` 是 ComfyUI 全局操作，静态图“停止”可能中断当前实际运行的 H3 prompt。
 
-**目标**
+**已实现**
 
-- 无 `task_id` / `prompt_id` 时 fail-closed，禁止全局 interrupt；
-- pending prompt 只做 `/queue delete`；
-- running prompt 仅在“目标 prompt 是唯一 running prompt”时允许 `/interrupt`；
-- 多 running / Comfy 状态不明时返回未确认，不释放 GPU ownership。
+- 无 `task_id` / `prompt_id` 时直接 400，禁止 unscoped cancel；
+- prompt-only cancel 必须能解析到 canonical 非 video task，image endpoint 不能用 H3 prompt id 取消视频；
+- pending prompt 只执行 `/queue { delete: [...] }`；
+- running prompt 仅在目标 prompt 是唯一 running prompt 时允许 `/interrupt`；
+- 多 running / queue 状态未知时 fail-closed；
+- 只有确认 prompt 已停止才允许 task -> cancelled 与 GPU lease release；
+- 测试覆盖 no-owner / pending / sole-running / multiple-running / already-absent / video prompt isolation。
 
-**状态**：进行中
+### P0-3 静态图批量停止没有明确 task ownership — ✅ 已关闭（兼容层方案）
 
-### P0-3 静态图批量停止没有明确 task ownership
+**原问题**
 
-**现象**
+Director `handleStopBatchGenerate()` 调用 `api.cancelAssetGeneration()`，没有显式传入当前 image task id。
 
-Director 当前 `handleStopBatchGenerate()` 调用 `api.cancelAssetGeneration()`，没有显式传入当前 image task id。
+**已实现**
 
-**目标**
+- `ApiService.generateAsset()` 持有最近成功创建的 `activeAssetTaskId`；
+- `cancelAssetGeneration()` 优先使用显式参数，否则只允许使用自身已知的 active task id；
+- 没有 owned task/prompt 时前端直接拒绝，不再发送空 cancel；
+- backend 仍做最终 ownership 校验，客户端缓存不是信任边界。
 
-- 前端保留 active image task id；
-- cancel 始终携带 task id；
-- 兼容层不得把“无 task id”解释成“中断当前 Comfy graph”。
+**后续清理**：若未来允许多个 UI surface 同时发起静态图生成，应把 task id 进一步下沉到各组件/批次显式持有，而不是依赖 API singleton 的单 active id。当前 Director 串行批量链路安全。
 
-**状态**：待修
+### P0-4 image terminal race 可覆盖 cancelled — ✅ 已关闭
 
-### P0-4 image terminal race 可覆盖 cancelled
+**原问题**
 
-**现象**
+旧 `AssetTaskStore.processing/completed/failed/cancelled` 使用通用 UPSERT。取消与 worker 并发时，迟到的 `processing/failed/completed` 可能覆盖 `cancelled`。
 
-旧 `AssetTaskStore.processing/completed/failed/cancelled` 使用通用 UPSERT。取消与 worker 并发时，迟到的 processing/failed/completed 有机会覆盖 `cancelled`。
+**已实现**
 
-**目标**
+- terminal transition 改成 CAS：只允许 `processing -> terminal`；
+- `processing()` 不再复活 terminal row；
+- progress 只更新 progress 字段并刷新 canonical row；
+- cancelled 后迟到的 processing / failed / completed 都保持 canonical cancelled；
+- queued cancel 先写 canonical cancelled，再 reject GPU waiter，避免 worker 的 catch/failed 抢赢终态。
 
-- terminal transition 使用 CAS：只允许 `processing -> terminal`；
-- `processing()` 不得复活 terminal row；
-- progress 更新只写 progress 字段（已完成）；
-- cancelled 后的迟到 worker 结果不得改变 canonical lifecycle。
+### P0-5 image prompt 提交前/提交中取消 race — ✅ 已关闭
 
-**状态**：待修
+**原问题**
 
-### P0-5 image prompt 提交前取消缺少检查
+任务在等待 GPU / VRAM handoff / workflow compile 阶段被取消后，旧 image pipeline 仍可能继续 `/prompt`；另有更窄窗口：取消发生在 `POST /prompt` 已发出但 `prompt_id` 尚未持久化时。
 
-**现象**
+**已实现**
 
-任务在等待 GPU / VRAM handoff / workflow compile 阶段被取消后，旧 image pipeline 仍可能继续 `/prompt`。
+- `generateImage()` 在 `/prompt` 前强制校验：当前 lease 必须为 image、owner task 必须 canonical `processing`；
+- pre-prompt active cancel 只写 cancelled，不由 route 提前释放 lease，由 worker unwind 负责释放，避免与正在飞行的 `/prompt` 重叠；
+- 拿到真实 prompt id 后再次校验 GPU owner 与 canonical task；
+- 若取消发生在 `/prompt` flight window，立即对新 prompt 做 scoped cancel；
+- 停止未确认时保持 prompt guard / background watcher，GPU 不开放给下一 H3；
+- image execution 增加 bounded deadline，deadline 后同样不以“API 返回”冒充 prompt 已停止。
 
-**目标**
+## P1 — 建议在 H3 合入 main 前继续收敛
 
-- `/prompt` 提交前检查 canonical task 状态；
-- queued lease cancellation 应让等待 worker 退出；
-- cancelled task 不得创建新的 Comfy prompt。
+### P1-1 image 启动恢复没有 Comfy orphan ownership reconciliation — ✅ 已关闭
 
-**状态**：待修
+**原问题**
 
-## P1 — 建议在 H3 合入 main 前关闭
+generic image restart recovery 会把 `processing` 标为 `interrupted`，但不像 H3 一样先确认 `comfy_prompt_id` 是否仍在 Comfy running/pending。NovaStory 重启而 Comfy 不重启时，旧 image prompt 可能仍占 GPU。
 
-### P1-1 image 启动恢复没有 Comfy orphan ownership reconciliation
+**已实现**
 
-generic image restart recovery 会把 `processing` 标为 `interrupted`，但不像 H3 一样先确认 `comfy_prompt_id` 是否仍在 Comfy running/pending。NovaStory 重启而 Comfy 不重启时，存在旧 image prompt 仍占 GPU、应用却误认为 GPU 可用的窗口。
+- 保留现有 `VideoStartupRecoveryService` 类名兼容调用，但 recovery 语义已改为 media-agnostic Comfy ownership reconciliation；
+- 启动扫描所有 `processing + comfy_prompt_id` 任务，而不再只看 video；
+- image/video orphan prompt 若仍 active，先获取共享 synthetic `__comfy_orphan_recovery__` GPU lease；
+- Comfy 不可达时，静态 image prompt fail-closed；video 仅在 `generating` 阶段按 unresolved ownership 处理，避免把合法 postprocess 历史 prompt 当 GPU owner；
+- recovery lease 直到所有 orphan prompt 均被 scoped cancel 或被 queue 证明 absent 才释放；
+- inactive video prompt 仍留给 raw/history 专用恢复判断；
+- 测试覆盖 active video、active image、Comfy offline image、inactive video history candidate。
 
-**建议**：把 H3 的 prompt reconciliation 下沉为共享 `ComfyPromptOwnershipService`，image/video 共用。
-
-### P1-2 两套 Comfy client 语义漂移
+### P1-2 两套 Comfy client 仍有代码重复 — 🟡 待架构收敛
 
 - image：`ComfyUIService`
 - video：`ComfyH3Provider`
 
-两者分别实现 `/prompt`、WS、history、queue、cancel，已出现取消与 deadline 语义不一致。
+当前二者的关键安全语义已经对齐：bounded queue observation、prompt guard、scoped pending delete、sole-running interrupt gate、stop confirmation、fail-closed ownership。
 
-**建议**：最终抽出共享 `ComfyExecutionClient`（网络/queue/history）+ `ComfyPromptOwnershipService`（guard/cancel/recovery）；image/video provider 只负责输出解析与 workflow 语义。
+**剩余问题**：这些 primitive 仍各自实现，未来修改一边可能再次语义漂移。
 
-### P1-3 Character Center reference 与 Video MediaAsset reference 重复建模
+**下一步建议**：最小抽取共享 `ComfyPromptOwnershipService`，仅负责：
+
+1. bounded queue snapshot；
+2. prompt active/absent 判断；
+3. pending delete；
+4. sole-running interrupt gate；
+5. stop confirmation / watcher；
+6. startup orphan ownership observation。
+
+暂不把 image/video workflow 输出解析、WS 事件解释等强行合成一个大 Provider，避免过度重构。
+
+### P1-3 Character Center reference 与 Video MediaAsset reference 重复建模 — 🟡 待处理
 
 静态图大量使用 `avatar_url / face_url / turnaround_url / character_ref_url`，H3 Reference Manager 使用 `MediaAsset ID + role`。功能不冲突，但同一参考图可能重复注册/上传。
 
-**建议**：Character Center 资产注册进统一 MediaAsset catalog，或增加无复制 adapter。
+**建议**：Character Center 资产注册进统一 MediaAsset catalog，或增加无复制 adapter；优先统一“身份/role/ownership”，不要迁移或复制物理文件。
 
 ## 已确认无需处理为“冲突”的部分
 
@@ -113,13 +140,29 @@ generic image restart recovery 会把 `processing` 标为 `interrupted`，但不
 - H3 的 Hybrid A2A / Official Ref2VA / Official FL2VA 是视频策略扩展，不与静态模型矩阵重复。
 - video 的 fail-closed、candidate/review/promote 生命周期应覆盖 main 旧视频行为，不保留两套语义。
 
-## 验收门槛
+## 验收状态
 
-1. image 完成后 lease 立即可交给下一 image/video task；
-2. image stop 永远不会因为缺少 ownership 而全局 interrupt H3；
-3. pending image cancel 不会提交 `/prompt`；
-4. running image cancel 后，只有确认 prompt stopped 才释放 GPU；
-5. cancelled 不会被迟到 progress/failed/completed/processing 复活；
-6. 单元测试覆盖 pending / sole-running / multiple-running / no-owner cancel；
-7. backend test + frontend/backend typecheck + production build 全绿；
-8. RTX 3060 12GB 实机至少验证 RedCraft -> H3、H3 -> RedCraft、取消切换三个场景。
+| Gate | 状态 |
+| --- | --- |
+| image 正常结束可安全交接 lease 给下一 image/video | ✅ 自动测试已覆盖 ownership/release；实机待验 |
+| image stop 不会因缺少 ownership 全局 interrupt H3 | ✅ |
+| pending/pre-prompt image cancel 不提交新 prompt | ✅ |
+| `/prompt` flight-window cancel 可 scoped 回收真实 prompt | ✅ |
+| running image 只有确认 prompt stopped 才释放 GPU | ✅ |
+| cancelled 不会被迟到 worker 状态复活 | ✅ |
+| orphan image/video prompt 启动时阻塞新 GPU 工作直到清理 | ✅ |
+| no-owner / pending / sole-running / multiple-running cancel tests | ✅ |
+| backend tests | ✅ CI #181：259/259 |
+| frontend/backend typecheck | ✅ CI #181 |
+| production build | ✅ CI #181 |
+| RTX 3060 12GB：RedCraft -> H3 | ⏳ 实机 Gate |
+| RTX 3060 12GB：H3 -> RedCraft | ⏳ 实机 Gate |
+| RTX 3060 12GB：运行中取消 / 重启恢复 / 连续切换 | ⏳ 实机 Gate |
+
+## 下一批次建议顺序
+
+1. **P1-2**：抽取最小共享 `ComfyPromptOwnershipService`，删除 image/video 重复 cancel/queue ownership primitive；
+2. **P1-3**：Reference Manager 与 Character Center 做 MediaAsset adapter，避免参考图重复注册/上传；
+3. 清理 legacy `releaseLease('', taskId)`，让 image pipeline 显式持有真实 lease id；
+4. RTX 3060 12GB 三组实机 Gate；
+5. Gate 全绿后把 PR #13 从 Draft 推进到 merge-ready。
