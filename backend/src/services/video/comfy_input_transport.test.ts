@@ -59,11 +59,14 @@ test('Comfy reference transport policy prefers filesystem locally and HTTP remot
 test('ComfyInputTransport uploads reference bytes into an isolated Comfy input subfolder', async () => {
   const originalFetch = global.fetch;
   let capturedUrl = '';
-  let capturedForm: FormData | null = null;
+  // Keep this as unknown: TypeScript cannot prove that the mocked fetch callback
+  // executes before the assertions, so FormData|null is incorrectly narrowed to
+  // the initializer-only null branch under strict control-flow analysis.
+  let capturedForm: unknown = null;
 
   global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     capturedUrl = String(input);
-    capturedForm = init?.body as FormData;
+    capturedForm = init?.body;
     return jsonResponse({
       name: 'abc123_ref.mp4',
       subfolder: 'novastory',
@@ -83,10 +86,10 @@ test('ComfyInputTransport uploads reference bytes into an isolated Comfy input s
 
     assert.equal(capturedUrl, 'http://10.10.0.8:8188/upload/image');
     assert.ok(capturedForm instanceof FormData);
-    assert.equal(capturedForm?.get('type'), 'input');
-    assert.equal(capturedForm?.get('overwrite'), 'true');
-    assert.equal(capturedForm?.get('subfolder'), 'novastory');
-    const file = capturedForm?.get('image') as any;
+    assert.equal(capturedForm.get('type'), 'input');
+    assert.equal(capturedForm.get('overwrite'), 'true');
+    assert.equal(capturedForm.get('subfolder'), 'novastory');
+    const file = capturedForm.get('image') as any;
     assert.equal(file?.name, 'abc123_ref.mp4');
     assert.equal(file?.type, 'video/mp4');
     assert.equal(result.inputName, 'novastory/abc123_ref.mp4');
