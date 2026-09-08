@@ -17,7 +17,6 @@ import { workflowRoutes } from './routes/workflows';
 import { characterRoutes } from './routes/characters';
 import { comicRoutes } from './routes/comics';
 import { timelineRoutes } from './routes/timeline';
-import { sceneMediaRoutes } from './routes/scene_media';
 import { assetRoutes } from './routes/assets';
 import { chapterRoutes } from './routes/chapters';
 import { creativeRoutes } from './routes/creative';
@@ -120,7 +119,6 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(characterRoutes, { prefix: '/api/characters' });
   await app.register(comicRoutes, { prefix: '/api/comics' });
   await app.register(timelineRoutes, { prefix: '/api/timeline' });
-  await app.register(sceneMediaRoutes, { prefix: '/api/scenes' });
   await app.register(assetRoutes, { prefix: '/api/assets' });
   await app.register(creativeRoutes, { prefix: '/api/agent' });
   await app.register(assistantRoutes, { prefix: '/api/assistant' });
