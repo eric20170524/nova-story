@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { db } from '../../db/database';
 import type { VideoGenerationRequest } from '../../schemas/video';
 import { MediaAssetService } from './media_asset_service';
+import { VideoGenerationService } from './video_generation_service';
 import { VideoReferenceIdentityService } from './video_reference_identity_service';
 
 const baseRequest = (sceneId: number, refs: number[]): VideoGenerationRequest => ({
@@ -106,13 +107,20 @@ test('H3 character references fail closed when one request spans multiple charac
       url: '/static/generated/manual_identity.png'
     });
 
-    const mixed = await VideoReferenceIdentityService.validate(
-      baseRequest(sceneId, [refA1.id!, refB.id!])
-    );
+    const mixedRequest = baseRequest(sceneId, [refA1.id!, refB.id!]);
+    const mixed = await VideoReferenceIdentityService.validate(mixedRequest);
     assert.equal(mixed.character_id, null);
     assert.ok(mixed.blockers.some((blocker) => blocker.includes('multiple identities')));
     assert.ok(mixed.blockers.some((blocker) => blocker.includes(String(characterA))));
     assert.ok(mixed.blockers.some((blocker) => blocker.includes(String(characterB))));
+
+    // The same invariant must hold without going through the Fastify route. This is
+    // what prevents future internal workers/scripts from bypassing identity ownership.
+    const servicePreflight = await VideoGenerationService.preflight(mixedRequest);
+    assert.ok(
+      servicePreflight.blockers.some((blocker) => blocker.includes('multiple identities')),
+      'VideoGenerationService.preflight must own the mixed-identity gate'
+    );
 
     const sameCharacter = await VideoReferenceIdentityService.validate(
       baseRequest(sceneId, [refA1.id!, refA2.id!, unboundManual.id!])
