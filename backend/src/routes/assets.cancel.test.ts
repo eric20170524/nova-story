@@ -5,7 +5,7 @@ import { buildApp } from '../server';
 import { db } from '../db/database';
 import { AssetTaskStore } from '../services/task_store';
 import { ComfyUIService } from '../services/ai/comfyui_service';
-import { GpuLeaseService } from '../services/gpu_lease_service';
+import { GpuLeaseCancelledError, GpuLeaseService } from '../services/gpu_lease_service';
 
 const taskId = (name: string) =>
   `test_asset_cancel_${name}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
@@ -36,6 +36,28 @@ test('assets cancel is ownership-scoped and never falls back to blind Comfy inte
     assert.equal(unscoped.statusCode, 400);
     assert.equal(cancelCalls, 0);
 
+    // A prompt id owned by a video task must never be cancellable through the image
+    // endpoint, even if an attacker/caller knows the exact Comfy prompt id.
+    const videoTask = taskId('video');
+    createdTaskIds.push(videoTask);
+    const now = new Date().toISOString();
+    await db.run(
+      `INSERT INTO generation_task (
+         task_id, scene_id, kind, status, stage, comfy_prompt_id, created_at, updated_at
+       ) VALUES (?, 0, 'video', 'processing', 'generating', ?, ?, ?)`,
+      videoTask,
+      'h3_prompt_owned_by_video',
+      now,
+      now
+    );
+    const foreignVideoPrompt = await app.inject({
+      method: 'POST',
+      url: '/api/assets/cancel',
+      payload: { prompt_id: 'h3_prompt_owned_by_video' }
+    });
+    assert.equal(foreignVideoPrompt.statusCode, 404);
+    assert.equal(cancelCalls, 0);
+
     // A task row alone is not enough before prompt submission: the task must own a
     // queued or active image lease, otherwise the route cannot prove what to cancel.
     const orphanTask = taskId('orphan');
@@ -50,8 +72,9 @@ test('assets cancel is ownership-scoped and never falls back to blind Comfy inte
     assert.equal(cancelCalls, 0);
     assert.equal((await AssetTaskStore.get(orphanTask))?.status, 'processing');
 
-    // Active pre-prompt image ownership can be cancelled without any Comfy call and
-    // releases the exact image lease for the next GPU task.
+    // Active pre-prompt ownership is marked cancelled immediately but the lease is
+    // deliberately retained until the worker observes cancellation and unwinds. A
+    // route-level eager release would allow the next H3 to overlap a /prompt race.
     GpuLeaseService.resetForTesting();
     const activeTask = taskId('active');
     createdTaskIds.push(activeTask);
@@ -67,7 +90,31 @@ test('assets cancel is ownership-scoped and never falls back to blind Comfy inte
     assert.equal(prePrompt.statusCode, 200);
     assert.equal(cancelCalls, 0);
     assert.equal((await AssetTaskStore.get(activeTask))?.status, 'cancelled');
-    assert.equal(GpuLeaseService.getCurrentLease(), null);
+    assert.equal(GpuLeaseService.getCurrentLease()?.owner_task_id, activeTask);
+    GpuLeaseService.releaseLease(activeLease.lease_id, activeTask);
+
+    // A queued task must become cancelled before its lease waiter is rejected. That
+    // ordering prevents the resumed worker's failed() path from winning terminal CAS.
+    const holderTask = taskId('holder');
+    const queuedTask = taskId('queued');
+    createdTaskIds.push(queuedTask);
+    const holderLease = await GpuLeaseService.acquireLease(holderTask, 'video');
+    await AssetTaskStore.processing(queuedTask, 0);
+    const queuedLeasePromise = GpuLeaseService.acquireLease(queuedTask, 'image');
+    const queuedRejected = queuedLeasePromise.then(
+      () => false,
+      (error) => error instanceof GpuLeaseCancelledError
+    );
+
+    const queuedCancel = await app.inject({
+      method: 'POST',
+      url: '/api/assets/cancel',
+      payload: { task_id: queuedTask }
+    });
+    assert.equal(queuedCancel.statusCode, 200);
+    assert.equal(await queuedRejected, true);
+    assert.equal((await AssetTaskStore.get(queuedTask))?.status, 'cancelled');
+    GpuLeaseService.releaseLease(holderLease.lease_id, holderTask);
 
     // Prompt id supplied alongside task id must match the canonical task ownership.
     const mismatchTask = taskId('mismatch');
