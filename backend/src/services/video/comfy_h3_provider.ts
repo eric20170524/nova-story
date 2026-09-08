@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
+import { ComfyPromptOwnershipService } from '../ai/comfy_prompt_ownership_service';
 import { GpuLeaseService } from '../gpu_lease_service';
 
 export interface ComfyH3ProviderOptions {
@@ -16,25 +17,11 @@ export interface ComfyVideoOutput {
   buffer: Buffer;
 }
 
-const queueEntryContainsPromptId = (entry: unknown, promptId: string): boolean => {
-  if (entry === promptId) return true;
-  if (Array.isArray(entry)) return entry.some((value) => queueEntryContainsPromptId(value, promptId));
-  if (entry && typeof entry === 'object') {
-    return Object.values(entry as Record<string, unknown>).some(
-      (value) => queueEntryContainsPromptId(value, promptId)
-    );
-  }
-  return false;
-};
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export class ComfyH3Provider {
-  private static promptStopWatchers = new Set<string>();
-
   private baseUrl: string;
   private clientId: string;
   private wsUrl: string;
+  private promptOwnership: ComfyPromptOwnershipService;
 
   constructor(options: ComfyH3ProviderOptions = {}) {
     const settings = SettingsManager.loadSettings();
@@ -42,6 +29,7 @@ export class ComfyH3Provider {
     this.baseUrl = configuredBase.replace(/\/$/, '');
     this.clientId = options.clientId || randomUUID();
     this.wsUrl = this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') + `/ws?clientId=${this.clientId}`;
+    this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl);
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
@@ -52,46 +40,6 @@ export class ComfyH3Provider {
     } finally {
       clearTimeout(timer);
     }
-  }
-
-  private promptIsActive(queue: { running: any[]; pending: any[] }, promptId: string): boolean {
-    return queue.running.some((entry) => queueEntryContainsPromptId(entry, promptId))
-      || queue.pending.some((entry) => queueEntryContainsPromptId(entry, promptId));
-  }
-
-  private watchPromptUntilStopped(promptId: string): void {
-    if (ComfyH3Provider.promptStopWatchers.has(promptId)) return;
-    ComfyH3Provider.promptStopWatchers.add(promptId);
-
-    logger.warn(`Comfy prompt ${promptId} stop is not yet confirmed; retaining GPU lease guard.`);
-    void (async () => {
-      try {
-        while (true) {
-          const queue = await this.getQueue(3000);
-          if (queue && !this.promptIsActive(queue, promptId)) {
-            GpuLeaseService.confirmPromptStopped(promptId);
-            logger.info(`Confirmed Comfy prompt ${promptId} stopped; GPU guard can be released.`);
-            return;
-          }
-          await sleep(2000);
-        }
-      } finally {
-        ComfyH3Provider.promptStopWatchers.delete(promptId);
-      }
-    })();
-  }
-
-  private async waitForPromptToStop(promptId: string, timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + Math.max(1, timeoutMs);
-    while (Date.now() < deadline) {
-      const remaining = Math.max(1, deadline - Date.now());
-      const queue = await this.getQueue(Math.min(1000, remaining));
-      if (queue && !this.promptIsActive(queue, promptId)) return true;
-      if (Date.now() < deadline) {
-        await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
-      }
-    }
-    return false;
   }
 
   async checkStatus(): Promise<boolean> {
@@ -114,19 +62,7 @@ export class ComfyH3Provider {
   }
 
   async getQueue(timeoutMs = 3000): Promise<{ running: any[]; pending: any[] } | null> {
-    try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/queue`, {}, timeoutMs);
-      if (res.ok) {
-        const data = await res.json() as any;
-        return {
-          running: data.queue_running || [],
-          pending: data.queue_pending || []
-        };
-      }
-    } catch {
-      /* offline */
-    }
-    return null;
+    return this.promptOwnership.getQueue(timeoutMs);
   }
 
   async getHistory(promptId: string): Promise<Record<string, any> | null> {
@@ -236,9 +172,9 @@ export class ComfyH3Provider {
           if (deadlineTimer) clearTimeout(deadlineTimer);
 
           if (result.promptStopped) {
-            GpuLeaseService.confirmPromptStopped(promptId);
+            this.promptOwnership.confirmPromptStopped(promptId);
           } else {
-            this.watchPromptUntilStopped(promptId);
+            this.promptOwnership.watchPromptUntilStopped(promptId, 'H3');
           }
 
           try {
@@ -284,16 +220,14 @@ export class ComfyH3Provider {
 
         deadlineTimer = setTimeout(() => {
           // The task deadline itself stays hard-bounded: return immediately and let
-          // cancellation run independently. The GPU lease remains guarded until the
-          // prompt is later confirmed absent from ComfyUI's queue.
+          // cancellation run independently. The shared prompt ownership service keeps
+          // the GPU lease guarded until queue absence is later proven.
           cleanup({
             status: 'error',
             error: `ComfyUI H3 execution exceeded deadline (${Math.round(timeoutMs / 1000)}s)`,
             promptStopped: false
           });
-          void this.cancelPrompt(promptId, 5000).then((stopped) => {
-            if (!stopped) this.watchPromptUntilStopped(promptId);
-          });
+          void this.cancelPrompt(promptId, 5000);
         }, timeoutMs);
 
         ws!.on('message', async (raw: any) => {
@@ -365,7 +299,7 @@ export class ComfyH3Provider {
           setTimeout(async () => {
             if (!isDone) {
               await fetchHistoryFallback();
-              const stopped = await this.waitForPromptToStop(promptId, 1500);
+              const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 1500);
               cleanup({
                 status: collectedVideos.length > 0 ? 'completed' : 'error',
                 error: collectedVideos.length === 0 ? 'ComfyUI connection closed before video output was available' : undefined,
@@ -382,62 +316,11 @@ export class ComfyH3Provider {
   }
 
   /**
-   * Cancel only the owned prompt. Every network call is bounded by the caller's
-   * cancellation budget. A return value of true means the prompt is confirmed absent
-   * from ComfyUI's running/pending queue; false means GPU ownership must be retained.
+   * Backward-compatible boolean wrapper over the shared prompt ownership primitive.
+   * true means the prompt is proven absent; false means GPU ownership remains guarded.
    */
   async cancelPrompt(promptId: string, timeoutMs = 5000): Promise<boolean> {
-    const deadline = Date.now() + Math.max(1, timeoutMs);
-    const remaining = () => Math.max(0, deadline - Date.now());
-
-    try {
-      const queue = await this.getQueue(Math.min(2000, Math.max(1, remaining())));
-      if (!queue || remaining() <= 0) return false;
-
-      const pendingMatch = queue.pending.some((entry) => queueEntryContainsPromptId(entry, promptId));
-      const runningMatches = queue.running.filter((entry) => queueEntryContainsPromptId(entry, promptId));
-
-      if (pendingMatch) {
-        const deleteRes = await this.fetchWithTimeout(`${this.baseUrl}/queue`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ delete: [promptId] })
-        }, Math.max(1, remaining()));
-        if (!deleteRes.ok || remaining() <= 0) return false;
-
-        const stopped = await this.waitForPromptToStop(promptId, remaining());
-        if (stopped) GpuLeaseService.confirmPromptStopped(promptId);
-        return stopped;
-      }
-
-      if (runningMatches.length > 0) {
-        const runningCount = queue.running.length;
-        if (runningCount !== 1) {
-          logger.warn(
-            `Refusing global ComfyUI interrupt for ${promptId}: ${runningCount} prompts are reported running.`
-          );
-          return false;
-        }
-
-        const interruptRes = await this.fetchWithTimeout(
-          `${this.baseUrl}/interrupt`,
-          { method: 'POST' },
-          Math.max(1, remaining())
-        );
-        if (!interruptRes.ok || remaining() <= 0) return false;
-
-        const stopped = await this.waitForPromptToStop(promptId, remaining());
-        if (stopped) GpuLeaseService.confirmPromptStopped(promptId);
-        return stopped;
-      }
-
-      // The queue is authoritative for ownership. If the prompt is no longer pending
-      // or running, it is safe to clear the lease guard without a blind interrupt.
-      GpuLeaseService.confirmPromptStopped(promptId);
-      return true;
-    } catch (err) {
-      logger.warn(`Failed to cancel ComfyUI prompt ${promptId}: ${err}`);
-      return false;
-    }
+    const result = await this.promptOwnership.cancelPrompt(promptId, timeoutMs, 'H3');
+    return result.ok;
   }
 }
