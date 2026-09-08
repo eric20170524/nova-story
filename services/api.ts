@@ -24,6 +24,8 @@ interface FetchOptions {
 }
 
 class ApiService {
+  private activeAssetTaskId: string | null = null;
+
   private async request<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
     const { method = 'GET', body, headers = {} } = options;
 
@@ -56,6 +58,8 @@ class ApiService {
           const errJson = await response.json();
           if (errJson.detail) {
             errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+          } else if (errJson.message) {
+            errDetail = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
           }
         } catch (_) {}
         throw new Error(errDetail);
@@ -169,6 +173,8 @@ class ApiService {
         const errJson = await response.json();
         if (errJson.detail) {
           errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        } else if (errJson.message) {
+          errDetail = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
         }
       } catch (_) {}
       throw new Error(errDetail);
@@ -417,14 +423,31 @@ class ApiService {
       } catch (_) {}
       throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
     }
-    return res.json();
+    const result = await res.json();
+    if (result?.task_id) {
+      this.activeAssetTaskId = String(result.task_id);
+    }
+    return result;
   };
 
-  cancelAssetGeneration = (opts?: { task_id?: string; prompt_id?: string }) =>
-    this.request<any>('/assets/cancel', {
+  cancelAssetGeneration = async (opts?: { task_id?: string; prompt_id?: string }) => {
+    const payload: { task_id?: string; prompt_id?: string } = { ...(opts || {}) };
+    if (!payload.task_id && !payload.prompt_id && this.activeAssetTaskId) {
+      payload.task_id = this.activeAssetTaskId;
+    }
+    if (!payload.task_id && !payload.prompt_id) {
+      throw new Error('No owned asset generation task is available to cancel');
+    }
+
+    const result = await this.request<any>('/assets/cancel', {
       method: 'POST',
-      body: opts || {}
+      body: payload
     });
+    if (payload.task_id && payload.task_id === this.activeAssetTaskId) {
+      this.activeAssetTaskId = null;
+    }
+    return result;
+  };
 
   generateComic = (chapterId: string) =>
     this.request<any>(`/comics/${chapterId}/generate`, { method: 'POST' });
