@@ -11,6 +11,7 @@ test('MediaAssetService resolves a final derivative back to its raw parent', asy
   const chapterId = 'video_asset_lineage_chapter';
   const sceneId = 99111;
 
+  await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
   await db.run('DELETE FROM scene WHERE id = ?', sceneId);
   await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
   await db.run('DELETE FROM project WHERE id = ?', projectId);
@@ -45,6 +46,9 @@ test('MediaAssetService resolves a final derivative back to its raw parent', asy
   assert.equal(resolved.id, raw.id);
   assert.equal(resolved.role, 'raw_video');
 
+  await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+  await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+  await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
   await db.run('DELETE FROM project WHERE id = ?', projectId);
 });
 
@@ -53,6 +57,7 @@ test('MediaAssetService refuses to promote rejected final candidates', async () 
   const chapterId = 'video_asset_rejected_chapter';
   const sceneId = 99121;
 
+  await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
   await db.run('DELETE FROM scene WHERE id = ?', sceneId);
   await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
   await db.run('DELETE FROM project WHERE id = ?', projectId);
@@ -73,6 +78,9 @@ test('MediaAssetService refuses to promote rejected final candidates', async () 
   });
 
   await assert.rejects(() => MediaAssetService.promoteAsset(asset.id!), /Cannot promote a rejected video asset/);
+  await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+  await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+  await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
   await db.run('DELETE FROM project WHERE id = ?', projectId);
 });
 
