@@ -129,3 +129,113 @@ test('MediaAssetService can stage a reference through the remote Comfy HTTP inpu
     }
   }
 });
+
+test('Character Center images become reusable no-copy MediaAsset references idempotently', async () => {
+  const projectId = 9913;
+  const chapterId = 'character_ref_adapter_chapter';
+  const sceneId = 99131;
+  const characterId = 991301;
+  const generatedDir = getGeneratedDirectory();
+  fs.mkdirSync(generatedDir, { recursive: true });
+
+  const faceFilename = 'character_adapter_face.png';
+  const turnaroundFilename = 'character_adapter_turnaround.png';
+  const facePath = path.join(generatedDir, faceFilename);
+  const turnaroundPath = path.join(generatedDir, turnaroundFilename);
+  fs.writeFileSync(facePath, Buffer.from('face-reference'));
+  fs.writeFileSync(turnaroundPath, Buffer.from('turnaround-reference'));
+
+  const faceUrl = `/static/generated/${faceFilename}`;
+  const turnaroundUrl = `/static/generated/${turnaroundFilename}`;
+
+  try {
+    await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+    await db.run('DELETE FROM character WHERE id = ?', characterId);
+    await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+    await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+    await db.run('DELETE FROM project WHERE id = ?', projectId);
+
+    await db.run('INSERT INTO project (id, title) VALUES (?, ?)', projectId, 'Character Adapter Test');
+    await db.run(
+      'INSERT INTO chapter (id, project_id, "index", title) VALUES (?, ?, 1, ?)',
+      chapterId,
+      projectId,
+      'Chapter'
+    );
+    await db.run(
+      'INSERT INTO scene (id, chapter_id, "index", visual_prompt) VALUES (?, ?, 1, ?)',
+      sceneId,
+      chapterId,
+      'test'
+    );
+    await db.run(
+      `INSERT INTO character (id, project_id, name, visual_tags)
+       VALUES (?, ?, ?, ?)`,
+      characterId,
+      projectId,
+      'Adapter Hero',
+      JSON.stringify({
+        assets: {
+          face_url: faceUrl,
+          // Same physical image exposed through two Character Center slots must not
+          // create duplicate MediaAsset rows.
+          avatar_url: faceUrl,
+          turnaround_url: turnaroundUrl
+        }
+      })
+    );
+
+    const first = await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    const refs = first.filter((asset) => asset.role === 'character_reference');
+    assert.equal(refs.length, 2);
+    assert.deepEqual(new Set(refs.map((asset) => asset.url)), new Set([faceUrl, turnaroundUrl]));
+    assert.ok(refs.every((asset) => asset.project_id === projectId));
+    assert.ok(refs.every((asset) => asset.character_id === characterId));
+    assert.ok(refs.every((asset) => asset.scene_id == null));
+    assert.ok(refs.every((asset) => asset.status === 'ready'));
+    for (const asset of refs) {
+      const metadata = JSON.parse(asset.metadata_json || '{}');
+      assert.equal(metadata.source, 'character_center_adapter');
+      assert.equal(metadata.no_copy, true);
+    }
+
+    const firstIds = refs.map((asset) => asset.id).sort();
+    const second = await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    const secondIds = second
+      .filter((asset) => asset.role === 'character_reference')
+      .map((asset) => asset.id)
+      .sort();
+    assert.deepEqual(secondIds, firstIds, 'repeated scene loads must reuse MediaAsset identities');
+
+    // Character Center changed: the old face becomes stale while the existing
+    // turnaround becomes the only active identity. The adapter archives only its own
+    // stale row instead of deleting/copying physical assets.
+    await db.run(
+      'UPDATE character SET visual_tags = ? WHERE id = ?',
+      JSON.stringify({ assets: { face_url: turnaroundUrl } }),
+      characterId
+    );
+    const afterChange = await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    const activeRefs = afterChange.filter((asset) => asset.role === 'character_reference');
+    assert.equal(activeRefs.length, 1);
+    assert.equal(activeRefs[0].url, turnaroundUrl);
+
+    const archived = await db.get(
+      `SELECT COUNT(*) AS count
+       FROM media_asset
+       WHERE project_id = ? AND character_id = ?
+         AND role = 'character_reference' AND status = 'archived'`,
+      projectId,
+      characterId
+    );
+    assert.equal(Number(archived?.count || 0), 1);
+  } finally {
+    await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+    await db.run('DELETE FROM character WHERE id = ?', characterId);
+    await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+    await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+    await db.run('DELETE FROM project WHERE id = ?', projectId);
+    try { fs.unlinkSync(facePath); } catch {}
+    try { fs.unlinkSync(turnaroundPath); } catch {}
+  }
+});
