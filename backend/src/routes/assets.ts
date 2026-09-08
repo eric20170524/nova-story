@@ -362,9 +362,30 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       const comfyService = new ComfyUIService(baseUrl);
 
       let promptId = body.prompt_id || null;
-      const taskId = body.task_id || null;
+      let taskId = body.task_id || null;
       let sceneId = 0;
       let task = null as Awaited<ReturnType<typeof AssetTaskStore.get>> | null;
+
+      // prompt_id-only cancellation is accepted only when the prompt belongs to a
+      // canonical non-video generation_task. This prevents the image endpoint from
+      // being used to interrupt an H3 prompt by guessing/providing its prompt id.
+      if (!taskId && promptId) {
+        const owner = await db.get(
+          `SELECT task_id FROM generation_task
+           WHERE comfy_prompt_id = ?
+             AND COALESCE(kind, 'image') <> 'video'
+           LIMIT 1`,
+          promptId
+        );
+        if (!owner?.task_id) {
+          return reply.status(404).send({
+            status: 'error',
+            comfy_prompt_id: promptId,
+            message: 'No owned static-image task matches this prompt_id'
+          });
+        }
+        taskId = String(owner.task_id);
+      }
 
       if (taskId) {
         task = await AssetTaskStore.get(taskId) || null;
@@ -377,15 +398,18 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         }
 
         sceneId = task.scene_id;
-        if (body.prompt_id && task.comfy_prompt_id && body.prompt_id !== task.comfy_prompt_id) {
+        const guardedPromptId = GpuLeaseService.getGuardedPromptId(taskId);
+        const canonicalPromptId = task.comfy_prompt_id || guardedPromptId;
+
+        if (body.prompt_id && canonicalPromptId && body.prompt_id !== canonicalPromptId) {
           return reply.status(409).send({
             status: 'error',
             task_id: taskId,
-            comfy_prompt_id: task.comfy_prompt_id,
+            comfy_prompt_id: canonicalPromptId,
             message: 'prompt_id does not belong to the supplied task_id'
           });
         }
-        if (task.comfy_prompt_id) promptId = task.comfy_prompt_id;
+        if (canonicalPromptId) promptId = canonicalPromptId;
 
         if (task.status !== 'processing') {
           return {
@@ -398,11 +422,13 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // The task may still be waiting for a GPU lease or may own the image lease but
-      // have not submitted /prompt yet. Both cases can be cancelled without touching
-      // ComfyUI. The provider performs a second canonical status check immediately
-      // before /prompt, closing the cancellation race.
+      // have not submitted /prompt yet. Prove that ownership first. Mark cancelled
+      // BEFORE rejecting a queued waiter so a resumed worker cannot win the CAS race
+      // by reporting failed. For an active pre-prompt owner, retain the lease until
+      // the worker observes cancellation and unwinds its finally block; releasing it
+      // here would create a narrow cancel-vs-/prompt overlap window with the next H3.
       if (taskId && !promptId) {
-        const cancelledQueuedLease = GpuLeaseService.cancelQueuedTask(taskId);
+        const queued = GpuLeaseService.isQueued(taskId);
         const activeLease = GpuLeaseService.getCurrentLease();
         const ownsActiveImageLease = Boolean(
           activeLease
@@ -410,7 +436,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
           && activeLease.kind === 'image'
         );
 
-        if (!cancelledQueuedLease && !ownsActiveImageLease) {
+        if (!queued && !ownsActiveImageLease) {
           return reply.status(409).send({
             status: 'failed',
             task_id: taskId,
@@ -419,9 +445,10 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         }
 
         await AssetTaskStore.cancelled(taskId, sceneId, 'Cancelled before ComfyUI prompt submission');
-        if (ownsActiveImageLease && activeLease) {
-          GpuLeaseService.releaseLease(activeLease.lease_id, taskId);
-        }
+        const cancelledQueuedLease = queued
+          ? GpuLeaseService.cancelQueuedTask(taskId)
+          : false;
+
         if (sceneId > 0 && sceneId < 90_000_000) {
           await db.run(
             `UPDATE scene SET asset_status = ? WHERE id = ? AND task_id = ? AND asset_status = 'generating'`,
@@ -439,7 +466,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
           interrupted: false,
           message: cancelledQueuedLease
             ? 'Cancelled while waiting for GPU lease'
-            : 'Cancelled before ComfyUI prompt submission'
+            : 'Cancellation recorded before ComfyUI prompt submission; active lease retained until worker unwind'
         };
       }
 
