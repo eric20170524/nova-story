@@ -11,7 +11,6 @@ import {
 } from '../schemas/video';
 import { VideoGenerationService } from '../services/video/video_generation_service';
 import { VideoRuntimeInspector } from '../services/video/video_runtime_inspector';
-import { VideoReferenceIdentityService } from '../services/video/video_reference_identity_service';
 import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
@@ -59,15 +58,13 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       });
     }
 
-    const [inputPreflight, runtime, identityValidation] = await Promise.all([
+    const [inputPreflight, runtime] = await Promise.all([
       VideoGenerationService.preflight(parseResult.data as any),
-      VideoRuntimeInspector.inspect(parseResult.data.workflow_id),
-      VideoReferenceIdentityService.validate(parseResult.data as any)
+      VideoRuntimeInspector.inspect(parseResult.data.workflow_id)
     ]);
 
     const blockers = [...new Set([
       ...inputPreflight.blockers,
-      ...identityValidation.blockers,
       ...runtime.missing_components
     ])];
     const warnings = [...inputPreflight.warnings];
@@ -79,9 +76,7 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
 
     return {
       ...inputPreflight,
-      ready: inputPreflight.ready
-        && identityValidation.blockers.length === 0
-        && runtime.video_generation_enabled,
+      ready: inputPreflight.ready && runtime.video_generation_enabled,
       blockers,
       warnings,
       runtime: {
@@ -239,14 +234,6 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       return reply.status(400).send({
         error: 'Invalid video generation request',
         details: parseResult.error.flatten()
-      });
-    }
-
-    const identityValidation = await VideoReferenceIdentityService.validate(parseResult.data);
-    if (identityValidation.blockers.length > 0) {
-      return reply.status(400).send({
-        error: 'Invalid character reference identity',
-        blockers: identityValidation.blockers
       });
     }
 
