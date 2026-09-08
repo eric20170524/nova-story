@@ -4,8 +4,27 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../../core/logging';
+import { GpuLeaseService } from '../gpu_lease_service';
+import { AssetTaskStore } from '../task_store';
+
+const queueEntryContainsPromptId = (entry: unknown, promptId: string): boolean => {
+    if (entry === promptId) return true;
+    if (Array.isArray(entry)) {
+        return entry.some((value) => queueEntryContainsPromptId(value, promptId));
+    }
+    if (entry && typeof entry === 'object') {
+        return Object.values(entry as Record<string, unknown>).some(
+            (value) => queueEntryContainsPromptId(value, promptId)
+        );
+    }
+    return false;
+};
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class ComfyUIService {
+    private static promptStopWatchers = new Set<string>();
+
     private baseUrl: string;
     private clientId: string;
     private wsUrl: string;
@@ -16,12 +35,77 @@ export class ComfyUIService {
         this.wsUrl = this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') + `/ws?clientId=${this.clientId}`;
     }
 
+    private async fetchWithTimeout(
+        url: string,
+        init: RequestInit = {},
+        timeoutMs: number = 5000
+    ): Promise<Response> {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    private async getQueue(timeoutMs: number = 3000): Promise<{ running: any[]; pending: any[] } | null> {
+        try {
+            const response = await this.fetchWithTimeout(`${this.baseUrl}/queue`, {}, timeoutMs);
+            if (!response.ok) return null;
+            const data = await response.json() as any;
+            return {
+                running: data.queue_running || [],
+                pending: data.queue_pending || []
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    private promptIsActive(queue: { running: any[]; pending: any[] }, promptId: string): boolean {
+        return queue.running.some((entry) => queueEntryContainsPromptId(entry, promptId))
+            || queue.pending.some((entry) => queueEntryContainsPromptId(entry, promptId));
+    }
+
+    private async waitForPromptToStop(promptId: string, timeoutMs: number): Promise<boolean> {
+        const deadline = Date.now() + Math.max(1, timeoutMs);
+        while (Date.now() < deadline) {
+            const remaining = Math.max(1, deadline - Date.now());
+            const queue = await this.getQueue(Math.min(1000, remaining));
+            if (queue && !this.promptIsActive(queue, promptId)) return true;
+            if (Date.now() < deadline) {
+                await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+            }
+        }
+        return false;
+    }
+
+    private watchPromptUntilStopped(promptId: string): void {
+        if (ComfyUIService.promptStopWatchers.has(promptId)) return;
+        ComfyUIService.promptStopWatchers.add(promptId);
+        logger.warn(`Image Comfy prompt ${promptId} stop is not confirmed; retaining GPU lease guard.`);
+
+        void (async () => {
+            try {
+                while (true) {
+                    const queue = await this.getQueue(3000);
+                    if (queue && !this.promptIsActive(queue, promptId)) {
+                        GpuLeaseService.confirmPromptStopped(promptId);
+                        logger.info(`Image Comfy prompt ${promptId} stopped; GPU guard cleared.`);
+                        return;
+                    }
+                    await sleep(2000);
+                }
+            } finally {
+                ComfyUIService.promptStopWatchers.delete(promptId);
+            }
+        })();
+    }
+
     async checkStatus(): Promise<boolean> {
         try {
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 2000);
-            const response = await fetch(`${this.baseUrl}/system_stats`, { signal: controller.signal });
-            clearTimeout(id);
+            const response = await this.fetchWithTimeout(`${this.baseUrl}/system_stats`, {}, 2000);
             return response.ok;
         } catch (error) {
             return false;
@@ -85,7 +169,10 @@ export class ComfyUIService {
     async generateImage(
         workflow: any,
         progressCallback?: (type: string, data: any) => void,
-        options?: { onPromptQueued?: (promptId: string) => void | Promise<void> }
+        options?: {
+            onPromptQueued?: (promptId: string) => void | Promise<void>;
+            timeoutMs?: number;
+        }
     ): Promise<{ status: string; message?: string; images?: any[]; prompt_id?: string }> {
         logger.info(`Generating image via ComfyUI with workflow: ${JSON.stringify(workflow).substring(0, 50)}...`);
 
@@ -97,53 +184,87 @@ export class ComfyUIService {
                 ws!.on('open', resolve);
                 ws!.on('error', reject);
             });
-            logger.info("Connected to ComfyUI WebSocket");
+            logger.info('Connected to ComfyUI WebSocket');
         } catch (error) {
             logger.error(`Failed to connect to ComfyUI WebSocket: ${error}`);
-            return { status: "error", message: `Connection Refused: ${error}` };
+            return { status: 'error', message: `Connection Refused: ${error}` };
         }
 
         try {
             let promptId: string | null = null;
 
-            const response = await fetch(`${this.baseUrl}/prompt`, {
+            // Cancellation may happen while an image task is waiting for GPU, freeing
+            // VRAM, or compiling its workflow. Check canonical task state immediately
+            // before /prompt so a cancelled task can never create new Comfy work.
+            const activeLeaseBeforeSubmit = GpuLeaseService.getCurrentLease();
+            if (activeLeaseBeforeSubmit?.kind === 'image') {
+                const task = await AssetTaskStore.get(activeLeaseBeforeSubmit.owner_task_id);
+                if (task && task.status !== 'processing') {
+                    ws.close();
+                    return {
+                        status: 'error',
+                        message: `Image task ${task.task_id} is ${task.status}; refusing ComfyUI prompt submission`
+                    };
+                }
+            }
+
+            const response = await this.fetchWithTimeout(`${this.baseUrl}/prompt`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompt: workflow, client_id: this.clientId })
-            });
+            }, 10_000);
 
             if (!response.ok) {
                 const errText = await response.text();
                 logger.error(`ComfyUI /prompt Error: ${response.status} - ${errText}`);
                 ws.close();
-                return { status: "error", message: `Queue failed: ${errText}` };
+                return { status: 'error', message: `Queue failed: ${errText}` };
             }
 
             const respData = await response.json() as Record<string, any>;
-            promptId = respData.prompt_id;
+            promptId = String(respData.prompt_id || '');
             logger.info(`Workflow queued. Prompt ID: ${promptId}`);
 
             if (!promptId) {
                 ws.close();
-                return { status: "error", message: "No prompt_id received" };
+                return { status: 'error', message: 'No prompt_id received' };
+            }
+
+            const activeLease = GpuLeaseService.getCurrentLease();
+            if (activeLease?.kind === 'image') {
+                GpuLeaseService.guardLeaseForPrompt(activeLease.owner_task_id, promptId);
             }
 
             try {
                 await options?.onPromptQueued?.(promptId);
             } catch (e) {
+                // The prompt already exists. Keep ownership guarded even if metadata
+                // persistence fails; cancellation/recovery must still own the GPU.
                 logger.warn(`onPromptQueued hook failed: ${e}`);
             }
 
             const generatedImages: any[] = [];
+            const timeoutMs = options?.timeoutMs ?? 15 * 60 * 1000;
 
             return new Promise((resolve) => {
-                let checkHistoryInterval: any = null;
+                let checkHistoryInterval: NodeJS.Timeout | null = null;
+                let deadlineTimer: NodeJS.Timeout | null = null;
                 let isFinished = false;
 
-                const finish = async (customResult?: { status: string; message: string }) => {
+                const finish = async (
+                    customResult?: { status: string; message: string },
+                    promptStopped: boolean = true
+                ) => {
                     if (isFinished) return;
                     isFinished = true;
                     if (checkHistoryInterval) clearInterval(checkHistoryInterval);
+                    if (deadlineTimer) clearTimeout(deadlineTimer);
+
+                    if (promptId) {
+                        if (promptStopped) GpuLeaseService.confirmPromptStopped(promptId);
+                        else this.watchPromptUntilStopped(promptId);
+                    }
+
                     try {
                         ws?.removeAllListeners();
                         ws?.close();
@@ -152,13 +273,17 @@ export class ComfyUIService {
                     }
 
                     if (customResult) {
-                        resolve(customResult);
+                        resolve({ ...customResult, prompt_id: promptId || undefined });
                         return;
                     }
 
                     if (generatedImages.length === 0 && promptId) {
                         try {
-                            const histRes = await fetch(`${this.baseUrl}/history/${promptId}`);
+                            const histRes = await this.fetchWithTimeout(
+                                `${this.baseUrl}/history/${promptId}`,
+                                {},
+                                5000
+                            );
                             if (histRes.ok) {
                                 const historyData = await histRes.json() as Record<string, any>;
                                 const promptOutput = historyData[promptId]?.outputs || {};
@@ -166,7 +291,11 @@ export class ComfyUIService {
                                     const nodeOut = promptOutput[nodeId];
                                     if (nodeOut.images) {
                                         for (const imgInfo of nodeOut.images) {
-                                            const imgData = await this.downloadImage(imgInfo.filename, imgInfo.subfolder, imgInfo.type);
+                                            const imgData = await this.downloadImage(
+                                                imgInfo.filename,
+                                                imgInfo.subfolder,
+                                                imgInfo.type
+                                            );
                                             if (imgData) {
                                                 generatedImages.push({ filename: imgInfo.filename, data: imgData });
                                             }
@@ -178,12 +307,32 @@ export class ComfyUIService {
                             logger.error(`History fetch fallback error: ${e}`);
                         }
                     }
-                    resolve({ status: "completed", images: generatedImages, prompt_id: promptId || undefined });
+                    resolve({
+                        status: generatedImages.length > 0 ? 'completed' : 'error',
+                        message: generatedImages.length > 0 ? undefined : 'ComfyUI completed without image outputs',
+                        images: generatedImages,
+                        prompt_id: promptId || undefined
+                    });
                 };
+
+                deadlineTimer = setTimeout(() => {
+                    void finish(
+                        {
+                            status: 'error',
+                            message: `ComfyUI image execution exceeded deadline (${Math.round(timeoutMs / 1000)}s)`
+                        },
+                        false
+                    );
+                    if (promptId) {
+                        void this.cancelExecution(promptId, 5000).then((result) => {
+                            if (!result.ok) this.watchPromptUntilStopped(promptId!);
+                        });
+                    }
+                }, timeoutMs);
 
                 ws!.on('error', (err) => {
                     logger.error(`ComfyUI WebSocket streaming error: ${err}`);
-                    finish({ status: "error", message: `WebSocket error: ${err}` });
+                    void finish({ status: 'error', message: `WebSocket error: ${err}` }, false);
                 });
 
                 ws!.on('message', async (data: any) => {
@@ -192,131 +341,241 @@ export class ComfyUIService {
                         const msgType = message.type;
                         const msgData = message.data || {};
 
-                        if (msgType === "execution_start" && msgData.prompt_id === promptId) {
-                            logger.info("ComfyUI Execution Started");
-                            if (progressCallback) progressCallback("started", {});
-                        } else if (msgType === "executing") {
+                        if (msgType === 'execution_start' && msgData.prompt_id === promptId) {
+                            logger.info('ComfyUI Execution Started');
+                            if (progressCallback) progressCallback('started', {});
+                        } else if (msgType === 'executing') {
                             const node = msgData.node;
                             if (node) {
-                                if (progressCallback) progressCallback("progress", { node });
-                            } else {
-                                logger.info("ComfyUI Execution Finished (Logic)");
-                                if (!msgData.prompt_id || msgData.prompt_id === promptId) {
-                                    setTimeout(() => finish(), 500);
-                                }
+                                if (progressCallback) progressCallback('progress', { node });
+                            } else if (!msgData.prompt_id || msgData.prompt_id === promptId) {
+                                logger.info('ComfyUI Execution Finished (Logic)');
+                                setTimeout(() => void finish(undefined, true), 500);
                             }
-                        } else if (msgType === "executed" && msgData.prompt_id === promptId) {
+                        } else if (msgType === 'executed' && msgData.prompt_id === promptId) {
                             const output = msgData.output || {};
                             if (output.images) {
                                 for (const imgInfo of output.images) {
                                     logger.info(`Image generated: ${imgInfo.filename}`);
-                                    const imgData = await this.downloadImage(imgInfo.filename, imgInfo.subfolder || "", imgInfo.type || "output");
+                                    const imgData = await this.downloadImage(
+                                        imgInfo.filename,
+                                        imgInfo.subfolder || '',
+                                        imgInfo.type || 'output'
+                                    );
                                     if (imgData) {
                                         generatedImages.push({ filename: imgInfo.filename, data: imgData });
                                     }
                                 }
                             }
-                        } else if (msgType === "progress") {
+                        } else if (msgType === 'progress') {
                             if (progressCallback && msgData.value && msgData.max) {
-                                progressCallback("progress", { current: msgData.value, total: msgData.max });
+                                progressCallback('progress', { current: msgData.value, total: msgData.max });
                             }
-                        } else if (msgType === "execution_error") {
+                        } else if (msgType === 'execution_error') {
                             if (!msgData.prompt_id || msgData.prompt_id === promptId) {
                                 const errStr = `ComfyUI Error [${msgData.node_type}]: ${msgData.exception_message}`;
                                 logger.error(errStr);
-                                finish({ status: "error", message: errStr });
+                                void finish({ status: 'error', message: errStr }, true);
                             }
-                        } else if (msgType === "execution_interrupted") {
+                        } else if (msgType === 'execution_interrupted') {
                             if (!msgData.prompt_id || msgData.prompt_id === promptId) {
-                                logger.info("ComfyUI Execution Interrupted");
-                                finish({ status: "error", message: "Generation interrupted" });
+                                logger.info('ComfyUI Execution Interrupted');
+                                void finish({ status: 'error', message: 'Generation interrupted' }, true);
                             }
                         }
-                    } catch (e) {
-                        // ignored
+                    } catch {
+                        // Ignore unrelated / malformed websocket messages.
                     }
                 });
 
                 ws!.on('close', () => {
-                    logger.warn("WebSocket closed");
-                    finish();
+                    logger.warn('WebSocket closed');
+                    setTimeout(async () => {
+                        if (isFinished || !promptId) return;
+                        const stopped = await this.waitForPromptToStop(promptId, 1500);
+                        if (stopped) {
+                            await finish(undefined, true);
+                        } else {
+                            await finish(
+                                {
+                                    status: 'error',
+                                    message: 'ComfyUI connection closed while prompt state is still active or unknown'
+                                },
+                                false
+                            );
+                        }
+                    }, 1500);
                 });
 
-                // Fallback check history in case WS missed completion
+                // Fallback check history in case WS missed completion.
                 checkHistoryInterval = setInterval(async () => {
                     try {
-                        const hRes = await fetch(`${this.baseUrl}/history/${promptId}`);
+                        const hRes = await this.fetchWithTimeout(
+                            `${this.baseUrl}/history/${promptId}`,
+                            {},
+                            5000
+                        );
                         if (hRes.ok) {
                             const hData = await hRes.json() as Record<string, any>;
                             if (hData[promptId!]) {
                                 logger.info(`Prompt ${promptId} confirmed completed via polling.`);
-                                finish();
+                                await finish(undefined, true);
                             }
                         }
-                    } catch (e) {}
+                    } catch {
+                        /* keep polling until deadline */
+                    }
                 }, 5000);
             });
 
         } catch (error: any) {
             logger.error(`Error during ComfyUI execution: ${error}`);
             if (ws) ws.close();
-            return { status: "error", message: error.toString() };
+            return { status: 'error', message: error.toString() };
         }
     }
 
     /**
-     * Cancel a specific queued prompt and/or interrupt the currently running job.
-     * ComfyUI: POST /queue { delete: [prompt_id] } removes queue items;
-     * POST /interrupt stops the active execution (not prompt-scoped).
+     * Cancel only the owned prompt. `/interrupt` is global in ComfyUI, therefore it
+     * is allowed only when the target prompt is confirmed to be the sole running
+     * prompt. Missing ownership fails closed and never interrupts unrelated H3 work.
      */
-    async cancelExecution(promptId?: string | null): Promise<{
+    async cancelExecution(promptId?: string | null, timeoutMs: number = 5000): Promise<{
         ok: boolean;
         deleted_from_queue: boolean;
         interrupted: boolean;
         message: string;
     }> {
+        if (!promptId) {
+            return {
+                ok: false,
+                deleted_from_queue: false,
+                interrupted: false,
+                message: 'Refusing unscoped ComfyUI cancel: prompt_id is required'
+            };
+        }
+
+        const deadline = Date.now() + Math.max(1, timeoutMs);
+        const remaining = () => Math.max(0, deadline - Date.now());
         let deletedFromQueue = false;
         let interrupted = false;
         const notes: string[] = [];
 
-        if (promptId) {
-            try {
-                // Prefer deleting a queued item by id (no-op if already running/done)
-                const delRes = await fetch(`${this.baseUrl}/queue`, {
+        try {
+            const queue = await this.getQueue(Math.min(2000, Math.max(1, remaining())));
+            if (!queue || remaining() <= 0) {
+                return {
+                    ok: false,
+                    deleted_from_queue: false,
+                    interrupted: false,
+                    message: 'Could not confirm ComfyUI queue state; cancellation failed closed'
+                };
+            }
+
+            const pendingMatch = queue.pending.some(
+                (entry) => queueEntryContainsPromptId(entry, promptId)
+            );
+            const runningMatches = queue.running.filter(
+                (entry) => queueEntryContainsPromptId(entry, promptId)
+            );
+
+            if (pendingMatch) {
+                const delRes = await this.fetchWithTimeout(`${this.baseUrl}/queue`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ delete: [promptId] })
-                });
+                }, Math.max(1, remaining()));
                 deletedFromQueue = delRes.ok;
-                notes.push(deletedFromQueue ? `queue delete ${promptId}` : `queue delete failed ${delRes.status}`);
-            } catch (error) {
-                logger.error(`Failed to delete ComfyUI queue item ${promptId}: ${error}`);
-                notes.push(`queue delete error: ${error}`);
+                notes.push(deletedFromQueue
+                    ? `queue delete ${promptId}`
+                    : `queue delete failed ${delRes.status}`);
+                if (!deletedFromQueue || remaining() <= 0) {
+                    return {
+                        ok: false,
+                        deleted_from_queue: deletedFromQueue,
+                        interrupted: false,
+                        message: notes.join('; ')
+                    };
+                }
+
+                const stopped = await this.waitForPromptToStop(promptId, remaining());
+                if (stopped) GpuLeaseService.confirmPromptStopped(promptId);
+                else this.watchPromptUntilStopped(promptId);
+                notes.push(stopped ? 'prompt stop confirmed' : 'prompt stop not yet confirmed');
+                return {
+                    ok: stopped,
+                    deleted_from_queue: deletedFromQueue,
+                    interrupted: false,
+                    message: notes.join('; ')
+                };
             }
-        }
 
-        try {
-            // If this prompt is the active one (or client wants a hard stop), interrupt running graph
-            const response = await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
-            interrupted = response.ok;
-            notes.push(interrupted ? 'interrupt ok' : `interrupt failed ${response.status}`);
+            if (runningMatches.length > 0) {
+                if (queue.running.length !== 1) {
+                    logger.warn(
+                        `Refusing global ComfyUI interrupt for image prompt ${promptId}: `
+                        + `${queue.running.length} prompts are reported running.`
+                    );
+                    return {
+                        ok: false,
+                        deleted_from_queue: false,
+                        interrupted: false,
+                        message: `Refusing global interrupt: ${queue.running.length} prompts are running`
+                    };
+                }
+
+                const interruptRes = await this.fetchWithTimeout(
+                    `${this.baseUrl}/interrupt`,
+                    { method: 'POST' },
+                    Math.max(1, remaining())
+                );
+                interrupted = interruptRes.ok;
+                notes.push(interrupted ? 'interrupt ok' : `interrupt failed ${interruptRes.status}`);
+                if (!interrupted || remaining() <= 0) {
+                    return {
+                        ok: false,
+                        deleted_from_queue: false,
+                        interrupted,
+                        message: notes.join('; ')
+                    };
+                }
+
+                const stopped = await this.waitForPromptToStop(promptId, remaining());
+                if (stopped) GpuLeaseService.confirmPromptStopped(promptId);
+                else this.watchPromptUntilStopped(promptId);
+                notes.push(stopped ? 'prompt stop confirmed' : 'prompt stop not yet confirmed');
+                return {
+                    ok: stopped,
+                    deleted_from_queue: false,
+                    interrupted,
+                    message: notes.join('; ')
+                };
+            }
+
+            // Queue evidence says the prompt is already absent. This is a successful
+            // idempotent cancellation and does not require a blind global interrupt.
+            GpuLeaseService.confirmPromptStopped(promptId);
+            return {
+                ok: true,
+                deleted_from_queue: false,
+                interrupted: false,
+                message: `Prompt ${promptId} is already absent from ComfyUI queue`
+            };
         } catch (error) {
-            logger.error(`Failed to interrupt ComfyUI: ${error}`);
-            notes.push(`interrupt error: ${error}`);
+            logger.error(`Failed to cancel ComfyUI prompt ${promptId}: ${error}`);
+            return {
+                ok: false,
+                deleted_from_queue: deletedFromQueue,
+                interrupted,
+                message: `Cancellation error: ${error}`
+            };
         }
-
-        return {
-            ok: deletedFromQueue || interrupted,
-            deleted_from_queue: deletedFromQueue,
-            interrupted,
-            message: notes.join('; ')
-        };
     }
 
     private async downloadImage(filename: string, subfolder: string, type: string): Promise<Buffer | null> {
         const url = `${this.baseUrl}/view?filename=${filename}&subfolder=${subfolder}&type=${type}`;
         try {
-            const res = await fetch(url);
+            const res = await this.fetchWithTimeout(url, {}, 30_000);
             if (res.ok) {
                 const arrayBuffer = await res.arrayBuffer();
                 return Buffer.from(arrayBuffer);
