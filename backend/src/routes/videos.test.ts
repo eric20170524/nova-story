@@ -313,15 +313,15 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(cancelMissingRes.statusCode, 200);
   assert.equal(JSON.parse(cancelMissingRes.body).ok, false);
 
-  // 7. Scene media and promotion.
-  const mediaRes = await app.inject({ method: 'GET', url: '/api/videos/scenes/9991/media' });
+  // 7. Scene media is canonical under /api/scenes; video remains the consumer/producer API.
+  const mediaRes = await app.inject({ method: 'GET', url: '/api/scenes/9991/media' });
   assert.equal(mediaRes.statusCode, 200);
   const mediaData = JSON.parse(mediaRes.body);
   assert.ok(mediaData.assets.some((a: any) => a.role === 'video_keyframe'));
   assert.ok(mediaData.assets.some((a: any) => a.role === 'last_frame_reference'));
   assert.ok(mediaData.assets.some((a: any) => a.role === 'loop_master'));
 
-  const mediaVersionRes = await app.inject({ method: 'GET', url: '/api/videos/scenes/9991/media?version=1' });
+  const mediaVersionRes = await app.inject({ method: 'GET', url: '/api/scenes/9991/media?version=1' });
   assert.equal(mediaVersionRes.statusCode, 200);
 
   const promoteLoopRes = await app.inject({ method: 'POST', url: `/api/videos/assets/${loopMasterAsset.id}/promote` });
