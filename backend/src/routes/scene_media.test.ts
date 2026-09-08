@@ -66,7 +66,7 @@ test('GET /api/scenes/:id/media exposes Character Center refs without copying as
       method: 'GET',
       url: `/api/scenes/${sceneId}/media?version=bad`
     });
-    assert.equal(badVersion.statusCode, 400);
+    assert.equal(badVersion.statusCode, 422);
   } finally {
     await app.close();
     await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
