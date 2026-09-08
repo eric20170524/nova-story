@@ -472,13 +472,15 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.get('/scenes/:scene_id/media', async (request, reply) => {
+  app.get('/scenes/:scene_id/media', async (request) => {
     const { scene_id } = z.object({
-      scene_id: z.coerce.number().int(),
+      scene_id: z.coerce.number().int().positive(),
     }).parse(request.params);
-    const version = (request.query as any)?.version ? Number((request.query as any).version) : undefined;
+    const { version } = z.object({
+      version: z.coerce.number().int().positive().optional(),
+    }).parse(request.query || {});
     const { MediaAssetService } = await import('../services/video/media_asset_service');
-    const assets = await MediaAssetService.listAssetsByScene(scene_id, version);
+    const assets = await MediaAssetService.listSceneContextAssets(scene_id, version);
     return { scene_id, assets };
   });
 };
