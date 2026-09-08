@@ -26,6 +26,12 @@ export interface AssetTaskState {
 }
 
 const memory = new Map<string, AssetTaskState>();
+const TERMINAL_STATUSES = new Set<AssetTaskStatus>([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted'
+]);
 
 const nowIso = () => new Date().toISOString();
 
@@ -41,6 +47,14 @@ const rowToState = (row: any): AssetTaskState => ({
   created_at: row.created_at,
   updated_at: row.updated_at
 });
+
+const cacheCanonicalRow = async (taskId: string): Promise<AssetTaskState | undefined> => {
+  const row = await db.get('SELECT * FROM generation_task WHERE task_id = ?', taskId);
+  if (!row) return undefined;
+  const state = rowToState(row);
+  memory.set(taskId, state);
+  return state;
+};
 
 const persist = async (state: AssetTaskState) => {
   memory.set(state.task_id, state);
@@ -77,17 +91,82 @@ const persist = async (state: AssetTaskState) => {
   return state;
 };
 
+/**
+ * Image lifecycle CAS: once a generation task leaves processing, late worker output
+ * must not overwrite its terminal state. This mirrors the hardened video state
+ * machine and closes cancel-vs-complete / cancel-vs-failed races.
+ */
+const persistTerminalIfProcessing = async (state: AssetTaskState) => {
+  try {
+    await db.run(
+      `UPDATE generation_task SET
+         scene_id = ?,
+         status = ?,
+         image_url = ?,
+         error = ?,
+         comfy_prompt_id = COALESCE(?, comfy_prompt_id),
+         retry_count = ?,
+         updated_at = ?
+       WHERE task_id = ? AND status = 'processing'`,
+      state.scene_id,
+      state.status,
+      state.image_url ?? null,
+      state.error ?? null,
+      state.comfy_prompt_id ?? null,
+      state.retry_count ?? 0,
+      state.updated_at,
+      state.task_id
+    );
+
+    const canonical = await cacheCanonicalRow(state.task_id);
+    if (canonical) return canonical;
+  } catch (err: any) {
+    logger.warn(`generation_task terminal transition failed: ${err?.message || err}`);
+  }
+
+  const hot = memory.get(state.task_id);
+  if (hot && TERMINAL_STATUSES.has(hot.status)) return hot;
+  return persist(state);
+};
+
 export const AssetTaskStore = {
   async processing(taskId: string, sceneId: number) {
     const updated = nowIso();
-    return persist({
+    const existing = memory.get(taskId) || (await AssetTaskStore.get(taskId));
+    if (existing && TERMINAL_STATUSES.has(existing.status)) {
+      return existing;
+    }
+
+    try {
+      await db.run(
+        `INSERT INTO generation_task (
+           task_id, scene_id, status, retry_count, created_at, updated_at
+         ) VALUES (?, ?, 'processing', 0, ?, ?)
+         ON CONFLICT(task_id) DO UPDATE SET
+           scene_id = excluded.scene_id,
+           updated_at = excluded.updated_at
+         WHERE generation_task.status = 'processing'`,
+        taskId,
+        sceneId,
+        updated,
+        updated
+      );
+      const canonical = await cacheCanonicalRow(taskId);
+      if (canonical) return canonical;
+    } catch (err: any) {
+      logger.warn(`generation_task processing persist failed: ${err?.message || err}`);
+    }
+
+    const next: AssetTaskState = {
       task_id: taskId,
       scene_id: sceneId,
       status: 'processing',
-      retry_count: 0,
-      created_at: updated,
+      retry_count: existing?.retry_count ?? 0,
+      created_at: existing?.created_at ?? updated,
       updated_at: updated
-    });
+    };
+    memory.set(taskId, next);
+    return next;
   },
 
   async setComfyPromptId(taskId: string, promptId: string) {
@@ -152,8 +231,8 @@ export const AssetTaskStore = {
   },
 
   async completed(taskId: string, sceneId: number, imageUrl: string) {
-    const existing = memory.get(taskId);
-    return persist({
+    const existing = memory.get(taskId) || (await AssetTaskStore.get(taskId));
+    return persistTerminalIfProcessing({
       task_id: taskId,
       scene_id: sceneId,
       status: 'completed',
@@ -166,8 +245,8 @@ export const AssetTaskStore = {
   },
 
   async failed(taskId: string, sceneId: number, error: string) {
-    const existing = memory.get(taskId);
-    return persist({
+    const existing = memory.get(taskId) || (await AssetTaskStore.get(taskId));
+    return persistTerminalIfProcessing({
       task_id: taskId,
       scene_id: sceneId,
       status: 'failed',
@@ -181,7 +260,7 @@ export const AssetTaskStore = {
 
   async cancelled(taskId: string, sceneId: number, error = 'Cancelled by user') {
     const existing = memory.get(taskId) || (await AssetTaskStore.get(taskId));
-    return persist({
+    return persistTerminalIfProcessing({
       task_id: taskId,
       scene_id: sceneId ?? existing?.scene_id ?? 0,
       status: 'cancelled',
@@ -224,7 +303,7 @@ export const AssetTaskStore = {
       );
       let n = 0;
       for (const row of rows as any[]) {
-        await persist({
+        await persistTerminalIfProcessing({
           task_id: String(row.task_id),
           scene_id: Number(row.scene_id),
           status: 'interrupted',
