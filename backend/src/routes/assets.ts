@@ -358,8 +358,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
 
       const settings = SettingsManager.loadSettings();
       const comfySettings = settings.comfyui || {};
-      const baseUrl = comfySettings.base_url || 'http://127.0.0.1:8188';
-      const comfyService = new ComfyUIService(baseUrl);
+      const comfyService = ComfyUIService.fromSettings(comfySettings);
 
       let promptId = body.prompt_id || null;
       let taskId = body.task_id || null;

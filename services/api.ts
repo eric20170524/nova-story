@@ -515,6 +515,7 @@ class ApiService {
   updateSettings = (settings: any) => this.request<any>('/settings/', { method: 'POST', body: settings });
   getLoras = () => this.request<{ lora_directory: string; exists: boolean; loras: string[] }>('/settings/loras');
   verifyLLMConnection = (config: any) => this.request<any>('/settings/verify-llm', { method: 'POST', body: config });
+  verifyComfyConnection = (config?: any) => this.request<any>('/settings/verify-comfy', { method: 'POST', body: config || {} });
 
   /** GPU / Ollama / ComfyUI VRAM health for the top status badge */
   getVramStatus = () =>

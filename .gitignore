@@ -31,6 +31,9 @@ backend/scripts/**
 !backend/scripts/verify_dreamcore_ac.ts
 !backend/scripts/run-tests.ts
 !backend/scripts/video-benchmark.ts
+!backend/scripts/download_l40_models.sh
+!backend/scripts/download_l40_models.py
+!backend/scripts/run_l40_benchmark.ts
 !backend/scripts/fixtures/
 !backend/scripts/fixtures/dreamcore_ac_fixture.json
 *.bak
@@ -46,6 +49,8 @@ backend/dist/
 # On-disk static root (HTTP still served at /static/*)
 backend/static/generated/
 backend/static/comics/
-/backend/scripts/
 /questionlist/
 backend/static/staging/
+*comfy_remote_session.json
+doc/
+

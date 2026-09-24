@@ -10,7 +10,12 @@ const DEFAULT_SETTINGS = {
     llm_model: 'novastory-qwen3:8b',
     image_model: 'gemini-2.5-flash-image',
     comfyui: {
+        mode: 'local', // 'local' | 'remote'
         base_url: 'http://127.0.0.1:8188',
+        local_base_url: 'http://127.0.0.1:8188',
+        remote_base_url: process.env.COMFYUI_REMOTE_URL || '',
+        remote_username: process.env.COMFYUI_REMOTE_USERNAME || '',
+        remote_password: process.env.COMFYUI_REMOTE_PASSWORD || '',
         enabled: false,
         selected_workflow_file: null,
         install_path: 'D:\\ComfyUI',
@@ -110,6 +115,29 @@ export class SettingsManager {
             settings.llm.model = llmModelEnv;
         }
 
+        if (settings.comfyui) {
+            if (process.env.COMFYUI_MODE) {
+                settings.comfyui.mode = process.env.COMFYUI_MODE;
+            }
+            if (process.env.COMFYUI_REMOTE_URL) {
+                settings.comfyui.remote_base_url = process.env.COMFYUI_REMOTE_URL;
+            }
+            if (process.env.COMFYUI_REMOTE_USERNAME) {
+                settings.comfyui.remote_username = process.env.COMFYUI_REMOTE_USERNAME;
+            }
+            if (process.env.COMFYUI_REMOTE_PASSWORD) {
+                settings.comfyui.remote_password = process.env.COMFYUI_REMOTE_PASSWORD;
+            }
+            if (process.env.COMFYUI_LOCAL_URL) {
+                settings.comfyui.local_base_url = process.env.COMFYUI_LOCAL_URL;
+            }
+            if (settings.comfyui.mode === 'remote') {
+                settings.comfyui.base_url = settings.comfyui.remote_base_url || process.env.COMFYUI_REMOTE_URL || '';
+            } else {
+                settings.comfyui.base_url = settings.comfyui.local_base_url || settings.comfyui.base_url || 'http://127.0.0.1:8188';
+            }
+        }
+
         return settings;
     }
 
@@ -137,6 +165,16 @@ export class SettingsManager {
                 String(publicSettings.gemini_api_key || '').trim()
             );
             delete publicSettings.gemini_api_key;
+        }
+        // Mask remote ComfyUI password
+        if (publicSettings.comfyui) {
+            const comfy = publicSettings.comfyui;
+            const hasRemotePassword = Boolean(String(comfy.remote_password || '').trim());
+            publicSettings.comfyui = {
+                ...comfy,
+                has_remote_password: hasRemotePassword,
+                remote_password: ''
+            };
         }
         // Nested nebula / other providers if present later
         if (publicSettings.nebula?.api_key) {
@@ -212,6 +250,33 @@ export class SettingsManager {
             }
         }
 
+        if (newSettingsCopy.comfyui) {
+            delete newSettingsCopy.comfyui.has_remote_password;
+            if (newSettingsCopy.comfyui.remote_password !== undefined) {
+                const pass = String(newSettingsCopy.comfyui.remote_password || '').trim();
+                const keepExisting = !pass || pass === '********' || pass === '••••••••' || /^•+$/.test(pass);
+                if (!keepExisting) {
+                    envContent = upsertEnvValue(envContent, 'COMFYUI_REMOTE_PASSWORD', pass);
+                    currentSettings.comfyui = currentSettings.comfyui || {};
+                    currentSettings.comfyui.remote_password = pass;
+                }
+                delete newSettingsCopy.comfyui.remote_password;
+            }
+
+            const comfyEnvMappings = [
+                ['COMFYUI_MODE', newSettingsCopy.comfyui.mode],
+                ['COMFYUI_REMOTE_URL', newSettingsCopy.comfyui.remote_base_url],
+                ['COMFYUI_REMOTE_USERNAME', newSettingsCopy.comfyui.remote_username],
+                ['COMFYUI_LOCAL_URL', newSettingsCopy.comfyui.local_base_url]
+            ] as const;
+
+            for (const [key, value] of comfyEnvMappings) {
+                if (value !== undefined) {
+                    envContent = upsertEnvValue(envContent, key, String(value));
+                }
+            }
+        }
+
         if (envContent !== originalEnvContent) {
             fs.writeFileSync(envPath, envContent);
         }
@@ -224,9 +289,20 @@ export class SettingsManager {
             }
         }
 
+        if (currentSettings.comfyui) {
+            if (currentSettings.comfyui.mode === 'remote') {
+                currentSettings.comfyui.base_url = currentSettings.comfyui.remote_base_url || process.env.COMFYUI_REMOTE_URL || '';
+            } else {
+                currentSettings.comfyui.base_url = currentSettings.comfyui.local_base_url || currentSettings.comfyui.base_url || 'http://127.0.0.1:8188';
+            }
+        }
+
         const jsonSettingsToSave = JSON.parse(JSON.stringify(currentSettings));
         if (jsonSettingsToSave.llm && jsonSettingsToSave.llm.api_key !== undefined) {
             jsonSettingsToSave.llm.api_key = '';
+        }
+        if (jsonSettingsToSave.comfyui && jsonSettingsToSave.comfyui.remote_password !== undefined) {
+            jsonSettingsToSave.comfyui.remote_password = '';
         }
 
         fs.writeFileSync(SettingsManager.getFilePath(), JSON.stringify(jsonSettingsToSave, null, 4), 'utf-8');

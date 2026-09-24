@@ -1080,7 +1080,7 @@ export const resolveGenerationPlan = (options: {
     nsfwLora,
     nsfwLoraStrength: advanced.nsfw_lora_strength,
     stylePreset,
-    allowRemoteUnverified: !comfy.install_path
+    allowRemoteUnverified: Boolean(comfy.mode === 'remote' || !comfy.install_path)
   });
   // Environment shots need spatial fidelity more than texture amplification.
   // Skip style/detail LoRAs entirely here; character LoRAs remain available.

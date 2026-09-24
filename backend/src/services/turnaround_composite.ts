@@ -226,8 +226,7 @@ export async function generateTurnaroundComposite(
     input.workflowData?.model_type || input.workflowData?.reference_model_type || 'pony'
   );
 
-  const baseUrl = comfySettings.base_url || 'http://127.0.0.1:8188';
-  const comfyService = new ComfyUIService(baseUrl);
+  const comfyService = ComfyUIService.fromSettings(comfySettings);
   const isRunning = await comfyService.ensureRunning(comfySettings.install_path);
   if (!isRunning) {
     throw new Error('Failed to start or connect to ComfyUI');
@@ -240,7 +239,7 @@ export async function generateTurnaroundComposite(
     || (input.workflowData?.ref_image_url as string | undefined)
     || null;
 
-  if (refUrl) {
+  if (refUrl && !comfyService.isRemote) {
     copyReferenceImageToComfy(
       {
         ...input.workflowData,
@@ -370,8 +369,12 @@ export async function generateTurnaroundComposite(
       }
     }
 
+    const executableWorkflow = comfyService.isRemote
+      ? await comfyService.uploadWorkflowReferences(finalWorkflow, staticDir)
+      : finalWorkflow;
+
     const result = await comfyService.generateImage(
-      finalWorkflow,
+      executableWorkflow,
       async (msgType, data) => {
         await input.onProgress?.(msgType, { ...data, view: view.id });
       },

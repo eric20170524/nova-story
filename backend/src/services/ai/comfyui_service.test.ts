@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { ComfyUIService } from './comfyui_service';
 import { GpuLeaseService } from '../gpu_lease_service';
+import { SettingsManager } from '../../core/settings_manager';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -139,4 +141,86 @@ test('already absent image prompt is idempotently confirmed without interrupt', 
     assert.equal(result.deleted_from_queue, false);
     assert.equal(calls.some((call) => call.url.endsWith('/interrupt')), false);
   });
+});
+
+test('ComfyUIService.fromSettings correctly resolves local mode', () => {
+    const service = ComfyUIService.fromSettings({
+        mode: 'local',
+        local_base_url: 'http://127.0.0.1:8188',
+        remote_base_url: 'https://comfy.example.com',
+        remote_username: 'mock_user',
+        remote_password: 'mock_password'
+    });
+
+    assert.equal(service.isRemote, false);
+    assert.equal(service.baseUrl, 'http://127.0.0.1:8188');
+});
+
+test('ComfyUIService.fromSettings correctly resolves remote mode', () => {
+    const service = ComfyUIService.fromSettings({
+        mode: 'remote',
+        local_base_url: 'http://127.0.0.1:8188',
+        remote_base_url: 'https://comfy.example.com',
+        remote_username: 'mock_user',
+        remote_password: 'mock_password_123'
+    });
+
+    assert.equal(service.isRemote, true);
+    assert.equal(service.baseUrl, 'https://comfy.example.com');
+});
+
+test('SettingsManager masks remote_password in toPublicSettings and preserves on save', () => {
+    const original = {
+        comfyui: {
+            mode: 'remote',
+            base_url: 'https://comfy.example.com',
+            remote_base_url: 'https://comfy.example.com',
+            remote_username: 'mock_user',
+            remote_password: 'mock_password_123'
+        }
+    };
+
+    const publicView = SettingsManager.toPublicSettings(original);
+    assert.equal(publicView.comfyui.has_remote_password, true);
+    assert.equal(publicView.comfyui.remote_password, '');
+
+    const envPath = SettingsManager.getEnvPath();
+    const settingsPath = SettingsManager.getFilePath();
+    const originalEnv = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : null;
+    const originalSettings = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf-8') : null;
+
+    try {
+        const saved = SettingsManager.saveSettings({
+            comfyui: {
+                mode: 'remote',
+                remote_base_url: 'https://comfy.example.com',
+                remote_username: 'mock_user',
+                remote_password: ''
+            }
+        });
+
+        assert.equal(saved.comfyui.has_remote_password, true);
+        assert.equal(saved.comfyui.mode, 'remote');
+        assert.equal(saved.comfyui.base_url, 'https://comfy.example.com');
+    } finally {
+        if (originalEnv !== null) {
+            fs.writeFileSync(envPath, originalEnv, 'utf-8');
+        }
+        if (originalSettings !== null) {
+            fs.writeFileSync(settingsPath, originalSettings, 'utf-8');
+        }
+    }
+});
+
+test('ComfyUIService uploadWorkflowReferences leaves local workflow intact', async () => {
+    const service = ComfyUIService.fromSettings({ mode: 'local' });
+    const workflow = {
+        '1': {
+            class_type: 'LoadImage',
+            inputs: { image: 'test.png' }
+        }
+    };
+
+    const res = await service.uploadWorkflowReferences(workflow, '/tmp');
+    assert.equal(res['1'].inputs.image, 'test.png');
 });

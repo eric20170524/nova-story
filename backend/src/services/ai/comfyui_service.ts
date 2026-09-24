@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
+import https from 'https';
 import { logger } from '../../core/logging';
 import {
     ComfyPromptOwnershipService,
@@ -10,18 +12,199 @@ import {
 } from './comfy_prompt_ownership_service';
 import { GpuLeaseService } from '../gpu_lease_service';
 import { AssetTaskStore } from '../task_store';
+import { getDataDirectory } from '../../core/paths';
+
+export interface ComfyUIAuthConfig {
+    username?: string;
+    password?: string;
+}
+
+export interface ComfyUIServiceOptions {
+    auth?: ComfyUIAuthConfig;
+    isRemote?: boolean;
+}
+
+interface SessionCacheEntry {
+    cookie: string;
+    expiresAt: number;
+    username: string;
+    baseUrl: string;
+}
 
 export class ComfyUIService {
-    private baseUrl: string;
+    public readonly baseUrl: string;
+    public readonly isRemote: boolean;
+    private auth?: ComfyUIAuthConfig;
     private clientId: string;
     private wsUrl: string;
+    private origin: string;
     private promptOwnership: ComfyPromptOwnershipService;
 
-    constructor(baseUrl: string) {
+    private static sessionMemoryCache = new Map<string, SessionCacheEntry>();
+
+    private static getSessionCacheFilePath(): string {
+        return path.join(getDataDirectory(), 'comfy_remote_session.json');
+    }
+
+    private static loadCachedSession(cacheKey: string): SessionCacheEntry | null {
+        if (ComfyUIService.sessionMemoryCache.has(cacheKey)) {
+            return ComfyUIService.sessionMemoryCache.get(cacheKey)!;
+        }
+        try {
+            const filePath = ComfyUIService.getSessionCacheFilePath();
+            if (fs.existsSync(filePath)) {
+                const raw = fs.readFileSync(filePath, 'utf-8');
+                const data = JSON.parse(raw);
+                if (data && data[cacheKey]) {
+                    const entry = data[cacheKey] as SessionCacheEntry;
+                    ComfyUIService.sessionMemoryCache.set(cacheKey, entry);
+                    return entry;
+                }
+            }
+        } catch {
+            // ignore
+        }
+        return null;
+    }
+
+    private static saveCachedSession(cacheKey: string, entry: SessionCacheEntry) {
+        ComfyUIService.sessionMemoryCache.set(cacheKey, entry);
+        try {
+            const filePath = ComfyUIService.getSessionCacheFilePath();
+            let data: Record<string, any> = {};
+            if (fs.existsSync(filePath)) {
+                try {
+                    data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) || {};
+                } catch {}
+            }
+            data[cacheKey] = entry;
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+        } catch {
+            // ignore
+        }
+    }
+
+    private static clearCachedSession(cacheKey: string) {
+        ComfyUIService.sessionMemoryCache.delete(cacheKey);
+        try {
+            const filePath = ComfyUIService.getSessionCacheFilePath();
+            if (fs.existsSync(filePath)) {
+                const data = JSON.parse(fs.readFileSync(filePath, 'utf-8')) || {};
+                delete data[cacheKey];
+                fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+            }
+        } catch {}
+    }
+
+    constructor(baseUrl: string, options?: ComfyUIServiceOptions) {
         this.baseUrl = baseUrl.replace(/\/$/, '');
         this.clientId = randomUUID();
         this.wsUrl = this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') + `/ws?clientId=${this.clientId}`;
         this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl);
+        try {
+            this.origin = new URL(this.baseUrl).origin;
+        } catch {
+            this.origin = this.baseUrl;
+        }
+        this.auth = options?.auth;
+        this.isRemote = options?.isRemote ?? (this.baseUrl.startsWith('https://') || Boolean(this.auth?.username));
+    }
+
+    /**
+     * Build service instance from comfyui settings object.
+     * Respects local vs remote mode switch and configures credentials automatically.
+     */
+    static fromSettings(comfySettings: any): ComfyUIService {
+        const settings = comfySettings || {};
+        const mode = settings.mode === 'remote' ? 'remote' : 'local';
+        const isRemote = mode === 'remote';
+
+        if (isRemote) {
+            const baseUrl = settings.remote_base_url || settings.base_url || process.env.COMFYUI_REMOTE_URL || '';
+            return new ComfyUIService(baseUrl, {
+                isRemote: true,
+                auth: {
+                    username: settings.remote_username || process.env.COMFYUI_REMOTE_USERNAME || '',
+                    password: settings.remote_password || process.env.COMFYUI_REMOTE_PASSWORD || ''
+                }
+            });
+        }
+
+        const baseUrl = settings.local_base_url || settings.base_url || 'http://127.0.0.1:8188';
+        return new ComfyUIService(baseUrl, {
+            isRemote: false
+        });
+    }
+
+    /**
+     * Authenticate against remote ComfyUI instance (e.g. suanli console).
+     * Uses persistent cache to avoid rate limiting (429).
+     */
+    async authenticate(force = false): Promise<string | null> {
+        if (!this.auth?.username || !this.auth?.password) {
+            return null;
+        }
+
+        const cacheKey = `${this.baseUrl}::${this.auth.username}`;
+
+        if (!force) {
+            const cached = ComfyUIService.loadCachedSession(cacheKey);
+            if (cached && cached.expiresAt > Date.now()) {
+                return cached.cookie;
+            }
+        }
+
+        logger.info(`Authenticating with remote ComfyUI at ${this.baseUrl} (user: ${this.auth.username})...`);
+
+        const loginUrl = `${this.baseUrl}/api/v1/auth/login`;
+
+        const res = await fetch(loginUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Origin': this.origin,
+                'Referer': `${this.origin}/`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            body: JSON.stringify({
+                username: this.auth.username,
+                password: this.auth.password,
+                admin_only: false
+            })
+        });
+
+        if (res.status === 429) {
+            throw new Error('远程 ComfyUI 登录请求过于频繁 (429 Too Many Requests)，请稍后重试');
+        }
+
+        if (res.status === 401 || res.status === 403) {
+            throw new Error('远程 ComfyUI 用户名或密码错误');
+        }
+
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(`远程 ComfyUI 登录失败 (${res.status}): ${errText || res.statusText}`);
+        }
+
+        const getSetCookie = (res.headers as any).getSetCookie?.() || [];
+        let cookieStr = getSetCookie[0] || res.headers.get('set-cookie') || '';
+        if (!cookieStr) {
+            throw new Error('远程 ComfyUI 登录未返回 Session Cookie');
+        }
+        const sessionCookie = cookieStr.split(';')[0].trim();
+
+        // Expire in 13 days (server max-age is 14 days)
+        const expiresAt = Date.now() + 13 * 24 * 3600 * 1000;
+        ComfyUIService.saveCachedSession(cacheKey, {
+            cookie: sessionCookie,
+            expiresAt,
+            username: this.auth.username,
+            baseUrl: this.baseUrl
+        });
+
+        logger.info(`Successfully authenticated with remote ComfyUI (${this.auth.username})`);
+        return sessionCookie;
     }
 
     private async fetchWithTimeout(
@@ -38,17 +221,82 @@ export class ComfyUIService {
         }
     }
 
+    /**
+     * Authenticated fetch helper for ComfyUI HTTP endpoints.
+     * Automatically handles cookies, origin headers, and session invalidation/retry.
+     */
+    async authenticatedFetch(endpointOrUrl: string, init?: RequestInit, timeoutMs: number = 10_000): Promise<Response> {
+        const url = endpointOrUrl.startsWith('http://') || endpointOrUrl.startsWith('https://')
+            ? endpointOrUrl
+            : `${this.baseUrl}${endpointOrUrl.startsWith('/') ? '' : '/'}${endpointOrUrl}`;
+
+        const doFetch = async (cookie?: string | null) => {
+            const headers = new Headers(init?.headers);
+            if (this.isRemote) {
+                headers.set('Origin', this.origin);
+                headers.set('Referer', `${this.origin}/`);
+            }
+            if (cookie) {
+                headers.set('Cookie', cookie);
+            }
+            return this.fetchWithTimeout(url, { ...init, headers }, timeoutMs);
+        };
+
+        let cookie: string | null = null;
+        if (this.auth?.username && this.auth?.password) {
+            try {
+                cookie = await this.authenticate(false);
+            } catch (authErr) {
+                logger.warn(`Remote ComfyUI auth failed before fetch: ${authErr}`);
+            }
+        }
+
+        let res = await doFetch(cookie);
+
+        if (
+            this.auth?.username &&
+            this.auth?.password &&
+            (res.status === 401 || (res.status === 302 && (res.headers.get('location') || '').includes('/auth')))
+        ) {
+            logger.warn(`Remote ComfyUI session expired or invalid (HTTP ${res.status}), re-authenticating...`);
+            const cacheKey = `${this.baseUrl}::${this.auth.username}`;
+            ComfyUIService.clearCachedSession(cacheKey);
+            cookie = await this.authenticate(true);
+            res = await doFetch(cookie);
+        }
+
+        return res;
+    }
+
     async checkStatus(): Promise<boolean> {
         try {
-            const response = await this.fetchWithTimeout(`${this.baseUrl}/system_stats`, {}, 2000);
+            const response = await this.authenticatedFetch('/system_stats', {}, 3000);
             return response.ok;
-        } catch (error) {
+        } catch {
             return false;
+        }
+    }
+
+    async fetchSystemStats(): Promise<any> {
+        try {
+            const res = await this.authenticatedFetch('/system_stats', {}, 8000);
+            if (!res.ok) {
+                throw new Error(`ComfyUI /system_stats failed with status ${res.status}`);
+            }
+            return await res.json();
+        } catch (err) {
+            throw err;
         }
     }
 
     async ensureRunning(installPath?: string, timeoutMs: number = 45_000): Promise<boolean> {
         if (await this.checkStatus()) return true;
+
+        if (this.isRemote) {
+            logger.error(`Remote ComfyUI at ${this.baseUrl} is unreachable or not responding`);
+            return false;
+        }
+
         if (!installPath) return false;
 
         const mainFile = path.join(installPath, 'main.py');
@@ -113,7 +361,35 @@ export class ComfyUIService {
 
         let ws: WebSocket | null = null;
         try {
-            ws = new WebSocket(this.wsUrl);
+            const isHttps = this.baseUrl.startsWith('https');
+            class WsHeaderAgent extends (isHttps ? https.Agent : http.Agent) {
+                addRequest(req: any, opt: any) {
+                    req.setHeader('Upgrade', 'WebSocket');
+                    return (super.addRequest as any)(req, opt);
+                }
+            }
+
+            let cookie: string | null = null;
+            if (this.auth?.username && this.auth?.password) {
+                cookie = await this.authenticate(false);
+            }
+
+            const wsHeaders: Record<string, string> = {};
+            if (cookie) {
+                wsHeaders['Cookie'] = cookie;
+            }
+            if (this.isRemote) {
+                wsHeaders['Origin'] = this.origin;
+            }
+
+            const wsOptions: any = {
+                headers: wsHeaders
+            };
+            if (this.isRemote) {
+                wsOptions.agent = new WsHeaderAgent();
+            }
+
+            ws = new WebSocket(this.wsUrl, wsOptions);
 
             await new Promise<void>((resolve, reject) => {
                 ws!.on('open', resolve);
@@ -152,7 +428,7 @@ export class ComfyUIService {
                 };
             }
 
-            const response = await this.fetchWithTimeout(`${this.baseUrl}/prompt`, {
+            const response = await this.authenticatedFetch('/prompt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompt: workflow, client_id: this.clientId })
@@ -227,6 +503,7 @@ export class ComfyUIService {
             }
 
             const generatedImages: any[] = [];
+            const pendingDownloads: Promise<any>[] = [];
             const timeoutMs = options?.timeoutMs ?? 15 * 60 * 1000;
 
             return new Promise((resolve) => {
@@ -235,18 +512,19 @@ export class ComfyUIService {
                 let isFinished = false;
 
                 const finish = async (
-                    customResult?: { status: string; message: string },
-                    promptStopped: boolean = true
+                    customResult?: { status: string; message?: string },
+                    confirmedStopped = false
                 ) => {
                     if (isFinished) return;
                     isFinished = true;
                     if (checkHistoryInterval) clearInterval(checkHistoryInterval);
                     if (deadlineTimer) clearTimeout(deadlineTimer);
 
-                    if (promptId) {
-                        if (promptStopped) {
-                            this.promptOwnership.confirmPromptStopped(promptId);
-                        } else {
+                    // If finishing with failure/timeout before natural completion, confirm the
+                    // prompt has stopped executing before leaving this method.
+                    if (promptId && customResult && customResult.status === 'error' && !confirmedStopped) {
+                        const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 3000);
+                        if (!stopped) {
                             this.promptOwnership.watchPromptUntilStopped(promptId, 'Image');
                         }
                     }
@@ -263,13 +541,13 @@ export class ComfyUIService {
                         return;
                     }
 
+                    if (pendingDownloads.length > 0) {
+                        await Promise.allSettled(pendingDownloads);
+                    }
+
                     if (generatedImages.length === 0 && promptId) {
                         try {
-                            const histRes = await this.fetchWithTimeout(
-                                `${this.baseUrl}/history/${promptId}`,
-                                {},
-                                5000
-                            );
+                            const histRes = await this.authenticatedFetch(`/history/${promptId}`, {}, 5000);
                             if (histRes.ok) {
                                 const historyData = await histRes.json() as Record<string, any>;
                                 const promptOutput = historyData[promptId]?.outputs || {};
@@ -345,14 +623,17 @@ export class ComfyUIService {
                             if (output.images) {
                                 for (const imgInfo of output.images) {
                                     logger.info(`Image generated: ${imgInfo.filename}`);
-                                    const imgData = await this.downloadImage(
-                                        imgInfo.filename,
-                                        imgInfo.subfolder || '',
-                                        imgInfo.type || 'output'
-                                    );
-                                    if (imgData) {
-                                        generatedImages.push({ filename: imgInfo.filename, data: imgData });
-                                    }
+                                    const dlPromise = (async () => {
+                                        const imgData = await this.downloadImage(
+                                            imgInfo.filename,
+                                            imgInfo.subfolder || '',
+                                            imgInfo.type || 'output'
+                                        );
+                                        if (imgData) {
+                                            generatedImages.push({ filename: imgInfo.filename, data: imgData });
+                                        }
+                                    })();
+                                    pendingDownloads.push(dlPromise);
                                 }
                             }
                         } else if (msgType === 'progress') {
@@ -398,11 +679,7 @@ export class ComfyUIService {
                 // Fallback check history in case WS missed completion.
                 checkHistoryInterval = setInterval(async () => {
                     try {
-                        const hRes = await this.fetchWithTimeout(
-                            `${this.baseUrl}/history/${promptId}`,
-                            {},
-                            5000
-                        );
+                        const hRes = await this.authenticatedFetch(`/history/${promptId}`, {}, 5000);
                         if (hRes.ok) {
                             const hData = await hRes.json() as Record<string, any>;
                             if (hData[promptId!]) {
@@ -434,10 +711,72 @@ export class ComfyUIService {
         return this.promptOwnership.cancelPrompt(promptId, timeoutMs, 'Image');
     }
 
+    /**
+     * Upload an image to ComfyUI (/upload/image) so workflows can reference it via LoadImage node.
+     * Returns the remote filename assigned by ComfyUI.
+     */
+    async uploadImage(buffer: Buffer, filename: string): Promise<string> {
+        const formData = new FormData();
+        const blob = new Blob([buffer]);
+        formData.append('image', blob, filename);
+        formData.append('overwrite', 'true');
+        formData.append('type', 'input');
+
+        const res = await this.authenticatedFetch('/upload/image', {
+            method: 'POST',
+            body: formData
+        }, 60_000);
+
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            throw new Error(`Failed to upload reference image to ComfyUI (${res.status}): ${text}`);
+        }
+
+        const data = await res.json() as { name: string; subfolder?: string; type?: string };
+        logger.info(`Uploaded reference image ${filename} to ComfyUI as ${data.name}`);
+        return data.name || filename;
+    }
+
+    /**
+     * If remote ComfyUI, scan workflow for LoadImage nodes and upload local references to remote server.
+     */
+    async uploadWorkflowReferences(workflow: any, staticDir: string): Promise<any> {
+        if (!this.isRemote || !workflow || typeof workflow !== 'object') {
+            return workflow;
+        }
+
+        const cloned = JSON.parse(JSON.stringify(workflow));
+        const uploadedCache = new Map<string, string>();
+
+        for (const node of Object.values(cloned) as any[]) {
+            if (node?.class_type === 'LoadImage' && node.inputs?.image) {
+                const originalFilename = String(node.inputs.image);
+                if (uploadedCache.has(originalFilename)) {
+                    node.inputs.image = uploadedCache.get(originalFilename);
+                    continue;
+                }
+
+                const localFilePath = path.join(staticDir, path.basename(originalFilename));
+                if (fs.existsSync(localFilePath)) {
+                    try {
+                        const buf = fs.readFileSync(localFilePath);
+                        const uploadedName = await this.uploadImage(buf, path.basename(originalFilename));
+                        uploadedCache.set(originalFilename, uploadedName);
+                        node.inputs.image = uploadedName;
+                    } catch (err) {
+                        logger.error(`Failed to upload reference image ${originalFilename}: ${err}`);
+                    }
+                }
+            }
+        }
+
+        return cloned;
+    }
+
     private async downloadImage(filename: string, subfolder: string, type: string): Promise<Buffer | null> {
-        const url = `${this.baseUrl}/view?filename=${filename}&subfolder=${subfolder}&type=${type}`;
+        const url = `/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
         try {
-            const res = await this.fetchWithTimeout(url, {}, 30_000);
+            const res = await this.authenticatedFetch(url, {}, 30_000);
             if (res.ok) {
                 const arrayBuffer = await res.arrayBuffer();
                 return Buffer.from(arrayBuffer);

@@ -1094,8 +1094,7 @@ export class GenerationService {
                 // Plan 1: auto VRAM handoff — unload Ollama before Pony/SDXL claims GPU
                 await runVramHandoffForImageGen(progressHandler);
 
-                const baseUrl = comfySettings.base_url || "http://127.0.0.1:8188";
-                const comfyService = new ComfyUIService(baseUrl);
+                const comfyService = ComfyUIService.fromSettings(comfySettings);
                 const isRunning = await comfyService.ensureRunning(
                     comfySettings.install_path
                 );
@@ -1103,11 +1102,13 @@ export class GenerationService {
                     throw new Error('Failed to start or connect to ComfyUI');
                 }
 
-                copyReferenceImageToComfy(
-                    effectiveWorkflowData,
-                    staticDir,
-                    comfySettings.install_path
-                );
+                if (!comfyService.isRemote) {
+                    copyReferenceImageToComfy(
+                        effectiveWorkflowData,
+                        staticDir,
+                        comfySettings.install_path
+                    );
+                }
 
                 // Live Tier B probe (object_info + models) before compile — Pony/SDXL only
                 const requestFamily = normalizeImageModelFamily(
@@ -1133,7 +1134,11 @@ export class GenerationService {
                     tierBCapability
                 );
 
-                result = await comfyService.generateImage(finalWorkflow, progressHandler, {
+                const executableWorkflow = comfyService.isRemote
+                    ? await comfyService.uploadWorkflowReferences(finalWorkflow, staticDir)
+                    : finalWorkflow;
+
+                result = await comfyService.generateImage(executableWorkflow, progressHandler, {
                     onPromptQueued: async (promptId) => {
                         await AssetTaskStore.setComfyPromptId(taskId, promptId);
                     }

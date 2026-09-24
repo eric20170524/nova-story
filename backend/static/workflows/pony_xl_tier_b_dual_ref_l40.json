@@ -1,0 +1,138 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 1,
+      "steps": 28,
+      "cfg": 7,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": ["14", 0],
+      "positive": ["17", 0],
+      "negative": ["17", 1],
+      "latent_image": ["5", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "ponyDiffusionV6XL_v6StartWithThisOne.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Load Checkpoint (Pony V6 XL)" }
+  },
+  "5": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "6": {
+    "inputs": {
+      "text": "score_9, score_8_up, score_7_up, source_anime, masterpiece, cinematic lighting",
+      "clip": ["10", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Positive)" }
+  },
+  "7": {
+    "inputs": {
+      "text": "score_6, score_5, score_4, watermark, text, ugly, bad anatomy, bad hands, lowres",
+      "clip": ["10", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Negative)" }
+  },
+  "8": {
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["4", 2]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "NovaStory_TierB_DualRef_L40",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" }
+  },
+  "10": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": ["4", 1]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": { "title": "CLIP Set Last Layer (Skip 2)" }
+  },
+  "11": {
+    "inputs": {
+      "image": "character_ref.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Character Reference Image" }
+  },
+  "12": {
+    "inputs": {
+      "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors"
+    },
+    "class_type": "IPAdapterModelLoader",
+    "_meta": { "title": "Load IP-Adapter Model" }
+  },
+  "13": {
+    "inputs": {
+      "clip_name": "clip_vision_g.safetensors"
+    },
+    "class_type": "CLIPVisionLoader",
+    "_meta": { "title": "Load CLIP Vision" }
+  },
+  "14": {
+    "inputs": {
+      "weight": 0.75,
+      "weight_type": "standard",
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 1,
+      "embeds_scaling": "V only",
+      "model": ["4", 0],
+      "ipadapter": ["12", 0],
+      "image": ["11", 0],
+      "clip_vision": ["13", 0]
+    },
+    "class_type": "IPAdapterAdvanced",
+    "_meta": { "title": "Apply IP-Adapter (Character Lock)" }
+  },
+  "15": {
+    "inputs": {
+      "image": "layout_ref.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Composition Reference Image" }
+  },
+  "16": {
+    "inputs": {
+      "control_net_name": "OpenPoseXL2.safetensors"
+    },
+    "class_type": "ControlNetLoader",
+    "_meta": { "title": "Load ControlNet (OpenPose XL)" }
+  },
+  "17": {
+    "inputs": {
+      "strength": 0.55,
+      "start_percent": 0,
+      "end_percent": 0.85,
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "control_net": ["16", 0],
+      "image": ["15", 0]
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": { "title": "Apply ControlNet (Composition / Pose)" }
+  }
+}

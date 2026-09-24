@@ -6,6 +6,7 @@ import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 import { VramService } from '../services/vram_service';
+import { ComfyUIService } from '../services/ai/comfyui_service';
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async () => {
@@ -110,6 +111,70 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       request.log.warn({ err: error, provider: providerType }, 'LLM connection verification failed');
       return reply.status(502).send({
         detail: `LLM verification failed: ${error?.message || String(error)}`
+      });
+    }
+  });
+
+  app.post('/verify-comfy', async (request, reply) => {
+    const config = (request.body || {}) as any;
+    const stored = SettingsManager.loadSettings();
+    const storedComfy = stored.comfyui || {};
+
+    const mode = config.mode || storedComfy.mode || 'local';
+    const isRemote = mode === 'remote';
+
+    const baseUrl = isRemote
+      ? (config.remote_base_url || storedComfy.remote_base_url || process.env.COMFYUI_REMOTE_URL || '')
+      : (config.local_base_url || config.base_url || storedComfy.local_base_url || 'http://127.0.0.1:8188');
+
+    const username = config.remote_username || storedComfy.remote_username || process.env.COMFYUI_REMOTE_USERNAME || '';
+    const rawPass = config.remote_password;
+    const password = rawPass && String(rawPass).trim() && !/^[*•]+$/.test(rawPass)
+      ? rawPass
+      : (storedComfy.remote_password || process.env.COMFYUI_REMOTE_PASSWORD || '');
+
+    const comfyConfig = {
+      mode,
+      base_url: baseUrl,
+      remote_base_url: baseUrl,
+      remote_username: username,
+      remote_password: password,
+      local_base_url: baseUrl
+    };
+
+    try {
+      const service = ComfyUIService.fromSettings(comfyConfig);
+      if (isRemote && comfyConfig.remote_username && comfyConfig.remote_password) {
+        await service.authenticate(false);
+      }
+
+      const isOnline = await service.checkStatus();
+      if (!isOnline) {
+        throw new Error(`无法连接至 ComfyUI 服务 (${baseUrl})，请检查服务是否运行或网络连接。`);
+      }
+
+      const stats = await service.fetchSystemStats();
+      const firstDevice = Array.isArray(stats?.devices) ? stats.devices[0] : null;
+      const deviceName = firstDevice?.name || 'GPU / Device';
+      const vramTotalGiB = firstDevice?.vram_total ? (firstDevice.vram_total / (1024 ** 3)).toFixed(1) + 'GB' : null;
+
+      return {
+        status: 'success',
+        message: isRemote
+          ? `远端 ComfyUI (算力机) 连接成功！检测到硬件: ${deviceName}${vramTotalGiB ? ` (${vramTotalGiB} 显存)` : ''}`
+          : `本地 ComfyUI 连接成功！检测到硬件: ${deviceName}${vramTotalGiB ? ` (${vramTotalGiB} 显存)` : ''}`,
+        mode,
+        base_url: baseUrl,
+        device_name: deviceName,
+        vram_total: vramTotalGiB,
+        system: stats.system,
+        devices: stats.devices
+      };
+    } catch (error: any) {
+      request.log.warn({ err: error, mode }, 'ComfyUI verification failed');
+      return reply.status(502).send({
+        status: 'error',
+        detail: error?.message || String(error)
       });
     }
   });

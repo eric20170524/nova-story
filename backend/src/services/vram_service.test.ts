@@ -62,6 +62,33 @@ test('buildVramStatus reports good health with nvidia-smi snapshot', () => {
   assert.match(status.summary_zh, /显存良好/);
 });
 
+test('CPU-only ComfyUI memory is not reported as GPU VRAM', () => {
+  const status = buildVramStatus({
+    gpu: null,
+    ollama: {
+      online: false,
+      base_url: 'http://127.0.0.1:11434',
+      used_bytes: 0,
+      models: [],
+    },
+    comfyui: {
+      online: true,
+      base_url: 'https://comfy.example.com',
+      compute_mode: 'cpu',
+      used_bytes: 26 * 1024 ** 3,
+      total_bytes: 256 * 1024 ** 3,
+      torch_used_bytes: 0,
+    },
+  });
+
+  assert.equal(status.level, 'unknown');
+  assert.equal(status.total_bytes, null);
+  assert.equal(status.used_bytes, null);
+  assert.equal(status.source, 'unavailable');
+  assert.match(status.summary_zh, /CPU 模式/);
+  assert.equal(status.processes.some((process) => process.name === 'ComfyUI'), false);
+});
+
 test('buildVramStatus marks dual-resident high load as warning/critical with tip breakdown', () => {
   const ollamaBytes = Math.round(5.1 * 1024 ** 3);
   const comfyBytes = Math.round(2.5 * 1024 ** 3);

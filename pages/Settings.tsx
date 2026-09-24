@@ -22,7 +22,13 @@ export const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<any>({ 
     llm_model: 'gemini-3-flash-preview',
     comfyui: {
+      mode: 'local',
       base_url: 'http://127.0.0.1:8188',
+      local_base_url: 'http://127.0.0.1:8188',
+      remote_base_url: '',
+      remote_username: '',
+      remote_password: '',
+      has_remote_password: false,
       enabled: false,
       selected_workflow_file: null,
       default_workflow: null
@@ -39,6 +45,8 @@ export const SettingsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [verifyingLLM, setVerifyingLLM] = useState(false);
+  const [verifyingComfy, setVerifyingComfy] = useState(false);
+  const [comfyVerifyResult, setComfyVerifyResult] = useState<{ status: 'success' | 'error'; message: string; details?: any } | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [advancedEnabled, setAdvancedEnabled] = useState(() => isAdvancedStylesEnabled());
   const secretClicksRef = useRef({ count: 0, lastAt: 0 });
@@ -92,12 +100,21 @@ export const SettingsPage: React.FC = () => {
         api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] }))
       ]);
 
-      const comfy = settingsData.comfyui || {
-        base_url: 'http://127.0.0.1:8188',
-        enabled: false,
-        selected_workflow_file: null,
-        pony_lora: 'Pony_DetailV2.0.safetensors',
-        pony_lora_strength: 0.65
+      const rawComfy = settingsData.comfyui || {};
+      const comfy = {
+        mode: rawComfy.mode || 'local',
+        base_url: rawComfy.base_url || (rawComfy.mode === 'remote' ? (rawComfy.remote_base_url || '') : 'http://127.0.0.1:8188'),
+        local_base_url: rawComfy.local_base_url || 'http://127.0.0.1:8188',
+        remote_base_url: rawComfy.remote_base_url || '',
+        remote_username: rawComfy.remote_username || '',
+        remote_password: '',
+        has_remote_password: rawComfy.has_remote_password ?? false,
+        enabled: rawComfy.enabled ?? false,
+        selected_workflow_file: rawComfy.selected_workflow_file ?? null,
+        pony_lora: rawComfy.pony_lora || 'Pony_DetailV2.0.safetensors',
+        pony_lora_strength: rawComfy.pony_lora_strength ?? 0.65,
+        install_path: rawComfy.install_path || 'D:\\ComfyUI',
+        tier_b: rawComfy.tier_b
       };
 
       const advanced = settingsData.advanced || {
@@ -137,12 +154,22 @@ export const SettingsPage: React.FC = () => {
           delete payload.llm.api_key;
         }
       }
+      if (payload.comfyui) {
+        const pass = String(payload.comfyui.remote_password || '').trim();
+        if (!pass && payload.comfyui.has_remote_password) {
+          delete payload.comfyui.remote_password;
+        }
+      }
       const saved = await api.updateSettings(payload);
       if (saved && typeof saved === 'object') {
         setSettings((prev: any) => ({
           ...prev,
           ...saved,
-          comfyui: saved.comfyui || prev.comfyui,
+          comfyui: {
+            ...(prev.comfyui || {}),
+            ...(saved.comfyui || {}),
+            remote_password: ''
+          },
           advanced: saved.advanced || prev.advanced,
           llm: {
             ...(prev.llm || {}),
@@ -179,14 +206,55 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleVerifyComfy = async () => {
+    setVerifyingComfy(true);
+    setComfyVerifyResult(null);
+    setMessage(null);
+
+    try {
+      const payload = {
+        mode: settings.comfyui?.mode || 'local',
+        base_url: settings.comfyui?.base_url,
+        local_base_url: settings.comfyui?.local_base_url,
+        remote_base_url: settings.comfyui?.remote_base_url,
+        remote_username: settings.comfyui?.remote_username,
+        remote_password: settings.comfyui?.remote_password
+      };
+      const response = await api.verifyComfyConnection(payload);
+      const okMessage = typeof response?.message === 'string'
+        ? response.message
+        : 'ComfyUI 连接验证成功！';
+      setComfyVerifyResult({ status: 'success', message: okMessage, details: response });
+      setMessage({ type: 'success', text: okMessage });
+    } catch (err: any) {
+      const errMsg = err.message || '未知错误';
+      setComfyVerifyResult({ status: 'error', message: errMsg });
+      setMessage({ type: 'error', text: `ComfyUI 连接验证失败: ${errMsg}` });
+    } finally {
+      setVerifyingComfy(false);
+    }
+  };
+
   const handleComfyChange = (key: string, value: any) => {
-    setSettings((prev: any) => ({
-      ...prev,
-      comfyui: {
-        ...(prev.comfyui || {}),
-        [key]: value
+    setSettings((prev: any) => {
+      const currentComfy = prev.comfyui || {};
+      const updatedComfy = { ...currentComfy, [key]: value };
+      if (key === 'mode') {
+        if (value === 'remote') {
+          updatedComfy.base_url = updatedComfy.remote_base_url || '';
+        } else {
+          updatedComfy.base_url = updatedComfy.local_base_url || 'http://127.0.0.1:8188';
+        }
+      } else if (key === 'local_base_url' && (updatedComfy.mode || 'local') === 'local') {
+        updatedComfy.base_url = value;
+      } else if (key === 'remote_base_url' && updatedComfy.mode === 'remote') {
+        updatedComfy.base_url = value;
       }
-    }));
+      return {
+        ...prev,
+        comfyui: updatedComfy
+      };
+    });
   };
 
   const handleLLMChange = (key: string, value: any) => {
@@ -543,65 +611,209 @@ export const SettingsPage: React.FC = () => {
               </div>
 
               {settings.comfyui?.enabled && (
-                <div className="space-y-4">
+                <div className="space-y-5">
+                  {/* ComfyUI Mode Switcher */}
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      {t('comfyui_url')}
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      {t('comfyui_mode')}
                     </label>
-                    <input
-                      type="text"
-                      value={settings.comfyui?.base_url || 'http://127.0.0.1:8188'}
-                      onChange={(e) => handleComfyChange('base_url', e.target.value)}
-                      placeholder="http://127.0.0.1:8188"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      ComfyUI 安装根目录 (用来检测本地与加载 LoRA 路径)
-                    </label>
-                    <input
-                      type="text"
-                      value={settings.comfyui?.install_path || 'D:\\ComfyUI'}
-                      onChange={(e) => handleComfyChange('install_path', e.target.value)}
-                      placeholder="D:\ComfyUI"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                    />
-                  </div>
-
-                  {/* Detected LoRAs Section */}
-                  <div className="pt-2 border-t border-slate-800/60 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-medium text-slate-300">
-                        {t('detected_loras_title')}
-                      </label>
-                      <span className={`text-xs px-2 py-0.5 rounded ${loraDirectoryInfo.exists ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' : 'bg-amber-950/50 text-amber-400 border border-amber-800/40'}`}>
-                        {loraDirectoryInfo.exists ? `找到 ${availableLoras.length} 个 LoRA 模型` : '路径未发现或为空'}
-                      </span>
-                    </div>
-
-                    {/* Default Pony XL LoRA Dropdown */}
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        {t('comfyui_pony_lora_label')}
-                      </label>
-                      <select
-                        value={settings.comfyui?.pony_lora || ''}
-                        onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleComfyChange('mode', 'local')}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          (settings.comfyui?.mode || 'local') === 'local'
+                            ? 'bg-emerald-600/10 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30'
+                            : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
+                        }`}
                       >
-                        <option value="">(自动发现 · Detail 细节)</option>
-                        {availableLoras.map((lora) => (
-                          <option key={lora} value={lora}>{lora}</option>
-                        ))}
-                        {settings.comfyui?.pony_lora
-                          && !availableLoras.includes(settings.comfyui.pony_lora) && (
-                          <option value={settings.comfyui.pony_lora}>
-                            {settings.comfyui.pony_lora} (自定义配置)
-                          </option>
+                        <div className="flex items-center gap-2 font-semibold text-sm mb-0.5">
+                          <Server className="w-4 h-4 text-emerald-400" />
+                          <span>{t('comfyui_mode_local')}</span>
+                        </div>
+                        <div className="text-xs opacity-75">本地机器运行，默认地址 http://127.0.0.1:8188</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleComfyChange('mode', 'remote')}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          settings.comfyui?.mode === 'remote'
+                            ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
+                            : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-semibold text-sm mb-0.5">
+                          <Cloud className="w-4 h-4 text-indigo-400" />
+                          <span>{t('comfyui_mode_remote')}</span>
+                        </div>
+                        <div className="text-xs opacity-75">远端算力机运行，自带 GPU，不占用本地显存</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Mode-specific Fields */}
+                  {(settings.comfyui?.mode || 'local') === 'local' ? (
+                    <div className="space-y-4 pt-1">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          {t('comfyui_url')}
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.comfyui?.local_base_url || settings.comfyui?.base_url || 'http://127.0.0.1:8188'}
+                          onChange={(e) => {
+                            handleComfyChange('local_base_url', e.target.value);
+                            handleComfyChange('base_url', e.target.value);
+                          }}
+                          placeholder="http://127.0.0.1:8188"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          ComfyUI 本地安装根目录 (用于自动加载 LoRA 与节点路径)
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.comfyui?.install_path || 'D:\\ComfyUI'}
+                          onChange={(e) => handleComfyChange('install_path', e.target.value)}
+                          placeholder="D:\ComfyUI"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                        />
+                      </div>
+
+                      {/* Detected LoRAs Section */}
+                      <div className="pt-2 border-t border-slate-800/60 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-medium text-slate-300">
+                            {t('detected_loras_title')}
+                          </label>
+                          <span className={`text-xs px-2 py-0.5 rounded ${loraDirectoryInfo.exists ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' : 'bg-amber-950/50 text-amber-400 border border-amber-800/40'}`}>
+                            {loraDirectoryInfo.exists ? `找到 ${availableLoras.length} 个 LoRA 模型` : '路径未发现或为空'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1">
+                            {t('comfyui_pony_lora_label')}
+                          </label>
+                          <select
+                            value={settings.comfyui?.pony_lora || ''}
+                            onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                          >
+                            <option value="">(自动发现 · Detail 细节)</option>
+                            {availableLoras.map((lora) => (
+                              <option key={lora} value={lora}>{lora}</option>
+                            ))}
+                            {settings.comfyui?.pony_lora
+                              && !availableLoras.includes(settings.comfyui.pony_lora) && (
+                              <option value={settings.comfyui.pony_lora}>
+                                {settings.comfyui.pony_lora} (自定义配置)
+                              </option>
+                            )}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 pt-1">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1">
+                          {t('comfyui_remote_url')}
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.comfyui?.remote_base_url || ''}
+                          onChange={(e) => {
+                            handleComfyChange('remote_base_url', e.target.value);
+                            handleComfyChange('base_url', e.target.value);
+                          }}
+                          placeholder="如：https://your-remote-comfyui.com"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1">
+                            {t('comfyui_remote_username')}
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.comfyui?.remote_username || ''}
+                            onChange={(e) => handleComfyChange('remote_username', e.target.value)}
+                            placeholder="如：admin"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1">
+                            {t('comfyui_remote_password')}
+                          </label>
+                          <input
+                            type="password"
+                            value={settings.comfyui?.remote_password || ''}
+                            onChange={(e) => handleComfyChange('remote_password', e.target.value)}
+                            placeholder={
+                              settings.comfyui?.has_remote_password
+                                ? '已保存密码（留空则不修改）'
+                                : '输入密码'
+                            }
+                            autoComplete="off"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                          />
+                          {settings.comfyui?.has_remote_password && !settings.comfyui?.remote_password && (
+                            <p className="text-[11px] text-emerald-500/80 mt-1">服务器已安全保存密码，不会在接口中回传明文。</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl text-xs text-indigo-300/90 leading-relaxed">
+                        💡 <strong>远端算力机说明：</strong>生图任务将通过 WebSocket 直连推送到远端 ComfyUI 执行。角色设定参考图将自动上传至远端，生成完成后的图像将回传下载并保存到本地项目目录。
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Verify Connection Button & Result */}
+                  <div className="pt-2 border-t border-slate-800/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={handleVerifyComfy}
+                        disabled={verifyingComfy}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-xl border border-slate-700/80 transition-colors flex items-center gap-2"
+                      >
+                        {verifyingComfy ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                            <span>{t('comfyui_verifying')}</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>{t('comfyui_verify_btn')}</span>
+                          </>
                         )}
-                      </select>
+                      </button>
+
+                      {comfyVerifyResult && (
+                        <div className={`text-xs px-3 py-1.5 rounded-lg border flex items-center gap-1.5 ${
+                          comfyVerifyResult.status === 'success'
+                            ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                            : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                        }`}>
+                          {comfyVerifyResult.status === 'success' ? (
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                          ) : (
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                          )}
+                          <span>{comfyVerifyResult.message}</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Default RedCraft Krea2 LoRA Dropdown */}

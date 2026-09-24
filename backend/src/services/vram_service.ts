@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
 import { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from './llm';
+import { ComfyUIService } from './ai/comfyui_service';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +31,7 @@ export type VramStatus = {
   comfyui: {
     online: boolean;
     base_url: string;
+    compute_mode?: 'gpu' | 'cpu' | 'unknown';
     used_bytes: number | null;
     total_bytes: number | null;
     torch_used_bytes: number | null;
@@ -232,22 +234,27 @@ async function queryOllama(baseUrl: string): Promise<VramStatus['ollama']> {
   return result;
 }
 
-async function queryComfyUi(baseUrl: string): Promise<VramStatus['comfyui']> {
+async function queryComfyUi(target: string | ComfyUIService): Promise<VramStatus['comfyui']> {
+  const service = typeof target === 'string' ? new ComfyUIService(target) : target;
   const result: VramStatus['comfyui'] = {
     online: false,
-    base_url: baseUrl,
+    base_url: service.baseUrl,
+    compute_mode: 'unknown',
     used_bytes: null,
     total_bytes: null,
     torch_used_bytes: null,
   };
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(`${baseUrl}/system_stats`, { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await service.authenticatedFetch('/system_stats', { signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return result;
     const data = (await res.json()) as {
+      system?: { argv?: string[] };
       devices?: Array<{
+        name?: string;
+        type?: string;
         vram_total?: number;
         vram_free?: number;
         torch_vram_total?: number;
@@ -256,6 +263,11 @@ async function queryComfyUi(baseUrl: string): Promise<VramStatus['comfyui']> {
     };
     result.online = true;
     const device = Array.isArray(data.devices) ? data.devices[0] : undefined;
+    const cpuMode =
+      String(device?.type || device?.name || '').toLowerCase() === 'cpu'
+      || data.system?.argv?.includes('--cpu') === true;
+    result.compute_mode = cpuMode ? 'cpu' : device ? 'gpu' : 'unknown';
+    if (cpuMode) return result;
     if (device) {
       const total = Number(device.vram_total || 0);
       const free = Number(device.vram_free || 0);
@@ -280,6 +292,7 @@ export function buildVramStatus(parts: {
   ollama: VramStatus['ollama'];
   comfyui: VramStatus['comfyui'];
 }): VramStatus {
+  const comfyCpuOnly = parts.comfyui.online && parts.comfyui.compute_mode === 'cpu';
   const processes: VramProcessInfo[] = [];
   if (parts.ollama.used_bytes > 0) {
     const modelNames = parts.ollama.models.map((m) => m.name).join(', ') || 'Ollama';
@@ -295,7 +308,7 @@ export function buildVramStatus(parts: {
       ? parts.comfyui.used_bytes
       : null);
   // Prefer torch reservation as "ComfyUI occupied" when available; else device used if Comfy online alone.
-  if (parts.comfyui.online) {
+  if (parts.comfyui.online && !comfyCpuOnly) {
     let comfyBytes = parts.comfyui.torch_used_bytes;
     if (comfyBytes == null || comfyBytes <= 0) {
       // Estimate residual after Ollama when nvidia-smi/device totals available later
@@ -325,7 +338,7 @@ export function buildVramStatus(parts: {
 
     // If ComfyUI torch numbers missing, refine process list using residual GPU after Ollama
     if (
-      parts.comfyui.online &&
+      parts.comfyui.online && !comfyCpuOnly &&
       !processes.some((p) => p.name === 'ComfyUI') &&
       used > parts.ollama.used_bytes + 300 * 1024 * 1024
     ) {
@@ -334,7 +347,7 @@ export function buildVramStatus(parts: {
         processes.push({ name: 'ComfyUI', bytes: residual, detail: 'estimated from GPU residual' });
       }
     }
-  } else if (parts.comfyui.total_bytes && parts.comfyui.used_bytes != null) {
+  } else if (!comfyCpuOnly && parts.comfyui.total_bytes && parts.comfyui.used_bytes != null) {
     total = parts.comfyui.total_bytes;
     used = parts.comfyui.used_bytes;
     free = Math.max(0, total - used);
@@ -357,9 +370,15 @@ export function buildVramStatus(parts: {
     level,
     ollamaOnline: parts.ollama.online,
     ollamaModels: parts.ollama.models.length,
-    comfyOnline: parts.comfyui.online,
+    comfyOnline: parts.comfyui.online && !comfyCpuOnly,
     comfyUsed: comfyUsed,
   });
+  if (comfyCpuOnly) {
+    texts.summary = 'ComfyUI is running in CPU mode';
+    texts.summary_zh = 'ComfyUI 正在使用 CPU 模式';
+    texts.tip = 'Start remote ComfyUI with CUDA before Pony XL generation.';
+    texts.tip_zh = '远端 ComfyUI 需以 CUDA 模式启动后才能运行 Pony XL 生图。';
+  }
 
   // Human tip with occupancy breakdown for critical/warning tooltips
   const breakdownParts: string[] = [];
@@ -401,15 +420,12 @@ export class VramService {
   static async getStatus(): Promise<VramStatus> {
     const settings = SettingsManager.loadSettings();
     const ollamaBase = ollamaNativeBaseUrl(settings.llm?.base_url);
-    const comfyBase = String(settings.comfyui?.base_url || 'http://127.0.0.1:8188').replace(
-      /\/$/,
-      ''
-    );
+    const comfyService = ComfyUIService.fromSettings(settings.comfyui);
 
     const [gpu, ollama, comfyui] = await Promise.all([
       queryNvidiaSmi(),
       queryOllama(ollamaBase),
-      queryComfyUi(comfyBase),
+      queryComfyUi(comfyService),
     ]);
 
     return buildVramStatus({ gpu, ollama, comfyui });
@@ -580,16 +596,13 @@ export class VramService {
   /** Ask ComfyUI to unload models and free torch VRAM cache. */
   static async freeComfy(): Promise<VramActionResult> {
     const settings = SettingsManager.loadSettings();
-    const comfyBase = String(settings.comfyui?.base_url || 'http://127.0.0.1:8188').replace(
-      /\/$/,
-      ''
-    );
+    const comfyService = ComfyUIService.fromSettings(settings.comfyui);
     const details: string[] = [];
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15_000);
-      const res = await fetch(`${comfyBase}/free`, {
+      const res = await comfyService.authenticatedFetch('/free', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ unload_models: true, free_memory: true }),
