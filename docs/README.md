@@ -78,10 +78,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 ### 4. 历史归档 (`docs/archive/`)
 | 文档 | 状态 | 核心说明 |
 | --- | --- | --- |
-| [frontend_legacy_requirements_and_todo.md](./archive/frontend_legacy_requirements_and_todo.md) | 📦 归档 | 合并原 `frontend_REQUIREMENTS_CN.md` 与 `frontend_TODO.md` 早期前端原型文档 |
 | [NovaStory MVP.md](<./archive/NovaStory MVP.md>) | 📦 归档 | MVP 早期设想（含已退役的旧 FLUX 工作流举例），仅作背景 |
-| [novel_document_import_todo_2026-08-25.md](./archive/novel_document_import_todo_2026-08-25.md) | 📦 归档 | PR #7 小说文档结构化导入历史设计与验收记录 |
-| [project_supplemental_documents_todo_2026-08-26.md](./archive/project_supplemental_documents_todo_2026-08-26.md) | 📦 归档 | PR #8 项目附加资料管理与 AI 写作上下文历史记录 |
 
 ---
 
