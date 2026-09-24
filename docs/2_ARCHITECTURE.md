@@ -1,6 +1,6 @@
 # 2_ARCHITECTURE.md: 架构红线与技术栈
 
-详细分层见现行文档 [`architecture_cn.md`](./architecture_cn.md)。本文只锁红线和本 Sprint 的目标管道，不重复那份总览。
+详细分层见现行文档 [`architecture_cn.md`](./architecture/architecture_cn.md)。本文只锁红线和本 Sprint 的目标管道，不重复那份总览。
 
 ## 1. 技术栈（现行，禁止按历史 MVP 回退）
 

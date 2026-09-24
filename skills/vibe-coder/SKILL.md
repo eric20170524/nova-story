@@ -15,7 +15,7 @@ This repo already instantiated the Vibe contract. **Read these files; do not reg
 |---|---|---|
 | Task list | `docs/0_TASKLIST.md` | Only licensed work. Start at the first `[ ]`. |
 | Product | `docs/1_PRD.md` | MVP scope / out of scope for the current sprint. |
-| Architecture | `docs/2_ARCHITECTURE.md` | Redlines. Deep stack: `docs/architecture_cn.md`. |
+| Architecture | `docs/2_ARCHITECTURE.md` | Redlines. Deep stack: `docs/architecture/architecture_cn.md`. |
 | UI | `docs/3_UI_RULES.md` | i18n, Tailwind, Toast, `data-testid` on new controls. |
 | Data | `docs/4_BACKEND_DB.md` | SQLite migrations, `project_id` isolation, logging. |
 | Agent | `docs/5_AGENT_RULES.md` | Coding zen, HITL, verification commands. |

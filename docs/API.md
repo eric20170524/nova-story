@@ -161,7 +161,7 @@ POST /api/assets/generate
 `generation_params` 中同时传入符合 `3:4`、`4:3` 或 `1:1` 的 `width` 与 `height`；后端会对齐到 64 的倍数。`auto_by_shot`
 仅在明确启用时根据 Wide / Establishing / Overhead 等镜头切换为横版。九宫格和角色三视图仍使用专用画布。
 
-参考策略详见 [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。
+参考策略详见 [local_image_reference_policy_cn.md](./deployment/local_image_reference_policy_cn.md)。
 
 ### 任务状态与取消
 

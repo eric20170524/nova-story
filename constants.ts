@@ -153,7 +153,7 @@ export const MOCK_TIMELINE = {
  * - both: either works; prefer Pony for final frames
  *
  * Style references: docs/风格参考/1/pixiv-favor.txt
- * Model guidance: docs/local_image_generation_deployment_cn.md
+ * Model guidance: docs/deployment/local_image_generation_deployment_cn.md
  * FLUX.1-dev GGUF retired on RTX 3060 12GB (2026-08).
  *
  * Adult-leaning styles live in frontend/local/advanced_visual_styles.ts (gitignored).

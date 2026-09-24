@@ -86,6 +86,6 @@ npx tsx scripts/gen_duel_pony_v4.ts --legacy-v4   # 仅复现失败路径
 
 ## 6. 相关文档
 
-- 部署与选型：`local_image_generation_deployment_cn.md`  
-- ComfyUI 安装：`comfyui_local_setup_guide_3060.md`  
-- 后端能力：`backend_implemented_features.md`  
+- 部署与选型：[local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md)  
+- ComfyUI 安装：[comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md)  
+- 后端能力：[backend_implemented_features.md](../architecture/backend_implemented_features.md)  

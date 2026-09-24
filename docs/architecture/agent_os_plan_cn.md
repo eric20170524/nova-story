@@ -5,7 +5,7 @@
 | 状态 | ⚠️ **功能已落地、待可靠性收口**（P1 修复进行中/见可靠性修订；勿称生产就绪直至 executor 集成测试与默认本地 LLM 验证通过） |
 | 评审 | 架构方向合理；曾过早宣称生产就绪。边界见 §9、§15、§17 |
 | 来源 | DreamWaver AI（`Renren/app-registry/.../DreamWaverAI`）能力对齐 |
-| 相关 | [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md)、[architecture_cn.md](./architecture_cn.md)、[backend_implemented_features.md](./backend_implemented_features.md) |
+| 相关 | [local_language_model_deployment_cn.md](../deployment/local_language_model_deployment_cn.md)、[architecture_cn.md](./architecture_cn.md)、[backend_implemented_features.md](./backend_implemented_features.md) |
 
 本文档是可版本管理的实现规格与基线参考：既记录首版设计，也对照代码落地结果与已知后续缺口。
 
@@ -281,7 +281,7 @@ DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参�
 ### Phase 5 — 验证与文档
 
 1. `backend npm test` + typecheck；前端 `npm run check`
-2. 更新 `docs/backend_implemented_features.md`、`docs/API.md`；实现完成后可将本文档状态改为「已落地」并链到实现说明
+2. 更新 `docs/architecture/backend_implemented_features.md`、`docs/API.md`；实现完成后可将本文档状态改为「已落地」并链到实现说明
 
 ---
 
@@ -291,7 +291,7 @@ DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参�
 - Agent 决策 prompt 控制在结构树 + 摘要级，避免整书正文
 - 结构化任务用低 temperature + JSON schema（现有 OpenAIProvider isOllama 路径）
 - 长写作：**首版同步阻塞**；本地 8B 写 1000–1500 字常见 20–45s loading（流式见 §15.1）
-- 与 ComfyUI 显存互斥策略不变（见 [local_language_model_deployment_cn.md](./local_language_model_deployment_cn.md)）
+- 与 ComfyUI 显存互斥策略不变（见 [local_language_model_deployment_cn.md](../deployment/local_language_model_deployment_cn.md)）
 
 ---
 
@@ -432,7 +432,7 @@ DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参�
 
 - **实现以代码为准**；本文档描述意图与验收基线。
 - 行为变更（协议 op、execute 语义、流式端点）应同步改本文档 §4 / §15 与 [backend_implemented_features.md](./backend_implemented_features.md)。
-- 索引见 [docs/README.md](./README.md)。
+- 索引见 [docs/README.md](../README.md)。
 
 ---
 

@@ -1,6 +1,6 @@
 # NovaStory 技术架构
 
-文档索引：[README.md](./README.md)。
+文档索引：[README.md](../README.md)。
 
 ## 总体结构
 
@@ -50,7 +50,7 @@ generation_service        → 解析工作流、注入节点、调 ComfyUI
         └── sd15_draft_12gb.json
 ```
 
-详见 [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md) 与 [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md)。
+详见 [local_image_reference_policy_cn.md](../deployment/local_image_reference_policy_cn.md) 与 [local_image_generation_deployment_cn.md](../deployment/local_image_generation_deployment_cn.md)。
 
 ## 边界与长期原则
 

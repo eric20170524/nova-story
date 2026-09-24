@@ -2,7 +2,7 @@
 
 本文档整理了针对 **RTX 3060 12GB + 32GB 系统内存** 的 NovaStory 本地生图策略（2026-08 实测结论）。
 
-文档索引：[README.md](./README.md) · ComfyUI 步骤：[comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md) · 参考图策略：[local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)
+文档索引：[README.md](../README.md) · ComfyUI 步骤：[comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md) · 参考图策略：[local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)
 
 ## 0. 本机实测配置（参考）
 
@@ -194,8 +194,8 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 ## 8. 资源获取
 
 - **Checkpoint / LoRA / 工作流**：主要 [Civitai](https://civitai.com)  
-- **ComfyUI 部署步骤**：`docs/comfyui_local_setup_guide_3060.md`  
-- **参考 / IP-Adapter 策略**：`docs/local_image_reference_policy_cn.md`  
+- **ComfyUI 部署步骤**：`docs/deployment/comfyui_local_setup_guide_3060.md`  
+- **参考 / IP-Adapter 策略**：`docs/deployment/local_image_reference_policy_cn.md`  
 - **画风与模型对照（历史对比文，FLUX 仅作背景）**：`local/Pony_XL与FLUX_Dev_GGUF生图风格对比.md`  
 - **分镜批跑对照实验**：`local/shortstory/xianxia_duel/`（v2 成功基线；v4 IP 失败；v4.1 无 IP 修复）
 

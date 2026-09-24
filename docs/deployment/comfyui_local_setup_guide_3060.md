@@ -6,7 +6,7 @@
 **FLUX.1-dev GGUF 已退役**，详见 [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md)。  
 **参考图 / IP-Adapter 何时生效：** [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。
 
-文档总索引：[README.md](./README.md)。
+文档总索引：[README.md](../README.md)。
 
 ## 1. 下载与运行 ComfyUI
 

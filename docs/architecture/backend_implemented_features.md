@@ -1,7 +1,7 @@
 # Node.js 后端已实现能力
 
 后端入口为 `backend/src/server.ts`，生产构建输出到 `backend/dist`。  
-文档索引见 [README.md](./README.md)。
+文档索引见 [README.md](../README.md)。
 
 ## 领域能力
 
@@ -25,8 +25,8 @@
 - 云生图：Gemini/Imagen、OpenAI Images、xAI 兼容端点
 - 本地生图：ComfyUI 自动探活/启动、内置 **Pony XL** + **SD1.5 Draft** 工作流、参考图、参数注入、LoRA 实际连线
 - **模型族贯通**：`model_type` / `reference_model_type` 支持 `pony` | `sd15`（legacy `flux` 在客户端与角色 prompt 路径回落为 pony）；`normalizeImageModelFamily` 统一解析
-- **FLUX.1-dev GGUF 已退役**（3060 12GB 不推荐）：权重/下载脚本/内置工作流已清理，见 `local_image_generation_deployment_cn.md`
-- **档位 A/B 参考策略**（详见 [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)）：
+- **FLUX.1-dev GGUF 已退役**（3060 12GB 不推荐）：权重/下载脚本/内置工作流已清理，见 [local_image_generation_deployment_cn.md](../deployment/local_image_generation_deployment_cn.md)
+- **档位 A/B 参考策略**（详见 [local_image_reference_policy_cn.md](../deployment/local_image_reference_policy_cn.md)）：
   - A：标签 + 角色 LoRA + 文本构图；单图 img2img 仅限立绘/三视图/特写
   - B（Pony/SDXL）：`character_ref` → IP-Adapter；`composition_ref` → ControlNet；缺节点/模型静默回退 A
   - **门禁**：双人 / 远景 / 动作镜**禁止**单图 IP-Adapter 锁构图（与 img2img 叙事门禁对齐）；`reference_tier: "A"` / `force_no_character_adapter` 可强制关闭

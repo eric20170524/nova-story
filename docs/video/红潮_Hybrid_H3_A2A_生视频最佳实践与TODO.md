@@ -577,7 +577,7 @@ qa_running, completed, rejected, failed, cancelled
 - 服务端根据 asset ID 解析路径，禁止前端提交可直接读写的绝对路径。
 - 日志只记录 asset/task ID、参数摘要和指纹，不写密钥或敏感绝对路径。
 
-### 12.2 授权 Gate G0
+### 12.2 授权 Gate G0 与核心模型指纹
 
 在红潮权重进入正式项目前，必须完成并存档：
 
@@ -588,7 +588,17 @@ qa_running, completed, rejected, failed, cancelled
 - LoopCloser 使用的 landmark/身份模型的**代码和预训练权重**各自许可。
 - 参考图/参考视频的肖像、版权和内容授权。
 
-未过 G0 可以做本机技术试验，但不得标记为可商用生产能力。
+未过 G0 可以做本机技术试验，但不得标记为可商用生产能力。视频资产生成管线默认设置 `video_generation.enabled = false` 特性开关。
+
+#### 核心模型与权重清单 (G0 指纹)
+
+| 组件 | 精确文件名 / 标识 | 格式 / 量化 | 来源 / 许可声明 |
+|---|---|---|---|
+| Diffusion Base | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | Pruned INT8 ConvRot | MiniMax / Apache-2.0 衍生研究，仅限本机 |
+| Diffusion T2V/I2V | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | Pruned INT8 ConvRot | MiniMax / 开源研究版 |
+| Text Encoder | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | NVFP4 / AWQ INT8 | Qwen / Tongyi 许可 + ComfyOrg 转换 |
+| Video VAE | `minimax_h3_video_vae_fp16.safetensors` | FP16 | MiniMax H3 原生 Video VAE |
+| Audio VAE | `minimax_h3_audio_vae_fp32.safetensors` | FP32 | 原生音频解码器 |
 
 ### 12.3 可观测性
 
@@ -755,9 +765,9 @@ qa_running, completed, rejected, failed, cancelled
 - `docs/2_ARCHITECTURE.md`
 - `docs/4_BACKEND_DB.md`
 - `docs/API.md`
-- `docs/architecture_cn.md`
-- `docs/local_image_generation_deployment_cn.md`
-- `docs/local_image_reference_policy_cn.md`
+- `docs/architecture/architecture_cn.md`
+- `docs/deployment/local_image_generation_deployment_cn.md`
+- `docs/deployment/local_image_reference_policy_cn.md`
 - `backend/src/routes/assets.ts`
 - `backend/src/services/generation_service.ts`
 - `backend/src/services/ai/comfyui_service.ts`
