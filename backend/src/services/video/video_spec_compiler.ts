@@ -64,12 +64,13 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
 
   const instructions: string[] = [];
   const isOfficialRef2va = request.workflow_id === 'minimax_h3_ref2va_official_12gb';
-  const pictureOffset = isOfficialRef2va ? 2 : 1;
+  const isMultiframe = request.workflow_id === 'minimax_h3_multiframe_official_12gb';
+  const pictureOffset = (isOfficialRef2va || isMultiframe) ? 2 : 1;
   const pictureTags = (request.character_reference_asset_ids || []).map(
     (_, index) => `<Picture ${index + pictureOffset}>`
   );
 
-  if (isOfficialRef2va) {
+  if (isOfficialRef2va || isMultiframe) {
     instructions.push(
       '<Picture 1> is the scene/keyframe reference; preserve its composition, lighting and starting appearance.'
     );
@@ -84,6 +85,13 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
   if (request.motion_reference_asset_id) {
     instructions.push(
       '<Video 1> is the motion-timing and body-pose reference only; preserve its action timing and pose trajectory without copying identity or appearance from the motion source.'
+    );
+  }
+
+  if (isMultiframe && (request.guide_frame_asset_id || request.last_frame_asset_id)) {
+    const frameIdx = request.guide_frame_idx ?? (request.guide_frame_asset_id ? 60 : 120);
+    instructions.push(
+      `Pin and stabilize the critical action pose, hand gesture, and spatial composition at frame ${frameIdx} matching the guide reference.`
     );
   }
 
@@ -136,6 +144,8 @@ export const VideoSpecCompiler = {
     if (isLoop) {
       if (isFl2va) {
         positiveParts.push('Locked camera. Treat the first and last keyframes as hard visual boundary anchors.');
+      } else if (request.workflow_id === 'minimax_h3_multiframe_official_12gb') {
+        positiveParts.push('Locked camera. Anchor key action frames cleanly and return smoothly to the boundary.');
       } else {
         positiveParts.push('Locked camera. Preserve the exact motion timing and body pose from <Video 1>.');
       }

@@ -101,7 +101,7 @@ export class ComfyUIService {
         this.baseUrl = baseUrl.replace(/\/$/, '');
         this.clientId = randomUUID();
         this.wsUrl = this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') + `/ws?clientId=${this.clientId}`;
-        this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl);
+        this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl, this);
         try {
             this.origin = new URL(this.baseUrl).origin;
         } catch {
@@ -365,7 +365,7 @@ export class ComfyUIService {
             class WsHeaderAgent extends (isHttps ? https.Agent : http.Agent) {
                 addRequest(req: any, opt: any) {
                     req.setHeader('Upgrade', 'WebSocket');
-                    return (super.addRequest as any)(req, opt);
+                    return ((isHttps ? https.Agent.prototype : http.Agent.prototype) as any).addRequest.call(this, req, opt);
                 }
             }
 

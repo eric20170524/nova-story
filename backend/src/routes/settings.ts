@@ -49,7 +49,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/loras', async (request, reply) => {
     const settings = SettingsManager.loadSettings();
-    const installPath = settings.comfyui?.install_path || 'D:\\ComfyUI';
+    const comfySettings = settings.comfyui || {};
+    const installPath = comfySettings.install_path || 'D:\\ComfyUI';
     const loraDirectory = path.join(String(installPath), 'models', 'loras');
     
     let loras: string[] = [];
@@ -61,6 +62,24 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           .filter((f) => /\.(safetensors|ckpt|pt)$/i.test(f))
           .sort((a, b) => a.localeCompare(b));
       } catch (err) {}
+    }
+
+    // When remote ComfyUI is used or local folder is missing, probe remote object_info
+    if ((!exists || loras.length === 0 || comfySettings.mode === 'remote') && comfySettings.enabled) {
+      try {
+        const comfyService = ComfyUIService.fromSettings(comfySettings);
+        const res = await comfyService.authenticatedFetch('/object_info', {}, 4000);
+        if (res.ok) {
+          const objectInfo = (await res.json()) as Record<string, any>;
+          const remoteLoras = objectInfo.LoraLoader?.input?.required?.lora_name?.[0];
+          if (Array.isArray(remoteLoras) && remoteLoras.length > 0) {
+            loras = Array.from(new Set([...loras, ...remoteLoras])).sort((a, b) => a.localeCompare(b));
+            exists = true;
+          }
+        }
+      } catch (err) {
+        // remote probe failure is non-fatal
+      }
     }
 
     return {

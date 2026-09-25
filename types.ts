@@ -124,7 +124,8 @@ export type VideoPreset = 'preview_480p_5s' | 'standard_720p_5s';
 export type VideoWorkflowId =
   | 'minimax_h3_hongchao_a2a_12gb'
   | 'minimax_h3_ref2va_official_12gb'
-  | 'minimax_h3_fl2va_official_12gb';
+  | 'minimax_h3_fl2va_official_12gb'
+  | 'minimax_h3_multiframe_official_12gb';
 export type VideoTaskStage =
   | 'queued'
   | 'preflight'
@@ -148,6 +149,8 @@ export type MediaAssetRole =
   | 'last_frame_reference'
   | 'character_reference'
   | 'motion_reference'
+  | 'guide_frame_reference'
+  | 'composition_reference'
   | 'raw_video'
   | 'loop_master'
   | 'narrative_final'
@@ -267,6 +270,8 @@ export interface VideoGenerationRequest {
   character_reference_asset_ids?: number[];
   motion_reference_asset_id?: number;
   last_frame_asset_id?: number;
+  guide_frame_asset_id?: number;
+  guide_frame_idx?: number;
   prompt_override?: string;
   preset?: VideoPreset;
   seed?: number;

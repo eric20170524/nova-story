@@ -68,7 +68,8 @@ const HUMAN_IDENTITY_NEGATIVE_RE =
 const VIDEO_WORKFLOW_IDS: VideoWorkflowId[] = [
   'minimax_h3_hongchao_a2a_12gb',
   'minimax_h3_ref2va_official_12gb',
-  'minimax_h3_fl2va_official_12gb'
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb'
 ];
 
 const getStoredVideoWorkflowId = (): VideoWorkflowId => {
@@ -968,6 +969,8 @@ export const DirectorMode: React.FC = () => {
       lastFrameAssetId?: number;
       characterRefAssetIds?: number[];
       motionRefAssetId?: number;
+      guideFrameAssetId?: number;
+      guideFrameIdx?: number;
       batchRun?: boolean;
     } = {}
   ) => {
@@ -980,6 +983,7 @@ export const DirectorMode: React.FC = () => {
     const numericSceneId = Number(sceneId);
     const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
     const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
+    const isMultiframe = workflowId === 'minimax_h3_multiframe_official_12gb';
 
     const sceneAssets = mediaAssetsByScene[sceneId] || [];
     const existingKeyframe = [...sceneAssets]
@@ -993,6 +997,14 @@ export const DirectorMode: React.FC = () => {
         .filter((a) => a.role === 'last_frame_reference' && a.id)
         .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
       lastFrameId = lastFrameAsset?.id;
+    }
+
+    let guideFrameId = options.guideFrameAssetId;
+    if (guideFrameId === undefined && isMultiframe) {
+      const guideAsset = [...sceneAssets]
+        .filter((a) => (a.role === 'guide_frame_reference' || a.role === 'composition_reference') && a.id)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      guideFrameId = guideAsset?.id;
     }
 
     let characterRefIds = options.characterRefAssetIds;
@@ -1024,6 +1036,8 @@ export const DirectorMode: React.FC = () => {
       preset,
       keyframe_asset_id: keyframeAssetId,
       last_frame_asset_id: lastFrameId,
+      guide_frame_asset_id: isMultiframe ? guideFrameId : undefined,
+      guide_frame_idx: isMultiframe ? options.guideFrameIdx : undefined,
       character_reference_asset_ids: characterRefIds,
       motion_reference_asset_id: motionRefId,
       prompt_override: motionPromptText,

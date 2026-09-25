@@ -1,13 +1,19 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
+import http from 'http';
+import https from 'https';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
 import { ComfyPromptOwnershipService } from '../ai/comfy_prompt_ownership_service';
+import { ComfyUIService, type ComfyUIAuthConfig } from '../ai/comfyui_service';
 import { GpuLeaseService } from '../gpu_lease_service';
 
 export interface ComfyH3ProviderOptions {
   baseUrl?: string;
   clientId?: string;
+  auth?: ComfyUIAuthConfig;
+  isRemote?: boolean;
+  comfyService?: ComfyUIService;
 }
 
 export interface ComfyVideoOutput {
@@ -21,39 +27,88 @@ export class ComfyH3Provider {
   private baseUrl: string;
   private clientId: string;
   private wsUrl: string;
+  private origin: string;
+  public readonly comfyService: ComfyUIService;
   private promptOwnership: ComfyPromptOwnershipService;
 
   constructor(options: ComfyH3ProviderOptions = {}) {
     const settings = SettingsManager.loadSettings();
-    const configuredBase = options.baseUrl || settings.comfyui?.base_url || 'http://127.0.0.1:8188';
+    const comfySettings = settings.comfyui || {};
+    const mode = comfySettings.mode === 'remote' ? 'remote' : 'local';
+    const isLoopback = (url: string) => {
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        return h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' || h === '::1';
+      } catch {
+        return false;
+      }
+    };
+    const isRemote = options.isRemote ?? (
+      options.baseUrl ? (!isLoopback(options.baseUrl) && mode === 'remote') : (mode === 'remote')
+    );
+
+    let configuredBase: string;
+    if (options.baseUrl) {
+      configuredBase = options.baseUrl;
+    } else if (isRemote) {
+      configuredBase = comfySettings.remote_base_url || comfySettings.base_url || process.env.COMFYUI_REMOTE_URL || '';
+    } else {
+      configuredBase = comfySettings.local_base_url || comfySettings.base_url || 'http://127.0.0.1:8188';
+    }
+
     this.baseUrl = configuredBase.replace(/\/$/, '');
     this.clientId = options.clientId || randomUUID();
     this.wsUrl = this.baseUrl.replace('http://', 'ws://').replace('https://', 'wss://') + `/ws?clientId=${this.clientId}`;
-    this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl);
+    try {
+      this.origin = new URL(this.baseUrl).origin;
+    } catch {
+      this.origin = this.baseUrl;
+    }
+
+    const auth = options.auth ?? (isRemote ? {
+      username: comfySettings.remote_username || process.env.COMFYUI_REMOTE_USERNAME || '',
+      password: comfySettings.remote_password || process.env.COMFYUI_REMOTE_PASSWORD || ''
+    } : undefined);
+
+    this.comfyService = options.comfyService || new ComfyUIService(this.baseUrl, { auth, isRemote });
+    this.promptOwnership = new ComfyPromptOwnershipService(this.baseUrl, this.comfyService);
+  }
+
+  static fromSettings(comfySettings?: any): ComfyH3Provider {
+    const settings = comfySettings || SettingsManager.loadSettings().comfyui || {};
+    const mode = settings.mode === 'remote' ? 'remote' : 'local';
+    const isRemote = mode === 'remote';
+
+    if (isRemote) {
+      const baseUrl = settings.remote_base_url || settings.base_url || process.env.COMFYUI_REMOTE_URL || '';
+      return new ComfyH3Provider({
+        baseUrl,
+        isRemote: true,
+        auth: {
+          username: settings.remote_username || process.env.COMFYUI_REMOTE_USERNAME || '',
+          password: settings.remote_password || process.env.COMFYUI_REMOTE_PASSWORD || ''
+        }
+      });
+    }
+
+    const baseUrl = settings.local_base_url || settings.base_url || 'http://127.0.0.1:8188';
+    return new ComfyH3Provider({
+      baseUrl,
+      isRemote: false
+    });
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-    try {
-      return await fetch(url, { ...init, signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.comfyService.authenticatedFetch(url, init, timeoutMs);
   }
 
   async checkStatus(): Promise<boolean> {
-    try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/system_stats`, {}, 2500);
-      return res.ok;
-    } catch {
-      return false;
-    }
+    return this.comfyService.checkStatus();
   }
 
   async getObjectInfo(): Promise<Record<string, any> | null> {
     try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/object_info`, {}, 3000);
+      const res = await this.comfyService.authenticatedFetch('/object_info', {}, 5000);
       if (res.ok) return (await res.json()) as Record<string, any>;
     } catch {
       /* ComfyUI offline or unreachable */
@@ -67,7 +122,7 @@ export class ComfyH3Provider {
 
   async getHistory(promptId: string): Promise<Record<string, any> | null> {
     try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/history/${promptId}`, {}, 5000);
+      const res = await this.comfyService.authenticatedFetch(`/history/${promptId}`, {}, 5000);
       if (res.ok) return (await res.json()) as Record<string, any>;
     } catch {
       /* offline */
@@ -76,9 +131,9 @@ export class ComfyH3Provider {
   }
 
   async downloadFile(filename: string, subfolder = '', type = 'output'): Promise<Buffer | null> {
-    const url = `${this.baseUrl}/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
+    const url = `/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
     try {
-      const res = await fetch(url);
+      const res = await this.comfyService.authenticatedFetch(url, {}, 30_000);
       if (res.ok) {
         const ab = await res.arrayBuffer();
         return Buffer.from(ab);
@@ -99,9 +154,35 @@ export class ComfyH3Provider {
   ): Promise<{ status: 'completed' | 'error' | 'cancelled'; videos: ComfyVideoOutput[]; prompt_id?: string; error?: string }> {
     let ws: WebSocket | null = null;
     try {
-      ws = new WebSocket(this.wsUrl);
+      const isHttps = this.baseUrl.startsWith('https');
+      class WsHeaderAgent extends (isHttps ? https.Agent : http.Agent) {
+        addRequest(req: any, opt: any) {
+          req.setHeader('Upgrade', 'WebSocket');
+          return ((isHttps ? https.Agent.prototype : http.Agent.prototype) as any).addRequest.call(this, req, opt);
+        }
+      }
+
+      let cookie: string | null = null;
+      if (this.comfyService.isRemote) {
+        cookie = await this.comfyService.authenticate(false).catch(() => null);
+      }
+
+      const wsHeaders: Record<string, string> = {};
+      if (cookie) {
+        wsHeaders['Cookie'] = cookie;
+      }
+      if (this.comfyService.isRemote) {
+        wsHeaders['Origin'] = this.origin;
+      }
+
+      const wsOptions: any = { headers: wsHeaders };
+      if (this.comfyService.isRemote) {
+        wsOptions.agent = new WsHeaderAgent();
+      }
+
+      ws = new WebSocket(this.wsUrl, wsOptions);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000);
+        const timer = setTimeout(() => reject(new Error('WebSocket connect timeout')), 8000);
         ws!.on('open', () => {
           clearTimeout(timer);
           resolve();

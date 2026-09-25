@@ -76,27 +76,48 @@ export class ComfyInputTransport {
     mimeType?: string | null;
     subfolder?: string;
     timeoutMs?: number;
+    auth?: { username?: string; password?: string };
+    isRemote?: boolean;
+    comfyService?: { authenticatedFetch: (url: string, init?: RequestInit, timeoutMs?: number) => Promise<Response> };
   }): Promise<ComfyInputUploadResult> {
     const baseUrl = options.baseUrl.replace(/\/$/, '');
     const timeoutMs = Math.max(500, options.timeoutMs ?? 15_000);
     const subfolder = String(options.subfolder ?? 'novastory').replace(/^\/+|\/+$/g, '');
 
-    const response = await withTimeout(timeoutMs, async (signal) => {
-      const form = new FormData();
-      const blob = new Blob([options.buffer], {
-        type: options.mimeType || 'application/octet-stream'
-      });
-      form.append('image', blob, options.filename);
-      form.append('type', 'input');
-      form.append('overwrite', 'true');
-      if (subfolder) form.append('subfolder', subfolder);
-
-      return fetch(`${baseUrl}/upload/image`, {
-        method: 'POST',
-        body: form,
-        signal
-      });
+    const form = new FormData();
+    const blob = new Blob([options.buffer], {
+      type: options.mimeType || 'application/octet-stream'
     });
+    form.append('image', blob, options.filename);
+    form.append('type', 'input');
+    form.append('overwrite', 'true');
+    if (subfolder) form.append('subfolder', subfolder);
+
+    let response: Response;
+    if (options.comfyService) {
+      response = await options.comfyService.authenticatedFetch('/upload/image', {
+        method: 'POST',
+        body: form
+      }, timeoutMs);
+    } else if (options.isRemote || options.auth?.username) {
+      const { ComfyUIService } = await import('../ai/comfyui_service');
+      const svc = new ComfyUIService(baseUrl, {
+        auth: options.auth,
+        isRemote: options.isRemote
+      });
+      response = await svc.authenticatedFetch('/upload/image', {
+        method: 'POST',
+        body: form
+      }, timeoutMs);
+    } else {
+      response = await withTimeout(timeoutMs, async (signal) => {
+        return fetch(`${baseUrl}/upload/image`, {
+          method: 'POST',
+          body: form,
+          signal
+        });
+      });
+    }
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -107,7 +128,9 @@ export class ComfyInputTransport {
 
     const payload = await response.json() as Record<string, unknown>;
     const name = String(payload.name || '').trim();
-    const returnedSubfolder = String(payload.subfolder || subfolder || '').replace(/^\/+|\/+$/g, '');
+    const returnedSubfolder = typeof payload.subfolder === 'string'
+      ? payload.subfolder.replace(/^\/+|\/+$/g, '')
+      : String(subfolder || '').replace(/^\/+|\/+$/g, '');
     const type = String(payload.type || 'input');
     if (!name) {
       throw new Error('ComfyUI reference upload did not return a file name');

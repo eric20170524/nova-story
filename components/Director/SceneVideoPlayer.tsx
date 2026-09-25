@@ -17,7 +17,8 @@ import {
   Image as ImageIcon,
   Film,
   X,
-  Link2
+  Link2,
+  Layers
 } from 'lucide-react';
 import {
   Scene,
@@ -45,7 +46,34 @@ type ReferenceUploadRole =
   | 'video_keyframe'
   | 'last_frame_reference'
   | 'character_reference'
-  | 'motion_reference';
+  | 'motion_reference'
+  | 'guide_frame_reference'
+  | 'composition_reference';
+
+const getSuggestedWorkflowForScene = (assets: MediaAsset[]): {
+  workflowId: VideoWorkflowId;
+  reason: string;
+} | null => {
+  const hasGuide = assets.some((asset) => asset.media_type === 'image' && (asset.role === 'guide_frame_reference' || asset.role === 'composition_reference'));
+  const hasLast = assets.some((asset) => asset.media_type === 'image' && asset.role === 'last_frame_reference');
+  const hasCharacter = assets.some((asset) => asset.media_type === 'image' && asset.role === 'character_reference');
+  if (hasGuide) {
+    return {
+      workflowId: 'minimax_h3_multiframe_official_12gb',
+      reason: '当前镜头有导引图，建议采用「多帧参考」，并指定该图在视频片段内的帧位置。'
+    };
+  }
+  if (hasLast && !hasCharacter) {
+    return {
+      workflowId: 'minimax_h3_fl2va_official_12gb',
+      reason: '当前镜头有尾帧图，建议采用「Official FL2VA」固定片段起止画面。'
+    };
+  }
+  return hasCharacter ? {
+    workflowId: 'minimax_h3_ref2va_official_12gb',
+    reason: '当前镜头有人物参考图，建议采用「Official Ref2VA」保持人物外观一致。'
+  } : null;
+};
 
 const WORKFLOWS: Array<{
   id: VideoWorkflowId;
@@ -54,22 +82,28 @@ const WORKFLOWS: Array<{
   description: string;
 }> = [
   {
-    id: 'minimax_h3_hongchao_a2a_12gb',
-    label: 'Hybrid A2A',
-    badge: '实验',
-    description: '人物参考 + 动作参考，可选硬尾帧。'
-  },
-  {
     id: 'minimax_h3_ref2va_official_12gb',
     label: 'Official Ref2VA',
-    badge: '候选',
-    description: '人物/动作参考；不支持硬尾帧。'
+    badge: '人物参考',
+    description: '首帧作场景参考，可传入人物参考图以保持外观一致。'
   },
   {
     id: 'minimax_h3_fl2va_official_12gb',
     label: 'Official FL2VA',
-    badge: '候选',
-    description: '首帧/尾帧边界；不消费人物/动作参考。'
+    badge: '首尾帧',
+    description: '用首帧与可选的尾帧固定片段的起止画面。'
+  },
+  {
+    id: 'minimax_h3_multiframe_official_12gb',
+    label: 'Official Multi-Frame',
+    badge: '复杂动作试验',
+    description: '可同时接收人物参考与导引图，把导引图固定到片段内指定帧。'
+  },
+  {
+    id: 'minimax_h3_hongchao_a2a_12gb',
+    label: 'Hybrid A2A',
+    badge: '实验基线',
+    description: '人物参考 + 动作参考，可选硬尾帧。'
   }
 ];
 
@@ -117,6 +151,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   });
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<number | null>(null);
   const [selectedLastFrameId, setSelectedLastFrameId] = useState<number | null>(null);
+  const [selectedGuideFrameId, setSelectedGuideFrameId] = useState<number | null>(null);
+  const [guideFrameIdx, setGuideFrameIdx] = useState<number>(60);
   const [selectedCharacterRefIds, setSelectedCharacterRefIds] = useState<number[]>([]);
   const [selectedMotionRefId, setSelectedMotionRefId] = useState<number | null>(null);
 
@@ -128,14 +164,24 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     return Array.from(byId.values());
   }, [mediaAssets, localReferenceAssets]);
 
+  const suggestedWorkflow = React.useMemo(() => getSuggestedWorkflowForScene(mergedAssets), [mergedAssets]);
+
   const videoAssets = mergedAssets.filter((asset) => asset.media_type === 'video');
   const finalVideoAssets = videoAssets.filter((asset) => isFinalVideo(asset));
   const keyframeAssets = mergedAssets.filter((asset) => asset.role === 'video_keyframe' && asset.media_type === 'image');
   const explicitLastFrameAssets = mergedAssets.filter((asset) => asset.role === 'last_frame_reference' && asset.media_type === 'image');
   const characterReferenceAssets = mergedAssets.filter((asset) => asset.role === 'character_reference' && asset.media_type === 'image');
   const motionReferenceAssets = mergedAssets.filter((asset) => asset.role === 'motion_reference' && asset.media_type === 'video');
+  const guideReferenceAssets = mergedAssets.filter(
+    (asset) =>
+      (asset.role === 'guide_frame_reference' || asset.role === 'composition_reference') &&
+      asset.media_type === 'image'
+  );
   const lastFrameChoices = Array.from(
     new Map([...keyframeAssets, ...explicitLastFrameAssets].map((asset) => [asset.id, asset])).values()
+  );
+  const guideFrameChoices = Array.from(
+    new Map([...guideReferenceAssets, ...keyframeAssets, ...explicitLastFrameAssets].map((asset) => [asset.id, asset])).values()
   );
 
   const selectedAsset = selectedAssetId != null
@@ -189,11 +235,17 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     if (selectedMotionRefId == null || !validMotionIds.has(selectedMotionRefId)) {
       setSelectedMotionRefId(latestAsset(motionReferenceAssets)?.id ?? null);
     }
+
+    const validGuideIds = new Set(guideFrameChoices.map((asset) => asset.id));
+    if (selectedGuideFrameId == null || !validGuideIds.has(selectedGuideFrameId)) {
+      setSelectedGuideFrameId(latestAsset(guideReferenceAssets)?.id ?? null);
+    }
   }, [
     keyframeAssets.map((asset) => asset.id).join(','),
     lastFrameChoices.map((asset) => asset.id).join(','),
     characterReferenceAssets.map((asset) => asset.id).join(','),
-    motionReferenceAssets.map((asset) => asset.id).join(',')
+    motionReferenceAssets.map((asset) => asset.id).join(','),
+    guideFrameChoices.map((asset) => asset.id).join(',')
   ]);
 
   const handleTogglePlay = () => {
@@ -249,6 +301,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
   const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
   const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
+  const isMultiframe = workflowId === 'minimax_h3_multiframe_official_12gb';
 
   const toggleCharacterRef = (assetId: number) => {
     setSelectedCharacterRefIds((current) => {
@@ -288,6 +341,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
       if (role === 'video_keyframe') setSelectedKeyframeId(asset.id);
       if (role === 'last_frame_reference') setSelectedLastFrameId(asset.id);
+      if (role === 'guide_frame_reference' || role === 'composition_reference') setSelectedGuideFrameId(asset.id);
       if (role === 'motion_reference') setSelectedMotionRefId(asset.id);
       if (role === 'character_reference') {
         setSelectedCharacterRefIds((current) => [...current.filter((id) => id !== asset.id), asset.id].slice(-3));
@@ -312,7 +366,9 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       keyframeAssetId: selectedKeyframeId,
       lastFrameAssetId: isRef2va ? undefined : (selectedLastFrameId || undefined),
       characterRefAssetIds: isFl2va ? [] : selectedCharacterRefIds,
-      motionRefAssetId: isFl2va ? undefined : (selectedMotionRefId || undefined)
+      motionRefAssetId: isFl2va ? undefined : (selectedMotionRefId || undefined),
+      guideFrameAssetId: isMultiframe ? (selectedGuideFrameId || undefined) : undefined,
+      guideFrameIdx: isMultiframe ? guideFrameIdx : undefined
     });
     setShowReferenceManager(false);
   };
@@ -366,6 +422,24 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
           </button>
         </div>
 
+        {suggestedWorkflow && (
+          <div className="p-2 rounded-lg bg-indigo-950/40 border border-indigo-800/60 flex items-start justify-between gap-2">
+            <div className="text-[10px] text-indigo-200">
+              <span className="font-semibold text-indigo-300">当前镜头素材建议：</span>
+              <span>{suggestedWorkflow.reason}</span>
+            </div>
+            {workflowId !== suggestedWorkflow.workflowId && (
+              <button
+                type="button"
+                onClick={() => setWorkflowId(suggestedWorkflow.workflowId)}
+                className="shrink-0 text-[10px] px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+              >
+                采用建议
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <span className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Workflow Strategy</span>
           <div className="grid grid-cols-1 gap-1.5">
@@ -385,7 +459,9 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                   <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
                     workflow.id === 'minimax_h3_hongchao_a2a_12gb'
                       ? 'text-amber-300 border-amber-800 bg-amber-950/40'
-                      : 'text-sky-300 border-sky-800 bg-sky-950/40'
+                      : workflow.id === 'minimax_h3_multiframe_official_12gb'
+                        ? 'text-emerald-300 border-emerald-800 bg-emerald-950/40'
+                        : 'text-sky-300 border-sky-800 bg-sky-950/40'
                   }`}>
                     {workflow.badge}
                   </span>
@@ -416,6 +492,60 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
               ))}
             </select>
           </div>
+
+          {isMultiframe && (
+            <div className="rounded-lg bg-slate-900/70 border border-slate-800 p-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-slate-300 flex items-center gap-1">
+                  <Layers size={11} className="text-amber-400" />
+                  Guide Frame（构图/动作导引帧）
+                </span>
+                {renderUploadButton('guide_frame_reference', '上传', 'image/*', <Upload size={10} />)}
+              </div>
+              <select
+                value={selectedGuideFrameId ?? ''}
+                onChange={(event) => setSelectedGuideFrameId(event.target.value ? Number(event.target.value) : null)}
+                className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-[10px] text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="">未指定 Guide Frame（默认回退首帧）</option>
+                {guideFrameChoices.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {assetLabel(asset, asset.role === 'guide_frame_reference' ? 'Guide' : asset.role === 'composition_reference' ? 'Comp' : asset.role === 'video_keyframe' ? 'Keyframe' : 'Last')}
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] text-slate-400">固定至帧位置 (frame_idx):</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={123}
+                  value={guideFrameIdx}
+                  onChange={(e) => setGuideFrameIdx(Math.max(1, Math.min(123, Number(e.target.value) || 60)))}
+                  className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200 text-center focus:outline-none focus:border-indigo-500"
+                />
+                <div className="flex gap-1">
+                  {[30, 60, 90].map((idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setGuideFrameIdx(idx)}
+                      className={`text-[9px] px-1 py-0.5 rounded border transition-colors ${
+                        guideFrameIdx === idx
+                          ? 'bg-amber-950/60 border-amber-600 text-amber-300 font-semibold'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      第 {idx} 帧
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[9px] text-slate-500">
+                帧位置属于当前视频片段，范围为 1–123；可直接输入精确帧号。
+              </div>
+            </div>
+          )}
 
           <div className={`rounded-lg bg-slate-900/70 border p-2 space-y-1.5 ${isRef2va ? 'border-slate-800 opacity-55' : 'border-slate-800'}`}>
             <div className="flex items-center justify-between gap-2">

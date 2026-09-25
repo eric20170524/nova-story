@@ -249,7 +249,7 @@ export class MediaAssetService {
       `SELECT * FROM media_asset
        WHERE scene_id = ?
          AND scene_version IS NULL
-         AND role IN ('video_keyframe', 'last_frame_reference', 'character_reference', 'motion_reference')
+         AND role IN ('video_keyframe', 'last_frame_reference', 'character_reference', 'motion_reference', 'guide_frame_reference', 'composition_reference')
          AND status != 'archived'
        ORDER BY id ASC`,
       sceneId
@@ -375,13 +375,19 @@ export class MediaAssetService {
         500,
         Number(process.env.NOVASTORY_COMFY_REFERENCE_UPLOAD_TIMEOUT_MS || 15_000)
       );
+      const isRemote = comfySettings.mode === 'remote';
       const uploaded = await ComfyInputTransport.uploadInput({
         baseUrl,
         filename: stagedFilename,
         buffer: fs.readFileSync(sourcePath),
         mimeType: inferReferenceMimeType(asset, sourcePath),
         subfolder: 'novastory',
-        timeoutMs
+        timeoutMs,
+        isRemote,
+        auth: isRemote ? {
+          username: comfySettings.remote_username || process.env.COMFYUI_REMOTE_USERNAME || '',
+          password: comfySettings.remote_password || process.env.COMFYUI_REMOTE_PASSWORD || ''
+        } : undefined
       });
       return {
         stagedFilename: uploaded.inputName,

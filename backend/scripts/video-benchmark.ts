@@ -4,7 +4,8 @@ import path from 'node:path';
 const WORKFLOWS = [
   'minimax_h3_hongchao_a2a_12gb',
   'minimax_h3_ref2va_official_12gb',
-  'minimax_h3_fl2va_official_12gb'
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb'
 ] as const;
 
 type WorkflowId = (typeof WORKFLOWS)[number];
@@ -35,6 +36,8 @@ type Args = {
   lastFrameAssetId?: number;
   characterReferenceAssetIds: number[];
   motionReferenceAssetId?: number;
+  guideFrameAssetId?: number;
+  guideFrameIdx?: number;
   workflows: WorkflowId[];
   seeds: number[];
   output: string;
@@ -95,6 +98,8 @@ const parseArgs = (): Args => {
     lastFrameAssetId: Number(values.get('last-frame')) || undefined,
     characterReferenceAssetIds: parseCsvNumbers(values.get('char-refs')),
     motionReferenceAssetId: Number(values.get('motion-ref')) || undefined,
+    guideFrameAssetId: Number(values.get('guide-frame')) || undefined,
+    guideFrameIdx: Number(values.get('guide-frame-idx')) || undefined,
     workflows: requestedWorkflows,
     seeds,
     output: path.resolve(values.get('output') || `video-benchmark-${Date.now()}.json`),
@@ -149,6 +154,11 @@ const buildRequest = (args: Args, workflowId: WorkflowId, seed: number) => {
   // may include it so the benchmark can compare K->K/K0->K1 behavior explicitly.
   if (workflowId === 'minimax_h3_hongchao_a2a_12gb' && args.lastFrameAssetId) {
     base.last_frame_asset_id = args.lastFrameAssetId;
+  }
+  if (workflowId === 'minimax_h3_multiframe_official_12gb') {
+    if (args.lastFrameAssetId) base.last_frame_asset_id = args.lastFrameAssetId;
+    if (args.guideFrameAssetId) base.guide_frame_asset_id = args.guideFrameAssetId;
+    if (args.guideFrameIdx != null) base.guide_frame_idx = args.guideFrameIdx;
   }
   return base;
 };

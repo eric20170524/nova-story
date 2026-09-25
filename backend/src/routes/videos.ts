@@ -28,7 +28,9 @@ const REFERENCE_UPLOAD_ROLES = [
   'character_reference',
   'motion_reference',
   'video_keyframe',
-  'last_frame_reference'
+  'last_frame_reference',
+  'guide_frame_reference',
+  'composition_reference'
 ] as const;
 
 const normalizeReferenceMediaType = (mimetype: string): 'image' | 'video' | null => {

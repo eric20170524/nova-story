@@ -27,6 +27,8 @@ export interface WorkflowManifest {
     last_frame?: WorkflowManifestSlot;
     character_refs?: WorkflowManifestSlot[];
     video_refs?: WorkflowManifestSlot[];
+    guide_frame?: WorkflowManifestSlot;
+    guide_frame_idx?: WorkflowManifestSlot;
     width?: WorkflowManifestSlot;
     height?: WorkflowManifestSlot;
     frames?: WorkflowManifestSlot;
@@ -52,7 +54,9 @@ export interface CompileWorkflowInputs {
     lastFrameFilename?: string;
     characterRefFilenames?: string[];
     motionRefFilename?: string;
+    guideFrameFilename?: string;
   };
+  guideFrameIdx?: number;
   seed?: number;
   outputPrefix?: string;
 }
@@ -105,6 +109,8 @@ export class VideoWorkflowCompiler {
     if (slots.negative_prompt) this.validateSlot(workflow, slots.negative_prompt, 'negative_prompt');
     if (slots.first_frame) this.validateSlot(workflow, slots.first_frame, 'first_frame');
     if (slots.last_frame) this.validateSlot(workflow, slots.last_frame, 'last_frame');
+    if (slots.guide_frame) this.validateSlot(workflow, slots.guide_frame, 'guide_frame');
+    if (slots.guide_frame_idx) this.validateSlot(workflow, slots.guide_frame_idx, 'guide_frame_idx');
     if (slots.width) this.validateSlot(workflow, slots.width, 'width');
     if (slots.height) this.validateSlot(workflow, slots.height, 'height');
     if (slots.frames) this.validateSlot(workflow, slots.frames, 'frames');
@@ -123,9 +129,38 @@ export class VideoWorkflowCompiler {
       workflow[slots.first_frame.node].inputs[slots.first_frame.input] = stagedFiles.firstFrameFilename;
     }
 
+    if (slots.guide_frame) {
+      const guideFile = stagedFiles.guideFrameFilename || stagedFiles.lastFrameFilename || stagedFiles.firstFrameFilename;
+      workflow[slots.guide_frame.node].inputs[slots.guide_frame.input] = guideFile;
+    }
+
+    if (slots.guide_frame_idx) {
+      let targetIdx: number;
+      if (inputs.guideFrameIdx != null && Number.isFinite(inputs.guideFrameIdx)) {
+        targetIdx = Math.round(inputs.guideFrameIdx);
+      } else if (stagedFiles.guideFrameFilename) {
+        targetIdx = Math.round((contract.frames || 124) / 2);
+      } else if (stagedFiles.lastFrameFilename) {
+        targetIdx = (contract.frames || 124) - 4;
+      } else {
+        targetIdx = 60;
+      }
+      if (targetIdx < 1 || targetIdx >= contract.frames) {
+        throw new Error(`Guide frame index must be within 1..${contract.frames - 1}; received ${targetIdx}.`);
+      }
+      workflow[slots.guide_frame_idx.node].inputs[slots.guide_frame_idx.input] = targetIdx;
+    }
+
     if (slots.last_frame) {
       const lastFrame = stagedFiles.lastFrameFilename || stagedFiles.firstFrameFilename;
       workflow[slots.last_frame.node].inputs[slots.last_frame.input] = lastFrame;
+      if (workflowId === 'minimax_h3_multiframe_official_12gb') {
+        if (stagedFiles.lastFrameFilename && workflow['23']) {
+          if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = ['23', 0];
+        } else {
+          if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = ['21', 0];
+        }
+      }
     }
 
     if (slots.character_refs && Array.isArray(slots.character_refs)) {
@@ -182,7 +217,8 @@ export class VideoWorkflowCompiler {
         fps: contract.fps,
         steps,
         seed,
-        prefix
+        prefix,
+        guide_frame_idx: slots.guide_frame_idx ? workflow[slots.guide_frame_idx.node]?.inputs?.[slots.guide_frame_idx.input] : undefined
       }
     };
   }
@@ -224,9 +260,31 @@ export class VideoWorkflowCompiler {
       }
     }
 
-    const objectInfoText = JSON.stringify(objectInfo);
-    for (const modelName of manifest.required_models || []) {
-      if (!objectInfoText.includes(modelName)) missingModels.push(modelName);
+    const loaderInputs: Record<string, string> = {
+      UNETLoader: 'unet_name',
+      CLIPLoader: 'clip_name',
+      VAELoader: 'vae_name'
+    };
+    const graphModels = Object.values(workflow).flatMap((node: any) => {
+      const input = loaderInputs[node?.class_type];
+      const name = input && node?.inputs?.[input];
+      return input && typeof name === 'string' ? [{ classType: node.class_type as string, input, name }] : [];
+    });
+    const declaredModels = manifest.required_models || [];
+    for (const { name } of graphModels) {
+      if (!declaredModels.includes(name)) {
+        missingSlots.push(`Workflow graph model '${name}' is absent from manifest required_models`);
+      }
+    }
+    for (const { classType, input, name } of graphModels) {
+      const loaderInfo = objectInfo[classType];
+      const choices = loaderInfo?.input?.required?.[input]?.[0] || loaderInfo?.models;
+      if (!Array.isArray(choices) || !choices.includes(name)) missingModels.push(name);
+    }
+    for (const name of declaredModels) {
+      if (!graphModels.some((model) => model.name === name)) {
+        missingSlots.push(`Manifest model '${name}' is not loaded by the workflow graph`);
+      }
     }
 
     return {

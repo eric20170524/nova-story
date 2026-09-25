@@ -304,6 +304,17 @@ export class VideoGenerationService {
       }
     }
 
+    if (request.guide_frame_asset_id) {
+      const guideAsset = await MediaAssetService.getAssetById(request.guide_frame_asset_id);
+      if (!guideAsset) {
+        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} does not exist.`);
+      } else if (guideAsset.media_type !== 'image') {
+        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} must be an image.`);
+      } else if (projectId && guideAsset.project_id !== projectId) {
+        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} belongs to a different project.`);
+      }
+    }
+
     // Strategy-required presence constraints are owned by VideoGenerationRequestSchema.
     // The service only validates supplied reference assets, avoiding contradictory
     // rules such as requiring Ref2VA inputs for the FL2VA boundary workflow.
@@ -694,6 +705,15 @@ export class VideoGenerationService {
         }
       }
 
+      let stagedGuideFilename: string | undefined;
+      if (request.guide_frame_asset_id) {
+        const guideAsset = await MediaAssetService.getAssetById(request.guide_frame_asset_id);
+        if (guideAsset) {
+          const staged = await MediaAssetService.stageAssetForComfy(guideAsset);
+          stagedGuideFilename = staged.stagedFilename;
+        }
+      }
+
       if (await isCancelled()) {
         stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
@@ -707,8 +727,10 @@ export class VideoGenerationService {
           firstFrameFilename: stagedKf.stagedFilename,
           lastFrameFilename: stagedLastFrameFilename,
           characterRefFilenames: stagedCharFiles,
-          motionRefFilename: stagedMotionFilename
+          motionRefFilename: stagedMotionFilename,
+          guideFrameFilename: stagedGuideFilename
         },
+        guideFrameIdx: request.guide_frame_idx,
         seed: request.seed,
         outputPrefix: `H3_${projectId}_${request.scene_id}_${taskId.slice(-6)}`
       });

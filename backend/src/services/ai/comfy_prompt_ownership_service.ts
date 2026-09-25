@@ -46,7 +46,10 @@ export class ComfyPromptOwnershipService {
 
   private readonly baseUrl: string;
 
-  constructor(baseUrl: string) {
+  constructor(
+    baseUrl: string,
+    private comfyService?: { authenticatedFetch: (url: string, init?: RequestInit, timeoutMs?: number) => Promise<Response> }
+  ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
@@ -59,6 +62,9 @@ export class ComfyPromptOwnershipService {
     init: RequestInit = {},
     timeoutMs: number = 5000
   ): Promise<Response> {
+    if (this.comfyService) {
+      return this.comfyService.authenticatedFetch(url, init, timeoutMs);
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
     try {

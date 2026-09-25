@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "workflow_id": "minimax_h3_multiframe_official_12gb",
+  "name": "MiniMax H3 Multi-Frame Reference Official (12GB Candidate)",
+  "description": "Official Comfy-Org Multi-Frame Reference template adapted for NovaStory: MiniMaxH3ReferenceToVideo + MiniMaxH3AddGuide + CreateVideo/SaveVideo. Supports character identity reference pictures while anchoring specific action/composition frames at frame_idx for complex hand/body motions.",
+  "stability": "candidate",
+  "workflow_family": "multiframe_ref2va",
+  "upstream_reference": "Comfy-Org/workflow_templates:templates/video_minimax_h3_multiframe_reference.json",
+  "reference_tag_policy": {
+    "first_frame": "<Picture 1>",
+    "character_refs_start_at": 2
+  },
+  "slots": {
+    "positive_prompt": {
+      "node": "10",
+      "input": "prompt"
+    },
+    "first_frame": {
+      "node": "4",
+      "input": "image"
+    },
+    "guide_frame": {
+      "node": "20",
+      "input": "image"
+    },
+    "guide_frame_idx": {
+      "node": "21",
+      "input": "frame_idx"
+    },
+    "last_frame": {
+      "node": "22",
+      "input": "image"
+    },
+    "character_refs": [
+      {
+        "node": "5",
+        "input": "image"
+      },
+      {
+        "node": "6",
+        "input": "image"
+      },
+      {
+        "node": "7",
+        "input": "image"
+      }
+    ],
+    "width": {
+      "node": "10",
+      "input": "width"
+    },
+    "height": {
+      "node": "10",
+      "input": "height"
+    },
+    "frames": {
+      "node": "10",
+      "input": "length"
+    },
+    "steps": {
+      "node": "13",
+      "input": "steps"
+    },
+    "seed": {
+      "node": "11",
+      "input": "noise_seed"
+    },
+    "output_prefix": {
+      "node": "18",
+      "input": "filename_prefix"
+    }
+  },
+  "default_params": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "delivery_frames": 120,
+    "fps": 24,
+    "steps": 20,
+    "sampler": "res_multistep",
+    "scheduler": "normal",
+    "ref_image_size": "match"
+  },
+  "required_models": [
+    "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "minimax_h3_video_vae_fp16.safetensors"
+  ],
+  "required_custom_nodes": []
+}

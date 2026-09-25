@@ -57,6 +57,58 @@ test('Ref2VA rejects a hard last-frame request instead of silently ignoring it',
   }, /does not provide a hard last-frame boundary/);
 });
 
+test('Multi-Frame workflow accepts character references, guide frame, and frame index', () => {
+  const parsed = VideoGenerationRequestSchema.parse({
+    scene_id: 39,
+    profile: 'narrative_clip',
+    workflow_id: 'minimax_h3_multiframe_official_12gb',
+    keyframe_asset_id: 10,
+    character_reference_asset_ids: [101, 102],
+    guide_frame_asset_id: 201,
+    guide_frame_idx: 39
+  });
+  assert.equal(parsed.workflow_id, 'minimax_h3_multiframe_official_12gb');
+  assert.equal(parsed.guide_frame_asset_id, 201);
+  assert.equal(parsed.guide_frame_idx, 39);
+  assert.deepEqual(parsed.character_reference_asset_ids, [101, 102]);
+});
+
+test('Multi-Frame workflow rejects guide frame indices outside the 124-frame clip', () => {
+  for (const guide_frame_idx of [0, 124, -1]) {
+    assert.throws(() => VideoGenerationRequestSchema.parse({
+      scene_id: 1,
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10,
+      guide_frame_asset_id: 201,
+      guide_frame_idx
+    }), /guide_frame_idx|too_small|too_big/i);
+  }
+});
+
+test('Multi-Frame workflow allows optional last-frame boundary guide', () => {
+  const parsed = VideoGenerationRequestSchema.parse({
+    scene_id: 50,
+    profile: 'narrative_clip',
+    workflow_id: 'minimax_h3_multiframe_official_12gb',
+    keyframe_asset_id: 10,
+    last_frame_asset_id: 12
+  });
+  assert.equal(parsed.workflow_id, 'minimax_h3_multiframe_official_12gb');
+  assert.equal(parsed.last_frame_asset_id, 12);
+});
+
+test('Ref2VA rejects guide_frame_asset_id', () => {
+  assert.throws(() => {
+    VideoGenerationRequestSchema.parse({
+      scene_id: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      guide_frame_asset_id: 201
+    });
+  }, /does not consume guide_frame_asset_id/);
+});
+
 test('FL2VA allows a boundary-only character loop without identity/motion references', () => {
   const parsed = VideoGenerationRequestSchema.parse({
     scene_id: 1,

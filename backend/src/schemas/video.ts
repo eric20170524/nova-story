@@ -9,7 +9,8 @@ export type VideoPreset = z.infer<typeof VideoPresetSchema>;
 export const VideoWorkflowIdSchema = z.enum([
   'minimax_h3_hongchao_a2a_12gb',
   'minimax_h3_ref2va_official_12gb',
-  'minimax_h3_fl2va_official_12gb'
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb'
 ]);
 export type VideoWorkflowId = z.infer<typeof VideoWorkflowIdSchema>;
 export const DEFAULT_VIDEO_WORKFLOW_ID: VideoWorkflowId = 'minimax_h3_hongchao_a2a_12gb';
@@ -39,6 +40,8 @@ export const MediaAssetRoleSchema = z.enum([
   'last_frame_reference',
   'character_reference',
   'motion_reference',
+  'guide_frame_reference',
+  'composition_reference',
   'raw_video',
   'loop_master',
   'narrative_final',
@@ -83,6 +86,8 @@ const VideoRequestBaseSchema = z.object({
   character_reference_asset_ids: z.array(z.number().int().positive()).max(3).optional().default([]),
   motion_reference_asset_id: z.number().int().positive().optional(),
   last_frame_asset_id: z.number().int().positive().optional(),
+  guide_frame_asset_id: z.number().int().positive().optional(),
+  guide_frame_idx: z.number().int().min(1).max(123).optional(),
   prompt_override: z.string().optional(),
   preset: VideoPresetSchema.default('preview_480p_5s'),
   seed: z.number().int().optional(),
@@ -92,12 +97,21 @@ const VideoRequestBaseSchema = z.object({
 const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: z.RefinementCtx) => {
   const isFl2va = data.workflow_id === 'minimax_h3_fl2va_official_12gb';
   const isRef2va = data.workflow_id === 'minimax_h3_ref2va_official_12gb';
+  const isMultiframe = data.workflow_id === 'minimax_h3_multiframe_official_12gb';
 
   if (isRef2va && data.last_frame_asset_id) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Official Ref2VA does not provide a hard last-frame boundary; use FL2VA or the experimental Hybrid workflow.',
       path: ['last_frame_asset_id']
+    });
+  }
+
+  if (isRef2va && data.guide_frame_asset_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Official Ref2VA does not consume guide_frame_asset_id; use the Official Multi-Frame workflow.',
+      path: ['guide_frame_asset_id']
     });
   }
 
@@ -116,13 +130,20 @@ const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: 
         path: ['motion_reference_asset_id']
       });
     }
+    if (data.guide_frame_asset_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Official FL2VA does not consume guide_frame_asset_id; use the Official Multi-Frame workflow.',
+        path: ['guide_frame_asset_id']
+      });
+    }
     return;
   }
 
-  // Ref2VA and the experimental Hybrid preserve the existing character-loop
-  // contract: identity references + exactly one motion reference.
+  // Ref2VA, Multiframe, and the experimental Hybrid preserve the character-loop
+  // identity contract: 1 to 3 character references.
   if (data.profile === 'character_loop') {
-    if (!data.motion_reference_asset_id) {
+    if (!data.motion_reference_asset_id && !isMultiframe) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'character_loop with Ref2VA/Hybrid requires exactly 1 motion_reference_asset_id',
@@ -132,7 +153,7 @@ const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: 
     if (!data.character_reference_asset_ids || data.character_reference_asset_ids.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'character_loop with Ref2VA/Hybrid requires 1 to 3 character_reference_asset_ids',
+        message: 'character_loop requires 1 to 3 character_reference_asset_ids',
         path: ['character_reference_asset_ids']
       });
     }
