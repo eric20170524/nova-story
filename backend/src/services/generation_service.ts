@@ -871,7 +871,9 @@ export class GenerationService {
                 }
                 const publish = createProgressPublisher(taskId, redis);
 
+                let turnaroundGpuLease: Awaited<ReturnType<typeof GpuLeaseService.acquireLease>> | null = null;
                 try {
+                    turnaroundGpuLease = await GpuLeaseService.acquireLease(taskId, 'image', 30 * 60 * 1000);
                     // Plan 1: free LLM VRAM before multi-panel ComfyUI work
                     await runVramHandoffForImageGen(publish);
 
@@ -893,7 +895,7 @@ export class GenerationService {
                     });
 
                     const assetUrl = result.sheetUrl;
-                    if (sceneId < 90_000_000) {
+                    if (sceneId < 900_000 && !workflowData?.character_id) {
                         await db.run(
                             'UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?',
                             'completed',
@@ -919,7 +921,7 @@ export class GenerationService {
                 } catch (error: any) {
                     logger.error(`[Task ${taskId}] Turnaround composite failed: ${error?.message || error}`);
                     await AssetTaskStore.failed(taskId, sceneId, error?.message || String(error));
-                    if (sceneId < 90_000_000) {
+                    if (sceneId < 900_000 && !workflowData?.character_id) {
                         try {
                             await db.run(
                                 'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
@@ -937,6 +939,9 @@ export class GenerationService {
                     });
                     return;
                 } finally {
+                    if (turnaroundGpuLease) {
+                        GpuLeaseService.releaseLease(turnaroundGpuLease.lease_id, taskId);
+                    }
                     if (redis) redis.disconnect();
                 }
             }
@@ -1021,7 +1026,7 @@ export class GenerationService {
                             }
                         }
                     }
-                } else if (sceneId >= 90_000_000 || workflowData?.character_id) {
+                } else if (sceneId >= 900_000 || workflowData?.character_id) {
                     // Check if this is a character generation request
                     if (workflowData?.character_id) {
                         characterId = Number(workflowData.character_id);

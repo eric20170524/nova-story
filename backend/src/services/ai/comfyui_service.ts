@@ -522,10 +522,16 @@ export class ComfyUIService {
 
                     // If finishing with failure/timeout before natural completion, confirm the
                     // prompt has stopped executing before leaving this method.
-                    if (promptId && customResult && customResult.status === 'error' && !confirmedStopped) {
-                        const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 3000);
-                        if (!stopped) {
-                            this.promptOwnership.watchPromptUntilStopped(promptId, 'Image');
+                    if (promptId) {
+                        if (confirmedStopped || !customResult || customResult.status !== 'error') {
+                            this.promptOwnership.confirmPromptStopped(promptId);
+                        } else {
+                            const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 3000);
+                            if (stopped) {
+                                this.promptOwnership.confirmPromptStopped(promptId);
+                            } else {
+                                this.promptOwnership.watchPromptUntilStopped(promptId, 'Image');
+                            }
                         }
                     }
 

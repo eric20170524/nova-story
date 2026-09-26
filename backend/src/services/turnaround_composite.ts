@@ -27,6 +27,7 @@ import {
   normalizeImageModelFamily,
   type ImageModelFamily
 } from './image_generation_policy';
+import { GpuLeaseService } from './gpu_lease_service';
 
 export type TurnaroundViewId = 'front' | 'side' | 'back';
 
@@ -312,6 +313,12 @@ export async function generateTurnaroundComposite(
   for (let i = 0; i < TURNAROUND_VIEWS.length; i++) {
     const view = TURNAROUND_VIEWS[i];
     if (!view) continue;
+
+    const currentLease = GpuLeaseService.getCurrentLease();
+    if (currentLease && currentLease.owner_task_id === input.taskId) {
+      GpuLeaseService.heartbeat(currentLease.lease_id, input.taskId);
+    }
+
     await input.onProgress?.('progress', {
       phase: 'turnaround_panel',
       view: view.id,
@@ -379,6 +386,7 @@ export async function generateTurnaroundComposite(
         await input.onProgress?.(msgType, { ...data, view: view.id });
       },
       {
+        ownerTaskId: input.taskId,
         onPromptQueued: async (promptId) => {
           try {
             const { AssetTaskStore } = await import('./task_store');

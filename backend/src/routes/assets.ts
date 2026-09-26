@@ -41,7 +41,8 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       || req.workflow?.new_version
       || req.workflow?.create_new_version
     );
-    if (req.scene_id < 90000000) {
+    const isCharacterScene = req.scene_id >= 900000 || Boolean(req.workflow?.character_id);
+    if (!isCharacterScene) {
       // Skip synthetic character scene ids (99999xxx)
       if (asNewVersion) {
         await createSceneVersion(req.scene_id, {
@@ -73,7 +74,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       logger.error(`Background task execution failed: ${err}`);
     });
 
-    const scene = req.scene_id < 90000000
+    const scene = !isCharacterScene
       ? await db.get('SELECT id, active_version FROM scene WHERE id = ?', req.scene_id)
       : null;
 
