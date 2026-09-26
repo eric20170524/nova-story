@@ -1321,7 +1321,7 @@ export const DirectorMode: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-slate-950 text-slate-100 h-full w-full min-h-0">
+    <div className="flex-1 flex overflow-hidden bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 h-full w-full min-h-0">
       <DirectorSidebar
         chapters={chapters}
         selectedChapterId={selectedChapterId}
@@ -1388,15 +1388,17 @@ export const DirectorMode: React.FC = () => {
       />
 
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-3 text-amber-400">
-              <AlertTriangle size={24} />
-              <h3 className="text-lg font-bold text-white">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-500">
+              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-800/50">
+                <AlertTriangle size={22} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
                 {t('director.re_generate_confirm_title', '重新生成分镜')}
               </h3>
             </div>
-            <p className="text-sm text-slate-300 leading-relaxed">
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
               {t(
                 'director.re_generate_confirm_desc',
                 '重新生成分镜将覆盖当前章节的所有镜头与参数设置。确认继续？'
@@ -1405,13 +1407,13 @@ export const DirectorMode: React.FC = () => {
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 onClick={() => setShowConfirmModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
               >
                 {t('common.cancel', '取消')}
               </button>
               <button
                 onClick={executeGenerateTimeline}
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-500 rounded-lg transition-colors shadow-lg shadow-amber-600/30"
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-500 rounded-xl transition-colors shadow-lg shadow-amber-600/30 font-semibold"
               >
                 {t('common.confirm', '确认重新生成')}
               </button>

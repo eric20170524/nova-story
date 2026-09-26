@@ -1,86 +1,214 @@
 @import "tailwindcss";
 
+@variant dark (&:where(.dark, .dark *));
+
 @theme {
     --color-gray-750: #2d3748;
     --color-gray-850: #1a202c;
     --color-gray-950: #0d1117;
+    --color-slate-850: #131c2e;
+    --color-slate-925: #0b0f19;
+}
+
+:root {
+    --bg-primary: #f8fafc;
+    --bg-surface: #ffffff;
+    --bg-surface-elevated: #ffffff;
+    --bg-surface-secondary: #f1f5f9;
+    --bg-input: #ffffff;
+    --border-subtle: #f1f5f9;
+    --border-default: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+    color-scheme: light;
+}
+
+.dark {
+    --bg-primary: #090d16;
+    --bg-surface: #0f172a;
+    --bg-surface-elevated: #131c2e;
+    --bg-surface-secondary: #1e293b;
+    --bg-input: #0b0f19;
+    --border-subtle: #172033;
+    --border-default: #1e293b;
+    --border-strong: #334155;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    color-scheme: dark;
+}
+
+html {
+    scroll-behavior: smooth;
 }
 
 body {
-    background-color: #0f172a; /* slate-950 */
-    color: #e2e8f0; /* slate-200 */
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar - Light Mode Default */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
 }
 ::-webkit-scrollbar-track {
-    background: #1e293b; 
+    background: #f1f5f9;
 }
 ::-webkit-scrollbar-thumb {
-    background: #475569; 
+    background: #cbd5e1;
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: #64748b; 
+    background: #94a3b8;
 }
 
-/* EasyMDE Dark Mode Overrides */
+/* Custom Scrollbar - Dark Mode */
+.dark ::-webkit-scrollbar-track {
+    background: #0f172a;
+}
+.dark ::-webkit-scrollbar-thumb {
+    background: #334155;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.7);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(71, 85, 105, 0.5);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.8);
+}
+
+/* Glassmorphism utility helpers */
+.glass-panel {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+}
+.dark .glass-panel {
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(30, 41, 59, 0.8);
+}
+
+/* EasyMDE Light Mode Styling */
 .EasyMDEContainer {
     display: flex;
     flex-direction: column;
     height: 100%;
 }
 .EasyMDEContainer .editor-toolbar {
-    background-color: #1e293b; /* slate-800 */
-    border-color: #334155; /* slate-700 */
-    border-radius: 8px 8px 0 0;
-    opacity: 0.8;
+    background-color: #f8fafc;
+    border-color: #e2e8f0;
+    border-radius: 12px 12px 0 0;
+    opacity: 0.95;
+    padding: 6px 10px;
 }
 .EasyMDEContainer .editor-toolbar i {
-    color: #94a3b8; /* slate-400 */
+    color: #64748b;
+}
+.EasyMDEContainer .editor-toolbar button {
+    border-radius: 6px;
+    transition: all 0.15s ease;
 }
 .EasyMDEContainer .editor-toolbar button:hover,
 .EasyMDEContainer .editor-toolbar button.active {
-    background-color: #334155;
-    border-color: #475569;
+    background-color: #e2e8f0;
+    border-color: #cbd5e1;
 }
 .EasyMDEContainer .editor-toolbar button:hover i,
 .EasyMDEContainer .editor-toolbar button.active i {
-    color: #e2e8f0;
+    color: #0f172a;
 }
 .EasyMDEContainer .CodeMirror {
-    background-color: #0f172a; /* slate-950 */
-    border-color: #334155; /* slate-700 */
-    color: #e2e8f0; /* slate-200 */
-    border-radius: 0 0 8px 8px;
+    background-color: #ffffff;
+    border-color: #e2e8f0;
+    color: #0f172a;
+    border-radius: 0 0 12px 12px;
     flex: 1;
-    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-    font-size: 1.125rem; /* text-lg */
-    line-height: 1.75;
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, "Songti SC", "SimSun", serif;
+    font-size: 1.125rem;
+    line-height: 1.85;
+    padding: 1rem 1.25rem;
+    transition: background-color 0.2s ease, color 0.2s ease;
 }
 .EasyMDEContainer .CodeMirror-cursor {
-    border-left: 1px solid #6366f1; /* indigo-500 */
+    border-left: 2px solid #6366f1;
 }
 .EasyMDEContainer .editor-preview {
-    background-color: #0f172a;
-    color: #e2e8f0;
-    padding: 2rem;
+    background-color: #ffffff;
+    color: #0f172a;
+    padding: 2.5rem;
+    line-height: 1.85;
 }
 .EasyMDEContainer .editor-statusbar {
-    display: none; /* Hide status bar */
+    display: none;
 }
-
-/* Hide toolbar completely if preferred, or maintain style */
-.editor-toolbar.fullscreen {
-    background-color: #1e293b;
-}
-
 .CodeMirror-selected {
-    background-color: #334155 !important;
+    background-color: #e0e7ff !important;
 }
 .CodeMirror-line::selection, .CodeMirror-line > span::selection, .CodeMirror-line > span > span::selection {
-    background-color: #334155 !important;
+    background-color: #e0e7ff !important;
+}
+
+/* EasyMDE Dark Mode Overrides */
+.dark .EasyMDEContainer .editor-toolbar {
+    background-color: #0f172a;
+    border-color: #1e293b;
+    opacity: 0.9;
+}
+.dark .EasyMDEContainer .editor-toolbar i {
+    color: #94a3b8;
+}
+.dark .EasyMDEContainer .editor-toolbar button:hover,
+.dark .EasyMDEContainer .editor-toolbar button.active {
+    background-color: #1e293b;
+    border-color: #334155;
+}
+.dark .EasyMDEContainer .editor-toolbar button:hover i,
+.dark .EasyMDEContainer .editor-toolbar button.active i {
+    color: #f8fafc;
+}
+.dark .EasyMDEContainer .CodeMirror {
+    background-color: #090d16;
+    border-color: #1e293b;
+    color: #e2e8f0;
+}
+.dark .EasyMDEContainer .CodeMirror-cursor {
+    border-left: 2px solid #818cf8;
+}
+.dark .EasyMDEContainer .editor-preview {
+    background-color: #090d16;
+    color: #e2e8f0;
+}
+.dark .editor-toolbar.fullscreen {
+    background-color: #0f172a;
+}
+.dark .CodeMirror-selected {
+    background-color: #312e81 !important;
+}
+.dark .CodeMirror-line::selection, .dark .CodeMirror-line > span::selection, .dark .CodeMirror-line > span > span::selection {
+    background-color: #312e81 !important;
 }

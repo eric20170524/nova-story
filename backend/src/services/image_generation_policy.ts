@@ -76,12 +76,18 @@ export interface LoraResolveInput {
   /** Style LoRA config (comfyui.pony_lora / flux_lora) */
   styleLora?: string | null;
   styleLoraStrength?: number;
-  /** NSFW LoRA config (advanced.pony_nsfw_lora / flux_nsfw_lora) */
+  /**
+   * Ignored. Adult look files come from the style preset, not this slot.
+   * Kept so older callers can still pass the retired settings fields.
+   */
   nsfwLora?: string | null;
   nsfwLoraStrength?: number;
   /** Visual style preset (affects whether Western NSFW LoRAs like Incase are used) */
   stylePreset?: string | null;
-  /** When true, missing install_path still accepts configured names (remote ComfyUI) */
+  /**
+   * Remote ComfyUI. Accept configured and preset filenames without consulting
+   * install_path — that directory is the local catalog, not the remote one.
+   */
   allowRemoteUnverified?: boolean;
 }
 
@@ -163,7 +169,7 @@ const REDCRAFT_KREA2_NSFW_PATTERNS: RegExp[] = [
 
 /** Trigger words known for popular LoRAs (matched by filename). */
 const TRIGGER_BY_PATTERN: Array<{ pattern: RegExp; trigger: string }> = [
-  { pattern: /expressiveh/i, trigger: 'Expressiveh' },
+  { pattern: /expressive[_-]?h/i, trigger: 'Expressiveh' },
   { pattern: /aidma/i, trigger: 'aidmaNSFWunlock' },
   { pattern: /incase/i, trigger: '' } // Incase is often triggerless
 ];
@@ -215,6 +221,14 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   anime: {
     pony: `source_anime, cel shaded, clean lines, vibrant colors`,
     flux: `anime illustration style, clean lines, vibrant colors`
+  },
+  western_comic: {
+    pony: `western comic book, thick ink, bold rim light, graphic novel shading`,
+    flux: `western comic book illustration, thick ink, graphic novel lighting`
+  },
+  autismmix_artist: {
+    pony: `source_anime, polished anime illustration, refined linework, rich color`,
+    flux: `polished anime illustration, refined linework, rich color`
   },
   cinematic_photo: {
     pony: 'cinematic lighting, shallow depth of field, film still, film grain',
@@ -418,10 +432,54 @@ const resolveTrigger = (filename: string): string | undefined => {
 };
 
 /**
+ * Adult look files (ExpressiveH, Incase, aidma, *nsfw*).
+ * A custom graph may already wire these. SFW compiles detach them by this test.
+ * Bare "sex" / "explicit" are omitted so unrelated filenames are left in place.
+ */
+const ADULT_LOOK_LORA_RE = /incase|expressive[_-]?h|hentai|nsfw|aidma|porn/i;
+
+export const isAdultLookLoraName = (filename: string): boolean =>
+  ADULT_LOOK_LORA_RE.test(path.basename(String(filename || '')));
+
+/** Establishing plates and overhead maps are empty frames even with no "wide" wording. */
+export const isEmptyShotIntent = (shotIntent?: string | null): boolean => {
+  const intent = String(shotIntent || '').toLowerCase().trim();
+  return intent === 'establish' || intent === 'overhead-map';
+};
+
+const SFW_SUPPRESSION_PHRASE_RE =
+  /\b(?:explicit sexual content|exposed breasts|sexual acts?|sexual content)\b/gi;
+const SFW_SUPPRESSION_TOKEN_RE =
+  /\b(?:nsfw|nudes?|naked|nudity|nipples?|genitalia|genitals|pussy|penis|sex|explicit)\b/gi;
+const EMPTY_WEIGHT_GROUP_RE = /[([]\s*:?[\d.]*\s*[)\]]/g;
+const SUPPRESSION_FILLER_RE = /^(?:no|not|without|avoid|and|or)$/i;
+
+/**
+ * Drop SFW blockers (nsfw, nude, …) from a negative prompt.
+ * Safety tokens such as child / loli are kept. Clauses that still say something
+ * else keep that remainder, including their own weights.
+ */
+export const stripSfwSuppressionFromNegative = (prompt: string): string => {
+  const kept: string[] = [];
+  for (const raw of String(prompt || '').split(/[,，]/)) {
+    let clause = raw.trim();
+    if (!clause) continue;
+    clause = clause.replace(SFW_SUPPRESSION_PHRASE_RE, ' ');
+    clause = clause.replace(SFW_SUPPRESSION_TOKEN_RE, ' ');
+    clause = clause.replace(EMPTY_WEIGHT_GROUP_RE, ' ');
+    clause = clause.replace(/\s{2,}/g, ' ').replace(/^[\s.:;-]+|[\s.:;-]+$/g, '').trim();
+    if (!clause || SUPPRESSION_FILLER_RE.test(clause)) continue;
+    if (!/[a-z0-9\u4e00-\u9fff]/i.test(clause)) continue;
+    kept.push(clause);
+  }
+  return kept.join(', ');
+};
+
+/**
  * Resolve a single configured or auto-discovered LoRA filename.
  * - Configured path wins when present on disk (or remote-unverified).
- * - Otherwise pattern discovery runs.
- * - When NSFW is off, adult-named LoRAs are never returned for style.
+ * - Otherwise pattern discovery runs against the local install.
+ * - Remote mode never scans install_path, so a local-only filename is not submitted.
  */
 export const resolveNamedOrDiscoveredLora = (options: {
   configured?: string | null;
@@ -446,7 +504,7 @@ export const resolveNamedOrDiscoveredLora = (options: {
     const base = path.basename(configuredName);
     const isExcluded = excludePatterns.some((re) => re.test(base));
     if (!isExcluded) {
-      if (!installPath && allowRemoteUnverified !== false) {
+      if (allowRemoteUnverified === true || (!installPath && allowRemoteUnverified !== false)) {
         return base;
       }
       if (fileExistsInInstall(installPath, base)) {
@@ -454,6 +512,9 @@ export const resolveNamedOrDiscoveredLora = (options: {
       }
     }
   }
+
+  // Retained install_path is not the remote catalog.
+  if (allowRemoteUnverified === true) return null;
 
   const candidates = listLoraFiles(installPath);
   if (candidates.length === 0) return null;
@@ -497,16 +558,80 @@ export const resolveStyleLora = (
     });
   }
 
-  // Pony: style = detail / quality. Never auto-pick Incase etc. as style when SFW.
-  const excludeNsfw = nsfwEnabled ? [] : PONY_NSFW_PATTERNS;
+  // Pony detail slot stays a quality LoRA. Adult looks belong to the style preset.
+  void nsfwEnabled;
   return resolveNamedOrDiscoveredLora({
     configured: input.styleLora,
     installPath: input.installPath,
     allowRemoteUnverified: input.allowRemoteUnverified,
     patterns: PONY_STYLE_PATTERNS,
-    excludePatterns: [...excludeNsfw, /flux/i, /krea/i, /redcraft/i],
-    fallbackPatterns: nsfwEnabled ? [/pony/i] : [/pony|detail/i]
+    excludePatterns: [...PONY_NSFW_PATTERNS, /artistsautism/i, /flux/i, /krea/i, /redcraft/i],
+    fallbackPatterns: [/pony|detail/i]
   });
+};
+
+/**
+ * Look LoRAs owned by a visual style. NSFW policy does not pick a second file.
+ * adultOnly slots are omitted while the project is SFW, because those files
+ * pull everyday shots toward a specific adult rendering.
+ */
+const PONY_PRESET_LOOKS: Record<string, Array<{
+  filenames: string[];
+  patterns: RegExp[];
+  strength: number;
+  adultOnly: boolean;
+  trigger?: string;
+}>> = {
+  anime: [
+    {
+      filenames: ['Expressive_H-000001.safetensors', 'ExpressiveH_PonyXL.safetensors'],
+      patterns: [/expressive[_-]?h/i],
+      strength: 0.55,
+      adultOnly: true,
+      trigger: 'Expressiveh'
+    }
+  ],
+  western_comic: [
+    {
+      filenames: ['Incase_Style_AutismMix_v3.safetensors', 'Incase_Style_PonyXL.safetensors'],
+      patterns: [/incase/i],
+      strength: 0.55,
+      adultOnly: true
+    }
+  ],
+  autismmix_artist: [
+    {
+      filenames: ['artistsautism_lora_XL_dim32_8e_v2_civit.safetensors'],
+      patterns: [/artistsautism|50[_-]?styles/i],
+      strength: 0.5,
+      adultOnly: false
+    }
+  ]
+};
+
+const resolvePresetLookFile = (
+  look: { filenames: string[]; patterns: RegExp[] },
+  input: Pick<LoraResolveInput, 'installPath' | 'allowRemoteUnverified'>
+): string | null => {
+  // Canonical preset name. A local file with a different fallback name must
+  // not be sent to a remote ComfyUI that does not have it.
+  if (input.allowRemoteUnverified === true) {
+    return look.filenames[0] ?? null;
+  }
+  if (input.installPath) {
+    for (const name of look.filenames) {
+      if (fileExistsInInstall(input.installPath, name)) return name;
+    }
+    return resolveNamedOrDiscoveredLora({
+      installPath: input.installPath,
+      allowRemoteUnverified: false,
+      patterns: look.patterns
+    });
+  }
+  if (input.allowRemoteUnverified !== false) {
+    return look.filenames[0] ?? null;
+  }
+  return null;
 };
 
 export const resolveNsfwLora = (
@@ -552,17 +677,17 @@ export const resolveNsfwLora = (
 export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
   const slots: LoraSlot[] = [];
   const used = new Set<string>();
-  const allowRemote = input.allowRemoteUnverified !== false && !input.installPath;
+  const remoteUnverified = input.allowRemoteUnverified === true;
 
   const push = (slot: LoraSlot | null) => {
     if (!slot?.name) return;
     const key = path.basename(slot.name).toLowerCase();
     if (used.has(key)) return;
-    // Local install: skip missing files
-    if (input.installPath && !fileExistsInInstall(input.installPath, slot.name) && !allowRemote) {
-      return;
+    if (!remoteUnverified) {
+      // Local install: skip missing files. Remote keeps the canonical name.
+      if (input.installPath && !fileExistsInInstall(input.installPath, slot.name)) return;
+      if (!input.installPath && input.allowRemoteUnverified === false) return;
     }
-    if (!input.installPath && !allowRemote) return;
     used.add(key);
     slots.push({
       ...slot,
@@ -600,62 +725,19 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
     });
   }
 
-  const stylePreset = String(input.stylePreset || '').toLowerCase();
-  const isGuofengFamily =
-    /gufeng|xianxia|ancient_fantasy|guoman|ethereal|sensual|immortal|guofeng/.test(stylePreset);
-
-  if (input.nsfwEnabled) {
-    const nsfwName = resolveNsfwLora(input.modelFamily, {
-      installPath: input.installPath,
-      nsfwLora: input.nsfwLora,
-      allowRemoteUnverified: input.allowRemoteUnverified
-    });
-    const defaultNsfwStrength =
-      input.modelFamily === 'flux'
-        ? DEFAULT_STRENGTHS.flux_nsfw
-        : input.modelFamily === 'redcraft_krea2'
-          ? DEFAULT_STRENGTHS.redcraft_krea2_nsfw
-          : DEFAULT_STRENGTHS.pony_nsfw;
-
-    if (nsfwName) {
-      // If config accidentally points NSFW at the same detail file as style, try rediscovery
-      const styleKey = styleName ? path.basename(styleName).toLowerCase() : '';
-      let finalNsfw = nsfwName;
-      if (path.basename(nsfwName).toLowerCase() === styleKey) {
-        const rediscovered = resolveNsfwLora(input.modelFamily, {
-          installPath: input.installPath,
-          nsfwLora: null,
-          allowRemoteUnverified: false
-        });
-        if (rediscovered && path.basename(rediscovered).toLowerCase() !== styleKey) {
-          finalNsfw = rediscovered;
-        } else {
-          finalNsfw = ''; // skip duplicate
-        }
-      }
-
-      // Incase is a Western/comic NSFW style LoRA — it fights guofeng/xianxia East-Asian faces.
-      // For 国风/仙侠 presets, rely on uncensored Pony base + explicit tags instead of Incase.
-      if (
-        finalNsfw
-        && input.modelFamily === 'pony'
-        && isGuofengFamily
-        && /incase/i.test(finalNsfw)
-      ) {
-        finalNsfw = '';
-      }
-
-      if (finalNsfw) {
-        let strength = Number(input.nsfwLoraStrength ?? defaultNsfwStrength);
-        if (isGuofengFamily && input.modelFamily === 'pony') {
-          strength = Math.min(strength, 0.4);
-        }
-        push({
-          role: 'nsfw',
-          name: finalNsfw,
-          strength
-        });
-      }
+  if (input.modelFamily === 'pony') {
+    const presetKey = String(input.stylePreset || '').toLowerCase();
+    const looks = PONY_PRESET_LOOKS[presetKey] ?? [];
+    for (const look of looks) {
+      if (look.adultOnly && !input.nsfwEnabled) continue;
+      const name = resolvePresetLookFile(look, input);
+      if (!name) continue;
+      push({
+        role: 'style',
+        name,
+        strength: look.strength,
+        triggerWords: look.trigger
+      });
     }
   }
 
@@ -773,7 +855,7 @@ export const buildPromptEnhancement = (options: {
   // Insert must never inherit environment-dominant framing even if the prompt mentions a park.
   const isEnvironment =
     !isInsertShot
-    && (intent === 'establish' || intent === 'wide-action' || intent === 'overhead-map' || shotMode === 'environment');
+    && (isEmptyShotIntent(intent) || intent === 'wide-action' || shotMode === 'environment');
   const isNarrativeScene = String(genType || '').toLowerCase() === 'scene';
   const inferredSubject = inferPromptSubjectType(existingPrompt, subjectType);
   const isExplicitFemale = inferredSubject === 'female_human';
@@ -1018,7 +1100,6 @@ export const resolveGenerationPlan = (options: {
 }): ResolvedGenerationPlan => {
   const { modelFamily, nsfwEnabled, runtimeSettings, workflowData = {}, basePrompt = '' } = options;
   const comfy = runtimeSettings?.comfyui || {};
-  const advanced = runtimeSettings?.advanced || {};
 
   const styleLora =
     modelFamily === 'flux'
@@ -1044,7 +1125,7 @@ export const resolveGenerationPlan = (options: {
   const isNarrativeScene = String(workflowData?.gen_type || '').toLowerCase() === 'scene';
   const workflowShotIntent = String(
     workflowData?.shot_intent || workflowData?.shot_spec?.shot_intent || ''
-  ).toLowerCase();
+  ).toLowerCase().trim();
   const isInsertShot =
     workflowShotIntent === 'insert'
     || /\b(insert shot|detail shot|macro shot|object close-up|prop close-up)\b/i.test(
@@ -1053,15 +1134,6 @@ export const resolveGenerationPlan = (options: {
   const styleStrength = isNarrativeScene
     ? Math.min(Number(configuredStyleStrength) || DEFAULT_STRENGTHS.pony_style, 0.35)
     : configuredStyleStrength;
-
-  const nsfwLora =
-    modelFamily === 'flux'
-      ? advanced.flux_nsfw_lora
-      : modelFamily === 'sd15'
-        ? null
-        : modelFamily === 'redcraft_krea2'
-          ? advanced.redcraft_krea2_nsfw_lora
-          : advanced.pony_nsfw_lora;
 
   const characterLora =
     workflowData?.lora_name || workflowData?.lora_path || workflowData?.character_lora;
@@ -1077,16 +1149,22 @@ export const resolveGenerationPlan = (options: {
     characterLoraStrength: workflowData?.lora_strength,
     styleLora,
     styleLoraStrength: styleStrength,
-    nsfwLora,
-    nsfwLoraStrength: advanced.nsfw_lora_strength,
     stylePreset,
     allowRemoteUnverified: Boolean(comfy.mode === 'remote' || !comfy.install_path)
   });
-  // Environment shots need spatial fidelity more than texture amplification.
-  // Skip style/detail LoRAs entirely here; character LoRAs remain available.
-  const loras = shotMode === 'environment' || isInsertShot
-    ? resolvedLoras.filter((slot) => slot.role !== 'style')
+  const strengthCapped = isNarrativeScene
+    ? resolvedLoras.map((slot) => (
+      slot.role === 'style'
+        ? { ...slot, strength: Math.min(slot.strength, 0.35) }
+        : slot
+    ))
     : resolvedLoras;
+  // Empty frames and insert shots need spatial fidelity more than texture amplification.
+  // establish / overhead-map count even when the prompt never says "wide".
+  // Skip detail and look LoRAs; character LoRAs remain available.
+  const loras = shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot
+    ? strengthCapped.filter((slot) => slot.role !== 'style')
+    : strengthCapped;
 
   const enhancement = buildPromptEnhancement({
     modelFamily,

@@ -367,17 +367,17 @@ export const StoryEditor: React.FC = () => {
   }), [t]);
 
   return (
-    <div className="flex h-full w-full min-h-0 bg-slate-950">
+    <div className="flex h-full w-full min-h-0 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Chapter Sidebar */}
-      <div className="w-16 lg:w-60 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 transition-all h-full min-h-0">
-        <div className="p-4 border-b border-slate-800 flex justify-between items-center h-14 flex-shrink-0">
-          <h3 className="font-semibold text-slate-300 hidden lg:block text-sm">{t('story.chapters')}</h3>
+      <div className="w-16 lg:w-64 bg-white/90 dark:bg-[#0c1322]/90 border-r border-slate-200/80 dark:border-slate-800/80 flex flex-col flex-shrink-0 transition-all h-full min-h-0 backdrop-blur-sm">
+        <div className="p-4 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center h-14 flex-shrink-0">
+          <h3 className="font-bold text-slate-800 dark:text-slate-200 hidden lg:block text-sm">{t('story.chapters')}</h3>
           <button
             onClick={handleCreateChapter}
-            className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white mx-auto lg:mx-0 transition-colors"
+            className="p-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-600 dark:text-indigo-400 rounded-xl mx-auto lg:mx-0 transition-all shadow-xs"
             title={t('story.new_chapter', '新建章节')}
           >
-            <Plus size={18} />
+            <Plus size={17} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-h-0">
@@ -385,15 +385,15 @@ export const StoryEditor: React.FC = () => {
             <div
               key={chapter.id}
               onClick={() => setSelectedChapter(chapter)}
-              className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer text-xs sm:text-sm transition-colors ${
+              className={`group flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer text-xs sm:text-sm transition-all ${
                 selectedChapter?.id === chapter.id 
-                  ? 'bg-indigo-600/20 text-indigo-300 font-medium' 
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold ring-1 ring-indigo-500/20 shadow-xs' 
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
               title={chapter.title}
             >
               <div className="flex items-center gap-2 overflow-hidden flex-1">
-                <FileText size={16} className="flex-shrink-0" />
+                <FileText size={15} className={`flex-shrink-0 ${selectedChapter?.id === chapter.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`} />
                 <span className="truncate hidden lg:block">{chapter.title}</span>
               </div>
               
@@ -401,7 +401,7 @@ export const StoryEditor: React.FC = () => {
                 <button 
                   onClick={(e) => handleMoveChapter(e, chapter, 'up')}
                   disabled={index === 0}
-                  className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
+                  className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-30 rounded"
                   title="Move Up"
                 >
                   <ArrowUp size={12} />
@@ -409,14 +409,14 @@ export const StoryEditor: React.FC = () => {
                 <button 
                   onClick={(e) => handleMoveChapter(e, chapter, 'down')}
                   disabled={index === chapters.length - 1}
-                  className="p-1 text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500"
+                  className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-30 rounded"
                   title="Move Down"
                 >
                   <ArrowDown size={12} />
                 </button>
                 <button 
                   onClick={(e) => handleDeleteChapter(e, chapter.id)}
-                  className="p-1 text-slate-500 hover:text-red-400 rounded transition-colors"
+                  className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded transition-colors"
                   title="Delete Chapter"
                 >
                   <Trash2 size={12} />
@@ -425,18 +425,18 @@ export const StoryEditor: React.FC = () => {
             </div>
           ))}
           {chapters.length === 0 && (
-            <div className="p-4 text-center text-xs text-slate-600 hidden lg:block">{t('story.no_chapters')}</div>
+            <div className="p-4 text-center text-xs text-slate-400 dark:text-slate-500 hidden lg:block">{t('story.no_chapters')}</div>
           )}
         </div>
       </div>
 
       {/* Main Full-Width Editor Area */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
-        {/* Editor Top Bar — z-20 so bar chrome stays above editor; menu itself portals to body */}
-        <div className="relative z-20 h-14 border-b border-slate-800 flex items-center justify-between px-3 sm:px-6 bg-slate-900/90 backdrop-blur gap-3 flex-shrink-0">
+        {/* Editor Top Bar */}
+        <div className="relative z-20 h-14 border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between px-3 sm:px-6 bg-white/80 dark:bg-[#0c1322]/80 backdrop-blur-md gap-3 flex-shrink-0">
           <input
             type="text"
-            className="bg-transparent border-none text-white font-medium focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate"
+            className="bg-transparent border-none text-slate-900 dark:text-white font-bold focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate placeholder-slate-400"
             value={selectedChapter?.title || ''}
             onChange={(e) => {
               const newTitle = e.target.value;
@@ -455,7 +455,7 @@ export const StoryEditor: React.FC = () => {
               type="button"
               onClick={undo}
               disabled={!canUndo}
-              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition-colors"
+              className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title={t('story.undo', 'Undo')}
             >
               <Undo2 size={16} />
@@ -464,13 +464,13 @@ export const StoryEditor: React.FC = () => {
               type="button"
               onClick={redo}
               disabled={!canRedo}
-              className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition-colors"
+              className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title={t('story.redo', 'Redo')}
             >
               <Redo2 size={16} />
             </button>
 
-            {/* Smart AI Actions Dropdown — portal+fixed so CodeMirror cannot cover it */}
+            {/* Smart AI Actions Dropdown */}
             <div className="relative">
               <button
                 ref={aiMenuBtnRef}
@@ -478,18 +478,18 @@ export const StoryEditor: React.FC = () => {
                 aria-expanded={showAiMenu}
                 aria-haspopup="menu"
                 onClick={() => setShowAiMenu((v) => !v)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-xl text-xs font-semibold transition-all ${
                   showAiMenu
-                    ? 'bg-indigo-600/40 text-indigo-200 border-indigo-400/50'
-                    : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border-indigo-500/30'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-200 border-indigo-300 dark:border-indigo-400/50 shadow-xs'
+                    : 'bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/40'
                 }`}
                 title={t('story.smart_ai_tools', '智能创作工具')}
               >
-                <Sparkles size={14} className="text-indigo-400" />
+                <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400" />
                 <span className="hidden md:inline">{t('story.smart_ai_tools', '智能创作')}</span>
                 <ChevronDown
                   size={13}
-                  className={`text-indigo-400 transition-transform duration-150 ${
+                  className={`text-indigo-600 dark:text-indigo-400 transition-transform duration-150 ${
                     showAiMenu ? 'rotate-180' : ''
                   }`}
                 />
@@ -508,9 +508,9 @@ export const StoryEditor: React.FC = () => {
                       maxHeight: aiMenuPos.maxHeight,
                       zIndex: 200,
                     }}
-                    className="w-64 overflow-y-auto overscroll-contain bg-slate-900 border border-slate-700 rounded-xl shadow-2xl shadow-black/50 py-1.5 text-xs custom-scrollbar animate-in fade-in zoom-in-95 duration-150 origin-top-right"
+                    className="w-64 overflow-y-auto overscroll-contain bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl py-1.5 text-xs custom-scrollbar animate-in fade-in zoom-in-95 duration-150 origin-top-right"
                   >
-                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">
                       {t('story.ai_extraction_analysis', '分析与抽取')}
                     </div>
                     <button
@@ -524,9 +524,9 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <Users size={14} className="text-indigo-400 flex-shrink-0" />
+                      <Users size={14} className="text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
                       <span>{t('story.analyze_characters', '提取本章角色')}</span>
                     </button>
                     <button
@@ -540,15 +540,15 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <Sparkles size={14} className="text-sky-400 flex-shrink-0" />
+                      <Sparkles size={14} className="text-sky-500 dark:text-sky-400 flex-shrink-0" />
                       <span>{t('story.analyze_impact', '剧情深度分析')}</span>
                     </button>
 
-                    <div className="h-px bg-slate-800 my-1" />
+                    <div className="h-px bg-slate-100 dark:bg-slate-800 my-1" />
 
-                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">
                       {t('story.skills', '写作技能')}
                     </div>
                     <button
@@ -562,9 +562,9 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <Film size={14} className="text-purple-400 flex-shrink-0" />
+                      <Film size={14} className="text-purple-500 dark:text-purple-400 flex-shrink-0" />
                       <span>{t('story.skill_cinematic', '电影化视听改写')}</span>
                     </button>
                     <button
@@ -578,9 +578,9 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <Wand2 size={14} className="text-amber-400 flex-shrink-0" />
+                      <Wand2 size={14} className="text-amber-500 dark:text-amber-400 flex-shrink-0" />
                       <span>{t('story.skill_conflict', '注入剧情冲突')}</span>
                     </button>
                     <button
@@ -594,15 +594,15 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <RefreshCw size={14} className="text-rose-400 flex-shrink-0" />
+                      <RefreshCw size={14} className="text-rose-500 dark:text-rose-400 flex-shrink-0" />
                       <span>{t('story.skill_reversal', '设计情节反转')}</span>
                     </button>
 
-                    <div className="h-px bg-slate-800 my-1" />
+                    <div className="h-px bg-slate-100 dark:bg-slate-800 my-1" />
 
-                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">
                       {t('story.world_consistency', '世界观与体检')}
                     </div>
                     <button
@@ -616,9 +616,9 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <ShieldAlert size={14} className="text-amber-400 flex-shrink-0" />
+                      <ShieldAlert size={14} className="text-amber-500 dark:text-amber-400 flex-shrink-0" />
                       <span>{t('story.consistency_btn', '全书逻辑体检')}</span>
                     </button>
                     <button
@@ -632,9 +632,9 @@ export const StoryEditor: React.FC = () => {
                           )
                         )
                       }
-                      className="w-full px-3 py-2 text-left text-slate-300 hover:bg-indigo-600/20 hover:text-indigo-200 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
                     >
-                      <BookOpen size={14} className="text-emerald-400 flex-shrink-0" />
+                      <BookOpen size={14} className="text-emerald-500 dark:text-emerald-400 flex-shrink-0" />
                       <span>{t('story.impact_btn', '定稿：更新世界观')}</span>
                     </button>
                   </div>,
@@ -642,12 +642,12 @@ export const StoryEditor: React.FC = () => {
                 )}
             </div>
 
-            {/* Soft link to Director (generate shots only in director workspace) */}
+            {/* Link to Director */}
             <button
               type="button"
               onClick={handleOpenDirector}
               disabled={!projectId}
-              className="p-1.5 text-slate-500 hover:text-slate-300 rounded-lg hover:bg-slate-800/80 transition-colors disabled:opacity-30"
+              className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-30"
               title={t('story.open_director', '打开导演分镜工作台')}
             >
               <Clapperboard size={16} />
@@ -657,17 +657,17 @@ export const StoryEditor: React.FC = () => {
             <button
               type="button"
               onClick={() => agentCtx?.setOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-400 hover:text-indigo-300 bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-800/40 rounded-lg text-xs font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/40 rounded-xl text-xs font-semibold transition-colors"
               title={t('agent.open_panel', '打开 Agent OS')}
             >
-              <Bot size={15} />
+              <Bot size={14} />
               <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
             </button>
 
             {/* Save Button */}
             <button 
               onClick={handleSave}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs sm:text-sm font-medium transition-colors shadow-md shadow-indigo-600/20"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-indigo-500/20"
             >
               <Save size={14} /> 
               <span>{t('story.save')}</span>
@@ -677,9 +677,9 @@ export const StoryEditor: React.FC = () => {
 
         {/* Outline / Summary Bar */}
         {selectedChapter && (
-          <div className="px-4 lg:px-6 py-2 border-b border-slate-800 bg-slate-950/80 flex-shrink-0">
+          <div className="px-4 lg:px-6 py-2.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#0c1322]/70 backdrop-blur-sm flex-shrink-0">
             <div className="flex items-center justify-between">
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-bold">
                 {t('story.chapter_summary', '本章剧情大纲 / 梗概 (Summary)')}
               </label>
             </div>
@@ -688,13 +688,13 @@ export const StoryEditor: React.FC = () => {
               onChange={(e) => setSummary(e.target.value)}
               rows={2}
               placeholder={t('story.summary_placeholder', '核心冲突、情节走向、结尾悬念…')}
-              className="mt-1 w-full bg-slate-900/90 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 resize-none transition-colors"
+              className="mt-1 w-full bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none transition-all shadow-2xs"
             />
           </div>
         )}
         
         {/* Editor Body */}
-        <div className="flex-1 relative group/editor overflow-hidden flex flex-col min-h-0">
+        <div className="flex-1 relative group/editor overflow-hidden flex flex-col min-h-0 bg-white dark:bg-[#090d16]">
           {selectedChapter ? (
             <SimpleMDE
               key={selectedChapter.id}
@@ -704,7 +704,7 @@ export const StoryEditor: React.FC = () => {
               className="h-full custom-simplemde"
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+            <div className="flex-1 flex items-center justify-center text-slate-400 dark:text-slate-500 text-sm">
               {t('story.no_chapters')}
             </div>
           )}
@@ -714,7 +714,7 @@ export const StoryEditor: React.FC = () => {
             <button
               onClick={handleAIDraft}
               disabled={aiLoading}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-full shadow-xl shadow-indigo-600/40 transition-transform hover:scale-105 disabled:opacity-50 flex items-center gap-2 text-xs font-medium"
+              className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white px-4 py-2.5 rounded-full shadow-xl shadow-indigo-600/30 transition-transform hover:scale-105 active:scale-95 disabled:opacity-50 flex items-center gap-2 text-xs font-semibold"
               title={t('story.ai_continue', '沉浸续写')}
             >
               {aiLoading ? <RefreshCw className="animate-spin" size={15} /> : <Wand2 size={15} />}

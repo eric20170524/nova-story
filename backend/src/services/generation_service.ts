@@ -16,11 +16,13 @@ import {
 } from '../core/paths';
 import {
     applyPromptEnhancement,
+    isAdultLookLoraName,
     mergeClipPositivePrompt,
     normalizeImageModelFamily,
     resolveGenerationPlan,
     sanitizeNegativePromptForSubject,
     sanitizePromptForSubject,
+    stripSfwSuppressionFromNegative,
     type ImageModelFamily
 } from './image_generation_policy';
 import {
@@ -303,6 +305,58 @@ const injectLora = (
     }
 };
 
+const LORA_LOADER_CLASS_TYPES = new Set(['LoraLoader', 'LoraLoaderModelOnly']);
+
+/**
+ * Custom graphs can ship with ExpressiveH / Incase already wired.
+ * The planner only adds LoRAs, so SFW compiles must unhook those loaders
+ * and point model/clip consumers at whatever fed the loader.
+ */
+const detachAdultLookLoras = (workflow: Record<string, any>) => {
+    const adultIds = Object.keys(workflow).filter((nodeId) => {
+        const node = workflow[nodeId];
+        return LORA_LOADER_CLASS_TYPES.has(node?.class_type)
+            && isAdultLookLoraName(String(node?.inputs?.lora_name || ''));
+    });
+
+    for (const nodeId of adultIds) {
+        const node = workflow[nodeId];
+        if (!node) continue;
+        const loraName = String(node.inputs?.lora_name || '');
+        const modelLink = Array.isArray(node.inputs?.model) ? [...node.inputs.model] : null;
+        const clipLink = Array.isArray(node.inputs?.clip) ? [...node.inputs.clip] : null;
+        const replacements = new Map<number, unknown[]>();
+        if (modelLink) replacements.set(0, modelLink);
+        if (clipLink) replacements.set(1, clipLink);
+
+        const edits: Array<{ owner: any; key: string; next: unknown[] }> = [];
+        let unresolved = false;
+        for (const other of Object.values(workflow) as any[]) {
+            if (!other?.inputs || other === node || typeof other.inputs !== 'object') continue;
+            for (const key of Object.keys(other.inputs)) {
+                const value = other.inputs[key];
+                if (!Array.isArray(value) || String(value[0]) !== nodeId) continue;
+                const next = replacements.get(Number(value[1]));
+                if (!next) {
+                    unresolved = true;
+                    break;
+                }
+                edits.push({ owner: other, key, next: [...next] });
+            }
+            if (unresolved) break;
+        }
+        if (unresolved) {
+            logger.warn(`Left prewired adult LoRA connected; no upstream output for ${loraName}`);
+            continue;
+        }
+        for (const edit of edits) {
+            edit.owner.inputs[edit.key] = edit.next;
+        }
+        delete workflow[nodeId];
+        logger.info(`Detached prewired adult LoRA while NSFW is off: ${loraName}`);
+    }
+};
+
 /**
  * Wire a real img2img path when a reference image is provided.
  * The base Pony/FLUX templates only do text2img — previously ref_image_url was
@@ -513,7 +567,12 @@ export const compileComfyWorkflow = async (
         ),
         plan.enhancement.negativeExtra
     ];
-    const negativePrompt = negativeParts.filter(Boolean).join(', ');
+    // Saved shot negatives and the joined booster can still carry nsfw/nude from
+    // an earlier SFW pass. Drop those blockers once adult mode is on.
+    let negativePrompt = negativeParts.filter(Boolean).join(', ');
+    if (nsfwEnabled) {
+        negativePrompt = stripSfwSuppressionFromNegative(negativePrompt);
+    }
 
     // FLUX prefers lower CFG; SD1.5 draft prefers fewer steps; RedCraft Krea2 defaults to 10 steps & CFG 1.0; Pony defaults otherwise
     const defaultSteps = Number(
@@ -548,9 +607,12 @@ export const compileComfyWorkflow = async (
                 : effectivePrompt;
         }
         if (negativeId && workflow[negativeId]?.inputs && negativeId !== positiveId) {
-            const templateText = String(workflow[negativeId].inputs.text || '').trim();
+            let templateText = String(workflow[negativeId].inputs.text || '').trim();
+            if (nsfwEnabled) {
+                templateText = stripSfwSuppressionFromNegative(templateText);
+            }
             workflow[negativeId].inputs.text = preserveTemplateConditioning && templateText
-                ? `${templateText}, ${negativePrompt}`
+                ? (negativePrompt ? `${templateText}, ${negativePrompt}` : templateText)
                 : negativePrompt;
         }
 
@@ -590,17 +652,14 @@ export const compileComfyWorkflow = async (
         }
     }
 
+    if (!nsfwEnabled) {
+        detachAdultLookLoras(workflow);
+    }
+
     for (const slot of plan.loras) {
         injectLora(workflow, slot.name, slot.strength, modelFamily);
         logger.info(
             `Injected ${slot.role} LoRA for ${modelFamily}: ${slot.name} @ ${slot.strength}`
-        );
-    }
-
-    if (nsfwEnabled && !plan.loras.some((l) => l.role === 'nsfw')) {
-        logger.warn(
-            `NSFW mode is enabled but no ${modelFamily} NSFW LoRA was found under models/loras. `
-            + 'Install Incase_Style_PonyXL (Pony) or set advanced.pony_nsfw_lora.'
         );
     }
 

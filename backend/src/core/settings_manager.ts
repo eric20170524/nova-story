@@ -42,8 +42,8 @@ const DEFAULT_SETTINGS = {
     },
     advanced: {
         nsfw_enabled: false,
-        // Adult style / unlock LoRAs — separate from style/detail; auto-discovered by filename patterns
-        pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+        // Retired. Look LoRAs are chosen by the visual style preset, not this switch.
+        pony_nsfw_lora: null,
         redcraft_krea2_nsfw_lora: null,
         nsfw_lora_strength: 0.55
     },

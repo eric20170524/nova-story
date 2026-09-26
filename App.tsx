@@ -10,6 +10,7 @@ import { ProjectSettings } from './pages/ProjectSettings';
 import { SettingsPage } from './pages/Settings';
 import { LanguageProvider } from './LanguageContext';
 import { ToastProvider } from './ToastContext';
+import { ThemeProvider } from './ThemeContext';
 import { AuthService } from './services/auth';
 
 // Authentication Guard Component
@@ -35,7 +36,14 @@ const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     }, [location]);
 
     if (isAuthenticated === null) {
-        return <div className="flex items-center justify-center h-screen">Loading Auth...</div>;
+        return (
+          <div className="flex items-center justify-center h-screen bg-slate-50 dark:bg-[#090d16] text-slate-800 dark:text-slate-200">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-sm font-medium">Loading NovaStory...</span>
+            </div>
+          </div>
+        );
     }
 
     if (!isAuthenticated) {
@@ -47,29 +55,31 @@ const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 const App: React.FC = () => {
   return (
-    <LanguageProvider>
-      <ToastProvider>
-        <BrowserRouter>
-          <AuthGuard>
-              <Routes>
-              <Route path="/" element={<Layout />}>
-                  <Route index element={<Dashboard />} />
-                  <Route path="settings" element={<SettingsPage />} />
-                  
-                  {/* Project Specific Routes */}
-                  <Route path="project/:id" element={<ProjectLayout />}>
-                  <Route index element={<Navigate to="story" replace />} />
-                  <Route path="story" element={<StoryEditor />} />
-                  <Route path="characters" element={<CharacterManager />} />
-                  <Route path="director" element={<DirectorMode />} />
-                  <Route path="settings" element={<ProjectSettings />} />
-                  </Route>
-              </Route>
-              </Routes>
-          </AuthGuard>
-        </BrowserRouter>
-      </ToastProvider>
-    </LanguageProvider>
+    <ThemeProvider>
+      <LanguageProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <AuthGuard>
+                <Routes>
+                <Route path="/" element={<Layout />}>
+                    <Route index element={<Dashboard />} />
+                    <Route path="settings" element={<SettingsPage />} />
+                    
+                    {/* Project Specific Routes */}
+                    <Route path="project/:id" element={<ProjectLayout />}>
+                    <Route index element={<Navigate to="story" replace />} />
+                    <Route path="story" element={<StoryEditor />} />
+                    <Route path="characters" element={<CharacterManager />} />
+                    <Route path="director" element={<DirectorMode />} />
+                    <Route path="settings" element={<ProjectSettings />} />
+                    </Route>
+                </Route>
+                </Routes>
+            </AuthGuard>
+          </BrowserRouter>
+        </ToastProvider>
+      </LanguageProvider>
+    </ThemeProvider>
   );
 };
 

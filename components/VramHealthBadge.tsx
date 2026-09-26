@@ -57,31 +57,31 @@ function levelStyles(level: VramLevel): {
   switch (level) {
     case 'good':
       return {
-        pill: 'bg-emerald-950/80 border-emerald-700/60 text-emerald-200 hover:bg-emerald-900/70',
-        dot: 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.85)]',
+        pill: 'bg-emerald-50 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-700/60 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/70',
+        dot: 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.85)]',
         ring: 'ring-emerald-500/40',
-        label: 'text-emerald-300',
+        label: 'text-emerald-700 dark:text-emerald-300',
       };
     case 'warning':
       return {
-        pill: 'bg-amber-950/80 border-amber-700/60 text-amber-100 hover:bg-amber-900/70',
-        dot: 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] animate-pulse',
+        pill: 'bg-amber-50 dark:bg-amber-950/80 border-amber-200 dark:border-amber-700/60 text-amber-800 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-900/70',
+        dot: 'bg-amber-500 dark:bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] animate-pulse',
         ring: 'ring-amber-500/40',
-        label: 'text-amber-300',
+        label: 'text-amber-700 dark:text-amber-300',
       };
     case 'critical':
       return {
-        pill: 'bg-rose-950/85 border-rose-600/70 text-rose-100 hover:bg-rose-900/75',
-        dot: 'bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.95)] animate-pulse',
+        pill: 'bg-rose-50 dark:bg-rose-950/85 border-rose-200 dark:border-rose-600/70 text-rose-800 dark:text-rose-100 hover:bg-rose-100 dark:hover:bg-rose-900/75',
+        dot: 'bg-rose-500 dark:bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.95)] animate-pulse',
         ring: 'ring-rose-500/50',
-        label: 'text-rose-300',
+        label: 'text-rose-700 dark:text-rose-300',
       };
     default:
       return {
-        pill: 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800',
-        dot: 'bg-slate-500',
-        ring: 'ring-slate-600/40',
-        label: 'text-slate-400',
+        pill: 'bg-slate-100 dark:bg-slate-900/90 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800',
+        dot: 'bg-slate-400 dark:bg-slate-500',
+        ring: 'ring-slate-500/40',
+        label: 'text-slate-600 dark:text-slate-400',
       };
   }
 }
@@ -289,10 +289,10 @@ export const VramHealthBadge: React.FC = () => {
       {/* Plan 1 seamless status text (status bar) */}
       {schedulerLabel && (
         <div
-          className="hidden sm:flex items-center gap-1.5 max-w-[18rem] px-2.5 py-1 rounded-full border border-indigo-800/50 bg-indigo-950/60 text-[11px] text-indigo-200 animate-pulse"
+          className="hidden sm:flex items-center gap-1.5 max-w-[18rem] px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50 dark:bg-indigo-950/60 text-[11px] text-indigo-700 dark:text-indigo-200 animate-pulse font-medium"
           title={schedulerLabel}
         >
-          <LoaderCircle size={12} className="animate-spin flex-shrink-0 text-indigo-300" />
+          <LoaderCircle size={12} className="animate-spin flex-shrink-0 text-indigo-600 dark:text-indigo-300" />
           <span className="truncate">{schedulerLabel}</span>
         </div>
       )}
@@ -300,9 +300,9 @@ export const VramHealthBadge: React.FC = () => {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-2 pl-2.5 pr-3 py-1.5 rounded-full border text-xs font-medium transition-all shadow-lg backdrop-blur-sm ${
+        className={`flex items-center gap-2 pl-2.5 pr-3 py-1 rounded-full border text-xs font-medium transition-all shadow-sm backdrop-blur-sm ${
           schedulerActive
-            ? 'bg-indigo-950/80 border-indigo-600/50 text-indigo-100 hover:bg-indigo-900/70 ring-2 ring-indigo-500/30'
+            ? 'bg-indigo-50 dark:bg-indigo-950/80 border-indigo-300 dark:border-indigo-600/50 text-indigo-700 dark:text-indigo-100 hover:bg-indigo-100 dark:hover:bg-indigo-900/70 ring-2 ring-indigo-500/30'
             : styles.pill
         } ${open ? `ring-2 ${styles.ring}` : ''}`}
         title={schedulerLabel || tip || title}
@@ -312,7 +312,7 @@ export const VramHealthBadge: React.FC = () => {
         <span
           className={`relative flex h-2 w-2 flex-shrink-0 rounded-full ${
             schedulerActive
-              ? 'bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.9)] animate-pulse'
+              ? 'bg-indigo-500 dark:bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.9)] animate-pulse'
               : styles.dot
           }`}
         >
@@ -333,16 +333,16 @@ export const VramHealthBadge: React.FC = () => {
               : title}
         </span>
         {status?.percent != null && !schedulerActive && (
-          <span className={`hidden sm:inline font-mono tabular-nums opacity-80 ${styles.label}`}>
+          <span className={`hidden sm:inline font-mono tabular-nums opacity-90 ${styles.label}`}>
             {Math.round(status.percent)}%
           </span>
         )}
       </button>
 
-      {/* Hover tooltip when panel closed — occupancy breakdown (e.g. Ollama 5.1G / ComfyUI 2.5G) */}
+      {/* Hover tooltip when panel closed */}
       {!open && tip && (
         <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 opacity-0 group-hover/vram:opacity-100 transition-opacity z-50">
-          <div className="rounded-lg border border-slate-700 bg-slate-900/95 px-3 py-2 text-[11px] text-slate-300 shadow-xl leading-relaxed">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-[#0f172a]/95 px-3 py-2 text-[11px] text-slate-700 dark:text-slate-300 shadow-xl backdrop-blur-md leading-relaxed">
             {tip}
           </div>
         </div>
@@ -352,18 +352,18 @@ export const VramHealthBadge: React.FC = () => {
         <div
           role="dialog"
           aria-label={t('vram.panel_title', '显存快速控制')}
-          className="absolute left-0 top-full mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-slate-700 bg-slate-900 shadow-2xl z-50 overflow-hidden animate-in fade-in duration-150"
+          className="absolute left-0 top-full mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0f172a] shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
         >
-          <div className="px-4 py-3 border-b border-slate-800 bg-gradient-to-r from-slate-900 to-slate-850">
+          <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-[#0f172a] dark:to-[#131c2e]">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className={`text-sm font-semibold ${styles.label}`}>{title}</div>
-                <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{summary}</div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{summary}</div>
               </div>
               <button
                 type="button"
                 onClick={() => refresh(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex-shrink-0"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors flex-shrink-0"
                 title={t('vram.refresh', '刷新')}
               >
                 <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -371,10 +371,10 @@ export const VramHealthBadge: React.FC = () => {
             </div>
 
             {status?.gpu_name && (
-              <div className="mt-2 text-[10px] text-slate-500 truncate" title={status.gpu_name}>
+              <div className="mt-2 text-[10px] text-slate-500 dark:text-slate-400 truncate" title={status.gpu_name}>
                 {status.gpu_name}
                 {status.used_bytes != null && status.total_bytes != null && (
-                  <span className="ml-1 text-slate-400">
+                  <span className="ml-1 text-slate-600 dark:text-slate-300 font-medium">
                     · {formatGiB(status.used_bytes)} / {formatGiB(status.total_bytes)}
                   </span>
                 )}
@@ -382,7 +382,7 @@ export const VramHealthBadge: React.FC = () => {
             )}
 
             {/* Usage bar */}
-            <div className="mt-2.5 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+            <div className="mt-2.5 h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-500 ${
                   level === 'critical'
@@ -390,16 +390,16 @@ export const VramHealthBadge: React.FC = () => {
                     : level === 'warning'
                       ? 'bg-amber-400'
                       : level === 'good'
-                        ? 'bg-emerald-400'
-                        : 'bg-slate-600'
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-500'
                 }`}
                 style={{ width: `${Math.min(100, Math.max(0, status?.percent ?? 0))}%` }}
               />
             </div>
           </div>
 
-          <div className="px-4 py-3 space-y-2.5 border-b border-slate-800">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+          <div className="px-4 py-3 space-y-2.5 border-b border-slate-100 dark:border-slate-800">
+            <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 font-bold">
               {t('vram.breakdown', '占用明细')}
             </div>
 
@@ -408,56 +408,56 @@ export const VramHealthBadge: React.FC = () => {
                 {status.processes.map((p) => (
                   <li
                     key={p.name}
-                    className="flex items-center justify-between text-xs text-slate-300 bg-slate-950/60 rounded-lg px-2.5 py-1.5 border border-slate-800"
+                    className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950/60 rounded-xl px-2.5 py-1.5 border border-slate-200/80 dark:border-slate-800"
                   >
-                    <span className="truncate">
+                    <span className="truncate font-medium">
                       {p.name}
                       {p.detail ? (
-                        <span className="text-slate-500 ml-1.5 text-[10px]">{p.detail}</span>
+                        <span className="text-slate-400 dark:text-slate-500 ml-1.5 text-[10px]">{p.detail}</span>
                       ) : null}
                     </span>
-                    <span className="font-mono text-slate-200 flex-shrink-0 ml-2">
+                    <span className="font-mono text-slate-900 dark:text-slate-200 flex-shrink-0 ml-2 font-semibold">
                       {formatGiB(p.bytes)}
                     </span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 {tip || t('vram.no_processes', '暂无模型占用显存')}
               </p>
             )}
 
             <div className="grid grid-cols-2 gap-2 pt-1">
-              <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2">
-                <div className="text-[10px] text-slate-500">Ollama</div>
-                <div className="text-xs text-slate-200 mt-0.5 truncate" title={ollamaLabel}>
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 px-2.5 py-2">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Ollama</div>
+                <div className="text-xs text-slate-800 dark:text-slate-200 mt-0.5 truncate font-semibold" title={ollamaLabel}>
                   {status?.ollama.online ? (
                     <span className="inline-flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                       {formatGiB(status.ollama.used_bytes)}
                     </span>
                   ) : (
-                    <span className="text-slate-500">{t('vram.offline', '离线')}</span>
+                    <span className="text-slate-400 dark:text-slate-500 font-normal">{t('vram.offline', '离线')}</span>
                   )}
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5 truncate">{ollamaLabel}</div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">{ollamaLabel}</div>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2">
-                <div className="text-[10px] text-slate-500">ComfyUI</div>
-                <div className="text-xs text-slate-200 mt-0.5">
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 px-2.5 py-2">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">ComfyUI</div>
+                <div className="text-xs text-slate-800 dark:text-slate-200 mt-0.5 font-semibold">
                   {status?.comfyui.online ? (
                     <span className="inline-flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
                       {formatGiB(
                         status.comfyui.torch_used_bytes ?? status.comfyui.used_bytes ?? 0
                       )}
                     </span>
                   ) : (
-                    <span className="text-slate-500">{t('vram.offline', '离线')}</span>
+                    <span className="text-slate-400 dark:text-slate-500 font-normal">{t('vram.offline', '离线')}</span>
                   )}
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{comfyLabel}</div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">{comfyLabel}</div>
               </div>
             </div>
           </div>
@@ -467,7 +467,7 @@ export const VramHealthBadge: React.FC = () => {
               type="button"
               disabled={busy !== null}
               onClick={handleReleaseLlm}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors shadow-lg shadow-indigo-900/30"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-all shadow-md shadow-indigo-500/20"
             >
               {busy === 'llm' ? (
                 <LoaderCircle size={16} className="animate-spin" />
@@ -476,7 +476,7 @@ export const VramHealthBadge: React.FC = () => {
               )}
               <span>{t('vram.release_llm', '一键释放 LLM 显存')}</span>
             </button>
-            <p className="text-[10px] text-slate-500 text-center px-2 leading-relaxed">
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 text-center px-2 leading-relaxed">
               {t(
                 'vram.release_llm_hint',
                 '释放后留给 ComfyUI 畅跑 Pony / SDXL'
@@ -487,7 +487,7 @@ export const VramHealthBadge: React.FC = () => {
               type="button"
               disabled={busy !== null}
               onClick={handleFreeComfy}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 border border-slate-700 transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors"
             >
               {busy === 'comfy' ? (
                 <LoaderCircle size={15} className="animate-spin" />

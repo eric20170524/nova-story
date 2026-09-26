@@ -95,33 +95,33 @@ const SingleResultCard: React.FC<{
     const hasData = characters.length > 0 || glossary.length > 0;
 
     return (
-      <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 overflow-hidden text-xs">
+      <div className="rounded-2xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/20 overflow-hidden text-xs shadow-sm transition-colors">
         <div
           onClick={() => setExpanded(!expanded)}
-          className="p-3 bg-emerald-950/40 border-b border-emerald-500/20 flex items-center justify-between cursor-pointer hover:bg-emerald-950/60 transition-colors"
+          className="p-3.5 bg-emerald-100/60 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-500/20 flex items-center justify-between cursor-pointer hover:bg-emerald-100/90 dark:hover:bg-emerald-950/60 transition-colors"
         >
-          <div className="flex items-center gap-2 text-emerald-300 font-semibold">
-            <Sparkles size={15} />
+          <div className="flex items-center gap-2 text-emerald-900 dark:text-emerald-300 font-bold">
+            <Sparkles size={15} className="text-emerald-600 dark:text-emerald-400" />
             <span>{t('agent.impact_result_title', '世界观演化报告 (World Impact)')}</span>
-            <span className="text-[10px] bg-emerald-900/60 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-700/50">
+            <span className="text-[10px] bg-emerald-200/80 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-700/50 font-semibold">
               {characters.length} {t('agent.chars_count', '角色')} · {glossary.length} {t('agent.terms_count', '术语')}
             </span>
           </div>
-          {expanded ? <ChevronUp size={14} className="text-emerald-400" /> : <ChevronDown size={14} className="text-emerald-400" />}
+          {expanded ? <ChevronUp size={14} className="text-emerald-700 dark:text-emerald-400" /> : <ChevronDown size={14} className="text-emerald-700 dark:text-emerald-400" />}
         </div>
 
         {expanded && (
-          <div className="p-3 space-y-3 max-h-[28rem] overflow-y-auto custom-scrollbar">
+          <div className="p-3.5 space-y-3 max-h-[28rem] overflow-y-auto custom-scrollbar">
             {!hasData && (
-              <p className="text-slate-400 italic text-center py-2">
+              <p className="text-slate-500 dark:text-slate-400 italic text-center py-2">
                 {t('agent.no_impact_changes', '本章未检测到新增或变更的角色与世界观设定')}
               </p>
             )}
 
             {(personalityMerged || visualTagsMerged) && hasData && (
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {personalityMerged && (
-                  <p className="text-[10px] text-emerald-400/90 bg-emerald-950/40 border border-emerald-800/40 rounded-md px-2 py-1.5">
+                  <p className="text-[11px] text-emerald-900 dark:text-emerald-300 bg-white dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-xl px-3 py-2 shadow-xs">
                     {t(
                       'agent.impact_personality_merged',
                       '已将性格特征合并写入角色 description'
@@ -129,7 +129,7 @@ const SingleResultCard: React.FC<{
                   </p>
                 )}
                 {visualTagsMerged && (
-                  <p className="text-[10px] text-sky-300/90 bg-sky-950/30 border border-sky-800/40 rounded-md px-2 py-1.5">
+                  <p className="text-[11px] text-sky-900 dark:text-sky-300 bg-white dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/40 rounded-xl px-3 py-2 shadow-xs">
                     {t(
                       'agent.impact_visual_tags_merged',
                       '已将视觉特征合并写入角色 visual_tags'
@@ -141,8 +141,8 @@ const SingleResultCard: React.FC<{
 
             {characters.length > 0 && (
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                  <Users size={13} className="text-indigo-400" />
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                  <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
                   <span>{t('agent.impact_characters', '角色演化 (Characters)')}</span>
                 </div>
                 <div className="grid gap-2">
@@ -159,28 +159,28 @@ const SingleResultCard: React.FC<{
                     return (
                       <div
                         key={i}
-                        className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-1.5"
+                        className="bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl p-3 space-y-2 shadow-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-indigo-300 text-xs">
+                          <span className="font-bold text-indigo-700 dark:text-indigo-300 text-xs">
                             {char.name}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase shrink-0">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-semibold uppercase shrink-0">
                             {char.role || char.roleInChapter || 'supporting'}
                           </span>
                         </div>
                         {char.description && (
-                          <p className="text-slate-400 text-[11px] leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar pr-0.5">
+                          <p className="text-slate-700 dark:text-slate-400 text-xs leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar pr-0.5">
                             {char.description}
                           </p>
                         )}
                         {Array.isArray(char.traits) && char.traits.length > 0 && (
-                          <div className="flex flex-wrap gap-1 pt-0.5">
+                          <div className="flex flex-wrap gap-1.5 pt-0.5">
                             {char.traits.slice(0, 8).map((tr: any, ti: number) => (
                               <span
                                 key={ti}
                                 title={tr.evidence || ''}
-                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300 border border-violet-800/40"
+                                className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-950/50 text-violet-800 dark:text-violet-300 border border-violet-200 dark:border-violet-800/40 font-medium"
                               >
                                 {tr.trait}
                                 {typeof tr.confidence === 'number'
@@ -191,12 +191,12 @@ const SingleResultCard: React.FC<{
                           </div>
                         )}
                         {vtags.length > 0 && (
-                          <div className="flex flex-wrap gap-1 pt-0.5">
+                          <div className="flex flex-wrap gap-1.5 pt-0.5">
                             {vtags.slice(0, 10).map(([k, v]) => (
                               <span
                                 key={String(k)}
                                 title={`${k}: ${v}`}
-                                className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-950/50 text-sky-300 border border-sky-800/40 max-w-full truncate"
+                                className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/50 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800/40 max-w-full truncate font-medium"
                               >
                                 <span className="opacity-70">{k}:</span> {String(v)}
                               </span>
@@ -212,28 +212,28 @@ const SingleResultCard: React.FC<{
 
             {glossary.length > 0 && (
               <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                  <BookOpen size={13} className="text-amber-400" />
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                  <BookOpen size={13} className="text-amber-600 dark:text-amber-400" />
                   <span>{t('agent.impact_glossary', '世界观术语演化 (Glossary)')}</span>
                 </div>
                 <div className="grid gap-2">
                   {glossary.map((g, i) => (
                     <div
                       key={i}
-                      className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 space-y-1"
+                      className="bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl p-3 space-y-1 shadow-xs"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-semibold text-amber-300 text-xs">
+                        <span className="font-bold text-amber-700 dark:text-amber-300 text-xs">
                           {g.term}
                         </span>
                         {g.category && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/40">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40 font-semibold">
                             {g.category}
                           </span>
                         )}
                       </div>
                       {g.definition && (
-                        <p className="text-slate-400 text-[11px] leading-relaxed">
+                        <p className="text-slate-700 dark:text-slate-400 text-xs leading-relaxed">
                           {g.definition}
                         </p>
                       )}
@@ -253,33 +253,33 @@ const SingleResultCard: React.FC<{
     const issues: any[] = item.data?.issues || [];
 
     return (
-      <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 overflow-hidden text-xs">
+      <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-950/20 overflow-hidden text-xs shadow-sm transition-colors">
         <div
           onClick={() => setExpanded(!expanded)}
-          className="p-3 bg-amber-950/40 border-b border-amber-500/20 flex items-center justify-between cursor-pointer hover:bg-amber-950/60 transition-colors"
+          className="p-3.5 bg-amber-100/60 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-500/20 flex items-center justify-between cursor-pointer hover:bg-amber-100/90 dark:hover:bg-amber-950/60 transition-colors"
         >
-          <div className="flex items-center gap-2 text-amber-300 font-semibold">
-            <ShieldAlert size={15} />
+          <div className="flex items-center gap-2 text-amber-900 dark:text-amber-300 font-bold">
+            <ShieldAlert size={15} className="text-amber-600 dark:text-amber-400" />
             <span>{t('agent.consistency_result_title', '全书逻辑体检报告 (Consistency Audit)')}</span>
             <span
-              className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
                 issues.length === 0
-                  ? 'bg-emerald-900/60 text-emerald-300 border-emerald-700/50'
-                  : 'bg-amber-900/60 text-amber-300 border-amber-700/50'
+                  ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700/50'
+                  : 'bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-700/50'
               }`}
             >
               {issues.length} {t('agent.issues_count', '项问题')}
             </span>
           </div>
-          {expanded ? <ChevronUp size={14} className="text-amber-400" /> : <ChevronDown size={14} className="text-amber-400" />}
+          {expanded ? <ChevronUp size={14} className="text-amber-700 dark:text-amber-400" /> : <ChevronDown size={14} className="text-amber-700 dark:text-amber-400" />}
         </div>
 
         {expanded && (
-          <div className="p-3 space-y-2.5">
+          <div className="p-3.5 space-y-2.5">
             {issues.length === 0 ? (
-              <div className="flex items-center gap-2 text-emerald-400 p-2 rounded bg-emerald-950/30 border border-emerald-800/40">
-                <CheckCircle2 size={16} />
-                <span>{t('agent.no_issues_found', '全书逻辑严谨，未发现明显设定冲突或断层。')}</span>
+              <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-400 p-3 rounded-xl bg-white dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
+                <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400" />
+                <span className="font-medium">{t('agent.no_issues_found', '全书逻辑严谨，未发现明显设定冲突或断层。')}</span>
               </div>
             ) : (
               issues.map((issue, i) => {
@@ -290,50 +290,50 @@ const SingleResultCard: React.FC<{
                 return (
                   <div
                     key={i}
-                    className={`p-3 rounded-lg border leading-relaxed space-y-1.5 ${
+                    className={`p-3.5 rounded-xl border leading-relaxed space-y-1.5 shadow-xs ${
                       isHigh
-                        ? 'bg-rose-950/30 border-rose-800/60 text-rose-200'
+                        ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 text-rose-900 dark:text-rose-200'
                         : isMed
-                          ? 'bg-amber-950/30 border-amber-800/60 text-amber-200'
-                          : 'bg-slate-900/70 border-slate-800 text-slate-300'
+                          ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 text-amber-900 dark:text-amber-200'
+                          : 'bg-white dark:bg-slate-900/70 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5">
                         {isHigh ? (
-                          <AlertTriangle size={13} className="text-rose-400 flex-shrink-0" />
+                          <AlertTriangle size={14} className="text-rose-600 dark:text-rose-400 flex-shrink-0" />
                         ) : isMed ? (
-                          <Info size={13} className="text-amber-400 flex-shrink-0" />
+                          <Info size={14} className="text-amber-600 dark:text-amber-400 flex-shrink-0" />
                         ) : (
-                          <Info size={13} className="text-slate-400 flex-shrink-0" />
+                          <Info size={14} className="text-slate-500 dark:text-slate-400 flex-shrink-0" />
                         )}
-                        <span className="font-semibold text-xs">
+                        <span className="font-bold text-xs">
                           {issue.type || t('agent.issue_general', '逻辑问题')}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {(issue.chapterIndex !== undefined ||
                           issue.location) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-300 border border-slate-700 max-w-[140px] truncate">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 max-w-[140px] truncate font-medium">
                             {issue.chapterIndex !== undefined
                               ? `#${issue.chapterIndex}`
                               : String(issue.location)}
                           </span>
                         )}
                         <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md ${
                             isHigh
-                              ? 'bg-rose-900/60 text-rose-300 border border-rose-700/50'
+                              ? 'bg-rose-200 dark:bg-rose-900/60 text-rose-900 dark:text-rose-300 border border-rose-300 dark:border-rose-700/50'
                               : isMed
-                                ? 'bg-amber-900/60 text-amber-300 border border-amber-700/50'
-                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                ? 'bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-700/50'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
                           }`}
                         >
                           {sev}
                         </span>
                       </div>
                     </div>
-                    <p className="text-slate-300 text-xs pl-4 border-l-2 border-slate-700/50">
+                    <p className="text-slate-700 dark:text-slate-300 text-xs pl-3 border-l-2 border-slate-300 dark:border-slate-700/50">
                       {issue.description}
                     </p>
                   </div>
@@ -356,16 +356,16 @@ const SingleResultCard: React.FC<{
     const applied = Boolean(item.data?.applied);
 
     return (
-      <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 overflow-hidden text-xs">
-        <div className="p-3 bg-indigo-950/40 border-b border-indigo-500/20 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-indigo-300 font-semibold">
-            <FileText size={15} />
+      <div className="rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-950/20 overflow-hidden text-xs shadow-sm transition-colors">
+        <div className="p-3.5 bg-indigo-100/60 dark:bg-indigo-950/40 border-b border-indigo-200 dark:border-indigo-500/20 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-indigo-950 dark:text-indigo-300 font-bold">
+            <FileText size={15} className="text-indigo-600 dark:text-indigo-400" />
             <span>{getOpTitle(item.op, t)}</span>
             <span
-              className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              className={`text-[10px] px-2.5 py-0.5 rounded-full border font-semibold ${
                 applied
-                  ? 'bg-emerald-900/60 text-emerald-300 border-emerald-700/50'
-                  : 'bg-indigo-900/60 text-indigo-300 border-indigo-700/50'
+                  ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700/50'
+                  : 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-700/50'
               }`}
             >
               {applied ? t('agent.applied', '已直接写入') : t('agent.ready_to_apply', '改写完成')}
@@ -374,24 +374,24 @@ const SingleResultCard: React.FC<{
           {content && (
             <button
               onClick={() => handleCopy(content)}
-              className="p-1 text-slate-400 hover:text-white rounded bg-slate-800/80 border border-slate-700"
+              className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 shadow-xs transition-colors"
               title={t('agent.copy', '复制正文')}
             >
-              {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+              {copied ? <Check size={13} className="text-emerald-500 dark:text-emerald-400" /> : <Copy size={13} />}
             </button>
           )}
         </div>
 
         {content && (
-          <div className="p-3 space-y-3">
-            <div className="max-h-48 overflow-y-auto p-2.5 rounded bg-slate-900/90 border border-slate-800 text-slate-300 text-xs font-serif leading-relaxed custom-scrollbar whitespace-pre-wrap">
+          <div className="p-3.5 space-y-3">
+            <div className="max-h-48 overflow-y-auto p-3 rounded-xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 text-xs font-serif leading-relaxed custom-scrollbar whitespace-pre-wrap shadow-inner">
               {content}
             </div>
             {!applied && onApplyContent && (
               <button
                 type="button"
                 onClick={() => onApplyContent(content)}
-                className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium text-xs flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-indigo-600/20"
               >
                 <Check size={14} />
                 {t('agent.apply_to_editor', '应用至编辑器当前章节')}
@@ -410,22 +410,22 @@ const SingleResultCard: React.FC<{
     const updates: string[] = analysis.updates || [];
 
     return (
-      <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 overflow-hidden text-xs">
-        <div className="p-3 bg-sky-950/40 border-b border-sky-500/20 flex items-center gap-2 text-sky-300 font-semibold">
-          <Sparkles size={15} />
+      <div className="rounded-2xl border border-sky-200 dark:border-sky-500/30 bg-sky-50/70 dark:bg-sky-950/20 overflow-hidden text-xs shadow-sm transition-colors">
+        <div className="p-3.5 bg-sky-100/60 dark:bg-sky-950/40 border-b border-sky-200 dark:border-sky-500/20 flex items-center gap-2 text-sky-950 dark:text-sky-300 font-bold">
+          <Sparkles size={15} className="text-sky-600 dark:text-sky-400" />
           <span>{t('agent.analysis_result_title', '剧情与实体深度分析')}</span>
         </div>
-        <div className="p-3 space-y-3">
+        <div className="p-3.5 space-y-3">
           {entities.length > 0 && (
             <div>
-              <span className="text-[11px] font-bold text-slate-400 block mb-1.5 uppercase">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-400 block mb-1.5 uppercase">
                 {t('story.new_entities', '新实体 / 人物')}
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {entities.map((e, i) => (
                   <span
                     key={i}
-                    className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 text-xs"
+                    className="px-2.5 py-1 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-medium shadow-xs"
                   >
                     {e}
                   </span>
@@ -436,13 +436,13 @@ const SingleResultCard: React.FC<{
 
           {updates.length > 0 && (
             <div>
-              <span className="text-[11px] font-bold text-slate-400 block mb-1.5 uppercase">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-400 block mb-1.5 uppercase">
                 {t('story.plot_progression', '剧情推进要点')}
               </span>
-              <ul className="space-y-1 text-slate-300">
+              <ul className="space-y-1 text-slate-700 dark:text-slate-300">
                 {updates.map((u, i) => (
                   <li key={i} className="flex gap-2">
-                    <span className="text-sky-400">•</span>
+                    <span className="text-sky-600 dark:text-sky-400 font-bold">•</span>
                     <span>{u}</span>
                   </li>
                 ))}
@@ -454,7 +454,7 @@ const SingleResultCard: React.FC<{
     );
   }
 
-  // 4b. ANALYZE_CHAPTER_CHARACTERS — personality + evidence (read-only)
+  // 4b. ANALYZE_CHAPTER_CHARACTERS
   if (item.op === 'ANALYZE_CHAPTER_CHARACTERS') {
     const characters: Array<{
       name: string;
@@ -465,39 +465,39 @@ const SingleResultCard: React.FC<{
     }> = item.data?.characters || [];
 
     return (
-      <div className="rounded-xl border border-violet-500/30 bg-violet-950/20 overflow-hidden text-xs">
-        <div className="p-3 bg-violet-950/40 border-b border-violet-500/20 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-violet-300 font-semibold">
-            <Users size={15} />
+      <div className="rounded-2xl border border-violet-200 dark:border-violet-500/30 bg-violet-50/70 dark:bg-violet-950/20 overflow-hidden text-xs shadow-sm transition-colors">
+        <div className="p-3.5 bg-violet-100/60 dark:bg-violet-950/40 border-b border-violet-200 dark:border-violet-500/20 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-violet-950 dark:text-violet-300 font-bold">
+            <Users size={15} className="text-violet-600 dark:text-violet-400" />
             <span>{t('agent.char_analysis_title', '本章角色与性格（只读）')}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-700/50 bg-violet-900/40 text-violet-200">
+            <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-200 dark:border-violet-700/50 bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200 font-semibold">
               {characters.length} {t('agent.chars_count', '角色')}
             </span>
           </div>
-          <span className="text-[10px] text-slate-500">
+          <span className="text-[10px] text-slate-500 dark:text-slate-400">
             {t('agent.char_analysis_hint', '不写入角色库；入库请用「定稿」')}
           </span>
         </div>
-        <div className="p-3 space-y-3 max-h-80 overflow-y-auto custom-scrollbar">
+        <div className="p-3.5 space-y-3 max-h-80 overflow-y-auto custom-scrollbar">
           {characters.length === 0 ? (
-            <p className="text-slate-500">{t('agent.char_analysis_empty', '未提取到角色')}</p>
+            <p className="text-slate-400 dark:text-slate-500 italic text-center py-2">{t('agent.char_analysis_empty', '未提取到角色')}</p>
           ) : (
             characters.map((ch, i) => (
               <div
                 key={`${ch.name}-${i}`}
-                className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 space-y-1.5"
+                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/60 p-3 space-y-1.5 shadow-xs"
               >
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-semibold text-slate-100">{ch.name}</span>
+                  <span className="font-bold text-slate-900 dark:text-slate-100 text-xs">{ch.name}</span>
                   {ch.roleInChapter && (
-                    <span className="text-[10px] text-violet-300/90 truncate">
+                    <span className="text-[10px] text-violet-700 dark:text-violet-300 font-medium truncate">
                       {ch.roleInChapter}
                     </span>
                   )}
                 </div>
                 {ch.motivation && (
-                  <p className="text-[11px] text-slate-400">
-                    <span className="text-slate-500">{t('agent.motivation', '动机')}：</span>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                    <span className="text-slate-500 dark:text-slate-500 font-medium">{t('agent.motivation', '动机')}：</span>
                     {ch.motivation}
                   </p>
                 )}
@@ -505,13 +505,13 @@ const SingleResultCard: React.FC<{
                   <ul className="space-y-1.5">
                     {(ch.traits || []).map((tr, j) => (
                       <li key={j} className="text-[11px] leading-relaxed">
-                        <span className="text-violet-300 font-medium">{tr.trait}</span>
+                        <span className="text-violet-700 dark:text-violet-300 font-semibold">{tr.trait}</span>
                         {typeof tr.confidence === 'number' && (
-                          <span className="text-slate-600 ml-1">
+                          <span className="text-slate-400 dark:text-slate-600 ml-1">
                             ({Math.round(tr.confidence * 100)}%)
                           </span>
                         )}
-                        <div className="text-slate-500 mt-0.5 pl-2 border-l border-slate-700">
+                        <div className="text-slate-600 dark:text-slate-500 mt-0.5 pl-2 border-l border-slate-200 dark:border-slate-700">
                           {tr.evidence}
                         </div>
                       </li>
@@ -519,7 +519,7 @@ const SingleResultCard: React.FC<{
                   </ul>
                 )}
                 {(ch.relationships || []).length > 0 && (
-                  <p className="text-[10px] text-slate-500">
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
                     {t('agent.relationships', '关系')}：{(ch.relationships || []).join('、')}
                   </p>
                 )}
@@ -533,11 +533,11 @@ const SingleResultCard: React.FC<{
 
   // Default fallback for other operations
   return (
-    <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs flex items-start gap-2">
-      <CheckCircle2 size={15} className="text-indigo-400 mt-0.5 flex-shrink-0" />
+    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs flex items-start gap-2 shadow-xs">
+      <CheckCircle2 size={15} className="text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0" />
       <div>
-        <span className="font-semibold text-slate-200">{item.op}</span>
-        <span className="text-slate-400 ml-1">— {item.message || item.status}</span>
+        <span className="font-bold text-slate-900 dark:text-slate-200">{item.op}</span>
+        <span className="text-slate-500 dark:text-slate-400 ml-1">— {item.message || item.status}</span>
       </div>
     </div>
   );

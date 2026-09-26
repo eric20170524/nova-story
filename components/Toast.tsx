@@ -20,20 +20,20 @@ export const Toast: React.FC<ToastProps> = ({ id, message, type, onClose }) => {
   }, [id, onClose]);
 
   const styles = {
-    success: 'bg-slate-900 border-green-500/50 text-green-100',
-    error: 'bg-slate-900 border-red-500/50 text-red-100',
-    info: 'bg-slate-900 border-indigo-500/50 text-indigo-100'
+    success: 'bg-white/95 dark:bg-slate-900/95 border-emerald-500/40 text-emerald-900 dark:text-emerald-100 shadow-emerald-500/10',
+    error: 'bg-white/95 dark:bg-slate-900/95 border-rose-500/40 text-rose-900 dark:text-rose-100 shadow-rose-500/10',
+    info: 'bg-white/95 dark:bg-slate-900/95 border-indigo-500/40 text-indigo-900 dark:text-indigo-100 shadow-indigo-500/10'
   };
 
   const icons = {
-    success: <CheckCircle className="text-green-500" size={20} />,
-    error: <AlertCircle className="text-red-500" size={20} />,
-    info: <Info className="text-indigo-500" size={20} />
+    success: <CheckCircle className="text-emerald-500 flex-shrink-0" size={20} />,
+    error: <AlertCircle className="text-rose-500 flex-shrink-0" size={20} />,
+    info: <Info className="text-indigo-500 flex-shrink-0" size={20} />
   };
 
   return (
     <div className={`
-      flex items-start gap-3 p-4 rounded-lg border shadow-xl backdrop-blur-md min-w-[300px] max-w-md
+      flex items-start gap-3 p-4 rounded-xl border shadow-xl backdrop-blur-md min-w-[320px] max-w-md
       animate-in slide-in-from-right-full duration-300 pointer-events-auto
       ${styles[type]}
     `}>
@@ -41,7 +41,7 @@ export const Toast: React.FC<ToastProps> = ({ id, message, type, onClose }) => {
       <div className="flex-1 text-sm font-medium leading-relaxed">{message}</div>
       <button 
         onClick={() => onClose(id)} 
-        className="text-slate-500 hover:text-white transition-colors"
+        className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors p-0.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
       >
         <X size={16} />
       </button>

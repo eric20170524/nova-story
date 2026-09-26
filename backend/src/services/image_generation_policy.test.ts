@@ -9,6 +9,8 @@ import {
   buildPromptEnhancement,
   inferPromptSubjectType,
   inferStyleShotMode,
+  isAdultLookLoraName,
+  isEmptyShotIntent,
   mergeClipPositivePrompt,
   normalizeImageModelFamily,
   resolveGenerationPlan,
@@ -17,6 +19,7 @@ import {
   resolveStyleLora,
   sanitizeNegativePromptForSubject,
   sanitizePromptForSubject,
+  stripSfwSuppressionFromNegative,
   stripStyleNarrativeTokens
 } from './image_generation_policy';
 
@@ -41,61 +44,98 @@ test('mergeClipPositivePrompt puts scene before framing and quality; dedupes sco
   assert.match(merged, /cinematic shot/);
 });
 
-test('SFW mode never auto-picks Incase as style; NSFW picks Incase for adult slot', () => {
+test('detail slot stays Pony Detail; look LoRAs come from the style preset', () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-lora-policy-'));
   const loraDir = path.join(installPath, 'models', 'loras');
   fs.mkdirSync(loraDir, { recursive: true });
   fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
   fs.writeFileSync(path.join(loraDir, 'Incase_Style_PonyXL.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Incase_Style_AutismMix_v3.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Expressive_H-000001.safetensors'), '');
 
   try {
     const styleSfw = resolveStyleLora('pony', false, { installPath, styleLora: null });
     assert.equal(styleSfw, 'Pony_DetailV2.0.safetensors');
-
     const styleNsfw = resolveStyleLora('pony', true, { installPath, styleLora: null });
     assert.equal(styleNsfw, 'Pony_DetailV2.0.safetensors');
 
-    const nsfw = resolveNsfwLora('pony', { installPath, nsfwLora: null });
-    assert.equal(nsfw, 'Incase_Style_PonyXL.safetensors');
-
-    const stack = resolveLoraStack({
+    const guofeng = resolveLoraStack({
       modelFamily: 'pony',
       nsfwEnabled: true,
       installPath,
-      styleLora: 'Pony_DetailV2.0.safetensors',
-      styleLoraStrength: 0.65,
-      nsfwLora: 'Incase_Style_PonyXL.safetensors',
-      nsfwLoraStrength: 0.55
+      stylePreset: 'sensual_gufeng',
+      nsfwLora: 'Incase_Style_PonyXL.safetensors'
     });
-    assert.equal(stack.length, 2);
-    assert.equal(stack[0]?.role, 'style');
-    assert.equal(stack[1]?.role, 'nsfw');
-    assert.equal(stack[1]?.strength, 0.55);
+    assert.deepEqual(guofeng.map((slot) => slot.name), ['Pony_DetailV2.0.safetensors']);
+
+    const comicOff = resolveLoraStack({
+      modelFamily: 'pony',
+      nsfwEnabled: false,
+      installPath,
+      stylePreset: 'western_comic'
+    });
+    assert.deepEqual(comicOff.map((slot) => slot.name), ['Pony_DetailV2.0.safetensors']);
+
+    const comicOn = resolveLoraStack({
+      modelFamily: 'pony',
+      nsfwEnabled: true,
+      installPath,
+      stylePreset: 'western_comic',
+      styleLoraStrength: 0.65
+    });
+    assert.deepEqual(comicOn.map((slot) => slot.name), [
+      'Pony_DetailV2.0.safetensors',
+      'Incase_Style_AutismMix_v3.safetensors'
+    ]);
+    assert.equal(comicOn[1]?.strength, 0.55);
+
+    const animeOn = resolveLoraStack({
+      modelFamily: 'pony',
+      nsfwEnabled: true,
+      installPath,
+      stylePreset: 'anime'
+    });
+    assert.deepEqual(animeOn.map((slot) => slot.name), [
+      'Pony_DetailV2.0.safetensors',
+      'Expressive_H-000001.safetensors'
+    ]);
+    assert.equal(animeOn[1]?.triggerWords, 'Expressiveh');
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
 });
 
-test('dedupes when NSFW config wrongly points at the same detail file as style', () => {
+test('retired NSFW LoRA setting does not override the style preset', () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-lora-dedupe-'));
   const loraDir = path.join(installPath, 'models', 'loras');
   fs.mkdirSync(loraDir, { recursive: true });
   fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
   fs.writeFileSync(path.join(loraDir, 'Incase_Style_PonyXL.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'artistsautism_lora_XL_dim32_8e_v2_civit.safetensors'), '');
 
   try {
     const stack = resolveLoraStack({
       modelFamily: 'pony',
       nsfwEnabled: true,
       installPath,
+      stylePreset: 'ancient_fantasy',
       styleLora: 'Pony_DetailV2.0.safetensors',
-      nsfwLora: 'Pony_DetailV2.0.safetensors', // misconfigured like old system_settings
+      nsfwLora: 'artistsautism_lora_XL_dim32_8e_v2_civit.safetensors',
       nsfwLoraStrength: 0.8
     });
-    const names = stack.map((s) => s.name);
-    assert.ok(names.includes('Pony_DetailV2.0.safetensors'));
-    assert.ok(names.includes('Incase_Style_PonyXL.safetensors'));
-    assert.equal(names.filter((n) => n === 'Pony_DetailV2.0.safetensors').length, 1);
+    assert.deepEqual(stack.map((slot) => slot.name), ['Pony_DetailV2.0.safetensors']);
+
+    const artists = resolveLoraStack({
+      modelFamily: 'pony',
+      nsfwEnabled: false,
+      installPath,
+      stylePreset: 'autismmix_artist'
+    });
+    assert.deepEqual(artists.map((slot) => slot.name), [
+      'Pony_DetailV2.0.safetensors',
+      'artistsautism_lora_XL_dim32_8e_v2_civit.safetensors'
+    ]);
+    assert.equal(artists[1]?.triggerWords, undefined);
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
@@ -229,6 +269,77 @@ test('insert shotIntent never stacks environment-dominant composition', () => {
   assert.doesNotMatch(wideEnh.suffix, /narrative insert shot/i);
 });
 
+test('remote ComfyUI keeps canonical LoRA names when install_path is still set', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-remote-lora-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  // Local catalog disagrees with the remote: fallback Incase and a different detail file.
+  fs.writeFileSync(path.join(loraDir, 'add_more_details.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Incase_Style_PonyXL.safetensors'), '');
+
+  const runtime = {
+    comfyui: {
+      install_path: installPath,
+      pony_lora: 'Pony_DetailV2.0.safetensors',
+      pony_lora_strength: 0.65
+    }
+  };
+  const workflowData = {
+    gen_type: 'portrait',
+    style_preset: 'western_comic',
+    subject_type: 'female_human'
+  };
+
+  try {
+    const remote = resolveGenerationPlan({
+      modelFamily: 'pony',
+      nsfwEnabled: true,
+      runtimeSettings: {
+        comfyui: { ...runtime.comfyui, mode: 'remote' }
+      },
+      workflowData,
+      basePrompt: '1girl, portrait'
+    });
+    assert.deepEqual(remote.loras.map((slot) => slot.name), [
+      'Pony_DetailV2.0.safetensors',
+      'Incase_Style_AutismMix_v3.safetensors'
+    ]);
+
+    const local = resolveGenerationPlan({
+      modelFamily: 'pony',
+      nsfwEnabled: true,
+      runtimeSettings: {
+        comfyui: { ...runtime.comfyui, mode: 'local' }
+      },
+      workflowData,
+      basePrompt: '1girl, portrait'
+    });
+    assert.deepEqual(local.loras.map((slot) => slot.name), [
+      'add_more_details.safetensors',
+      'Incase_Style_PonyXL.safetensors'
+    ]);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('NSFW strips SFW suppression tokens and keeps safety negatives', () => {
+  const stripped = stripSfwSuppressionFromNegative(
+    'low quality, nsfw, (nude:1.2), nipples, explicit sexual content, bad hands, child, loli, watermark'
+  );
+  assert.equal(stripped, 'low quality, bad hands, child, loli, watermark');
+  assert.equal(
+    stripSfwSuppressionFromNegative('no nude, exposed breasts, (bad anatomy:1.3)'),
+    '(bad anatomy:1.3)'
+  );
+  assert.equal(isAdultLookLoraName('Expressive_H-000001.safetensors'), true);
+  assert.equal(isAdultLookLoraName('Incase_Style_AutismMix_v3.safetensors'), true);
+  assert.equal(isAdultLookLoraName('Pony_DetailV2.0.safetensors'), false);
+  assert.equal(isEmptyShotIntent('establish'), true);
+  assert.equal(isEmptyShotIntent(' overhead-map '), true);
+  assert.equal(isEmptyShotIntent('wide-action'), false);
+});
+
 test('environment shots skip portrait-detail style LoRA', () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-environment-lora-'));
   const loraDir = path.join(installPath, 'models', 'loras');
@@ -255,6 +366,52 @@ test('environment shots skip portrait-detail style LoRA', () => {
     });
     const style = plan.loras.find((slot) => slot.role === 'style');
     assert.equal(style, undefined);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('establish and overhead-map intents skip style LoRAs without wide wording', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-empty-intent-lora-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Expressive_H-000001.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'hero_character.safetensors'), '');
+
+  const runtimeSettings = {
+    comfyui: {
+      mode: 'local',
+      install_path: installPath,
+      pony_lora: 'Pony_DetailV2.0.safetensors',
+      pony_lora_strength: 0.65
+    }
+  };
+  // No "wide" / "establishing". Subject is a creature, so text inference stays general.
+  const basePrompt = 'A furry creature opens a wooden door.';
+  const planFor = (workflowData: Record<string, unknown>) => resolveGenerationPlan({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    runtimeSettings,
+    workflowData: {
+      gen_type: 'scene',
+      subject_type: 'nonhuman',
+      style_preset: 'anime',
+      ...workflowData
+    },
+    basePrompt
+  });
+
+  try {
+    const establish = planFor({ shot_intent: 'establish', lora_name: 'hero_character.safetensors' });
+    assert.deepEqual(establish.loras.map((slot) => slot.name), ['hero_character.safetensors']);
+
+    const overhead = planFor({ shot_spec: { shot_intent: 'overhead-map' } });
+    assert.equal(overhead.loras.find((slot) => slot.role === 'style'), undefined);
+
+    const wideAction = planFor({ shot_intent: 'wide-action' });
+    assert.ok(wideAction.loras.some((slot) => slot.name === 'Pony_DetailV2.0.safetensors'));
+    assert.ok(wideAction.loras.some((slot) => slot.name === 'Expressive_H-000001.safetensors'));
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
@@ -426,8 +583,8 @@ test('FLUX discovers asian style and aidma unlock separately', () => {
       nsfwEnabled: true,
       installPath
     });
-    assert.ok(stack.some((s) => s.role === 'style'));
-    assert.ok(stack.some((s) => s.role === 'nsfw' && s.triggerWords === 'aidmaNSFWunlock'));
+    assert.deepEqual(stack.map((slot) => slot.name), ['flux_asian_style.safetensors']);
+    assert.ok(!stack.some((slot) => slot.name === 'aidmaNSFWunlock.safetensors'));
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
@@ -474,7 +631,6 @@ test('RedCraft Krea2 isolates LoRAs from Pony and discovers RedCraft LoRAs', () 
     assert.ok(!names.includes('Pony_DetailV2.0.safetensors'));
     assert.ok(!names.includes('Incase_Style_PonyXL.safetensors'));
 
-    // When valid RedCraft LoRAs are provided, they are correctly stacked with targetModel 'model_only'
     const validStack = resolveLoraStack({
       modelFamily: 'redcraft_krea2',
       nsfwEnabled: true,
@@ -484,11 +640,8 @@ test('RedCraft Krea2 isolates LoRAs from Pony and discovers RedCraft LoRAs', () 
       nsfwLora: 'krea2_nsfw_detail.safetensors',
       nsfwLoraStrength: 0.7
     });
-    assert.equal(validStack.length, 2);
-    assert.equal(validStack[0]?.name, 'redcraft_krea2_style.safetensors');
+    assert.deepEqual(validStack.map((slot) => slot.name), ['redcraft_krea2_style.safetensors']);
     assert.equal(validStack[0]?.strength, 0.8);
-    assert.equal(validStack[1]?.name, 'krea2_nsfw_detail.safetensors');
-    assert.equal(validStack[1]?.strength, 0.7);
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Loader2, Trash2, AlertCircle } from 'lucide-react';
+import { Save, Loader2, Trash2, AlertCircle, Palette, BookOpen, Library, SlidersHorizontal, FileText } from 'lucide-react';
 import { api } from '../services/api';
 import { ImageOutputSpec, Project } from '../types';
 import { useLanguage } from '../LanguageContext';
@@ -9,8 +9,112 @@ import {
   formatVisualStyleLabel,
   getVisualStyles,
   STANDARD_VISUAL_STYLES,
+  styleLoraRecipeLocaleKey,
   type VisualStyleDef,
 } from '../constants';
+
+type SettingsTab = 'overview' | 'story' | 'glossary' | 'advanced';
+
+const fieldClass =
+  'w-full bg-slate-50/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all shadow-sm';
+
+function SectionCard({
+  icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/50 p-5 sm:p-6 shadow-sm transition-colors">
+      <header className="mb-3.5">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+          <span className="text-indigo-600 dark:text-indigo-400">{icon}</span>
+          {title}
+        </h2>
+        {hint ? <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">{hint}</p> : null}
+      </header>
+      <div className="space-y-3.5">{children}</div>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  hintClass = 'text-slate-500 dark:text-slate-400',
+  children,
+}: {
+  label: string;
+  hint?: string;
+  hintClass?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">{label}</div>
+      {children}
+      {hint ? (
+        <p className={`mt-1 line-clamp-2 text-[11px] leading-snug ${hintClass}`} title={hint}>
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  testId,
+  tone = 'indigo',
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  options: Array<{ value: T; label: string; title?: string }>;
+  testId: string;
+  tone?: 'indigo' | 'nsfw';
+}) {
+  return (
+    <div
+      role="radiogroup"
+      data-testid={testId}
+      className="grid gap-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-950/80 p-1 shadow-inner"
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        const activeClass =
+          tone === 'nsfw' && option.value === 'on'
+            ? 'bg-rose-600 text-white shadow-sm'
+            : tone === 'nsfw' && option.value === 'off'
+              ? 'bg-slate-600 text-white shadow-sm'
+              : 'bg-indigo-600 text-white shadow-sm';
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={option.title || option.label}
+            data-testid={`${testId}-${option.value}`}
+            onClick={() => onChange(option.value)}
+            className={`rounded-lg px-2 py-1.5 text-xs font-semibold transition-all ${
+              active ? activeClass : 'text-slate-600 dark:text-slate-400 hover:bg-white/60 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export const ProjectSettings: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -57,6 +161,7 @@ export const ProjectSettings: React.FC = () => {
   const [editTerm, setEditTerm] = useState('');
   const [editDefinition, setEditDefinition] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [tab, setTab] = useState<SettingsTab>('overview');
 
   useEffect(() => {
     if (id) {
@@ -268,513 +373,507 @@ export const ProjectSettings: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-slate-950 p-12 text-slate-500">
+      <div className="flex h-full items-center justify-center bg-slate-50 dark:bg-slate-950 p-12 text-slate-400">
+        <Loader2 className="animate-spin text-indigo-500 mr-2" size={20} />
         {t('dashboard.loading')}
       </div>
     );
   }
   if (!project) {
     return (
-      <div className="flex h-full items-center justify-center bg-slate-950 p-12 text-red-500">
-        Project not found
+      <div className="flex h-full items-center justify-center bg-slate-50 dark:bg-slate-950 p-12 text-rose-500">
+        {t('project_settings.not_found')}
       </div>
     );
   }
 
+  const canvasValue: '3:4' | '4:3' | '1:1' | 'auto' =
+    outputSpec.orientation_policy === 'auto_by_shot' || outputSpec.aspect_ratio === 'auto'
+      ? 'auto'
+      : outputSpec.aspect_ratio === '4:3' || outputSpec.aspect_ratio === '1:1'
+        ? outputSpec.aspect_ratio
+        : '3:4';
+
+  const tabs: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
+    { id: 'overview', label: t('project_settings.tab_overview'), icon: <Palette size={14} /> },
+    { id: 'story', label: t('project_settings.tab_story'), icon: <BookOpen size={14} /> },
+    { id: 'glossary', label: t('project_settings.tab_glossary'), icon: <Library size={14} /> },
+    { id: 'advanced', label: t('project_settings.tab_advanced'), icon: <SlidersHorizontal size={14} /> },
+  ];
+
   return (
-    <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar">
-      <div className="max-w-3xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white mb-6 sm:mb-8">{t('project_settings.title')}</h1>
-        
-        <form onSubmit={handleSave} className="space-y-6 sm:space-y-8">
-            {/* General Info */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-6">
-                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
-                    {t('project_settings.general')}
-                </h2>
-                
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('dashboard.field_title')}
-                    </label>
-                    <input
-                        type="text"
-                        required
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm sm:text-base"
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                    />
-                </div>
+    <div className="flex h-full w-full flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950 transition-colors">
+      <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-800/80 bg-white/90 dark:bg-slate-950/95 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 pb-2 pt-3.5 sm:px-6">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold tracking-tight text-slate-900 dark:text-white sm:text-lg">
+              {t('project_settings.title')}
+            </h1>
+            <p className="truncate text-xs text-slate-500 dark:text-slate-400">{t('project_settings.subtitle')}</p>
+          </div>
+          <button
+            type="submit"
+            form="project-settings-form"
+            disabled={saving}
+            data-testid="project-settings-save"
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition-all shadow-md shadow-indigo-600/20 hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
+            {t('project_settings.save')}
+          </button>
+        </div>
+        <div role="tablist" className="mx-auto flex max-w-6xl gap-1.5 overflow-x-auto px-4 pb-2 sm:px-6 custom-scrollbar">
+          {tabs.map((item) => {
+            const active = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                data-testid={`project-settings-tab-${item.id}`}
+                onClick={() => setTab(item.id)}
+                className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition-all ${
+                  active
+                    ? item.id === 'advanced'
+                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 shadow-sm'
+                      : 'bg-indigo-50 text-indigo-700 dark:bg-slate-800 dark:text-indigo-300 shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('dashboard.field_desc')}
-                    </label>
-                    <textarea
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none h-32 resize-none text-sm sm:text-base"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                    />
-                </div>
-            </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-16 custom-scrollbar">
+        <form
+          id="project-settings-form"
+          data-testid="project-settings-form"
+          onSubmit={handleSave}
+          className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-5"
+        >
+          {tab === 'overview' && (
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              <SectionCard icon={<FileText size={15} />} title={t('project_settings.general')}>
+                <Field label={t('dashboard.field_title')}>
+                  <input
+                    type="text"
+                    required
+                    data-testid="project-settings-title"
+                    className={fieldClass}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </Field>
+                <Field label={t('dashboard.field_desc')}>
+                  <textarea
+                    data-testid="project-settings-description"
+                    className={`${fieldClass} h-24 resize-none`}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </Field>
+                <button
+                  type="button"
+                  data-testid="project-settings-story-jump"
+                  onClick={() => setTab('story')}
+                  className="w-full rounded-xl border border-dashed border-slate-300 dark:border-slate-700/80 bg-slate-50/70 dark:bg-slate-950/40 px-3.5 py-3 text-left transition-colors hover:border-indigo-500/50 hover:bg-indigo-50/30 dark:hover:bg-slate-950/70 shadow-sm"
+                >
+                  <div className="text-xs font-semibold text-slate-800 dark:text-slate-300">{t('project_settings.story_jump')}</div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {[genre, storyStyle, tone].filter(Boolean).join(' · ') ||
+                      mainPlot.trim() ||
+                      t('project_settings.story_empty_hint')}
+                  </p>
+                </button>
+              </SectionCard>
 
-            {/* Defaults */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-6">
-                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
-                    {t('project_settings.defaults')}
-                </h2>
-                
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.default_style')}
-                    </label>
-                    <p className="text-xs text-slate-500 mb-2">
-                        {t('project_settings.default_style_desc')}
-                    </p>
-                    <select
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm sm:text-base"
-                        value={defaultStyle}
-                        onChange={(e) => setDefaultStyle(e.target.value)}
-                    >
-                        {visualStyles.map(s => (
-                            <option key={s.value} value={s.value}>
-                                {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.default_model_preset')}
-                    </label>
-                    <p className="text-xs text-slate-500 mb-2">
-                        {t('project_settings.default_model_preset_desc')}
-                    </p>
-                    <select
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm sm:text-base"
-                        value={defaultWorkflowId ? `wf_${defaultWorkflowId}` : defaultModelType}
-                        onChange={(e) => {
-                            const val = e.target.value;
-                            if (val.startsWith('wf_')) {
-                                const wfId = Number(val.replace('wf_', ''));
-                                setDefaultWorkflowId(wfId);
-                                const foundWf = workflows.find((w) => w.id === wfId);
-                                if (foundWf) {
-                                    const nameLower = (foundWf.name || '').toLowerCase();
-                                    if (nameLower.includes('sd15') || nameLower.includes('sd1.5') || nameLower.includes('1.5')) {
-                                      setDefaultModelType('sd15');
-                                    } else if (nameLower.includes('krea') || nameLower.includes('redcraft') || nameLower.includes('赤佬')) {
-                                      setDefaultModelType('redcraft_krea2');
-                                    } else {
-                                      setDefaultModelType('pony');
-                                    }
-                                }
-                            } else {
-                                setDefaultWorkflowId(null);
-                                setDefaultModelType(val as 'pony' | 'sd15' | 'redcraft_krea2');
-                            }
-                        }}
-                    >
-                        <optgroup label="内置基础模型 (Base Models)">
-                            <option value="pony">Pony XL (SDXL 二次元/国风 · 成片)</option>
-                            <option value="redcraft_krea2">RedCraft 3.0 (Krea2 静态文生图 · 12GB 推荐)</option>
-                            <option value="sd15">SD 1.5 Draft (轻量草稿 · 快速迭代)</option>
-                        </optgroup>
-                        {workflows.length > 0 && (
-                            <optgroup label="ComfyUI 工作流预设 (Custom Workflows)">
-                                {workflows.map((wf) => (
-                                    <option key={wf.id} value={`wf_${wf.id}`}>
-                                        {wf.name} {wf.description ? `(${wf.description})` : ''}
-                                    </option>
-                                ))}
-                            </optgroup>
-                        )}
-                    </select>
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.nsfw_mode')}
-                    </label>
-                    <p className="text-xs text-slate-500 mb-2">
-                        {t('project_settings.nsfw_mode_desc')}
-                    </p>
-                    <select
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-rose-500 focus:outline-none text-sm sm:text-base"
-                        value={nsfwMode}
-                        onChange={(e) => setNsfwMode(e.target.value as 'inherit' | 'on' | 'off')}
-                    >
-                        <option value="inherit">{t('project_settings.nsfw_inherit')}</option>
-                        <option value="on">{t('project_settings.nsfw_on')}</option>
-                        <option value="off">{t('project_settings.nsfw_off')}</option>
-                    </select>
-                </div>
-
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.canvas_mode')}
-                        </label>
-                        <p className="text-xs text-slate-500 mb-2">
-                            {t('project_settings.canvas_mode_desc')}
-                        </p>
-                        <select
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm"
-                            value={
-                              outputSpec.orientation_policy === 'auto_by_shot' || outputSpec.aspect_ratio === 'auto'
-                                ? 'auto'
-                                : outputSpec.aspect_ratio
-                            }
-                            onChange={(e) => {
-                              const value = e.target.value as '3:4' | '4:3' | '1:1' | 'auto';
-                              setOutputSpec((current) => ({
-                                ...current,
-                                aspect_ratio: value === 'auto' ? '3:4' : value,
-                                orientation_policy: value === 'auto' ? 'auto_by_shot' : 'fixed',
-                              }));
-                            }}
-                        >
-                            <option value="3:4">{t('project_settings.canvas_portrait')}</option>
-                            <option value="4:3">{t('project_settings.canvas_landscape')}</option>
-                            <option value="1:1">{t('project_settings.canvas_square')}</option>
-                            <option value="auto">{t('project_settings.canvas_auto')}</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.output_resolution')}
-                        </label>
-                        <p className="text-xs text-slate-500 mb-2">
-                            {t('project_settings.output_resolution_desc')}
-                        </p>
-                        <select
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm"
-                            value={outputSpec.resolution}
-                            onChange={(e) => setOutputSpec((current) => ({
-                              ...current,
-                              resolution: e.target.value as 'draft' | 'standard' | 'high',
-                            }))}
-                        >
-                            <option value="draft">{t('project_settings.resolution_draft')}</option>
-                            <option value="standard">{t('project_settings.resolution_standard')}</option>
-                            <option value="high">{t('project_settings.resolution_high')}</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            {/* Story Bible */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-6">
-                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
-                    {t('project_settings.story_bible', 'Story Bible')}
-                </h2>
-                <p className="text-xs text-slate-500 -mt-2">
-                    {t(
-                      'project_settings.story_bible_desc',
-                      'Used by Agent OS and chapter drafting (local LLM context).'
-                    )}
-                </p>
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.genre', 'Genre')}
-                        </label>
-                        <input
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            value={genre}
-                            onChange={(e) => setGenre(e.target.value)}
-                            placeholder="xianxia / urban / suspense…"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.story_style', 'Writing style')}
-                        </label>
-                        <input
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            value={storyStyle}
-                            onChange={(e) => setStoryStyle(e.target.value)}
-                            placeholder="cinematic, webnovel…"
-                        />
-                    </div>
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.story_tags', 'Story tags')}
-                    </label>
-                    <input
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        value={storyTagsText}
-                        onChange={(e) => setStoryTagsText(e.target.value)}
-                        placeholder="梦核幻想, 小动物视角, 治愈系探索"
-                    />
-                    <p className="text-xs text-slate-600 mt-1">
-                        {t('project_settings.story_tags_desc', 'Separate tags with commas, slashes, or 、. Up to 20 are stored; writing context uses the first 8 within a fixed budget.')}
-                    </p>
-                </div>
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.pov', 'Point of view (POV)')}
-                        </label>
-                        <input
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            value={pov}
-                            onChange={(e) => setPov(e.target.value)}
-                            placeholder="第三人称限知 / 第一人称…"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-400 mb-2">
-                            {t('project_settings.tone', 'Tone')}
-                        </label>
-                        <input
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            value={tone}
-                            onChange={(e) => setTone(e.target.value)}
-                            placeholder="温柔、轻微诡异…"
-                        />
-                    </div>
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.main_plot', 'Main plot')}
-                    </label>
-                    <textarea
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white h-28 resize-none text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        value={mainPlot}
-                        onChange={(e) => setMainPlot(e.target.value)}
-                    />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">
-                        {t('project_settings.character_relations', 'Character relations')}
-                    </label>
-                    <textarea
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white h-20 resize-none text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        value={characterRelations}
-                        onChange={(e) => setCharacterRelations(e.target.value)}
-                    />
-                </div>
-            </div>
-
-            {/* Glossary */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-4">
-                <h2 className="text-lg sm:text-xl font-semibold text-slate-200 border-b border-slate-800 pb-4">
-                    {t('project_settings.glossary', 'Glossary')}
-                </h2>
-                <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder={t('project_settings.glossary_term', 'Term')}
-                        value={newTerm}
-                        onChange={(e) => setNewTerm(e.target.value)}
-                    />
-                    <input
-                        className="w-28 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder={t('project_settings.glossary_cat', 'Category')}
-                        value={newCategory}
-                        onChange={(e) => setNewCategory(e.target.value)}
-                    />
-                    <input
-                        className="flex-[2] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder={t('project_settings.glossary_def', 'Definition')}
-                        value={newDefinition}
-                        onChange={(e) => setNewDefinition(e.target.value)}
-                    />
-                    <button
-                        type="button"
-                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm"
-                        onClick={async () => {
-                            if (!id || !newTerm.trim()) return;
-                            try {
-                                const row = await api.createGlossary(Number(id), {
-                                    term: newTerm.trim(),
-                                    definition: newDefinition.trim() || undefined,
-                                    category: newCategory.trim() || undefined,
-                                });
-                                setGlossary((g) => [...g, row]);
-                                setNewTerm('');
-                                setNewDefinition('');
-                                setNewCategory('');
-                            } catch (e) {
-                                console.error(e);
-                                showToast(t('project_settings.glossary_fail', 'Failed to add term'), 'error');
-                            }
-                        }}
-                    >
-                        {t('project_settings.glossary_add', 'Add')}
-                    </button>
-                </div>
-                <ul className="space-y-2 max-h-56 overflow-y-auto">
-                    {glossary.map((g) => (
-                        <li
-                            key={g.id}
-                            className="text-sm bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2"
-                        >
-                            {editingGlossaryId === g.id ? (
-                              <div className="space-y-2">
-                                <div className="flex flex-col sm:flex-row gap-2">
-                                  <input
-                                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs"
-                                    value={editTerm}
-                                    onChange={(e) => setEditTerm(e.target.value)}
-                                  />
-                                  <input
-                                    className="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs"
-                                    value={editCategory}
-                                    onChange={(e) => setEditCategory(e.target.value)}
-                                    placeholder="category"
-                                  />
-                                </div>
-                                <textarea
-                                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white text-xs h-14 resize-none"
-                                  value={editDefinition}
-                                  onChange={(e) => setEditDefinition(e.target.value)}
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 bg-indigo-600 rounded text-white"
-                                    onClick={async () => {
-                                      if (!id) return;
-                                      try {
-                                        const updated = await api.updateGlossary(Number(id), g.id, {
-                                          term: editTerm.trim(),
-                                          definition: editDefinition,
-                                          category: editCategory || null,
-                                        });
-                                        setGlossary((list) =>
-                                          list.map((x) => (x.id === g.id ? updated : x))
-                                        );
-                                        setEditingGlossaryId(null);
-                                      } catch (e) {
-                                        console.error(e);
-                                        showToast(
-                                          t('project_settings.glossary_fail', 'Failed to update term'),
-                                          'error'
-                                        );
-                                      }
-                                    }}
-                                  >
-                                    {t('project_settings.glossary_save', 'Save')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 text-slate-400"
-                                    onClick={() => setEditingGlossaryId(null)}
-                                  >
-                                    {t('dashboard.cancel', 'Cancel')}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <span className="text-indigo-300 font-medium">{g.term}</span>
-                                  {g.category && (
-                                    <span className="ml-2 text-[10px] uppercase text-slate-500">
-                                      {g.category}
-                                    </span>
-                                  )}
-                                  {g.definition && (
-                                    <p className="text-xs text-slate-400 mt-0.5">{g.definition}</p>
-                                  )}
-                                </div>
-                                <div className="flex gap-1 flex-shrink-0">
-                                  <button
-                                    type="button"
-                                    className="text-slate-500 hover:text-indigo-300 p-1 text-xs"
-                                    onClick={() => {
-                                      setEditingGlossaryId(g.id);
-                                      setEditTerm(g.term);
-                                      setEditDefinition(g.definition || '');
-                                      setEditCategory(g.category || '');
-                                    }}
-                                  >
-                                    {t('project_settings.glossary_edit', 'Edit')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="text-slate-500 hover:text-red-400 p-1"
-                                    onClick={async () => {
-                                      if (!id) return;
-                                      try {
-                                        await api.deleteGlossary(Number(id), g.id);
-                                        setGlossary((list) => list.filter((x) => x.id !== g.id));
-                                      } catch (e) {
-                                        console.error(e);
-                                      }
-                                    }}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                        </li>
+              <SectionCard
+                icon={<Palette size={15} />}
+                title={t('project_settings.defaults')}
+                hint={t('project_settings.default_style_desc')}
+              >
+                <Field
+                  label={t('project_settings.default_style')}
+                  hint={t(styleLoraRecipeLocaleKey(defaultStyle))}
+                  hintClass="text-indigo-600 dark:text-indigo-300/80"
+                >
+                  <select
+                    data-testid="project-settings-style"
+                    className={fieldClass}
+                    value={defaultStyle}
+                    onChange={(e) => setDefaultStyle(e.target.value)}
+                  >
+                    {visualStyles.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {formatVisualStyleLabel(s, t(`director.styles.${s.value}`) || s.label)}
+                      </option>
                     ))}
-                    {glossary.length === 0 && (
-                        <li className="text-xs text-slate-600 py-2">
-                            {t('project_settings.glossary_empty', 'No glossary terms yet.')}
-                        </li>
-                    )}
-                </ul>
-            </div>
+                  </select>
+                </Field>
 
-            {/* Advanced: prompt override */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 space-y-3">
-              <h2 className="text-lg font-semibold text-slate-200 border-b border-slate-800 pb-3">
-                {t('project_settings.prompt_override', 'Agent prompt overrides (advanced)')}
-              </h2>
-              <p className="text-xs text-slate-500">
-                {t(
-                  'project_settings.prompt_override_desc',
-                  'Optional JSON map of PromptKey → template string. Empty clears override. Other project settings keys are preserved on save.'
+                <Field label={t('project_settings.default_model_preset')}>
+                  <select
+                    data-testid="project-settings-model"
+                    title={t('project_settings.default_model_preset_desc')}
+                    className={fieldClass}
+                    value={defaultWorkflowId ? `wf_${defaultWorkflowId}` : defaultModelType}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.startsWith('wf_')) {
+                        const wfId = Number(val.replace('wf_', ''));
+                        setDefaultWorkflowId(wfId);
+                        const foundWf = workflows.find((w) => w.id === wfId);
+                        if (foundWf) {
+                          const nameLower = (foundWf.name || '').toLowerCase();
+                          if (nameLower.includes('sd15') || nameLower.includes('sd1.5') || nameLower.includes('1.5')) {
+                            setDefaultModelType('sd15');
+                          } else if (nameLower.includes('krea') || nameLower.includes('redcraft') || nameLower.includes('赤佬')) {
+                            setDefaultModelType('redcraft_krea2');
+                          } else {
+                            setDefaultModelType('pony');
+                          }
+                        }
+                      } else {
+                        setDefaultWorkflowId(null);
+                        setDefaultModelType(val as 'pony' | 'sd15' | 'redcraft_krea2');
+                      }
+                    }}
+                  >
+                    <optgroup label={t('project_settings.base_models')}>
+                      <option value="pony">{t('project_settings.model_pony')}</option>
+                      <option value="redcraft_krea2">{t('project_settings.model_redcraft')}</option>
+                      <option value="sd15">{t('project_settings.model_sd15')}</option>
+                    </optgroup>
+                    {workflows.length > 0 && (
+                      <optgroup label={t('project_settings.custom_workflows')}>
+                        {workflows.map((wf) => (
+                          <option key={wf.id} value={`wf_${wf.id}`}>
+                            {wf.name} {wf.description ? `(${wf.description})` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </Field>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label={t('project_settings.canvas_mode')}>
+                    <Segmented
+                      testId="project-settings-canvas"
+                      value={canvasValue}
+                      onChange={(value) => {
+                        setOutputSpec((current) => ({
+                          ...current,
+                          aspect_ratio: value === 'auto' ? '3:4' : value,
+                          orientation_policy: value === 'auto' ? 'auto_by_shot' : 'fixed',
+                        }));
+                      }}
+                      options={[
+                        { value: '3:4', label: t('project_settings.canvas_portrait_short'), title: t('project_settings.canvas_portrait') },
+                        { value: '4:3', label: t('project_settings.canvas_landscape_short'), title: t('project_settings.canvas_landscape') },
+                        { value: '1:1', label: t('project_settings.canvas_square_short'), title: t('project_settings.canvas_square') },
+                        { value: 'auto', label: t('project_settings.canvas_auto_short'), title: t('project_settings.canvas_auto') },
+                      ]}
+                    />
+                  </Field>
+                  <Field label={t('project_settings.output_resolution')} hint={t('project_settings.output_resolution_desc')}>
+                    <Segmented
+                      testId="project-settings-resolution"
+                      value={outputSpec.resolution}
+                      onChange={(resolution) => setOutputSpec((current) => ({ ...current, resolution }))}
+                      options={[
+                        { value: 'draft', label: t('project_settings.resolution_draft') },
+                        { value: 'standard', label: t('project_settings.resolution_standard') },
+                        { value: 'high', label: t('project_settings.resolution_high') },
+                      ]}
+                    />
+                  </Field>
+                </div>
+
+                <Field label={t('project_settings.nsfw_mode')} hint={t('project_settings.nsfw_mode_desc')}>
+                  <Segmented
+                    testId="project-settings-nsfw"
+                    tone="nsfw"
+                    value={nsfwMode}
+                    onChange={setNsfwMode}
+                    options={[
+                      { value: 'inherit', label: t('project_settings.nsfw_inherit_short'), title: t('project_settings.nsfw_inherit') },
+                      { value: 'on', label: t('project_settings.nsfw_on_short'), title: t('project_settings.nsfw_on') },
+                      { value: 'off', label: t('project_settings.nsfw_off_short'), title: t('project_settings.nsfw_off') },
+                    ]}
+                  />
+                </Field>
+              </SectionCard>
+            </div>
+          )}
+
+          {tab === 'story' && (
+            <SectionCard
+              icon={<BookOpen size={15} />}
+              title={t('project_settings.story_bible')}
+              hint={t('project_settings.story_bible_desc')}
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label={t('project_settings.genre')}>
+                  <input
+                    data-testid="project-settings-genre"
+                    className={fieldClass}
+                    value={genre}
+                    onChange={(e) => setGenre(e.target.value)}
+                    placeholder={t('project_settings.placeholder_genre')}
+                  />
+                </Field>
+                <Field label={t('project_settings.story_style')}>
+                  <input
+                    data-testid="project-settings-story-style"
+                    className={fieldClass}
+                    value={storyStyle}
+                    onChange={(e) => setStoryStyle(e.target.value)}
+                    placeholder={t('project_settings.placeholder_story_style')}
+                  />
+                </Field>
+                <Field label={t('project_settings.pov')}>
+                  <input
+                    data-testid="project-settings-pov"
+                    className={fieldClass}
+                    value={pov}
+                    onChange={(e) => setPov(e.target.value)}
+                    placeholder={t('project_settings.placeholder_pov')}
+                  />
+                </Field>
+                <Field label={t('project_settings.tone')}>
+                  <input
+                    data-testid="project-settings-tone"
+                    className={fieldClass}
+                    value={tone}
+                    onChange={(e) => setTone(e.target.value)}
+                    placeholder={t('project_settings.placeholder_tone')}
+                  />
+                </Field>
+              </div>
+              <Field label={t('project_settings.story_tags')} hint={t('project_settings.story_tags_desc')}>
+                <input
+                  data-testid="project-settings-tags"
+                  className={fieldClass}
+                  value={storyTagsText}
+                  onChange={(e) => setStoryTagsText(e.target.value)}
+                  placeholder={t('project_settings.placeholder_tags')}
+                />
+              </Field>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <Field label={t('project_settings.main_plot')}>
+                  <textarea
+                    data-testid="project-settings-plot"
+                    className={`${fieldClass} h-28 resize-y`}
+                    value={mainPlot}
+                    onChange={(e) => setMainPlot(e.target.value)}
+                  />
+                </Field>
+                <Field label={t('project_settings.character_relations')}>
+                  <textarea
+                    data-testid="project-settings-relations"
+                    className={`${fieldClass} h-28 resize-y`}
+                    value={characterRelations}
+                    onChange={(e) => setCharacterRelations(e.target.value)}
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+          )}
+
+          {tab === 'glossary' && (
+            <SectionCard icon={<Library size={15} />} title={t('project_settings.glossary')}>
+              <div className="grid gap-2 sm:grid-cols-[1fr_7rem_1.4fr_auto]">
+                <input
+                  className={fieldClass}
+                  placeholder={t('project_settings.glossary_term')}
+                  value={newTerm}
+                  onChange={(e) => setNewTerm(e.target.value)}
+                />
+                <input
+                  className={fieldClass}
+                  placeholder={t('project_settings.glossary_cat')}
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                />
+                <input
+                  className={fieldClass}
+                  placeholder={t('project_settings.glossary_def')}
+                  value={newDefinition}
+                  onChange={(e) => setNewDefinition(e.target.value)}
+                />
+                <button
+                  type="button"
+                  data-testid="project-settings-glossary-add"
+                  className="rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors shadow-sm"
+                  onClick={async () => {
+                    if (!id || !newTerm.trim()) return;
+                    try {
+                      const row = await api.createGlossary(Number(id), {
+                        term: newTerm.trim(),
+                        definition: newDefinition.trim() || undefined,
+                        category: newCategory.trim() || undefined,
+                      });
+                      setGlossary((g) => [...g, row]);
+                      setNewTerm('');
+                      setNewDefinition('');
+                      setNewCategory('');
+                    } catch (e) {
+                      console.error(e);
+                      showToast(t('project_settings.glossary_fail'), 'error');
+                    }
+                  }}
+                >
+                  {t('project_settings.glossary_add')}
+                </button>
+              </div>
+              <ul className="max-h-72 space-y-1.5 overflow-y-auto custom-scrollbar">
+                {glossary.map((g) => (
+                  <li key={g.id} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 px-3.5 py-2.5 text-sm shadow-sm transition-colors">
+                    {editingGlossaryId === g.id ? (
+                      <div className="space-y-2">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <input
+                            className={`${fieldClass} text-xs`}
+                            value={editTerm}
+                            onChange={(e) => setEditTerm(e.target.value)}
+                          />
+                          <input
+                            className={`${fieldClass} text-xs sm:w-28`}
+                            value={editCategory}
+                            onChange={(e) => setEditCategory(e.target.value)}
+                            placeholder={t('project_settings.glossary_cat')}
+                          />
+                        </div>
+                        <textarea
+                          className={`${fieldClass} h-14 resize-none text-xs`}
+                          value={editDefinition}
+                          onChange={(e) => setEditDefinition(e.target.value)}
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-1 text-xs font-semibold text-white transition-colors"
+                            onClick={async () => {
+                              if (!id) return;
+                              try {
+                                const updated = await api.updateGlossary(Number(id), g.id, {
+                                  term: editTerm.trim(),
+                                  definition: editDefinition,
+                                  category: editCategory || null,
+                                });
+                                setGlossary((list) => list.map((x) => (x.id === g.id ? updated : x)));
+                                setEditingGlossaryId(null);
+                              } catch (e) {
+                                console.error(e);
+                                showToast(t('project_settings.glossary_fail'), 'error');
+                              }
+                            }}
+                          >
+                            {t('project_settings.glossary_save')}
+                          </button>
+                          <button
+                            type="button"
+                            className="px-3 py-1 text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+                            onClick={() => setEditingGlossaryId(null)}
+                          >
+                            {t('dashboard.cancel', 'Cancel')}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="font-semibold text-indigo-600 dark:text-indigo-300">{g.term}</span>
+                          {g.category && (
+                            <span className="ml-2 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">{g.category}</span>
+                          )}
+                          {g.definition && <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">{g.definition}</p>}
+                        </div>
+                        <div className="flex flex-shrink-0 gap-1">
+                          <button
+                            type="button"
+                            className="p-1 text-xs text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
+                            onClick={() => {
+                              setEditingGlossaryId(g.id);
+                              setEditTerm(g.term);
+                              setEditDefinition(g.definition || '');
+                              setEditCategory(g.category || '');
+                            }}
+                          >
+                            {t('project_settings.glossary_edit')}
+                          </button>
+                          <button
+                            type="button"
+                            className="p-1 text-slate-400 hover:text-red-500 transition-colors"
+                            onClick={async () => {
+                              if (!id) return;
+                              try {
+                                await api.deleteGlossary(Number(id), g.id);
+                                setGlossary((list) => list.filter((x) => x.id !== g.id));
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+                {glossary.length === 0 && (
+                  <li className="py-6 text-center text-xs text-slate-400 dark:text-slate-600">{t('project_settings.glossary_empty')}</li>
                 )}
-              </p>
+              </ul>
+            </SectionCard>
+          )}
+
+          {tab === 'advanced' && (
+            <SectionCard
+              icon={<SlidersHorizontal size={15} />}
+              title={t('project_settings.prompt_override')}
+              hint={t('project_settings.prompt_override_desc')}
+            >
               <textarea
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 h-32 resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder='{ "agent_core": "..." }'
+                data-testid="project-settings-prompt-override"
+                className={`${fieldClass} h-40 resize-y font-mono text-xs text-slate-800 dark:text-slate-300`}
+                placeholder={t('project_settings.placeholder_prompt')}
                 value={promptOverrideJson}
                 onChange={(e) => setPromptOverrideJson(e.target.value)}
               />
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end gap-4 pt-4 border-t border-slate-800">
-                <button
-                    type="submit"
-                    disabled={saving}
-                    className="w-full sm:w-auto flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg font-medium transition-all disabled:opacity-50 text-sm sm:text-base"
-                >
-                    {saving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
-                    {t('project_settings.save')}
-                </button>
-            </div>
+            </SectionCard>
+          )}
         </form>
 
-        {/* Danger Zone */}
-        <div className="mt-10 sm:mt-12 pt-6 sm:pt-8 border-t border-slate-800">
-            <h3 className="text-red-400 font-bold mb-4 uppercase text-xs sm:text-sm tracking-wider flex items-center gap-2">
-                <AlertCircle size={16} />
-                {t('project_settings.danger_zone')}
-            </h3>
-            <div className="bg-red-900/10 border border-red-900/30 rounded-xl p-5 sm:p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div>
-                    <h4 className="text-red-200 font-medium text-sm sm:text-base">{t('project_settings.delete_project')}</h4>
-                    <p className="text-xs sm:text-sm text-red-300/60 mt-1">{t('project_settings.delete_desc')}</p>
-                </div>
-                <button
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="w-full sm:w-auto bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex-shrink-0"
-                >
-                    {deleting ? "Deleting..." : t('project_settings.delete_btn')}
-                </button>
+        {tab === 'advanced' && (
+          <div className="mx-auto max-w-6xl px-4 pb-6 sm:px-6">
+            <div className="flex flex-col gap-3 rounded-2xl border border-red-200 dark:border-red-950/50 bg-red-50 dark:bg-red-950/15 px-5 py-4 sm:flex-row sm:items-center sm:justify-between shadow-sm">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-sm font-bold text-red-900 dark:text-red-200">
+                  <AlertCircle size={15} />
+                  {t('project_settings.delete_project')}
+                </p>
+                <p className="mt-0.5 text-xs text-red-700/80 dark:text-red-300/55">{t('project_settings.delete_desc')}</p>
+              </div>
+              <button
+                type="button"
+                data-testid="project-settings-delete"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-shrink-0 rounded-xl bg-red-600 hover:bg-red-500 px-4 py-2 text-xs font-semibold text-white transition-all shadow-md shadow-red-600/20 disabled:opacity-50"
+              >
+                {deleting ? t('project_settings.deleting') : t('project_settings.delete_btn')}
+              </button>
             </div>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

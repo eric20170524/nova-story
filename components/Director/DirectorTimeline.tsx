@@ -168,12 +168,12 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-slate-950">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Header */}
-      <div className="h-14 border-b border-slate-800 flex items-center justify-between px-4 lg:px-6 bg-slate-925 gap-2 flex-shrink-0">
+      <div className="h-14 border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between px-4 lg:px-6 bg-white/80 dark:bg-[#0c1322]/80 backdrop-blur-md gap-2 flex-shrink-0">
          <div className="flex items-center gap-3 min-w-0">
-           <h2 className="text-white font-medium truncate">{t('director.storyboard')}</h2>
-           <span className="text-xs px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/50 text-indigo-300 font-mono flex-shrink-0">
+           <h2 className="text-slate-900 dark:text-white font-bold truncate text-base">{t('director.storyboard')}</h2>
+           <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300 font-mono font-semibold flex-shrink-0">
              {t('director.shots_badge', '{count} shots', { count: timeline.length })}
            </span>
          </div>
@@ -184,38 +184,38 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                 type="button"
                 onClick={onGenerateNarration}
                 disabled={loading || generatingNarration || !selectedChapterId}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-amber-200 hover:text-amber-100 bg-amber-950/40 hover:bg-amber-950/60 border border-amber-800/50 rounded-lg text-xs sm:text-sm font-medium transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-amber-800 dark:text-amber-200 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-950/60 border border-amber-300 dark:border-amber-800/50 rounded-xl text-xs sm:text-sm font-semibold transition-all disabled:opacity-50 shadow-2xs"
                 title={t('director.generate_narration_hint', 'Use the local model to add narration without changing images')}
               >
-                {generatingNarration ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
+                {generatingNarration ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
                 <span className="hidden sm:inline">{t('director.generate_narration', 'Local Narration')}</span>
               </button>
             )}
             <button
               type="button"
               onClick={() => agentCtx?.setOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-indigo-300 hover:text-indigo-200 bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-800/40 rounded-lg text-xs sm:text-sm font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/40 rounded-xl text-xs sm:text-sm font-semibold transition-colors shadow-2xs"
               title={t('agent.open_panel', '打开 Agent OS')}
             >
-              <Sparkles size={15} />
+              <Sparkles size={14} />
               <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
             </button>
 
             <button 
               onClick={onGenerateTimeline}
               disabled={loading || !selectedChapterId}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 sm:px-4 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium disabled:opacity-50 transition-all shadow-md hover:shadow-indigo-500/20"
+              className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white px-3.5 sm:px-4 py-1.5 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-semibold disabled:opacity-50 transition-all shadow-md shadow-indigo-500/20"
             >
-              {loading ? <Loader2 className="animate-spin" size={16} /> : <Film size={16} />}
+              {loading ? <Loader2 className="animate-spin" size={15} /> : <Film size={15} />}
               <span className="hidden xs:inline sm:inline">{t('director.generate_scenes')}</span>
             </button>
             
             {/* Mobile Settings Toggle */}
             <button 
               onClick={() => setShowRightPanel(!showRightPanel)}
-              className="lg:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg"
+              className="lg:hidden p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
             >
-               <PanelRight size={20} />
+               <PanelRight size={18} />
             </button>
          </div>
       </div>
@@ -228,9 +228,12 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
             ) : (
                 <>
                     {timeline.length === 0 && (
-                    <div className="w-full text-center text-slate-500 flex flex-col items-center mt-20">
-                        <Film size={48} className="mb-4 opacity-20" />
-                        <p>{t('director.no_scenes')}</p>
+                    <div className="w-full text-center text-slate-400 dark:text-slate-500 flex flex-col items-center mt-20">
+                        <div className="w-16 h-16 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-4 ring-1 ring-indigo-500/20">
+                          <Film size={28} />
+                        </div>
+                        <p className="font-semibold text-slate-700 dark:text-slate-300 text-base">{t('director.no_scenes')}</p>
+                        <p className="text-xs text-slate-400 mt-1">点击上方“生成分镜”以自动拆解剧本镜头</p>
                     </div>
                     )}
                     
@@ -245,18 +248,18 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     const currentTab = activeMediaTabs[scene.id] || (hasVideoAssets || isVideoGenerating ? 'video' : 'storyboard');
 
                     return (
-                    <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl hover:shadow-2xl transition-all group animate-in fade-in zoom-in-95 duration-300">
+                    <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl dark:shadow-md hover:border-indigo-400/50 dark:hover:border-slate-700 transition-all group animate-in fade-in zoom-in-95 duration-200">
                         {/* Header */}
-                        <div className="p-3 bg-slate-850 border-b border-slate-800 flex justify-between items-center gap-2">
+                        <div className="p-3 bg-slate-50/80 dark:bg-[#131c2e]/80 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center gap-2">
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="font-mono text-xs text-indigo-400 font-bold">{t('director.scene')} {idx + 1}</span>
-                              <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">
+                              <span className="font-mono text-xs text-indigo-700 dark:text-indigo-400 font-bold">{t('director.scene')} {idx + 1}</span>
+                              <span className="text-[10px] bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-400 px-1.5 py-0.5 rounded-md font-mono font-medium">
                                 {scene.duration}s
                               </span>
                               {/* Version switcher for A/B testing copy + image */}
                               <div className="flex items-center gap-1">
                                 <select
-                                  className="bg-slate-950 border border-amber-800/50 text-amber-200 text-[10px] font-mono rounded px-1.5 py-0.5 max-w-[4.5rem] focus:outline-none focus:border-amber-500"
+                                  className="bg-white dark:bg-slate-950 border border-amber-300 dark:border-amber-800/50 text-amber-800 dark:text-amber-200 text-[10px] font-mono rounded-md px-1.5 py-0.5 max-w-[4.5rem] focus:outline-none font-semibold"
                                   value={scene.active_version || 1}
                                   title="切换生成版本（文案+图片）"
                                   onChange={(e) => {
@@ -279,7 +282,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onCreateVersion(scene.id, true)}
-                                    className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/50 text-amber-200"
+                                    className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/80 border border-amber-300 dark:border-amber-700/50 text-amber-800 dark:text-amber-200 font-semibold"
                                     title="新建版本（复制当前文案，清空图片）"
                                   >
                                     +V
@@ -291,24 +294,24 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             <div className="flex items-center gap-2 flex-shrink-0">
                                 <button
                                   onClick={() => handleOpenCoverage(scene)}
-                                  className="text-xs bg-purple-950/60 hover:bg-purple-900/80 border border-purple-700/60 text-purple-300 px-2 py-1 rounded flex items-center gap-1 transition-all"
+                                  className="text-xs bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/80 border border-purple-200 dark:border-purple-700/60 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-lg flex items-center gap-1 transition-all font-semibold shadow-2xs"
                                   title="单场景九镜头候选覆盖扩展"
                                 >
-                                  <Grid size={13} />
+                                  <Grid size={12} />
                                   <span>{t('director.coverage_btn', '9-Shot')}</span>
                                 </button>
                             </div>
                         </div>
 
                         {/* Media Tabs Switcher */}
-                        <div className="flex bg-slate-950 border-b border-slate-800 p-1 text-[10px] font-medium gap-1">
+                        <div className="flex bg-slate-100 dark:bg-slate-950 border-b border-slate-200/80 dark:border-slate-800 p-1 text-[10px] font-medium gap-1">
                           <button
                             type="button"
                             onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'storyboard' }))}
-                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
                               currentTab === 'storyboard'
-                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                                : 'text-slate-400 hover:text-slate-200'
+                                ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                             }`}
                           >
                             <ImageIcon size={11} />
@@ -318,10 +321,10 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                           <button
                             type="button"
                             onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'keyframe' }))}
-                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
                               currentTab === 'keyframe'
-                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                                : 'text-slate-400 hover:text-slate-200'
+                                ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                             }`}
                           >
                             <Crop size={11} />
@@ -331,16 +334,16 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                           <button
                             type="button"
                             onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }))}
-                            className={`flex-1 py-1 rounded text-center transition-colors flex items-center justify-center gap-1 ${
+                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
                               currentTab === 'video'
-                                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                                : 'text-slate-400 hover:text-slate-200'
+                                ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                             }`}
                           >
                             <Film size={11} />
                             <span>{t('director.media_tab_video', '视频')}</span>
-                            {hasVideoAssets && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
-                            {isVideoGenerating && <Loader2 size={10} className="animate-spin text-amber-400" />}
+                            {hasVideoAssets && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>}
+                            {isVideoGenerating && <Loader2 size={10} className="animate-spin text-amber-500" />}
                           </button>
                         </div>
 
@@ -389,13 +392,13 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 </div>
                               </>
                             ) : (
-                              <div className="text-slate-600 flex flex-col items-center p-3 text-center">
+                              <div className="text-slate-500 flex flex-col items-center p-3 text-center">
                                 <Crop size={24} className="mb-1 opacity-50" />
                                 <span className="text-[11px]">暂无 16:9 关键帧</span>
                                 <button
                                   type="button"
                                   onClick={() => onGenerateKeyframe ? onGenerateKeyframe(scene.id) : onGenerateAsset(scene.id, { canvasAspectRatio: '16:9', newVersion: false })}
-                                  className="mt-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-2.5 py-1 rounded text-[10px] font-medium transition-colors"
+                                  className="mt-2 bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors"
                                 >
                                   生成 16:9 关键帧
                                 </button>
@@ -403,8 +406,8 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             )}
                           </div>
                         ) : (
-                          /* Storyboard Image Area (Standard) */
-                          <div className="aspect-square bg-black relative flex items-center justify-center group/image h-64">
+                          /* Storyboard Image Area */
+                          <div className="aspect-square bg-slate-900 relative flex items-center justify-center group/image h-64">
                               {scene.asset_status === 'completed' && scene.asset_url ? (
                                   <>
                                     <PreviewableImage
@@ -415,13 +418,13 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                     <ZoomHint className="group-hover/image:opacity-100" />
                                   </>
                               ) : (
-                                  <div className="text-slate-600 flex flex-col items-center">
+                                  <div className="text-slate-400 dark:text-slate-500 flex flex-col items-center">
                                   {scene.asset_status === 'generating' ? (
                                       <Loader2 className="animate-spin text-indigo-500 mb-2" size={32} />
                                   ) : (
                                       <ImageIcon size={32} className="mb-2 opacity-50" />
                                   )}
-                                  <span className="text-xs capitalize">
+                                  <span className="text-xs capitalize font-medium">
                                       {scene.asset_status === 'generating' ? t('director.status_generating') : scene.asset_status === 'failed' ? t('director.status_failed') : scene.asset_status || 'No Asset'}
                                   </span>
                                   </div>
@@ -471,11 +474,11 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                         )}
 
                         {/* Content (Editable) */}
-                        <div className="flex-1 p-3 flex flex-col gap-2 bg-slate-900 border-t border-slate-800">
+                        <div className="flex-1 p-3.5 flex flex-col gap-2.5 bg-white dark:bg-[#0f172a] border-t border-slate-100 dark:border-slate-800/80">
                             {/* Camera Details Dropdowns */}
-                            <div className="grid grid-cols-3 gap-1 mb-1">
+                            <div className="grid grid-cols-3 gap-1.5 mb-0.5">
                                 <select 
-                                className="bg-slate-800 border border-slate-700 rounded text-[10px] text-sky-300 font-medium py-1 px-1 focus:outline-none"
+                                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[10px] text-sky-700 dark:text-sky-300 font-semibold py-1 px-1.5 focus:outline-none"
                                 value={scene.shot_type || ''}
                                 onChange={(e) => onUpdateScene(scene.id, 'shot_type', e.target.value)}
                                 title="Shot Type"
@@ -483,7 +486,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 {SHOT_TYPES.map(opt => <option key={opt.value} value={opt.value}>{opt.value || 'Shot...'}</option>)}
                                 </select>
                                 <select 
-                                className="bg-slate-800 border border-slate-700 rounded text-[10px] text-emerald-300 font-medium py-1 px-1 focus:outline-none"
+                                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold py-1 px-1.5 focus:outline-none"
                                 value={scene.camera_movement || ''}
                                 onChange={(e) => onUpdateScene(scene.id, 'camera_movement', e.target.value)}
                                 title="Camera Movement"
@@ -491,7 +494,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 {CAMERA_MOVEMENTS.map(opt => <option key={opt.value} value={opt.value}>{opt.value || 'Move...'}</option>)}
                                 </select>
                                 <select 
-                                className="bg-slate-800 border border-slate-700 rounded text-[10px] text-amber-300 font-medium py-1 px-1 focus:outline-none"
+                                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[10px] text-amber-700 dark:text-amber-300 font-semibold py-1 px-1.5 focus:outline-none"
                                 value={scene.camera_angle || ''}
                                 onChange={(e) => onUpdateScene(scene.id, 'camera_angle', e.target.value)}
                                 title="Camera Angle"
@@ -503,7 +506,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             {/* OpenPose Posture Selector */}
                             <div>
                                 <select 
-                                className="w-full bg-slate-950/80 border border-purple-800/40 rounded text-[10px] text-purple-300 font-medium py-1 px-2 focus:outline-none hover:border-purple-600/60"
+                                className="w-full bg-slate-50 dark:bg-slate-950/80 border border-purple-200 dark:border-purple-800/40 rounded-lg text-[10px] text-purple-700 dark:text-purple-300 font-semibold py-1 px-2 focus:outline-none"
                                 onChange={(e) => {
                                     const presetId = e.target.value;
                                     if (!presetId) return;
@@ -529,9 +532,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             <div className="flex-1 min-h-0 flex flex-col space-y-2">
                                 {/* Visual Prompt */}
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">{t('director.visual')}</label>
+                                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">{t('director.visual')}</label>
                                     <textarea
-                                        className="w-full bg-slate-950/50 border border-slate-800 rounded p-2 text-xs text-slate-300 leading-relaxed resize-none focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 h-16"
+                                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-200 leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500 h-16 transition-all"
                                         value={scene.visual_prompt || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'visual_prompt', e.target.value)}
                                         placeholder="Describe the scene..."
@@ -540,9 +543,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
                                 {/* Narration */}
                                 <div>
-                                    <label className="text-[10px] font-bold text-amber-500/80 uppercase mb-1 block">{t('director.narration', 'Narration')}</label>
+                                    <label className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase mb-1 block">{t('director.narration', 'Narration')}</label>
                                     <textarea
-                                        className="w-full bg-amber-950/20 border border-amber-900/50 rounded p-2 text-xs text-amber-100 leading-relaxed resize-none focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/20 h-14"
+                                        className="w-full bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 rounded-xl p-2 text-xs text-amber-900 dark:text-amber-100 leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-amber-500 h-14 transition-all"
                                         value={scene.narration || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'narration', e.target.value)}
                                         placeholder={t('director.narration_placeholder', 'Narration or internal monologue...')}
@@ -551,9 +554,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
                                 {/* Dialogue */}
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">{t('director.dialogue')}</label>
+                                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">{t('director.dialogue')}</label>
                                     <textarea
-                                        className="w-full bg-slate-950/50 border border-slate-800 rounded p-2 text-xs text-slate-300 italic leading-relaxed resize-none focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 h-10"
+                                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-300 italic leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500 h-10 transition-all"
                                         value={scene.dialogue || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'dialogue', e.target.value)}
                                         placeholder="Dialogue..."
@@ -564,21 +567,21 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             {/* Advanced Toggle */}
                             <button 
                             onClick={() => toggleExpand(scene.id)}
-                            className="flex items-center justify-between w-full mt-2 text-[10px] text-slate-500 hover:text-indigo-400 transition-colors"
+                            className="flex items-center justify-between w-full mt-1 text-[10px] text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-bold"
                             >
-                            <span className="uppercase font-bold">Advanced Settings</span>
+                            <span className="uppercase">Advanced Settings</span>
                             {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                             </button>
 
                             {/* Advanced Section */}
                             {isExpanded && (
-                            <div className="mt-2 pt-2 border-t border-slate-800 animate-in fade-in slide-in-from-top-1 space-y-2">
+                            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 animate-in fade-in slide-in-from-top-1 space-y-2">
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
+                                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 flex items-center gap-1">
                                         <Music size={10} /> Audio Prompt
                                     </label>
                                     <textarea
-                                        className="w-full bg-slate-950/50 border border-slate-800 rounded p-2 text-xs text-slate-400 leading-relaxed resize-none focus:outline-none focus:border-indigo-500/50 h-12"
+                                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-2 text-xs text-slate-700 dark:text-slate-300 leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500 h-12"
                                         value={scene.audio_prompt || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'audio_prompt', e.target.value)}
                                         placeholder="Sound effects, bgm..."
@@ -586,11 +589,11 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                 </div>
 
                                 <div>
-                                    <label className="text-[10px] font-bold text-red-400/80 uppercase mb-1 flex items-center gap-1">
+                                    <label className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase mb-1 flex items-center gap-1">
                                         <AlertCircle size={10} /> Negative Prompt
                                     </label>
                                     <textarea
-                                        className="w-full bg-red-950/10 border border-red-900/30 rounded p-2 text-xs text-slate-400 leading-relaxed resize-none focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 h-12 placeholder-slate-600"
+                                        className="w-full bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40 rounded-xl p-2 text-xs text-rose-900 dark:text-slate-300 leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-rose-500 h-12 placeholder-rose-300 dark:placeholder-slate-600"
                                         value={scene.negative_prompt || ''}
                                         onChange={(e) => onUpdateScene(scene.id, 'negative_prompt', e.target.value)}
                                         placeholder="Elements to exclude..."
@@ -609,23 +612,23 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
       {/* 9-Shot Coverage Modal */}
       {activeCoverageScene && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-purple-800/60 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-[#0f172a] border border-purple-200 dark:border-purple-800/60 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="px-6 py-4 bg-slate-925 border-b border-purple-800/40 flex items-center justify-between flex-shrink-0">
+            <div className="px-6 py-4 bg-slate-50 dark:bg-[#0c1322] border-b border-purple-100 dark:border-purple-800/40 flex items-center justify-between flex-shrink-0">
               <div>
                 <div className="flex items-center gap-2">
-                  <Grid size={18} className="text-purple-400" />
-                  <h3 className="text-lg font-semibold text-white">{t('director.coverage_title')}</h3>
-                  <span className="text-xs px-2 py-0.5 rounded bg-purple-950 text-purple-300 font-mono border border-purple-700/50">
+                  <Grid size={18} className="text-purple-600 dark:text-purple-400" />
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">{t('director.coverage_title')}</h3>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-mono font-semibold border border-purple-200 dark:border-purple-700/50">
                     Scene #{activeCoverageScene.id}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-1">{t('director.coverage_subtitle')}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{t('director.coverage_subtitle')}</p>
               </div>
               <button 
                 onClick={() => setActiveCoverageScene(null)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg transition-colors"
               >
                 <X size={20} />
               </button>
@@ -633,9 +636,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
             {/* Notice Banner */}
             {actionNotice && (
-              <div className="bg-purple-950/60 border-b border-purple-800/50 px-6 py-2 text-xs text-purple-200 flex items-center justify-between font-medium flex-shrink-0">
+              <div className="bg-purple-50 dark:bg-purple-950/60 border-b border-purple-200 dark:border-purple-800/50 px-6 py-2 text-xs text-purple-800 dark:text-purple-200 flex items-center justify-between font-semibold flex-shrink-0">
                 <span>{actionNotice}</span>
-                <button onClick={() => setActionNotice(null)} className="text-purple-400 hover:text-white">
+                <button onClick={() => setActionNotice(null)} className="text-purple-600 dark:text-purple-400 hover:text-purple-800">
                   <X size={14} />
                 </button>
               </div>
@@ -644,15 +647,15 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6 min-h-0 custom-scrollbar">
               {/* Controls bar */}
-              <div className="flex items-center justify-between bg-slate-950/60 p-4 rounded-xl border border-slate-800">
-                <div className="text-xs text-slate-300">
-                  <span className="text-slate-500 font-semibold uppercase mr-2">源场景:</span>
-                  <span className="italic text-slate-200">"{activeCoverageScene.visual_prompt?.substring(0, 80)}..."</span>
+              <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-950/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                <div className="text-xs text-slate-700 dark:text-slate-300">
+                  <span className="text-slate-400 font-bold uppercase mr-2">源场景:</span>
+                  <span className="italic text-slate-800 dark:text-slate-200">"{activeCoverageScene.visual_prompt?.substring(0, 80)}..."</span>
                 </div>
                 <button
                   onClick={handleGenerateCoverage}
                   disabled={loadingCoverage}
-                  className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 disabled:opacity-50 transition-all shadow-md hover:shadow-purple-500/20"
+                  className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 disabled:opacity-50 transition-all shadow-md hover:shadow-purple-500/20"
                 >
                   {loadingCoverage ? <Loader2 className="animate-spin" size={14} /> : <Grid size={14} />}
                   <span>{coverageGroup ? "重新生成 9 候选" : t('director.generate_coverage')}</span>
@@ -661,38 +664,38 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
               {/* Coverage Shots Display */}
               {loadingCoverage ? (
-                <div className="py-20 flex flex-col items-center justify-center text-purple-400 space-y-3">
+                <div className="py-20 flex flex-col items-center justify-center text-purple-600 dark:text-purple-400 space-y-3">
                   <Loader2 className="animate-spin" size={36} />
-                  <span className="text-sm font-medium">{t('director.generating_coverage')}</span>
+                  <span className="text-sm font-semibold">{t('director.generating_coverage')}</span>
                 </div>
               ) : coverageGroup && coverageGroup.shots ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {coverageGroup.shots.map((shot) => (
-                    <div key={shot.id} className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col justify-between hover:border-purple-600/50 transition-all space-y-3 group">
+                    <div key={shot.id} className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 flex flex-col justify-between hover:border-purple-400 dark:hover:border-purple-600/50 transition-all space-y-3 group">
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="font-mono text-xs font-bold text-purple-400 bg-purple-950/70 border border-purple-800/60 px-2 py-0.5 rounded">
+                          <span className="font-mono text-xs font-bold text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/70 border border-purple-200 dark:border-purple-800/60 px-2 py-0.5 rounded-md">
                             #{shot.slot} {shot.shot_size}
                           </span>
-                          <span className="text-[10px] text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded font-mono">
+                          <span className="text-[10px] text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-1.5 py-0.5 rounded-md font-mono">
                             {shot.camera_angle}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-300 leading-relaxed line-clamp-4 bg-slate-900/60 p-2 rounded border border-slate-800/80">
+                        <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed line-clamp-4 bg-white dark:bg-slate-900/60 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800/80">
                           {shot.visual_prompt}
                         </p>
                         {shot.narrative_purpose && (
-                          <span className="text-[10px] text-slate-500 italic mt-1 block">
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500 italic mt-1.5 block">
                             定位: {shot.narrative_purpose}
                           </span>
                         )}
                       </div>
 
                       {/* Card Actions */}
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between gap-2">
                         <button
                           onClick={() => handleApplyShot(shot)}
-                          className="flex-1 bg-slate-800 hover:bg-purple-900/50 text-slate-200 hover:text-purple-200 py-1.5 px-2 rounded text-[11px] font-medium flex items-center justify-center gap-1 transition-colors border border-slate-700 hover:border-purple-700"
+                          className="flex-1 bg-white hover:bg-purple-50 dark:bg-slate-800 dark:hover:bg-purple-900/50 text-slate-700 hover:text-purple-700 dark:text-slate-200 dark:hover:text-purple-200 py-1.5 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors border border-slate-200 dark:border-slate-700"
                           title="使用该候选镜头的景别与提示词更新源场景"
                         >
                           <Check size={12} />
@@ -700,7 +703,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                         </button>
                         <button
                           onClick={() => handlePromoteShot(shot)}
-                          className="flex-1 bg-purple-900/40 hover:bg-purple-800/60 text-purple-300 py-1.5 px-2 rounded text-[11px] font-medium flex items-center justify-center gap-1 transition-colors border border-purple-700/60"
+                          className="flex-1 bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/40 dark:hover:bg-purple-800/60 text-purple-700 dark:text-purple-300 py-1.5 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors border border-purple-200 dark:border-purple-700/60"
                           title="将该候选镜头插入为主时间线场景卡片"
                         >
                           <ArrowRight size={12} />
@@ -711,10 +714,10 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                   ))}
                 </div>
               ) : (
-                <div className="py-16 text-center text-slate-500 flex flex-col items-center">
-                  <Grid size={40} className="mb-3 opacity-30 text-purple-400" />
-                  <p className="text-sm">暂无该场景的九镜头覆盖数据。</p>
-                  <p className="text-xs text-slate-600 mt-1">点击上方“生成 9 候选镜头”按钮为本场景创建景别扩展。</p>
+                <div className="py-16 text-center text-slate-400 dark:text-slate-500 flex flex-col items-center">
+                  <Grid size={40} className="mb-3 opacity-30 text-purple-500" />
+                  <p className="text-sm font-medium">暂无该场景的九镜头覆盖数据。</p>
+                  <p className="text-xs text-slate-400 mt-1">点击上方“生成 9 候选镜头”按钮为本场景创建景别扩展。</p>
                 </div>
               )}
             </div>

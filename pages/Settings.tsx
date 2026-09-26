@@ -1,7 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Save, CheckCircle, AlertCircle, Server, Workflow as WorkflowIcon, Cloud, Settings, Sliders, Shield } from 'lucide-react';
+import {
+  Save,
+  CheckCircle,
+  AlertCircle,
+  Server,
+  Workflow as WorkflowIcon,
+  Cloud,
+  Settings,
+  Sliders,
+  Shield,
+  Sun,
+  Moon,
+  Palette,
+  Check
+} from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../LanguageContext';
+import { useTheme } from '../ThemeContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
 import {
   ADVANCED_VISUAL_STYLES,
@@ -13,6 +28,7 @@ const LOCAL_OLLAMA_MODEL = 'novastory-qwen3:8b';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
+  const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<'general' | 'workflow' | 'advanced'>('general');
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
     return localStorage.getItem('settings_advanced_unlocked') !== 'false';
@@ -20,7 +36,7 @@ export const SettingsPage: React.FC = () => {
   const [titleClicks, setTitleClicks] = useState(0);
 
   const [settings, setSettings] = useState<any>({ 
-    llm_model: 'gemini-3-flash-preview',
+    llm_model: 'gemini-3.6-flash',
     comfyui: {
       mode: 'local',
       base_url: 'http://127.0.0.1:8188',
@@ -35,7 +51,8 @@ export const SettingsPage: React.FC = () => {
     },
     advanced: {
       nsfw_enabled: false,
-      pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
+      pony_nsfw_lora: null,
+      redcraft_krea2_nsfw_lora: null,
       nsfw_lora_strength: 0.55
     }
   });
@@ -117,10 +134,11 @@ export const SettingsPage: React.FC = () => {
         tier_b: rawComfy.tier_b
       };
 
-      const advanced = settingsData.advanced || {
-        nsfw_enabled: false,
-        pony_nsfw_lora: 'Incase_Style_PonyXL.safetensors',
-        nsfw_lora_strength: 0.55
+      const advanced = {
+        ...(settingsData.advanced || {}),
+        nsfw_enabled: Boolean(settingsData.advanced?.nsfw_enabled),
+        pony_nsfw_lora: null,
+        redcraft_krea2_nsfw_lora: null
       };
 
       setSettings({
@@ -174,10 +192,7 @@ export const SettingsPage: React.FC = () => {
           llm: {
             ...(prev.llm || {}),
             ...(saved.llm || {}),
-            // Keep local draft only if user was typing a new key
-            api_key: settings.llm?.api_key && String(settings.llm.api_key).trim()
-              ? ''
-              : ''
+            api_key: ''
           }
         }));
       }
@@ -289,707 +304,725 @@ export const SettingsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-slate-950">
+      <div className="flex h-full items-center justify-center bg-slate-50 dark:bg-slate-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar">
-    <div className="max-w-4xl mx-auto space-y-6 pb-12">
-      <div>
-        <h1 
-          className="text-2xl font-bold text-slate-100 flex items-center gap-2 cursor-pointer select-none"
-          onClick={handleTitleClick}
-        >
-          <Settings className="w-6 h-6 text-indigo-400" />
-          {t('settings_title')}
-        </h1>
-        <p className="text-slate-400 text-sm mt-1">{t('settings_subtitle')}</p>
-      </div>
-
-      {/* Secret click trigger zone */}
-      <div
-        className="text-xs text-slate-400/50 hover:text-slate-400 select-none cursor-pointer py-1 px-2 rounded bg-slate-900/30 border border-slate-800/40 inline-flex items-center gap-1.5 transition-colors"
-        onClick={handleSecretAreaClick}
-        title="连续点击 5 次切换高级画风配置面板"
-      >
-        <Sliders className="w-3.5 h-3.5" />
-        <span>画风选项模式: {advancedEnabled ? '高级（全量）' : '精简（推荐）'}</span>
-      </div>
-
-      {message && (
-        <div className={`p-4 rounded-xl flex items-center gap-3 border ${
-          message.type === 'success' 
-            ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300' 
-            : 'bg-red-950/40 border-red-800/50 text-red-300'
-        }`}>
-          {message.type === 'success' ? (
-            <CheckCircle className="w-5 h-5 flex-shrink-0" />
-          ) : (
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
-          )}
-          <span className="text-sm font-medium">{message.text}</span>
+    <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-50/50 dark:bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar transition-colors">
+      <div className="max-w-4xl mx-auto space-y-6 pb-12">
+        <div>
+          <h1 
+            className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 cursor-pointer select-none"
+            onClick={handleTitleClick}
+          >
+            <Settings className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+            {t('settings_title')}
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('settings_subtitle')}</p>
         </div>
-      )}
 
-      {/* Tabs — horizontal scroll on narrow viewports so labels are not clipped */}
-      <div className="flex border-b border-slate-800 overflow-x-auto custom-scrollbar -mx-1 px-1">
-        <button
-          onClick={() => setActiveTab('general')}
-          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
-            activeTab === 'general'
-              ? 'border-indigo-500 text-indigo-400'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
+        {/* Secret click trigger zone */}
+        <div
+          className="text-xs text-slate-400 hover:text-slate-600 dark:text-slate-500 hover:dark:text-slate-400 select-none cursor-pointer py-1.5 px-3 rounded-lg bg-slate-100 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/40 inline-flex items-center gap-1.5 transition-colors"
+          onClick={handleSecretAreaClick}
+          title="连续点击 5 次切换高级画风配置面板"
         >
-          <Cloud className="w-4 h-4 flex-shrink-0" />
-          API & 服务配置
-        </button>
-        <button
-          onClick={() => setActiveTab('workflow')}
-          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
-            activeTab === 'workflow'
-              ? 'border-indigo-500 text-indigo-400'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <WorkflowIcon className="w-4 h-4 flex-shrink-0" />
-          工作流预设 (Workflows)
-        </button>
+          <Sliders className="w-3.5 h-3.5 text-indigo-500" />
+          <span>画风选项模式: {advancedEnabled ? '高级（全量）' : '精简（推荐）'}</span>
+        </div>
 
-        <button
-          onClick={() => setActiveTab('advanced')}
-          className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
-            activeTab === 'advanced'
-              ? 'border-rose-500 text-rose-400'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Shield className="w-4 h-4 flex-shrink-0" />
-          {t('advanced_settings.advanced_tab_title')}
-        </button>
-      </div>
+        {message && (
+          <div className={`p-4 rounded-xl flex items-center gap-3 border shadow-sm ${
+            message.type === 'success' 
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300' 
+              : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800/50 text-red-800 dark:text-red-300'
+          }`}>
+            {message.type === 'success' ? (
+              <CheckCircle className="w-5 h-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-600 dark:text-red-400" />
+            )}
+            <span className="text-sm font-medium">{message.text}</span>
+          </div>
+        )}
 
-      <form onSubmit={handleSave} className="space-y-6">
-        {activeTab === 'general' && (
-          <>
-            {/* LLM Engine Configuration Card */}
-            <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6 space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-indigo-500/10 rounded-lg border border-indigo-500/20 text-indigo-400">
-                    <Cloud className="w-5 h-5" />
+        {/* Tabs */}
+        <div className="flex border-b border-slate-200 dark:border-slate-800 overflow-x-auto custom-scrollbar -mx-1 px-1">
+          <button
+            onClick={() => setActiveTab('general')}
+            className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
+              activeTab === 'general'
+                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-500 dark:text-indigo-400 font-semibold'
+                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Cloud className="w-4 h-4 flex-shrink-0" />
+            API & 服务配置
+          </button>
+          <button
+            onClick={() => setActiveTab('workflow')}
+            className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
+              activeTab === 'workflow'
+                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-500 dark:text-indigo-400 font-semibold'
+                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <WorkflowIcon className="w-4 h-4 flex-shrink-0" />
+            工作流预设 (Workflows)
+          </button>
+
+          <button
+            onClick={() => setActiveTab('advanced')}
+            className={`py-3 px-3 sm:px-6 text-sm font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
+              activeTab === 'advanced'
+                ? 'border-rose-600 text-rose-600 dark:border-rose-500 dark:text-rose-400 font-semibold'
+                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Shield className="w-4 h-4 flex-shrink-0" />
+            {t('advanced_settings.advanced_tab_title')}
+          </button>
+        </div>
+
+        <form onSubmit={handleSave} className="space-y-6">
+          {activeTab === 'general' && (
+            <>
+              {/* Theme & Appearance Configuration Card */}
+              <div className="bg-white dark:bg-slate-900/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-6 space-y-5 shadow-sm transition-colors">
+                <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl border border-indigo-100 dark:border-indigo-500/20 text-indigo-600 dark:text-indigo-400">
+                      <Palette className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">{t('theme.theme_mode', '界面主题风格')}</h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">自定义全站色彩氛围，支持清爽明亮与极客暗黑双模式</p>
+                    </div>
                   </div>
-                  <div>
-                    <h2 className="text-base font-semibold text-slate-200">LLM 语言模型服务</h2>
-                    <p className="text-xs text-slate-400">配置文本生成、角色提取和剧本推导的核心大语言模型引擎</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
-                    (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
-                      ? 'bg-amber-950/40 border-amber-800/50 text-amber-300'
-                      : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
-                      ? 'bg-blue-950/40 border-blue-800/50 text-blue-300'
-                      : 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
-                  }`}>
-                    {((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
-                      ? '离线模式'
-                      : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
+                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                    {theme === 'light' ? t('theme.light_mode', '白天浅色（默认）') : t('theme.dark_mode', '黑夜深色')}
                   </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <button
                     type="button"
-                    onClick={handleVerifyLLM}
-                    disabled={verifyingLLM}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    onClick={() => setTheme('light')}
+                    className={`p-4 rounded-xl border text-left transition-all flex items-start gap-3.5 relative ${
+                      theme === 'light'
+                        ? 'bg-indigo-50/70 dark:bg-indigo-950/50 border-indigo-500 text-slate-900 dark:text-white shadow-sm ring-1 ring-indigo-500/30'
+                        : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-700 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                    }`}
                   >
-                    {verifyingLLM ? (
-                      <>
-                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-400"></div>
-                        <span>验证中...</span>
-                      </>
-                    ) : (
-                      <span>测试连接</span>
+                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 flex-shrink-0">
+                      <Sun className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100">{t('theme.light', '白天模式')}</span>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                          {t('theme.default', '默认')}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                        高对比度清爽创作者风格，适合日常编剧、角色设计与分镜排版
+                      </p>
+                    </div>
+                    {theme === 'light' && (
+                      <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center flex-shrink-0 self-center">
+                        <Check size={12} strokeWidth={3} />
+                      </div>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTheme('dark')}
+                    className={`p-4 rounded-xl border text-left transition-all flex items-start gap-3.5 relative ${
+                      theme === 'dark'
+                        ? 'bg-indigo-50/70 dark:bg-indigo-950/50 border-indigo-500 text-slate-900 dark:text-white shadow-sm ring-1 ring-indigo-500/30'
+                        : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-700 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                    }`}
+                  >
+                    <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-500 flex-shrink-0">
+                      <Moon className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-bold text-slate-900 dark:text-slate-100">{t('theme.dark', '黑夜模式')}</span>
+                        <span className="text-[10px] font-medium text-slate-400">暗黑极客</span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                        沉浸式夜间创作环境，减少夜间用眼疲劳，专注画面审阅
+                      </p>
+                    </div>
+                    {theme === 'dark' && (
+                      <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center flex-shrink-0 self-center">
+                        <Check size={12} strokeWidth={3} />
+                      </div>
                     )}
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    模型提供方 (Provider)
-                  </label>
-                  <div className="grid grid-cols-3 gap-3">
+              {/* LLM Engine Configuration Card */}
+              <div className="bg-white dark:bg-slate-900/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-6 space-y-6 shadow-sm transition-colors">
+                <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl border border-indigo-100 dark:border-indigo-500/20 text-indigo-600 dark:text-indigo-400">
+                      <Cloud className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">LLM 语言模型服务</h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">配置文本生成、角色提取和剧本推导的核心大语言模型引擎</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                      (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                        ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'
+                        : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                        ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
+                        : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300'
+                    }`}>
+                      {((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
+                        ? '离线模式'
+                        : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => handleLLMChange('provider', 'gemini')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini'
-                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
-                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
-                      }`}
+                      onClick={handleVerifyLLM}
+                      disabled={verifyingLLM}
+                      className="px-3.5 py-1.5 rounded-xl text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
                     >
-                      <div className="text-sm font-semibold mb-0.5">Google Gemini</div>
-                      <div className="text-xs opacity-75">自带 API 密钥，推荐使用 3.6 Flash / 2.5 Flash</div>
-                    </button>
-                    
-                    <button
-                      type="button"
-                      onClick={() => handleLLMChange('provider', 'openai')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
-                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
-                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
-                      }`}
-                    >
-                      <div className="text-sm font-semibold mb-0.5">OpenAI API 兼容</div>
-                      <div className="text-xs opacity-75">支持 DeepSeek, Claude, ChatGPT 或自建转发中转</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleLLMChange('provider', 'local_llm')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
-                          ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
-                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
-                      }`}
-                    >
-                      <div className="text-sm font-semibold mb-0.5">本地部署 (Ollama)</div>
-                      <div className="text-xs opacity-75">完全本地运行，0 API 费用，配合一键启动脚本</div>
+                      {verifyingLLM ? (
+                        <>
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600 dark:border-indigo-400"></div>
+                          <span>验证中...</span>
+                        </>
+                      ) : (
+                        <span>测试连接</span>
+                      )}
                     </button>
                   </div>
                 </div>
 
-                {/* Gemini Specific Settings */}
-                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini' && (
-                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Gemini API Key
-                      </label>
-                      <input
-                        type="password"
-                        value={settings.llm?.api_key || ''}
-                        onChange={(e) => handleLLMChange('api_key', e.target.value)}
-                        placeholder={
-                          settings.llm?.has_api_key
-                            ? '已配置密钥（留空则不修改）'
-                            : 'AIzaSy...'
-                        }
-                        autoComplete="off"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                      {settings.llm?.has_api_key && !settings.llm?.api_key && (
-                        <p className="text-[11px] text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
-                      )}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                      模型提供方 (Provider)
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleLLMChange('provider', 'gemini')}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          (settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini'
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">Google Gemini</div>
+                        <div className="text-xs opacity-75">自带 API 密钥，推荐使用 3.6 Flash / 2.5 Flash</div>
+                      </button>
+                      
+                      <button
+                        type="button"
+                        onClick={() => handleLLMChange('provider', 'openai')}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">OpenAI API 兼容</div>
+                        <div className="text-xs opacity-75">支持 DeepSeek, Claude, ChatGPT 或自建转发中转</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleLLMChange('provider', 'local_llm')}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">本地部署 (Ollama)</div>
+                        <div className="text-xs opacity-75">完全本地运行，0 API 费用，配合一键启动脚本</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Gemini Specific Settings */}
+                  {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini' && (
+                    <div className="space-y-4 pt-2 border-t border-slate-200/80 dark:border-slate-800/60">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Gemini API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={settings.llm?.api_key || ''}
+                          onChange={(e) => handleLLMChange('api_key', e.target.value)}
+                          placeholder={
+                            settings.llm?.has_api_key
+                              ? '已配置密钥（留空则不修改）'
+                              : 'AIzaSy...'
+                          }
+                          autoComplete="off"
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                        {settings.llm?.has_api_key && !settings.llm?.api_key && (
+                          <p className="text-[11px] text-emerald-600 dark:text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Gemini 模型版本
+                        </label>
+                        <select
+                          value={settings.llm?.model || settings.llm_model || 'gemini-3.6-flash'}
+                          onChange={(e) => handleLLMChange('model', e.target.value)}
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        >
+                          <option value="gemini-3.6-flash">gemini-3.6-flash (最新版，强烈推荐)</option>
+                          <option value="gemini-2.5-flash">gemini-2.5-flash (稳定，速度极快)</option>
+                          <option value="gemini-2.5-pro">gemini-2.5-pro (推理能力极强)</option>
+                          <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* OpenAI / Custom Proxy Settings */}
+                  {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai' && (
+                    <div className="space-y-4 pt-2 border-t border-slate-200/80 dark:border-slate-800/60">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={settings.llm?.api_key || ''}
+                          onChange={(e) => handleLLMChange('api_key', e.target.value)}
+                          placeholder={
+                            settings.llm?.has_api_key
+                              ? '已配置密钥（留空则不修改）'
+                              : 'sk-...'
+                          }
+                          autoComplete="off"
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                        {settings.llm?.has_api_key && !settings.llm?.api_key && (
+                          <p className="text-[11px] text-emerald-600 dark:text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Base URL
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.llm?.base_url || settings.openai_base_url || 'https://api.openai.com/v1'}
+                          onChange={(e) => handleLLMChange('base_url', e.target.value)}
+                          placeholder="https://api.openai.com/v1"
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          模型名称
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.llm?.model || settings.llm_model || 'gpt-4o-mini'}
+                          onChange={(e) => handleLLMChange('model', e.target.value)}
+                          placeholder="gpt-4o-mini 或 deepseek-chat"
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Local LLM Settings */}
+                  {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm' && (
+                    <div className="space-y-4 pt-2 border-t border-slate-200/80 dark:border-slate-800/60">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Ollama 服务端地址
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.llm?.base_url || 'http://127.0.0.1:11434/v1'}
+                          onChange={(e) => handleLLMChange('base_url', e.target.value)}
+                          placeholder="http://127.0.0.1:11434/v1"
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          本地模型名称
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.llm?.model || LOCAL_OLLAMA_MODEL}
+                          onChange={(e) => handleLLMChange('model', e.target.value)}
+                          placeholder={LOCAL_OLLAMA_MODEL}
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ComfyUI Image Generation Engine Card */}
+              <div className="bg-white dark:bg-slate-900/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-6 space-y-6 shadow-sm transition-colors">
+                <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl border border-emerald-100 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                      <Server className="w-5 h-5" />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Gemini 模型版本
+                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">{t('comfyui_settings')}</h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">配置本地/远程 ComfyUI 绘图引擎服务</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.comfyui?.enabled ?? false}
+                      onChange={(e) => handleComfyChange('enabled', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {settings.comfyui?.enabled && (
+                  <div className="space-y-5">
+                    {/* ComfyUI Mode Switcher */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                        {t('comfyui_mode')}
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleComfyChange('mode', 'local')}
+                          className={`p-3.5 rounded-xl border text-left transition-all ${
+                            (settings.comfyui?.mode || 'local') === 'local'
+                              ? 'bg-emerald-50/80 dark:bg-emerald-600/10 border-emerald-500 text-emerald-950 dark:text-emerald-300 ring-1 ring-emerald-500/30 shadow-sm'
+                              : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 font-bold text-sm mb-0.5">
+                            <Server className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                            <span>{t('comfyui_mode_local')}</span>
+                          </div>
+                          <div className="text-xs opacity-75">本地机器运行，默认地址 http://127.0.0.1:8188</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleComfyChange('mode', 'remote')}
+                          className={`p-3.5 rounded-xl border text-left transition-all ${
+                            settings.comfyui?.mode === 'remote'
+                              ? 'bg-indigo-50/80 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                              : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 font-bold text-sm mb-0.5">
+                            <Cloud className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                            <span>{t('comfyui_mode_remote')}</span>
+                          </div>
+                          <div className="text-xs opacity-75">远端算力机运行，自带 GPU，不占用本地显存</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mode-specific Fields */}
+                    {(settings.comfyui?.mode || 'local') === 'local' ? (
+                      <div className="space-y-4 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {t('comfyui_url')}
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.comfyui?.local_base_url || settings.comfyui?.base_url || 'http://127.0.0.1:8188'}
+                            onChange={(e) => {
+                              handleComfyChange('local_base_url', e.target.value);
+                              handleComfyChange('base_url', e.target.value);
+                            }}
+                            placeholder="http://127.0.0.1:8188"
+                            className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            ComfyUI 本地安装根目录 (用于自动加载 LoRA 与节点路径)
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.comfyui?.install_path || 'D:\\ComfyUI'}
+                            onChange={(e) => handleComfyChange('install_path', e.target.value)}
+                            placeholder="D:\ComfyUI"
+                            className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                          />
+                        </div>
+
+                        {/* Detected LoRAs Section */}
+                        <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/60 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                              {t('detected_loras_title')}
+                            </label>
+                            <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${loraDirectoryInfo.exists ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40' : 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40'}`}>
+                              {loraDirectoryInfo.exists ? `找到 ${availableLoras.length} 个 LoRA 模型` : '路径未发现或为空'}
+                            </span>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {t('comfyui_pony_lora_label')}
+                            </label>
+                            <select
+                              value={settings.comfyui?.pony_lora || ''}
+                              onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
+                              className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                            >
+                              <option value="">(自动发现 · Detail 细节)</option>
+                              {availableLoras.map((lora) => (
+                                <option key={lora} value={lora}>{lora}</option>
+                              ))}
+                              {settings.comfyui?.pony_lora
+                                && !availableLoras.includes(settings.comfyui.pony_lora) && (
+                                <option value={settings.comfyui.pony_lora}>
+                                  {settings.comfyui.pony_lora} (自定义配置)
+                                </option>
+                              )}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {t('comfyui_remote_url')}
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.comfyui?.remote_base_url || ''}
+                            onChange={(e) => {
+                              handleComfyChange('remote_base_url', e.target.value);
+                              handleComfyChange('base_url', e.target.value);
+                            }}
+                            placeholder="如：https://your-remote-comfyui.com"
+                            className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {t('comfyui_remote_username')}
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.comfyui?.remote_username || ''}
+                              onChange={(e) => handleComfyChange('remote_username', e.target.value)}
+                              placeholder="如：admin"
+                              className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {t('comfyui_remote_password')}
+                            </label>
+                            <input
+                              type="password"
+                              value={settings.comfyui?.remote_password || ''}
+                              onChange={(e) => handleComfyChange('remote_password', e.target.value)}
+                              placeholder={
+                                settings.comfyui?.has_remote_password
+                                  ? '已保存密码（留空则不修改）'
+                                  : '输入密码'
+                              }
+                              autoComplete="off"
+                              className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                            />
+                            {settings.comfyui?.has_remote_password && !settings.comfyui?.remote_password && (
+                              <p className="text-[11px] text-emerald-600 dark:text-emerald-500/80 mt-1">服务器已安全保存密码，不会在接口中回传明文。</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/40 rounded-xl text-xs text-indigo-900 dark:text-indigo-300/90 leading-relaxed shadow-sm">
+                          💡 <strong>远端算力机说明：</strong>生图任务将通过 WebSocket 直连推送到远端 ComfyUI 执行。角色设定参考图将自动上传至远端，生成完成后的图像将回传下载并保存到本地项目目录。
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Verify Connection Button & Result */}
+                    <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/60 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={handleVerifyComfy}
+                          disabled={verifyingComfy}
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-800 dark:text-slate-200 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-2 shadow-sm"
+                        >
+                          {verifyingComfy ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-indigo-600 dark:border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                              <span>{t('comfyui_verifying')}</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                              <span>{t('comfyui_verify_btn')}</span>
+                            </>
+                          )}
+                        </button>
+
+                        {comfyVerifyResult && (
+                          <div className={`text-xs px-3 py-1.5 rounded-lg border flex items-center gap-1.5 shadow-sm ${
+                            comfyVerifyResult.status === 'success'
+                              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-500/40 text-emerald-800 dark:text-emerald-300'
+                              : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-500/40 text-rose-800 dark:text-rose-300'
+                          }`}>
+                            {comfyVerifyResult.status === 'success' ? (
+                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                            ) : (
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 flex-shrink-0" />
+                            )}
+                            <span>{comfyVerifyResult.message}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Default RedCraft Krea2 LoRA Dropdown */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {t('comfyui_redcraft_krea2_lora_label')}
+                        </label>
+                        <select
+                          value={settings.comfyui?.redcraft_krea2_lora || ''}
+                          onChange={(e) => handleComfyChange('redcraft_krea2_lora', e.target.value || null)}
+                          className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
+                        >
+                          <option value="">(自动发现 · RedCraft / Krea2 风格)</option>
+                          {availableLoras.map((lora) => (
+                            <option key={lora} value={lora}>{lora}</option>
+                          ))}
+                          {settings.comfyui?.redcraft_krea2_lora
+                            && !availableLoras.includes(settings.comfyui.redcraft_krea2_lora) && (
+                            <option value={settings.comfyui.redcraft_krea2_lora}>
+                              {settings.comfyui.redcraft_krea2_lora} (自定义配置)
+                            </option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {t('comfyui_workflow')}
                       </label>
                       <select
-                        value={settings.llm?.model || settings.llm_model || 'gemini-3.6-flash'}
-                        onChange={(e) => handleLLMChange('model', e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
+                        value={settings.comfyui?.selected_workflow_file || ''}
+                        onChange={(e) => handleComfyChange('selected_workflow_file', e.target.value || null)}
+                        className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                       >
-                        <option value="gemini-3.6-flash">gemini-3.6-flash (最新版，强烈推荐)</option>
-                        <option value="gemini-2.5-flash">gemini-2.5-flash (稳定，速度极快)</option>
-                        <option value="gemini-2.5-pro">gemini-2.5-pro (推理能力极强)</option>
-                        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                        <option value="">-- {t('comfyui_default')} --</option>
+                        {workflowFiles.map((file) => (
+                          <option key={file} value={file}>
+                            {file}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
                 )}
-
-                {/* OpenAI / Custom Proxy Settings */}
-                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai' && (
-                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        API Key
-                      </label>
-                      <input
-                        type="password"
-                        value={settings.llm?.api_key || ''}
-                        onChange={(e) => handleLLMChange('api_key', e.target.value)}
-                        placeholder={
-                          settings.llm?.has_api_key
-                            ? '已配置密钥（留空则不修改）'
-                            : 'sk-...'
-                        }
-                        autoComplete="off"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                      {settings.llm?.has_api_key && !settings.llm?.api_key && (
-                        <p className="text-[11px] text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
-                      )}
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Base URL
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.llm?.base_url || settings.openai_base_url || 'https://api.openai.com/v1'}
-                        onChange={(e) => handleLLMChange('base_url', e.target.value)}
-                        placeholder="https://api.openai.com/v1"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        模型名称
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.llm?.model || settings.llm_model || 'gpt-4o-mini'}
-                        onChange={(e) => handleLLMChange('model', e.target.value)}
-                        placeholder="gpt-4o-mini 或 deepseek-chat"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Local LLM Settings */}
-                {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm' && (
-                  <div className="space-y-4 pt-2 border-t border-slate-800/60">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        Ollama 服务端地址
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.llm?.base_url || 'http://127.0.0.1:11434/v1'}
-                        onChange={(e) => handleLLMChange('base_url', e.target.value)}
-                        placeholder="http://127.0.0.1:11434/v1"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        本地模型名称
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.llm?.model || LOCAL_OLLAMA_MODEL}
-                        onChange={(e) => handleLLMChange('model', e.target.value)}
-                        placeholder={LOCAL_OLLAMA_MODEL}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
-            </div>
+            </>
+          )}
 
-            {/* ComfyUI Image Generation Engine Card */}
-            <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6 space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+          {activeTab === 'workflow' && (
+            <div className="bg-white dark:bg-slate-900/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-6 shadow-sm transition-colors">
+              <WorkflowSettings />
+            </div>
+          )}
+
+          {activeTab === 'advanced' && (
+            <div className="bg-white dark:bg-slate-900/60 backdrop-blur-sm border border-rose-200 dark:border-rose-900/40 rounded-2xl p-6 space-y-6 shadow-sm transition-colors">
+              <div className="flex items-center justify-between border-b border-rose-200 dark:border-rose-900/40 pb-4">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20 text-emerald-400">
-                    <Server className="w-5 h-5" />
+                  <div className="p-2 bg-rose-50 dark:bg-rose-500/10 rounded-xl border border-rose-200 dark:border-rose-500/20 text-rose-600 dark:text-rose-400">
+                    <Shield className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-slate-200">{t('comfyui_settings')}</h2>
-                    <p className="text-xs text-slate-400">配置本地/远程 ComfyUI 绘图引擎服务</p>
+                    <h2 className="text-base font-semibold text-rose-900 dark:text-rose-200">{t('advanced_settings.advanced_config_title')}</h2>
+                    <p className="text-xs text-rose-700/80 dark:text-rose-300/80 mt-1">
+                      {t('advanced_settings.nsfw_enable_title')}
+                      <br/>{t('advanced_settings.nsfw_enable_desc')}
+                    </p>
                   </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={settings.comfyui?.enabled ?? false}
-                    onChange={(e) => handleComfyChange('enabled', e.target.checked)}
+                    checked={settings.advanced?.nsfw_enabled ?? false}
+                    onChange={(e) => handleAdvancedChange('nsfw_enabled', e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  <div className="w-11 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
                 </label>
               </div>
 
-              {settings.comfyui?.enabled && (
-                <div className="space-y-5">
-                  {/* ComfyUI Mode Switcher */}
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-2">
-                      {t('comfyui_mode')}
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleComfyChange('mode', 'local')}
-                        className={`p-3 rounded-xl border text-left transition-all ${
-                          (settings.comfyui?.mode || 'local') === 'local'
-                            ? 'bg-emerald-600/10 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30'
-                            : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 font-semibold text-sm mb-0.5">
-                          <Server className="w-4 h-4 text-emerald-400" />
-                          <span>{t('comfyui_mode_local')}</span>
-                        </div>
-                        <div className="text-xs opacity-75">本地机器运行，默认地址 http://127.0.0.1:8188</div>
-                      </button>
+              <div className="space-y-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-4">
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  {t('advanced_settings.nsfw_lora_recipe_title')}
+                </p>
+                <ul className="space-y-1.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                  <li>{t('director.lora_recipe_detail')}</li>
+                  <li>{t('director.lora_recipe_anime')}</li>
+                  <li>{t('director.lora_recipe_comic')}</li>
+                  <li>{t('director.lora_recipe_artists')}</li>
+                </ul>
+              </div>
+            </div>
+          )}
 
-                      <button
-                        type="button"
-                        onClick={() => handleComfyChange('mode', 'remote')}
-                        className={`p-3 rounded-xl border text-left transition-all ${
-                          settings.comfyui?.mode === 'remote'
-                            ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/30'
-                            : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/80 hover:text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 font-semibold text-sm mb-0.5">
-                          <Cloud className="w-4 h-4 text-indigo-400" />
-                          <span>{t('comfyui_mode_remote')}</span>
-                        </div>
-                        <div className="text-xs opacity-75">远端算力机运行，自带 GPU，不占用本地显存</div>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Mode-specific Fields */}
-                  {(settings.comfyui?.mode || 'local') === 'local' ? (
-                    <div className="space-y-4 pt-1">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-300 mb-1">
-                          {t('comfyui_url')}
-                        </label>
-                        <input
-                          type="text"
-                          value={settings.comfyui?.local_base_url || settings.comfyui?.base_url || 'http://127.0.0.1:8188'}
-                          onChange={(e) => {
-                            handleComfyChange('local_base_url', e.target.value);
-                            handleComfyChange('base_url', e.target.value);
-                          }}
-                          placeholder="http://127.0.0.1:8188"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-slate-300 mb-1">
-                          ComfyUI 本地安装根目录 (用于自动加载 LoRA 与节点路径)
-                        </label>
-                        <input
-                          type="text"
-                          value={settings.comfyui?.install_path || 'D:\\ComfyUI'}
-                          onChange={(e) => handleComfyChange('install_path', e.target.value)}
-                          placeholder="D:\ComfyUI"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                        />
-                      </div>
-
-                      {/* Detected LoRAs Section */}
-                      <div className="pt-2 border-t border-slate-800/60 space-y-4">
-                        <div className="flex items-center justify-between">
-                          <label className="block text-xs font-medium text-slate-300">
-                            {t('detected_loras_title')}
-                          </label>
-                          <span className={`text-xs px-2 py-0.5 rounded ${loraDirectoryInfo.exists ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' : 'bg-amber-950/50 text-amber-400 border border-amber-800/40'}`}>
-                            {loraDirectoryInfo.exists ? `找到 ${availableLoras.length} 个 LoRA 模型` : '路径未发现或为空'}
-                          </span>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-medium text-slate-300 mb-1">
-                            {t('comfyui_pony_lora_label')}
-                          </label>
-                          <select
-                            value={settings.comfyui?.pony_lora || ''}
-                            onChange={(e) => handleComfyChange('pony_lora', e.target.value)}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                          >
-                            <option value="">(自动发现 · Detail 细节)</option>
-                            {availableLoras.map((lora) => (
-                              <option key={lora} value={lora}>{lora}</option>
-                            ))}
-                            {settings.comfyui?.pony_lora
-                              && !availableLoras.includes(settings.comfyui.pony_lora) && (
-                              <option value={settings.comfyui.pony_lora}>
-                                {settings.comfyui.pony_lora} (自定义配置)
-                              </option>
-                            )}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4 pt-1">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-300 mb-1">
-                          {t('comfyui_remote_url')}
-                        </label>
-                        <input
-                          type="text"
-                          value={settings.comfyui?.remote_base_url || ''}
-                          onChange={(e) => {
-                            handleComfyChange('remote_base_url', e.target.value);
-                            handleComfyChange('base_url', e.target.value);
-                          }}
-                          placeholder="如：https://your-remote-comfyui.com"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-slate-300 mb-1">
-                            {t('comfyui_remote_username')}
-                          </label>
-                          <input
-                            type="text"
-                            value={settings.comfyui?.remote_username || ''}
-                            onChange={(e) => handleComfyChange('remote_username', e.target.value)}
-                            placeholder="如：admin"
-                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-medium text-slate-300 mb-1">
-                            {t('comfyui_remote_password')}
-                          </label>
-                          <input
-                            type="password"
-                            value={settings.comfyui?.remote_password || ''}
-                            onChange={(e) => handleComfyChange('remote_password', e.target.value)}
-                            placeholder={
-                              settings.comfyui?.has_remote_password
-                                ? '已保存密码（留空则不修改）'
-                                : '输入密码'
-                            }
-                            autoComplete="off"
-                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                          />
-                          {settings.comfyui?.has_remote_password && !settings.comfyui?.remote_password && (
-                            <p className="text-[11px] text-emerald-500/80 mt-1">服务器已安全保存密码，不会在接口中回传明文。</p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl text-xs text-indigo-300/90 leading-relaxed">
-                        💡 <strong>远端算力机说明：</strong>生图任务将通过 WebSocket 直连推送到远端 ComfyUI 执行。角色设定参考图将自动上传至远端，生成完成后的图像将回传下载并保存到本地项目目录。
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Verify Connection Button & Result */}
-                  <div className="pt-2 border-t border-slate-800/60 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={handleVerifyComfy}
-                        disabled={verifyingComfy}
-                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-xl border border-slate-700/80 transition-colors flex items-center gap-2"
-                      >
-                        {verifyingComfy ? (
-                          <>
-                            <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-                            <span>{t('comfyui_verifying')}</span>
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>{t('comfyui_verify_btn')}</span>
-                          </>
-                        )}
-                      </button>
-
-                      {comfyVerifyResult && (
-                        <div className={`text-xs px-3 py-1.5 rounded-lg border flex items-center gap-1.5 ${
-                          comfyVerifyResult.status === 'success'
-                            ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
-                            : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
-                        }`}>
-                          {comfyVerifyResult.status === 'success' ? (
-                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                          ) : (
-                            <AlertCircle className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
-                          )}
-                          <span>{comfyVerifyResult.message}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Default RedCraft Krea2 LoRA Dropdown */}
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">
-                        {t('comfyui_redcraft_krea2_lora_label')}
-                      </label>
-                      <select
-                        value={settings.comfyui?.redcraft_krea2_lora || ''}
-                        onChange={(e) => handleComfyChange('redcraft_krea2_lora', e.target.value || null)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                      >
-                        <option value="">(自动发现 · RedCraft / Krea2 风格)</option>
-                        {availableLoras.map((lora) => (
-                          <option key={lora} value={lora}>{lora}</option>
-                        ))}
-                        {settings.comfyui?.redcraft_krea2_lora
-                          && !availableLoras.includes(settings.comfyui.redcraft_krea2_lora) && (
-                          <option value={settings.comfyui.redcraft_krea2_lora}>
-                            {settings.comfyui.redcraft_krea2_lora} (自定义配置)
-                          </option>
-                        )}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      {t('comfyui_workflow')}
-                    </label>
-                    <select
-                      value={settings.comfyui?.selected_workflow_file || ''}
-                      onChange={(e) => handleComfyChange('selected_workflow_file', e.target.value || null)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none transition-colors"
-                    >
-                      <option value="">-- {t('comfyui_default')} --</option>
-                      {workflowFiles.map((file) => (
-                        <option key={file} value={file}>
-                          {file}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-800/80">
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              {saving ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <span>{t('saving')}...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>{t('save_settings')}</span>
+                </>
               )}
-            </div>
-          </>
-        )}
-
-        {activeTab === 'workflow' && (
-          <div className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6">
-            <WorkflowSettings />
+            </button>
           </div>
-        )}
-
-        {activeTab === 'advanced' && (
-          <div className="bg-slate-900/60 backdrop-blur-sm border border-rose-900/40 rounded-2xl p-6 space-y-6">
-            <div className="flex items-center justify-between border-b border-rose-900/40 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-rose-500/10 rounded-lg border border-rose-500/20 text-rose-400">
-                  <Shield className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-semibold text-rose-200">{t('advanced_settings.advanced_config_title')}</h2>
-                  <p className="text-xs text-rose-300/80 mt-1">
-                    {t('advanced_settings.nsfw_enable_title')}
-                    <br/>{t('advanced_settings.nsfw_enable_desc')}
-                  </p>
-                </div>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.advanced?.nsfw_enabled ?? false}
-                  onChange={(e) => handleAdvancedChange('nsfw_enabled', e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
-              </label>
-            </div>
-
-            {settings.advanced?.nsfw_enabled && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    {t('advanced_settings.pony_nsfw_lora_label')}
-                  </label>
-                  <select
-                    value={settings.advanced?.pony_nsfw_lora || ''}
-                    onChange={(e) => handleAdvancedChange('pony_nsfw_lora', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
-                  >
-                    <option value="">(自动发现 · Incase / ExpressiveH 等)</option>
-                    {availableLoras.map((lora) => (
-                      <option key={lora} value={lora}>{lora}</option>
-                    ))}
-                    {settings.advanced?.pony_nsfw_lora
-                      && !availableLoras.includes(settings.advanced.pony_nsfw_lora) && (
-                      <option value={settings.advanced.pony_nsfw_lora}>
-                        {settings.advanced.pony_nsfw_lora} (自定义配置)
-                      </option>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    {t('advanced_settings.redcraft_krea2_nsfw_lora_label')}
-                  </label>
-                  <select
-                    value={settings.advanced?.redcraft_krea2_nsfw_lora || ''}
-                    onChange={(e) => handleAdvancedChange('redcraft_krea2_nsfw_lora', e.target.value || null)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-rose-500 focus:outline-none transition-colors"
-                  >
-                    <option value="">(选填 · RedCraft 原生支持成人出图)</option>
-                    {availableLoras.map((lora) => (
-                      <option key={lora} value={lora}>{lora}</option>
-                    ))}
-                    {settings.advanced?.redcraft_krea2_nsfw_lora
-                      && !availableLoras.includes(settings.advanced.redcraft_krea2_nsfw_lora) && (
-                      <option value={settings.advanced.redcraft_krea2_nsfw_lora}>
-                        {settings.advanced.redcraft_krea2_nsfw_lora} (自定义配置)
-                      </option>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-medium text-slate-300">
-                      {t('advanced_settings.nsfw_lora_strength_label')}
-                    </label>
-                    <span className="text-xs text-rose-400 font-mono">
-                      {settings.advanced?.nsfw_lora_strength ?? 0.55}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.05"
-                    value={settings.advanced?.nsfw_lora_strength ?? 0.55}
-                    onChange={(e) => handleAdvancedChange('nsfw_lora_strength', parseFloat(e.target.value))}
-                    className="w-full accent-rose-500 cursor-pointer"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
-                    开启 NSFW 后：自动叠加载 细节/风格 LoRA + 成人向 LoRA（去重），并按题材注入触发词与分镜策略。
-                    关闭时：仅风格/细节 LoRA，并强制 SFW 负向词。文件缺失时会按文件名模式自动发现。
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-3 pt-4 border-t border-slate-800/80">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 disabled:opacity-50"
-          >
-            {saving ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                <span>{t('saving')}...</span>
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4" />
-                <span>{t('save_settings')}</span>
-              </>
-            )}
-          </button>
-        </div>
-      </form>
-    </div>
+        </form>
+      </div>
     </div>
   );
 };

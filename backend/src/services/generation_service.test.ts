@@ -89,7 +89,7 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
   assert.equal(safeWorkflow["5"].inputs.width, 1024);
 
   const loraWorkflow = await compileComfyWorkflow(
-    ponyWorkflow(),
+    { ...ponyWorkflow(), style_preset: 'western_comic' },
     'Hero opens a door',
     'standard',
     {},
@@ -106,7 +106,8 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
     ([, node]: [string, any]) => node.class_type === 'LoraLoader'
   );
   assert.ok(loraEntry);
-  assert.equal((loraEntry![1] as any).inputs.lora_name, 'detail.safetensors');
+  assert.equal((loraEntry![1] as any).inputs.lora_name, 'Incase_Style_AutismMix_v3.safetensors');
+  assert.equal((loraEntry![1] as any).inputs.strength_model, 0.55);
   assert.deepEqual(loraWorkflow["3"].inputs.model, [loraEntry![0], 0]);
   assert.doesNotMatch(loraWorkflow["7"].inputs.text, /explicit sexual content/);
 });
@@ -431,12 +432,13 @@ test('preserves main FLUX prompt enhancement and discovers a local style LoRA', 
   }
 });
 
-test('NSFW ON stacks style + adult LoRAs for non-guofeng styles', async () => {
+test('anime preset adds ExpressiveH only while NSFW is on', async () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-comfy-nsfw-stack-'));
   const loraDirectory = path.join(installPath, 'models', 'loras');
   fs.mkdirSync(loraDirectory, { recursive: true });
   fs.writeFileSync(path.join(loraDirectory, 'Pony_DetailV2.0.safetensors'), '');
   fs.writeFileSync(path.join(loraDirectory, 'Incase_Style_PonyXL.safetensors'), '');
+  fs.writeFileSync(path.join(loraDirectory, 'Expressive_H-000001.safetensors'), '');
 
   try {
     const compiled = await compileComfyWorkflow(
@@ -466,7 +468,8 @@ test('NSFW ON stacks style + adult LoRAs for non-guofeng styles', async () => {
     ) as any[];
     assert.equal(loraNodes.length, 2);
     const names = loraNodes.map((n) => n.inputs.lora_name).sort();
-    assert.deepEqual(names, ['Incase_Style_PonyXL.safetensors', 'Pony_DetailV2.0.safetensors'].sort());
+    assert.deepEqual(names, ['Expressive_H-000001.safetensors', 'Pony_DetailV2.0.safetensors'].sort());
+    assert.match(compiled["6"].inputs.text, /Expressiveh/);
     assert.match(compiled["6"].inputs.text, /rating_/);
     assert.doesNotMatch(compiled["7"].inputs.text, /explicit sexual content/);
   } finally {
@@ -509,6 +512,136 @@ test('guofeng/xianxia styles skip Incase LoRA to protect East Asian faces', asyn
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
+});
+
+const workflowWithPrewiredAdultLoras = () => {
+  const workflow = ponyWorkflow() as any;
+  workflow['8'] = {
+    inputs: {
+      lora_name: 'Pony_DetailV2.0.safetensors',
+      strength_model: 0.65,
+      strength_clip: 0.65,
+      model: ['4', 0],
+      clip: ['4', 1]
+    },
+    class_type: 'LoraLoader'
+  };
+  workflow['9'] = {
+    inputs: {
+      lora_name: 'Expressive_H-000001.safetensors',
+      strength_model: 0.55,
+      strength_clip: 0.55,
+      model: ['8', 0],
+      clip: ['8', 1]
+    },
+    class_type: 'LoraLoader'
+  };
+  workflow['10'] = {
+    inputs: {
+      lora_name: 'Incase_Style_PonyXL.safetensors',
+      strength_model: 0.55,
+      strength_clip: 0.55,
+      model: ['9', 0],
+      clip: ['9', 1]
+    },
+    class_type: 'LoraLoader'
+  };
+  workflow['3'].inputs.model = ['10', 0];
+  workflow['6'].inputs.clip = ['10', 1];
+  workflow['7'].inputs.clip = ['10', 1];
+  return workflow;
+};
+
+test('SFW compile detaches prewired ExpressiveH and Incase loaders', async () => {
+  const compiled = await compileComfyWorkflow(
+    workflowWithPrewiredAdultLoras(),
+    '1girl standing in a library',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  const names = Object.values(compiled)
+    .filter((node: any) => node?.class_type === 'LoraLoader')
+    .map((node: any) => node.inputs.lora_name);
+  assert.deepEqual(names, ['Pony_DetailV2.0.safetensors']);
+  assert.equal(compiled['9'], undefined);
+  assert.equal(compiled['10'], undefined);
+  assert.deepEqual(compiled['3'].inputs.model, ['8', 0]);
+  assert.deepEqual(compiled['6'].inputs.clip, ['8', 1]);
+  assert.deepEqual(compiled['7'].inputs.clip, ['8', 1]);
+});
+
+test('NSFW compile keeps a prewired adult LoRA', async () => {
+  const compiled = await compileComfyWorkflow(
+    { ...workflowWithPrewiredAdultLoras(), style_preset: 'anime' },
+    '1girl standing in a library',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: true }, comfyui: {} }
+  );
+  const names = Object.values(compiled)
+    .filter((node: any) => node?.class_type === 'LoraLoader')
+    .map((node: any) => node.inputs.lora_name);
+  assert.ok(names.includes('Expressive_H-000001.safetensors'));
+  assert.ok(names.includes('Incase_Style_PonyXL.safetensors'));
+  assert.equal(
+    names.filter((name) => name === 'Expressive_H-000001.safetensors').length,
+    1
+  );
+});
+
+test('SFW compile detaches a prewired FLUX NSFW LoRA', async () => {
+  const workflow = fluxWorkflow() as any;
+  workflow['7'] = {
+    inputs: {
+      lora_name: 'aidmaNSFWunlock.safetensors',
+      strength_model: 0.7,
+      model: ['1', 0]
+    },
+    class_type: 'LoraLoaderModelOnly'
+  };
+  workflow['6'].inputs.model = ['7', 0];
+  const compiled = await compileComfyWorkflow(
+    workflow,
+    'a mountain temple',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  assert.equal(compiled['7'], undefined);
+  assert.deepEqual(compiled['6'].inputs.model, ['1', 0]);
+});
+
+test('enabling NSFW drops SFW blockers from the shot and template negatives', async () => {
+  const workflow = ponyWorkflow() as any;
+  workflow['7'].inputs.text = 'low quality, nsfw, nude, bad anatomy';
+  workflow.negative_prompt = 'watermark, explicit sexual content, (nude:1.2), blurry';
+  const compiled = await compileComfyWorkflow(
+    workflow,
+    '1girl, adult woman in a silk robe',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: true }, comfyui: {} }
+  );
+  const negative = String(compiled['7'].inputs.text);
+  assert.match(negative, /low quality/);
+  assert.match(negative, /bad anatomy/);
+  assert.match(negative, /watermark/);
+  assert.match(negative, /blurry/);
+  assert.match(negative, /child/);
+  assert.doesNotMatch(negative, /\bnsfw\b/i);
+  assert.doesNotMatch(negative, /\bnude\b/i);
+  assert.doesNotMatch(negative, /explicit sexual content/i);
+
+  const sfw = await compileComfyWorkflow(
+    workflow,
+    '1girl, adult woman in a silk robe',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  assert.match(String(sfw['7'].inputs.text), /\bnsfw\b/i);
+  assert.match(String(sfw['7'].inputs.text), /\bnude\b/i);
 });
 
 test('wires real img2img path when ref_image_url is set for turnaround', async () => {

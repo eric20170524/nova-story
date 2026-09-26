@@ -112,12 +112,12 @@ const QuickCopyButton: React.FC<{
     <button
       type="button"
       onClick={handleCopy}
-      className={`inline-flex items-center gap-1 p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-700/80 border border-transparent hover:border-slate-600 transition-colors ${className}`}
+      className={`inline-flex items-center gap-1 p-1 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-slate-700/80 border border-transparent hover:border-slate-300 dark:hover:border-slate-600 transition-colors ${className}`}
       title={label || t('agent.copy', '复制')}
       aria-label={label || t('agent.copy', '复制')}
     >
       {copied ? (
-        <Check size={13} className="text-emerald-400" />
+        <Check size={13} className="text-emerald-500 dark:text-emerald-400" />
       ) : (
         <Copy size={13} />
       )}
@@ -474,16 +474,18 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
   const suggestions = getRouteSuggestions();
 
   const panelBody = (
-    <div className="flex flex-col h-full bg-slate-950">
+    <div className="flex flex-col h-full bg-white dark:bg-slate-950 transition-colors">
       {!embedded && (
-        <div className="p-4 border-b border-slate-800 bg-slate-900 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Bot className="text-indigo-400" size={20} />
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900 flex items-center justify-between transition-colors">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/40 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-sm">
+              <Bot size={18} />
+            </div>
             <div>
-              <h3 className="font-semibold text-slate-200 text-sm">
+              <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
                 {t('agent.title_os')}
               </h3>
-              <p className="text-[10px] text-slate-500">
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">
                 {routeHint}
                 {chapterId ? ` · ch ${String(chapterId).slice(0, 8)}…` : ''}
               </p>
@@ -492,14 +494,14 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <X size={18} />
           </button>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-slate-50/30 dark:bg-slate-950/40">
         {messages.map((msg, idx) => (
           <div
             key={idx}
@@ -508,15 +510,15 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             }`}
           >
             <div
-              className={`group/msg relative max-w-[92%] p-3 pr-9 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
+              className={`group/msg relative max-w-[92%] p-3.5 pr-9 rounded-2xl text-xs sm:text-sm leading-relaxed whitespace-pre-wrap shadow-sm transition-all ${
                 msg.role === 'user'
-                  ? 'bg-indigo-600 text-white rounded-br-none'
-                  : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
-              } ${msg.error ? 'border-red-500 text-red-100 bg-red-900/20' : ''}`}
+                  ? 'bg-indigo-600 text-white rounded-br-none shadow-indigo-600/10'
+                  : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none border border-slate-200/80 dark:border-slate-700'
+              } ${msg.error ? 'border-red-300 dark:border-red-500 text-red-900 dark:text-red-100 bg-red-50 dark:bg-red-900/20' : ''}`}
             >
               {msg.content}
               <div
-                className={`absolute top-1.5 right-1.5 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity ${
+                className={`absolute top-2 right-2 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity ${
                   msg.role === 'user' ? 'text-indigo-100' : ''
                 }`}
               >
@@ -531,10 +533,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
               </div>
             </div>
             {msg.thought && (
-              <div className="group/thought max-w-[92%] text-xs text-slate-500 flex items-start gap-2 bg-slate-900/50 p-2 pr-8 rounded border border-slate-800/50 relative">
-                <Brain size={12} className="mt-0.5 flex-shrink-0" />
+              <div className="group/thought max-w-[92%] text-xs text-slate-500 dark:text-slate-400 flex items-start gap-2 bg-slate-100/80 dark:bg-slate-900/50 p-2.5 pr-8 rounded-xl border border-slate-200 dark:border-slate-800/50 relative">
+                <Brain size={13} className="mt-0.5 flex-shrink-0 text-indigo-500 dark:text-indigo-400" />
                 <span className="italic flex-1 min-w-0">{msg.thought}</span>
-                <div className="absolute top-1 right-1 opacity-0 group-hover/thought:opacity-100 transition-opacity">
+                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover/thought:opacity-100 transition-opacity">
                   <QuickCopyButton
                     text={msg.thought}
                     label={t('agent.copy_thought', '复制思考')}
@@ -565,15 +567,15 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         )}
 
         {loading && (
-          <div className="flex items-center gap-2 text-slate-500 text-xs p-2">
-            <Loader2 size={12} className="animate-spin" />
+          <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 text-xs p-2">
+            <Loader2 size={13} className="animate-spin" />
             <span>{t('agent.thinking')}</span>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="p-3 bg-slate-900 border-t border-slate-800">
+      <div className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 transition-colors">
         <div className="relative">
           <input
             type="text"
@@ -584,33 +586,33 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
               'agent.placeholder',
               'e.g. Rename this chapter / continue writing…'
             )}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-4 pr-20 py-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl pl-4 pr-20 py-3 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all shadow-sm"
             disabled={loading || executing}
           />
           <div className="absolute right-2 top-2 flex items-center gap-1">
             <QuickCopyButton
               text={input}
               label={t('agent.copy_input', '复制输入')}
-              className="bg-slate-800/80 border border-slate-700"
+              className="bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 shadow-sm"
             />
             <button
               type="button"
               onClick={() => handleSend()}
               disabled={loading || executing || !input.trim()}
-              className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-indigo-600 rounded-md transition-all disabled:opacity-50"
+              className="p-1.5 text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-all shadow-sm disabled:opacity-40"
               title={t('agent.send', '发送')}
             >
-              <Send size={16} />
+              <Send size={15} />
             </button>
           </div>
         </div>
-        <div className="mt-2 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+        <div className="mt-2.5 flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
           {suggestions.map((item, idx) => (
             <button
               key={idx}
               type="button"
               onClick={() => handleSend(item.prompt, item.preferredOp)}
-              className="text-[10px] whitespace-nowrap px-2.5 py-1 bg-slate-800 hover:bg-indigo-900/40 hover:text-indigo-200 text-slate-400 rounded-full border border-slate-700 transition-colors"
+              className="text-[11px] whitespace-nowrap px-3 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 dark:bg-slate-800 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-200 text-slate-600 dark:text-slate-400 rounded-full border border-slate-200 dark:border-slate-700 transition-colors font-medium shadow-xs"
             >
               {item.label}
             </button>
@@ -636,11 +638,11 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className={`fixed ${fabOffsetClass} flex items-center gap-2 px-4 py-3 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/40 transition-transform hover:scale-105`}
+          className={`fixed ${fabOffsetClass} flex items-center gap-2 px-4 py-3 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-xl shadow-indigo-600/30 transition-transform hover:scale-105`}
           title={t('agent.open_panel', '打开 Agent OS')}
         >
           <Sparkles size={18} />
-          <span className="text-sm font-medium hidden sm:inline">
+          <span className="text-sm font-semibold hidden sm:inline">
             {t('agent.fab_label', 'Agent OS')}
           </span>
         </button>
@@ -648,10 +650,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       {open && (
         <>
           <div
-            className="fixed inset-0 bg-black/40 z-[70] lg:bg-black/20"
+            className="fixed inset-0 bg-slate-900/30 dark:bg-black/40 z-[70] backdrop-blur-xs"
             onClick={() => setOpen(false)}
           />
-          <div className="fixed inset-y-0 right-0 z-[80] w-full max-w-md shadow-2xl border-l border-slate-800 flex flex-col bg-slate-950">
+          <div className="fixed inset-y-0 right-0 z-[80] w-full max-w-md shadow-2xl border-l border-slate-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-950 animate-in slide-in-from-right duration-200">
             {panelBody}
           </div>
         </>

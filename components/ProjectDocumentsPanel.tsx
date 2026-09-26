@@ -130,30 +130,30 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 left-5 z-30 flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/95 px-4 py-2 text-sm font-medium text-slate-200 shadow-xl hover:border-indigo-500/50 hover:text-indigo-300"
+        className="fixed bottom-5 left-5 z-30 flex items-center gap-2 rounded-full border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-xl hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-indigo-300 transition-all backdrop-blur-sm"
         title={t('project_documents.open', '附加资料')}
       >
-        <FileText size={16} />
+        <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
         <span>{t('project_documents.open', '附加资料')}</span>
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm">
-          <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-800 bg-slate-950 shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-950/95 px-5 py-4 backdrop-blur">
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/30 dark:bg-black/50 backdrop-blur-xs">
+          <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-2xl animate-in slide-in-from-right duration-200 transition-colors">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950/95 px-5 py-4 backdrop-blur">
               <div>
-                <h2 className="text-lg font-semibold text-white">{t('project_documents.title', '项目附加资料')}</h2>
-                <p className="mt-0.5 text-xs text-slate-500">TXT / Markdown · 不自动覆盖正文或 Story Bible</p>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">{t('project_documents.title', '项目附加资料')}</h2>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">TXT / Markdown · 不自动覆盖正文或 Story Bible</p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white">
+              <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-white transition-colors">
                 <X size={18} />
               </button>
             </div>
 
             <div className="space-y-5 p-5">
-              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
-                  <Plus size={16} /> 添加资料
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 p-4 space-y-3 shadow-sm transition-colors">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-200">
+                  <Plus size={16} className="text-indigo-600 dark:text-indigo-400" /> 添加资料
                 </div>
                 <div className="grid gap-3 sm:grid-cols-[150px_1fr]">
                   <select
@@ -163,7 +163,7 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
                       setDocumentType(event.target.value as ProjectDocumentType);
                       setPreview(null);
                     }}
-                    className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-xs"
                   >
                     {TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                   </select>
@@ -175,26 +175,26 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
                       setFile(event.target.files?.[0] || null);
                       setPreview(null);
                     }}
-                    className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-indigo-500/10 file:px-2 file:py-1 file:text-indigo-300"
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-700 dark:text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:dark:bg-indigo-500/10 file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-indigo-600 file:dark:text-indigo-300 shadow-xs"
                   />
                 </div>
 
                 {preview && (
-                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm">
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3.5 text-xs shadow-xs">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-slate-200">{preview.title}</span>
-                      <span className="text-xs text-slate-500">{preview.source.format.toUpperCase()}</span>
+                      <span className="font-bold text-slate-900 dark:text-slate-200">{preview.title}</span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{preview.source.format.toUpperCase()}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+                    <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500 dark:text-slate-400">
                       <span>{preview.content_characters} 字符</span>
                       <span>{preview.line_count} 行</span>
                       {preview.heading_count > 0 && <span>{preview.heading_count} 个标题</span>}
                     </div>
-                    <div className="mt-3 rounded bg-emerald-500/5 px-2 py-1.5 text-xs text-emerald-300/80">
+                    <div className="mt-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/5 px-2.5 py-1.5 text-xs text-emerald-800 dark:text-emerald-300/80 border border-emerald-200/60 dark:border-emerald-800/40">
                       安全预览：不会修改章节正文，不会修改 Story Bible；保存后 AI 上下文默认关闭。
                     </div>
                     {preview.duplicate_document && (
-                      <div className="mt-2 rounded bg-amber-500/10 px-2 py-1.5 text-xs text-amber-300">
+                      <div className="mt-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
                         重复资料：已存在“{preview.duplicate_document.name}”。
                       </div>
                     )}
@@ -206,67 +206,67 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
                     type="button"
                     disabled={!file || busy || Boolean(preview?.duplicate_document)}
                     onClick={handlePreviewOrCommit}
-                    className="flex min-w-28 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500"
+                    className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-500 shadow-md shadow-indigo-600/20 transition-all"
                   >
-                    {busy && <Loader2 size={15} className="animate-spin" />}
+                    {busy && <Loader2 size={14} className="animate-spin" />}
                     {preview ? '确认添加' : '解析预览'}
                   </button>
                 </div>
               </div>
 
               <div>
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2.5 flex items-center justify-between">
                   <div>
-                    <h3 className="text-sm font-medium text-slate-300">已添加资料</h3>
-                    <p className="mt-0.5 text-[11px] text-slate-600">只有手动开启的资料才会按固定预算进入写作上下文。</p>
+                    <h3 className="text-xs font-bold text-slate-800 dark:text-slate-300">已添加资料</h3>
+                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-500">只有手动开启的资料才会按固定预算进入写作上下文。</p>
                   </div>
-                  <span className="text-xs text-slate-600">{documents.length}</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{documents.length}</span>
                 </div>
                 {loading ? (
-                  <div className="flex justify-center py-10 text-slate-500"><Loader2 className="animate-spin" size={20} /></div>
+                  <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
                 ) : documents.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-800 py-10 text-center text-sm text-slate-600">暂无附加资料</div>
+                  <div className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-400 dark:text-slate-600">暂无附加资料</div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     {documents.map((document) => {
                       let metadata: Record<string, unknown> = {};
                       try { metadata = document.metadata_json ? JSON.parse(document.metadata_json) : {}; } catch { metadata = {}; }
                       const contextEnabled = isContextEnabled(document.context_enabled);
                       return (
-                        <div key={document.id} className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3">
+                        <div key={document.id} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3.5 shadow-sm transition-colors">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <div className="truncate text-sm font-medium text-slate-200">{document.name}</div>
-                              <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                                <span>{typeLabel(document.document_type)}</span>
+                              <div className="truncate text-xs font-bold text-slate-900 dark:text-slate-200">{document.name}</div>
+                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                                <span className="font-medium text-indigo-600 dark:text-indigo-400">{typeLabel(document.document_type)}</span>
                                 <span>{document.source_format.toUpperCase()}</span>
                                 {typeof metadata.content_characters === 'number' && <span>{metadata.content_characters} 字符</span>}
                               </div>
-                              {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-600">{document.source_filename}</div>}
+                              {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-400 dark:text-slate-600">{document.source_filename}</div>}
                             </div>
                             <button
                               type="button"
                               onClick={() => void handleDelete(document)}
-                              className="rounded p-1.5 text-slate-600 hover:bg-red-500/10 hover:text-red-400"
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
                               aria-label="删除附加资料"
                             >
                               <Trash2 size={15} />
                             </button>
                           </div>
 
-                          <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-800 pt-2.5">
+                          <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-2.5">
                             <div>
-                              <div className="text-xs text-slate-400">AI 写作上下文</div>
-                              <div className="text-[11px] text-slate-600">开启后按类型优先级和总量预算截取。</div>
+                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">AI 写作上下文</div>
+                              <div className="text-[11px] text-slate-400 dark:text-slate-500">开启后按类型优先级和总量预算截取。</div>
                             </div>
                             <button
                               type="button"
                               disabled={contextBusyId !== null}
                               onClick={() => void handleContextToggle(document)}
-                              className={`min-w-20 rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                              className={`min-w-20 rounded-full border px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
                                 contextEnabled
-                                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                                  : 'border-slate-700 bg-slate-950 text-slate-500 hover:text-slate-300'
+                                  ? 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 shadow-xs'
+                                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
                               }`}
                             >
                               {contextBusyId === document.id ? '更新中…' : contextEnabled ? '已开启' : '关闭'}

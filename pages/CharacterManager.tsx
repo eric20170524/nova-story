@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Plus, Wand2, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { Character } from '../types';
-import { API_BASE_URL } from '../constants';
+import { API_BASE_URL, styleLoraRecipeLocaleKey } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { resolveMediaUrl, useImagePreview } from '../components/ImageLightbox';
@@ -649,16 +649,16 @@ export const CharacterManager: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 bg-slate-950 p-4 sm:p-8 overflow-y-auto h-full w-full custom-scrollbar overscroll-contain">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6 sm:mb-8">
+    <div className="flex-1 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 p-4 sm:p-8 overflow-y-auto h-full w-full custom-scrollbar overscroll-contain transition-colors duration-200">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6 sm:mb-8 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
         <div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white">{t('characters.title')}</h2>
-          <p className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
-            <span className={`px-2 py-0.5 rounded-full font-semibold ${effectiveNsfw ? 'bg-rose-900/60 text-rose-200' : 'bg-emerald-900/50 text-emerald-200'}`}>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white">{t('characters.title')}</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2">
+            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${effectiveNsfw ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-200 border-rose-200 dark:border-rose-800/60' : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800/60'}`}>
               {effectiveNsfw ? 'NSFW' : 'SFW'}
             </span>
-            <span className="text-slate-500">style: {projectStyle}</span>
-            {batchProgress && <span className="text-indigo-400 animate-pulse">{batchProgress}</span>}
+            <span className="text-slate-600 dark:text-slate-400 font-medium">{t(styleLoraRecipeLocaleKey(projectStyle))}</span>
+            {batchProgress && <span className="text-indigo-600 dark:text-indigo-400 font-medium animate-pulse">{batchProgress}</span>}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -666,7 +666,7 @@ export const CharacterManager: React.FC = () => {
             <button
               type="button"
               onClick={() => { stopBatchRef.current = true; }}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/50 px-4 py-2 rounded-lg text-sm font-medium"
+              className="flex items-center gap-2 bg-amber-50 dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-slate-700 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800/50 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-xs"
             >
               <RefreshCw size={16} className="animate-spin" /> {t('characters.batch_stop') || 'Stop batch'}
             </button>
@@ -675,7 +675,7 @@ export const CharacterManager: React.FC = () => {
               type="button"
               onClick={handleBatchRegenerateAll}
               disabled={!characters.length}
-              className="flex items-center gap-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              className="flex items-center gap-2 bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-xs"
               title={t('characters.batch_hint') || 'Portrait then turnaround for every character'}
             >
               <Wand2 size={16} /> {t('characters.batch_regen') || 'Batch regenerate all'}
@@ -683,7 +683,7 @@ export const CharacterManager: React.FC = () => {
           )}
           <button
             onClick={() => openModal()}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm sm:text-base font-medium"
+            className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white px-4 py-2 rounded-xl text-sm sm:text-base font-semibold transition-all shadow-md shadow-indigo-500/20"
           >
             <Plus size={18} /> {t('characters.add_btn')}
           </button>

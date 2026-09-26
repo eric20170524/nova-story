@@ -52,7 +52,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-sm p-3 sm:p-6 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 dark:bg-black/92 backdrop-blur-md p-3 sm:p-6 animate-in fade-in duration-150"
       role="dialog"
       aria-modal="true"
       aria-label={alt}
@@ -68,7 +68,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
             download
             target="_blank"
             rel="noopener noreferrer"
-            className="p-2 rounded-full bg-slate-800/90 hover:bg-indigo-600 text-slate-200 hover:text-white border border-slate-700 transition-colors"
+            className="p-2 rounded-xl bg-white/10 dark:bg-slate-800/90 hover:bg-indigo-600 text-white border border-white/20 dark:border-slate-700 transition-colors shadow-lg backdrop-blur-sm"
             title="Open / download"
             onClick={(e) => e.stopPropagation()}
           >
@@ -77,7 +77,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 transition-colors"
+            className="p-2 rounded-xl bg-white/10 dark:bg-slate-800/90 hover:bg-white/20 dark:hover:bg-slate-700 text-white border border-white/20 dark:border-slate-700 transition-colors shadow-lg backdrop-blur-sm"
             aria-label="Close"
           >
             <X size={20} />
@@ -86,10 +86,10 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
         <img
           src={fullSrc}
           alt={alt}
-          className="max-w-[96vw] max-h-[85vh] object-contain rounded-lg shadow-2xl border border-slate-700/80 bg-slate-950"
+          className="max-w-[96vw] max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-white/10 dark:border-slate-800 bg-slate-950/80"
           draggable={false}
         />
-        <p className="text-[11px] text-slate-500 select-none">Click outside or press Esc to close</p>
+        <p className="text-[11px] text-white/60 dark:text-slate-400 select-none font-medium">Click outside or press Esc to close</p>
       </div>
     </div>,
     document.body

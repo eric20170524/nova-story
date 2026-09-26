@@ -199,6 +199,22 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     tier: 'standard',
   },
   {
+    value: 'western_comic',
+    label: 'Western Comic (美漫厚涂)',
+    prompt: 'western comic book illustration, thick painterly ink, bold rim light, graphic novel shading, saturated colors, dynamic panel lighting, score_9, source_cartoon',
+    negative_prompt: 'photoreal, chibi, ink wash monochrome, muddy colors, low quality, bad anatomy',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
+    value: 'autismmix_artist',
+    label: 'AutismMix Artists (画师风格)',
+    prompt: 'polished anime illustration, refined linework, rich color, character-focused composition, score_9, source_anime',
+    negative_prompt: 'photoreal DSLR, 3d render, chibi, low quality, bad anatomy, western comic halftone',
+    recommended_model: 'pony_xl',
+    tier: 'standard',
+  },
+  {
     value: 'ancient_fantasy',
     label: 'Gu Feng Fantasy (古风幻想)',
     prompt: 'ancient Chinese xianxia fantasy illustration, East Asian facial features, guofeng national style beauty, refined ink-inspired linework, painterly texture, ethereal atmosphere, cinematic volumetric lighting, elegant silk textures, atmospheric depth, intricate traditional patterns, semi-realistic digital rendering',
@@ -379,6 +395,14 @@ export function getVisualStyles(includeAdvanced: boolean = isAdvancedStylesEnabl
     }
   }
   return unique;
+}
+
+/** Locale key describing which LoRAs this visual style loads. */
+export function styleLoraRecipeLocaleKey(style: string): string {
+  if (style === 'anime') return 'director.lora_recipe_anime';
+  if (style === 'western_comic') return 'director.lora_recipe_comic';
+  if (style === 'autismmix_artist') return 'director.lora_recipe_artists';
+  return 'director.lora_recipe_detail';
 }
 
 export function findVisualStyle(value: string): VisualStyleDef | undefined {

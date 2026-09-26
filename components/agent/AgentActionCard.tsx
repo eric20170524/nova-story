@@ -69,30 +69,30 @@ export const AgentActionCard: React.FC<AgentActionCardProps> = ({
 
   return (
     <div
-      className={`rounded-xl border p-3 space-y-2 ${
+      className={`rounded-2xl border p-4 space-y-3 shadow-md transition-all ${
         hasDelete
-          ? 'border-red-500/40 bg-red-950/30'
-          : 'border-indigo-500/30 bg-indigo-950/20'
+          ? 'border-red-300 dark:border-red-500/40 bg-red-50/90 dark:bg-red-950/30'
+          : 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-950/20'
       }`}
     >
-      <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+      <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
         {hasDelete ? (
-          <AlertTriangle size={14} className="text-red-400" />
+          <AlertTriangle size={15} className="text-red-600 dark:text-red-400" />
         ) : (
-          <Terminal size={14} className="text-indigo-400" />
+          <Terminal size={15} className="text-indigo-600 dark:text-indigo-400" />
         )}
         <span>
-          {t('agent.action_plan', 'Proposed actions')} ({actions.length})
+          {t('agent.action_plan', '执行方案')} ({actions.length})
         </span>
       </div>
       <ul className="space-y-1.5">
         {actions.map((action, idx) => (
           <li
             key={idx}
-            className="text-xs text-slate-300 font-mono bg-slate-900/60 rounded px-2 py-1.5 border border-slate-800"
+            className="text-xs text-slate-800 dark:text-slate-300 font-mono bg-white dark:bg-slate-900/60 rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-800 shadow-xs"
           >
-            <span className="text-indigo-400 mr-1">{action.op}</span>
-            <span className="text-slate-400">— {describeAction(action, t)}</span>
+            <span className="text-indigo-600 dark:text-indigo-400 font-semibold mr-1.5">{action.op}</span>
+            <span className="text-slate-600 dark:text-slate-400">— {describeAction(action, t)}</span>
           </li>
         ))}
       </ul>
@@ -101,7 +101,7 @@ export const AgentActionCard: React.FC<AgentActionCardProps> = ({
           type="button"
           disabled={executing}
           onClick={onConfirm}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all shadow-sm disabled:opacity-50 ${
             hasDelete
               ? 'bg-red-600 hover:bg-red-500 text-white'
               : 'bg-indigo-600 hover:bg-indigo-500 text-white'
@@ -109,18 +109,18 @@ export const AgentActionCard: React.FC<AgentActionCardProps> = ({
         >
           <Check size={14} />
           {executing
-            ? t('agent.executing', 'Executing…')
+            ? t('agent.executing', '正在执行…')
             : hasDelete
-              ? t('agent.confirm_delete', 'Confirm delete')
-              : t('agent.confirm_execute', 'Execute all')}
+              ? t('agent.confirm_delete', '确认删除')
+              : t('agent.confirm_execute', '全部执行')}
         </button>
         <button
           type="button"
           disabled={executing}
           onClick={onDismiss}
-          className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700"
+          className="px-3.5 py-2 rounded-xl text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-colors"
         >
-          <X size={14} />
+          <X size={15} />
         </button>
       </div>
     </div>
