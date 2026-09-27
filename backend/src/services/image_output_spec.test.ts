@@ -25,11 +25,11 @@ test('project auto policy may switch wide storyboard shots to landscape', () => 
       gen_type: 'scene',
       shot_type: 'Establishing Shot',
       project_settings: {
-        output_spec: {
+        image_generation: { output_spec: {
           aspect_ratio: '3:4',
           resolution: 'standard',
           orientation_policy: 'auto_by_shot',
-        },
+        } },
       },
     },
     modelFamily: 'pony',
@@ -46,7 +46,7 @@ test('request output spec overrides the project canvas', () => {
     workflowData: {
       gen_type: 'scene',
       project_settings: {
-        output_spec: { aspect_ratio: '3:4', resolution: 'standard' },
+        image_generation: { output_spec: { aspect_ratio: '3:4', resolution: 'standard' } },
       },
       output_spec: { aspect_ratio: '1:1', resolution: 'draft' },
     },
@@ -57,6 +57,18 @@ test('request output spec overrides the project canvas', () => {
   assert.equal(target.height, 768);
   assert.equal(target.resolved_aspect_ratio, '1:1');
   assert.equal(target.source, 'request');
+});
+
+test('project canvas applies to character portraits', () => {
+  const target = resolveImageOutputTarget({
+    workflowData: { gen_type: 'portrait', project_settings: {
+      image_generation: { output_spec: { aspect_ratio: '1:1', resolution: 'high' } }
+    } },
+    modelFamily: 'sd15',
+  });
+  assert.equal(target.width, 1024);
+  assert.equal(target.height, 1024);
+  assert.equal(target.source, 'project');
 });
 
 test('exact request dimensions win and align to model-safe multiples of 64', () => {

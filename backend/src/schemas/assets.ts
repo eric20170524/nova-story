@@ -9,6 +9,7 @@ export const ImageOutputSpecSchema = z.object({
 export const GenerationParamsSchema = z.object({
   cfg: z.number().positive().optional(),
   steps: z.number().int().positive().optional(),
+  seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   sampler_name: z.string().min(1).optional(),
   scheduler: z.string().min(1).optional(),
   width: z.number().int().min(256).max(4096).optional(),

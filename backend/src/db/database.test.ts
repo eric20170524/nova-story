@@ -92,8 +92,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 012_video_generation
-    assert.equal(migrationCount.count, 12);
+    // 001_core through 013_project_image_generation
+    assert.equal(migrationCount.count, 13);
   } finally {
     await legacyDatabase.close();
   }
@@ -164,6 +164,43 @@ test('011 adds coverage_shot contract columns when only 001-010 were applied', a
       `SELECT version FROM schema_migration WHERE version = '011_coverage_shot_contract'`
     );
     assert.ok(row);
+  } finally {
+    await database.close();
+  }
+});
+
+test('013 rewrites existing project image settings and removes character models once', async () => {
+  const database = await open({ filename: ':memory:', driver: sqlite3.Database });
+  try {
+    await runMigrations(database);
+    await database.run(
+      'INSERT INTO project (id, title, settings) VALUES (?, ?, ?)',
+      1, 'existing', JSON.stringify({
+        default_model_type: 'sd15', default_style: 'anime', default_workflow_id: 99,
+        output_spec: { aspect_ratio: 'auto', resolution: 'high' }, nsfw_enabled: true,
+        genre: 'fantasy',
+      })
+    );
+    await database.run('INSERT INTO character (id, project_id, name, visual_tags) VALUES (?, ?, ?, ?)',
+      1, 1, 'hero', JSON.stringify({ model_type: 'pony', assets: { model_type: 'pony', avatar_url: '/a.png' } }));
+    await database.run("DELETE FROM schema_migration WHERE version = '013_project_image_generation'");
+    await runMigrations(database);
+    await runMigrations(database);
+
+    const project = await database.get('SELECT settings FROM project WHERE id = 1');
+    const settings = JSON.parse(project.settings);
+    assert.equal(settings.image_generation.model, 'sd15');
+    assert.equal(settings.image_generation.workflow_id, null);
+    assert.equal(settings.image_generation.style, 'anime');
+    assert.equal(settings.image_generation.output_spec.orientation_policy, 'auto_by_shot');
+    assert.equal(settings.image_generation.nsfw_mode, 'on');
+    assert.equal(settings.genre, 'fantasy');
+    assert.equal('default_model_type' in settings, false);
+    const character = await database.get('SELECT visual_tags FROM character WHERE id = 1');
+    const tags = JSON.parse(character.visual_tags);
+    assert.equal('model_type' in tags, false);
+    assert.equal('model_type' in tags.assets, false);
+    assert.equal(tags.assets.avatar_url, '/a.png');
   } finally {
     await database.close();
   }

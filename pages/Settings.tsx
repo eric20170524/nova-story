@@ -56,7 +56,6 @@ export const SettingsPage: React.FC = () => {
       nsfw_lora_strength: 0.55
     }
   });
-  const [workflowFiles, setWorkflowFiles] = useState<string[]>([]);
   const [availableLoras, setAvailableLoras] = useState<string[]>([]);
   const [loraDirectoryInfo, setLoraDirectoryInfo] = useState<{ lora_directory: string; exists: boolean }>({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false });
   const [loading, setLoading] = useState(true);
@@ -111,9 +110,8 @@ export const SettingsPage: React.FC = () => {
 
   const loadSettings = async () => {
     try {
-      const [settingsData, filesData, lorasData] = await Promise.all([
+      const [settingsData, lorasData] = await Promise.all([
         api.getSettings(),
-        api.getWorkflowFiles(),
         api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] }))
       ]);
 
@@ -146,7 +144,6 @@ export const SettingsPage: React.FC = () => {
         comfyui: comfy,
         advanced: advanced
       });
-      setWorkflowFiles(filesData || []);
       if (lorasData?.loras) {
         setAvailableLoras(lorasData.loras);
         setLoraDirectoryInfo({ lora_directory: lorasData.lora_directory, exists: lorasData.exists });
@@ -933,23 +930,6 @@ export const SettingsPage: React.FC = () => {
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {t('comfyui_workflow')}
-                      </label>
-                      <select
-                        value={settings.comfyui?.selected_workflow_file || ''}
-                        onChange={(e) => handleComfyChange('selected_workflow_file', e.target.value || null)}
-                        className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
-                      >
-                        <option value="">-- {t('comfyui_default')} --</option>
-                        {workflowFiles.map((file) => (
-                          <option key={file} value={file}>
-                            {file}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
                   </div>
                 )}
               </div>

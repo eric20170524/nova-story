@@ -85,7 +85,7 @@ function Segmented<T extends string>({
       role="radiogroup"
       data-testid={testId}
       className="grid gap-1 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-950/80 p-1 shadow-inner"
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${Math.min(options.length, 4)}, minmax(0, 1fr))` }}
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -204,20 +204,14 @@ export const ProjectSettings: React.FC = () => {
             ? (raw ? JSON.parse(raw) : {})
             : (raw && typeof raw === 'object' ? raw : {});
           setSettingsBase(settingsObj && typeof settingsObj === 'object' ? { ...settingsObj } : {});
-          if (settingsObj.default_style) {
-              setDefaultStyle(settingsObj.default_style);
+          const imageSettings = settingsObj.image_generation || {};
+          if (imageSettings.style) setDefaultStyle(imageSettings.style);
+          if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+              setDefaultModelType(imageSettings.model);
           }
-          if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony' || settingsObj.default_model_type === 'redcraft_krea2') {
-              setDefaultModelType(settingsObj.default_model_type);
-          } else if (settingsObj.default_model_type === 'flux') {
-              // FLUX.1-dev GGUF retired — migrate to Pony XL
-              setDefaultModelType('pony');
-          }
-          if (typeof settingsObj.default_workflow_id === 'number') {
-              setDefaultWorkflowId(settingsObj.default_workflow_id);
-          }
-          const savedOutputSpec = settingsObj.output_spec || {};
-          const aspectRatio = ['3:4', '4:3', '1:1', 'auto'].includes(savedOutputSpec.aspect_ratio)
+          setDefaultWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
+          const savedOutputSpec = imageSettings.output_spec || {};
+          const aspectRatio = ['3:4', '4:3', '1:1', '16:9', '9:16'].includes(savedOutputSpec.aspect_ratio)
             ? savedOutputSpec.aspect_ratio
             : '3:4';
           const resolution = ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
@@ -231,13 +225,8 @@ export const ProjectSettings: React.FC = () => {
             resolution,
             orientation_policy: orientationPolicy,
           });
-          if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
-              setNsfwMode(settingsObj.nsfw_mode);
-          } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
-              setNsfwMode(settingsObj.nsfw_enabled ? 'on' : 'off');
-          } else {
-              setNsfwMode('inherit');
-          }
+          setNsfwMode(imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off'
+            ? imageSettings.nsfw_mode : 'inherit');
           setGenre(typeof settingsObj.genre === 'string' ? settingsObj.genre : '');
           setStoryStyle(typeof settingsObj.style === 'string' ? settingsObj.style : '');
           setStoryTagsText(
@@ -282,6 +271,10 @@ export const ProjectSettings: React.FC = () => {
     setSaving(true);
     
     try {
+        if (defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId && wf.model_family === defaultModelType)) {
+          showToast(t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配'), 'error');
+          return;
+        }
         let agent_prompts_override: Record<string, string> | undefined;
         if (promptOverrideJson.trim()) {
           try {
@@ -311,11 +304,13 @@ export const ProjectSettings: React.FC = () => {
         // Merge so API-only keys (and any future fields) are not wiped on save
         const settingsJson = JSON.stringify({
             ...settingsBase,
-            default_style: defaultStyle,
-            default_model_type: defaultModelType,
-            default_workflow_id: defaultWorkflowId,
-            output_spec: outputSpec,
-            nsfw_mode: nsfwMode,
+            image_generation: {
+              model: defaultModelType,
+              workflow_id: defaultWorkflowId,
+              style: defaultStyle,
+              output_spec: outputSpec,
+              nsfw_mode: nsfwMode,
+            },
             genre,
             style: storyStyle,
             story_tags: storyTags,
@@ -337,13 +332,6 @@ export const ProjectSettings: React.FC = () => {
         });
         setSettingsBase(JSON.parse(settingsJson));
         
-        // Seed Director Mode & Character Mode settings for this session
-        localStorage.setItem('director_selectedStyle', defaultStyle);
-        if (id) {
-          localStorage.setItem(`director_project_${id}_style`, defaultStyle);
-          localStorage.setItem(`director_project_${id}_model_type`, defaultModelType);
-          localStorage.setItem(`director_project_${id}_nsfw_mode`, nsfwMode);
-        }
         window.dispatchEvent(new Event('novastory-project-settings-changed'));
         
         showToast(t("settings.updated", "Project updated successfully"), 'success');
@@ -387,10 +375,11 @@ export const ProjectSettings: React.FC = () => {
     );
   }
 
-  const canvasValue: '3:4' | '4:3' | '1:1' | 'auto' =
+  const canvasValue: '3:4' | '4:3' | '1:1' | '16:9' | '9:16' | 'auto' =
     outputSpec.orientation_policy === 'auto_by_shot' || outputSpec.aspect_ratio === 'auto'
       ? 'auto'
       : outputSpec.aspect_ratio === '4:3' || outputSpec.aspect_ratio === '1:1'
+        || outputSpec.aspect_ratio === '16:9' || outputSpec.aspect_ratio === '9:16'
         ? outputSpec.aspect_ratio
         : '3:4';
 
@@ -516,48 +505,34 @@ export const ProjectSettings: React.FC = () => {
                   </select>
                 </Field>
 
-                <Field label={t('project_settings.default_model_preset')}>
+                <Field label={t('project_settings.project_model', '项目模型')}>
                   <select
                     data-testid="project-settings-model"
-                    title={t('project_settings.default_model_preset_desc')}
                     className={fieldClass}
-                    value={defaultWorkflowId ? `wf_${defaultWorkflowId}` : defaultModelType}
+                    value={defaultModelType}
                     onChange={(e) => {
-                      const val = e.target.value;
-                      if (val.startsWith('wf_')) {
-                        const wfId = Number(val.replace('wf_', ''));
-                        setDefaultWorkflowId(wfId);
-                        const foundWf = workflows.find((w) => w.id === wfId);
-                        if (foundWf) {
-                          const nameLower = (foundWf.name || '').toLowerCase();
-                          if (nameLower.includes('sd15') || nameLower.includes('sd1.5') || nameLower.includes('1.5')) {
-                            setDefaultModelType('sd15');
-                          } else if (nameLower.includes('krea') || nameLower.includes('redcraft') || nameLower.includes('赤佬')) {
-                            setDefaultModelType('redcraft_krea2');
-                          } else {
-                            setDefaultModelType('pony');
-                          }
-                        }
-                      } else {
-                        setDefaultWorkflowId(null);
-                        setDefaultModelType(val as 'pony' | 'sd15' | 'redcraft_krea2');
-                      }
+                      setDefaultModelType(e.target.value as 'pony' | 'sd15' | 'redcraft_krea2');
+                      setDefaultWorkflowId(null);
                     }}
                   >
-                    <optgroup label={t('project_settings.base_models')}>
-                      <option value="pony">{t('project_settings.model_pony')}</option>
-                      <option value="redcraft_krea2">{t('project_settings.model_redcraft')}</option>
-                      <option value="sd15">{t('project_settings.model_sd15')}</option>
-                    </optgroup>
-                    {workflows.length > 0 && (
-                      <optgroup label={t('project_settings.custom_workflows')}>
-                        {workflows.map((wf) => (
-                          <option key={wf.id} value={`wf_${wf.id}`}>
-                            {wf.name} {wf.description ? `(${wf.description})` : ''}
-                          </option>
-                        ))}
-                      </optgroup>
+                    <option value="pony">{t('project_settings.model_pony')}</option>
+                    <option value="redcraft_krea2">{t('project_settings.model_redcraft')}</option>
+                    <option value="sd15">{t('project_settings.model_sd15')}</option>
+                  </select>
+                </Field>
+
+                <Field label={t('project_settings.project_workflow', '项目工作流')}
+                  hint={t('project_settings.project_workflow_desc', '可选；只显示与项目模型匹配的工作流。')}>
+                  <select data-testid="project-settings-workflow" className={fieldClass}
+                    value={defaultWorkflowId ?? ''}
+                    onChange={(e) => setDefaultWorkflowId(e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">{t('project_settings.workflow_auto', '自动匹配')}</option>
+                    {defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId && wf.model_family === defaultModelType) && (
+                      <option value={defaultWorkflowId}>{t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}</option>
                     )}
+                    {workflows.filter((wf) => wf.model_family === defaultModelType).map((wf) => (
+                      <option key={wf.id} value={wf.id}>{wf.name}</option>
+                    ))}
                   </select>
                 </Field>
 
@@ -577,6 +552,8 @@ export const ProjectSettings: React.FC = () => {
                         { value: '3:4', label: t('project_settings.canvas_portrait_short'), title: t('project_settings.canvas_portrait') },
                         { value: '4:3', label: t('project_settings.canvas_landscape_short'), title: t('project_settings.canvas_landscape') },
                         { value: '1:1', label: t('project_settings.canvas_square_short'), title: t('project_settings.canvas_square') },
+                        { value: '16:9', label: t('project_settings.canvas_wide_short'), title: t('project_settings.canvas_wide') },
+                        { value: '9:16', label: t('project_settings.canvas_tall_short'), title: t('project_settings.canvas_tall') },
                         { value: 'auto', label: t('project_settings.canvas_auto_short'), title: t('project_settings.canvas_auto') },
                       ]}
                     />

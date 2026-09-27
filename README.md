@@ -61,7 +61,7 @@ Fastify (backend/src/server.ts)
 - 成片：`pony_xl_12gb.json`（Pony / SDXL）
 - 草稿：`sd15_draft_12gb.json`（SD 1.5）
 - 参考策略（IP-Adapter 门禁）：[docs/deployment/local_image_reference_policy_cn.md](docs/deployment/local_image_reference_policy_cn.md)
-- 安装：`docs/deployment/comfyui_local_setup_guide_3060.md`
+- 项目统一模型出图需要启用 ComfyUI；安装：`docs/deployment/comfyui_local_setup_guide_3060.md`
 
 ## 常用命令
 

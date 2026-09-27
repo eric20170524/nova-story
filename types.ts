@@ -45,7 +45,6 @@ export interface CharacterVersionSummary {
   face_url?: string | null;
   has_avatar?: boolean;
   has_turnaround?: boolean;
-  model_type?: string;
   created_at?: string;
 }
 
@@ -59,8 +58,6 @@ export interface Character {
   avatar_url?: string;
   turnaround_url?: string;
   face_url?: string;
-  /** Local Comfy family. `flux` kept only for reading legacy project data (maps to pony). */
-  model_type?: 'pony' | 'sd15' | 'redcraft_krea2' | 'flux';
   /** Active look/content version (1-based) */
   active_version?: number;
   versions?: CharacterVersionSummary[];

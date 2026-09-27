@@ -221,7 +221,6 @@ class ApiService {
   extractCharacters = (chapterId: string) => this.request<any[]>('/characters/extract', { method: 'POST', body: { chapter_id: chapterId } });
   buildCharacterPrompt = (
     characterId: number, 
-    modelType: string, 
     genType: string, 
     customDesc?: string,
     useRefPortrait?: boolean,
@@ -232,7 +231,6 @@ class ApiService {
       { 
         method: 'POST', 
         body: { 
-          model_type: modelType, 
           gen_type: genType,
           custom_description: customDesc,
           use_ref_portrait: useRefPortrait ?? true,

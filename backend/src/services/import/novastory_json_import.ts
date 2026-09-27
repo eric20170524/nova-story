@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../db/database';
 import type { NovaStoryJsonImportProject } from './novastory_json_model';
+import { canonicalProjectSettings } from '../project_settings';
 
 const tableExists = async (tableName: string) => {
   const table = await db.get(
@@ -8,6 +9,16 @@ const tableExists = async (tableName: string) => {
     tableName
   );
   return Boolean(table);
+};
+
+const withoutCharacterModel = (raw: string) => {
+  const tags = JSON.parse(raw || '{}');
+  if (tags && typeof tags === 'object' && !Array.isArray(tags)) {
+    delete tags.model_type;
+    if (tags.assets && typeof tags.assets === 'object') delete tags.assets.model_type;
+    if (tags.base_model && typeof tags.base_model === 'object') delete tags.base_model.model_type;
+  }
+  return JSON.stringify(tags);
 };
 
 export const restoreNovaStoryJsonProject = async (
@@ -35,7 +46,7 @@ export const restoreNovaStoryJsonProject = async (
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       importProject.project.title,
       importProject.project.description,
-      JSON.stringify(importProject.project.settings),
+      JSON.stringify(canonicalProjectSettings(importProject.project.settings)),
       userId
     );
 
@@ -74,7 +85,7 @@ export const restoreNovaStoryJsonProject = async (
           character.name,
           character.role,
           character.description,
-          character.visualTags
+          withoutCharacterModel(character.visualTags)
         );
       }
     }

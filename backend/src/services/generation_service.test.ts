@@ -89,7 +89,11 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
   assert.equal(safeWorkflow["5"].inputs.width, 1024);
 
   const loraWorkflow = await compileComfyWorkflow(
-    { ...ponyWorkflow(), style_preset: 'western_comic' },
+    { ...ponyWorkflow(), project_settings: { image_generation: {
+      model: 'pony', workflow_id: null, style: 'western_comic',
+      output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+      nsfw_mode: 'inherit'
+    } } },
     'Hero opens a door',
     'standard',
     {},
@@ -143,6 +147,43 @@ test('real pony template keeps cinematic shot and places action before quality',
   assert.equal((text.match(/\bscore_9\b/g) || []).length, 1);
   assert.equal((text.match(/\bsource_anime\b/g) || []).length, 1);
   assert.doesNotMatch(text, /environment-dominant cinematic composition/i);
+});
+
+test('AutismMix narrative scene places model tags first and scopes anti-panel negatives', async () => {
+  const workflow = {
+    ...ponyWorkflow(),
+    '6': {
+      ...ponyWorkflow()['6'],
+      inputs: { text: 'score_9, score_8_up, source_anime', clip: ['4', 1] }
+    },
+    gen_type: 'scene',
+    project_settings: { image_generation: {
+      model: 'pony', workflow_id: null, style: 'autismmix_artist',
+      output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+      nsfw_mode: 'inherit'
+    } }
+  };
+  const compiled = await compileComfyWorkflow(
+    workflow,
+    'One adult woman walks through a xianxia palace',
+    'standard',
+    { seed: 42 },
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  const positive = String(compiled['6'].inputs.text);
+  assert.ok(positive.startsWith('score_9, score_8_up, source_anime'));
+  assert.ok(positive.indexOf('One adult woman walks') > positive.indexOf('source_anime'));
+  assert.match(String(compiled['7'].inputs.text), /comic strip, triptych/);
+  assert.equal(compiled['3'].inputs.seed, 42);
+
+  const grid = await compileComfyWorkflow(
+    workflow,
+    'One adult woman walks through a xianxia palace',
+    'cinematic_grid',
+    { seed: 42 },
+    { advanced: { nsfw_enabled: false }, comfyui: {} }
+  );
+  assert.doesNotMatch(String(grid['7'].inputs.text), /comic strip, triptych/);
 });
 
 test('compiles the failed animal wide-shot case as landscape without female tags', async () => {
@@ -444,7 +485,11 @@ test('anime preset adds ExpressiveH only while NSFW is on', async () => {
     const compiled = await compileComfyWorkflow(
       {
         ...ponyWorkflow(),
-        style_preset: 'anime'
+        project_settings: { image_generation: {
+          model: 'pony', workflow_id: null, style: 'anime',
+          output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+          nsfw_mode: 'inherit'
+        } }
       },
       '1girl, cyberpunk night city',
       'standard',

@@ -12,6 +12,7 @@ import { AssetTaskStore } from '../services/task_store';
 import { GpuLeaseService } from '../services/gpu_lease_service';
 import { createSceneVersion, ensureSceneVersionBaseline, syncActiveVersionAssets } from '../services/scene_versions';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
+import { getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -31,6 +32,12 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/generate', async (request, reply) => {
     const req = GenerateRequestSchema.parse(request.body);
+    if (Object.values(req.workflow).some((node: any) => node?.class_type)) {
+      return reply.status(400).send({ detail: 'Select image workflows in project settings; direct workflow graphs are not accepted' });
+    }
+    if (!SettingsManager.loadSettings().comfyui?.enabled) {
+      return reply.status(409).send({ detail: 'Project image models require ComfyUI to be enabled' });
+    }
 
     logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'})`);
     const taskId = randomUUID();
@@ -42,6 +49,31 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       || req.workflow?.create_new_version
     );
     const isCharacterScene = req.scene_id >= 900000 || Boolean(req.workflow?.character_id);
+    const projectLink = isCharacterScene
+      ? req.workflow?.character_id
+        ? await db.get('SELECT project_id FROM character WHERE id = ?', Number(req.workflow.character_id))
+        : null
+      : await db.get(
+          'SELECT chapter.project_id FROM scene INNER JOIN chapter ON chapter.id = scene.chapter_id WHERE scene.id = ?',
+          req.scene_id
+        );
+    if (!projectLink?.project_id) {
+      return reply.status(404).send({ detail: 'Image generation requires a scene or character in a project' });
+    }
+    const projectRow = await db.get('SELECT settings FROM project WHERE id = ?', projectLink.project_id);
+    if (!projectRow) return reply.status(404).send({ detail: 'Project not found' });
+    const projectSettings = parseProjectSettings(projectRow.settings);
+    const imageSettings = getProjectImageSettings(projectSettings);
+    const projectWorkflow = {
+      ...req.workflow,
+      project_settings: projectSettings,
+      model_type: imageSettings.model,
+      reference_model_type: imageSettings.model,
+      style_preset: imageSettings.style,
+      workflow_id: undefined,
+      selected_workflow_id: undefined,
+      nsfw_enabled: undefined,
+    };
     if (!isCharacterScene) {
       // Skip synthetic character scene ids (99999xxx)
       if (asNewVersion) {
@@ -70,7 +102,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     await AssetTaskStore.processing(taskId, req.scene_id);
 
     // Fire and forget background task
-    GenerationService.generateAssets(taskId, req.workflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
+    GenerationService.generateAssets(taskId, projectWorkflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
       logger.error(`Background task execution failed: ${err}`);
     });
 

@@ -54,7 +54,7 @@ IP-Adapter 与轻度 img2img 都会「锁构图」。在**双人、远景、动�
 - 原地重生成：可用上一帧作构图参考（B 构图支路）。  
 - 新建版本 / 首次生成：通常无构图参考。  
 
-项目设置 `default_model_type`：`pony` | `sd15`（旧 `flux` 读入时回落 `pony`）。
+项目设置 `image_generation.model`：`pony` | `sd15` | `redcraft_krea2`。所有新出图，包括角色图和分镜图，统一读取项目模型；角色不保存独立模型。
 
 ## 4. 风格与 NSFW（摘要）
 

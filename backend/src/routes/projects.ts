@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { ProjectImportInputError } from '../services/import/import_file';
 import { commitProjectImportFile } from '../services/import/project_import';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
+import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 
 // Dummy implementation of current_user auth
 // Real implementation should parse JWT/headers as needed
@@ -33,6 +35,39 @@ const tableExists = async (tableName: string) => {
 };
 
 export const projectRoutes: FastifyPluginAsync = async (app) => {
+  const validateImageSettings = async (raw: string, reply: any): Promise<string | null> => {
+    let settings: Record<string, unknown>;
+    try {
+      settings = JSON.parse(raw);
+    } catch {
+      reply.status(400).send({ detail: 'Project settings must be valid JSON' });
+      return null;
+    }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)
+      || !settings.image_generation || typeof settings.image_generation !== 'object') {
+      reply.status(400).send({ detail: 'image_generation is required in project settings' });
+      return null;
+    }
+    const image = settings.image_generation as Record<string, unknown>;
+    if (image.model !== 'pony' && image.model !== 'sd15' && image.model !== 'redcraft_krea2') {
+      reply.status(400).send({ detail: 'Invalid project image model' });
+      return null;
+    }
+    if (image.workflow_id != null) {
+      if (!Number.isSafeInteger(image.workflow_id) || Number(image.workflow_id) <= 0) {
+        reply.status(400).send({ detail: 'Invalid project workflow ID' });
+        return null;
+      }
+      const workflow = await db.get('SELECT id, name, content FROM workflow WHERE id = ? AND is_active = 1', image.workflow_id);
+      let family: string | null = null;
+      try { family = workflow ? inferComfyWorkflowFamily(workflow) : null; } catch { /* Invalid graph. */ }
+      if (family !== image.model) {
+        reply.status(400).send({ detail: 'Project workflow must be active and match the project model' });
+        return null;
+      }
+    }
+    return JSON.stringify({ ...settings, image_generation: getProjectImageSettings(parseProjectSettings(settings)) });
+  };
   app.get('/:id/export', async (request, reply) => {
     const { id } = z.object({
       id: z.coerce.number()
@@ -557,11 +592,15 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const user = mockGetCurrentUser(request);
     const data = ProjectCreateSchema.parse(request.body);
 
+    const settingsJson = data.settings
+      ? await validateImageSettings(data.settings, reply)
+      : JSON.stringify({ image_generation: DEFAULT_PROJECT_IMAGE_SETTINGS });
+    if (settingsJson == null) return;
     const result = await db.run(
       'INSERT INTO project (title, description, settings, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
       data.title,
       data.description || null,
-      data.settings || '{}',
+      settingsJson,
       user.id
     );
 
@@ -599,8 +638,10 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       params.push(data.description);
     }
     if (data.settings !== undefined) {
+      const settingsJson = data.settings == null ? null : await validateImageSettings(data.settings, reply);
+      if (settingsJson == null) return;
       updateFields.push('settings = ?');
-      params.push(data.settings);
+      params.push(settingsJson);
     }
 
     if (updateFields.length > 0) {

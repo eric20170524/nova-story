@@ -10,7 +10,6 @@ export const CharacterSchema = z.object({
   avatar_url: z.string().nullable().optional(),
   turnaround_url: z.string().nullable().optional(),
   face_url: z.string().nullable().optional(),
-  model_type: z.string().default('pony')
 });
 
 export const CharacterCreateSchema = z.object({
@@ -22,7 +21,6 @@ export const CharacterCreateSchema = z.object({
   avatar_url: z.string().nullable().optional(),
   turnaround_url: z.string().nullable().optional(),
   face_url: z.string().nullable().optional(),
-  model_type: z.string().default('pony')
 });
 
 export const CharacterUpdateSchema = z.object({
@@ -34,7 +32,6 @@ export const CharacterUpdateSchema = z.object({
   avatar_url: z.string().nullable().optional(),
   turnaround_url: z.string().nullable().optional(),
   face_url: z.string().nullable().optional(),
-  model_type: z.string().optional()
 });
 
 export type Character = z.infer<typeof CharacterSchema>;

@@ -115,7 +115,7 @@ export const resolveImageOutputTarget = (options: {
   const mode = options.mode || 'standard';
   const genType = String(workflowData.gen_type || 'scene');
   const requestRaw = generationParams.output_spec || workflowData.output_spec;
-  const projectRaw = workflowData.project_settings?.output_spec;
+  const projectRaw = workflowData.project_settings?.image_generation?.output_spec;
   const requestSpec = parsePartialSpec(requestRaw);
   const projectSpec = parsePartialSpec(projectRaw);
   const requestHasSpec = Object.keys(requestSpec).length > 0;
@@ -148,7 +148,7 @@ export const resolveImageOutputTarget = (options: {
     };
   }
 
-  // Character assets keep purpose-built framing unless a request explicitly overrides it.
+  // A turnaround sheet is assembled from three panels by its compositor.
   if (genType === 'turnaround' && !requestHasSpec) {
     const dimensions = modelFamily === 'sd15'
       ? { width: 768, height: 512 }
@@ -163,7 +163,7 @@ export const resolveImageOutputTarget = (options: {
     };
   }
 
-  const applyProjectSpec = genType === 'scene' || requestHasSpec;
+  const applyProjectSpec = genType !== 'turnaround';
   const spec: ImageOutputSpec = {
     ...DEFAULT_IMAGE_OUTPUT_SPEC,
     ...(applyProjectSpec ? projectSpec : {}),

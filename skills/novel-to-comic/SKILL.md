@@ -288,8 +288,8 @@ Project → Settings
 - main_plot
 - character_relations
 - glossary
-- default_style
-- default_model_type
+- image_generation.style
+- image_generation.model
 
 缺失字段允许为空，不为了“字段齐全”自动脑补。
 

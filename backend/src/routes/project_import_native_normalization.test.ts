@@ -136,7 +136,7 @@ test('native JSON preview counts exactly the graph later committed', async () =>
   );
 
   const stored = await db.get('SELECT settings FROM project WHERE id = ?', project.id);
-  assert.deepEqual(JSON.parse(stored.settings), {});
+  assert.deepEqual(JSON.parse(stored.settings), preview.project.settings);
 
   await app.close();
 });

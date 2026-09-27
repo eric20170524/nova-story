@@ -8,7 +8,6 @@ interface TurnaroundModalProps {
   character: Character | null;
   onClose: () => void;
   modelType: 'pony' | 'sd15' | 'redcraft_krea2';
-  setModelType: (type: 'pony' | 'sd15' | 'redcraft_krea2') => void;
   genType: 'turnaround' | 'portrait';
   setGenType: (type: 'turnaround' | 'portrait') => void;
   prompt: string;
@@ -23,7 +22,7 @@ interface TurnaroundModalProps {
   refImageUrl: string | null;
   projectStyle: string;
   effectiveNsfw: boolean;
-  onRebuildPrompt: (modelType: string, genType: string, customUseRef?: boolean, customRefUrl?: string | null) => void;
+  onRebuildPrompt: (genType: string, customUseRef?: boolean, customRefUrl?: string | null) => void;
   onGenerateSheetImage: () => void;
   onSaveAssetToCharacter: (assetType: 'avatar' | 'turnaround', opts?: { newVersion?: boolean }) => void;
   onUploadPortrait: (file: File) => Promise<void>;
@@ -108,7 +107,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                   type="button"
                   onClick={() => {
                     setGenType('turnaround');
-                    onRebuildPrompt(modelType, 'turnaround');
+                    onRebuildPrompt('turnaround');
                   }}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold border transition-all ${
                     genType === 'turnaround'
@@ -122,7 +121,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                   type="button"
                   onClick={() => {
                     setGenType('portrait');
-                    onRebuildPrompt(modelType, 'portrait');
+                    onRebuildPrompt('portrait');
                   }}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold border transition-all ${
                     genType === 'portrait'
@@ -153,7 +152,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                     onChange={(e) => {
                       const checked = e.target.checked;
                       setUseRefPortrait(checked);
-                      onRebuildPrompt(modelType, genType, checked, refImageUrl);
+                      onRebuildPrompt(genType, checked, refImageUrl);
                     }}
                     className="w-4 h-4 rounded text-emerald-600 bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
                   />
@@ -247,7 +246,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">{t('characters.prompt')}</label>
               <button
                 type="button"
-                onClick={() => onRebuildPrompt(modelType, genType)}
+                onClick={() => onRebuildPrompt(genType)}
                 className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-semibold flex items-center gap-1"
               >
                 <Wand2 size={12} /> Re-Generate Prompt

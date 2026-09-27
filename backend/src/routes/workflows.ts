@@ -4,6 +4,7 @@ import { WorkflowCreateSchema, WorkflowUpdateSchema } from '../schemas/workflow'
 import { z } from 'zod';
 import fs from 'fs';
 import { getWorkflowsDirectory } from '../core/paths';
+import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 
 export const workflowRoutes: FastifyPluginAsync = async (app) => {
   app.get('/files', async (request, reply) => {
@@ -32,7 +33,8 @@ export const workflowRoutes: FastifyPluginAsync = async (app) => {
     return rows.map(row => ({
       ...row,
       content: typeof row.content === 'string' ? JSON.parse(row.content) : row.content,
-      is_active: row.is_active === 1
+      is_active: row.is_active === 1,
+      model_family: inferComfyWorkflowFamily(row),
     }));
   });
 

@@ -5,6 +5,8 @@ import path from 'path';
 import { settings } from '../core/config';
 import { logger } from '../core/logging';
 import { getWorkflowsDirectory } from '../core/paths';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
+import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 
 let dbInstance: Database | undefined;
 let dbInitialization: Promise<Database> | undefined;
@@ -462,6 +464,77 @@ const migrations: Migration[] = [
         started_at: 'DATETIME',
         completed_at: 'DATETIME',
       });
+    }
+  },
+  {
+    version: '013_project_image_generation',
+    up: async (database) => {
+      const hasProject = await database.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project'");
+      if (!hasProject) return;
+      const projects = await database.all('SELECT id, settings FROM project');
+      const clearedWorkflows: number[] = [];
+      for (const project of projects) {
+        const settings = parseProjectSettings(project.settings);
+        const legacy = settings as Record<string, any>;
+        const oldSpec = legacy.output_spec && typeof legacy.output_spec === 'object'
+          ? legacy.output_spec : {};
+        const model = legacy.default_model_type === 'sd15' || legacy.default_model_type === 'redcraft_krea2'
+          ? legacy.default_model_type : 'pony';
+        let workflowId = Number.isSafeInteger(legacy.default_workflow_id) && legacy.default_workflow_id > 0
+          ? legacy.default_workflow_id : null;
+        if (workflowId != null) {
+          const workflow = await database.get('SELECT id, name, content FROM workflow WHERE id = ? AND is_active = 1', workflowId);
+          try {
+            if (!workflow || inferComfyWorkflowFamily(workflow) !== model) workflowId = null;
+          } catch { workflowId = null; }
+          if (workflowId == null) clearedWorkflows.push(project.id);
+        }
+        const image_generation = getProjectImageSettings({
+          image_generation: {
+            ...DEFAULT_PROJECT_IMAGE_SETTINGS,
+            model,
+            workflow_id: workflowId,
+            style: typeof legacy.default_style === 'string' && legacy.default_style.trim()
+              ? legacy.default_style : DEFAULT_PROJECT_IMAGE_SETTINGS.style,
+            output_spec: {
+              aspect_ratio: oldSpec.aspect_ratio === 'auto' ? '3:4' : oldSpec.aspect_ratio,
+              resolution: oldSpec.resolution,
+              orientation_policy: oldSpec.aspect_ratio === 'auto' ? 'auto_by_shot' : oldSpec.orientation_policy,
+            },
+            nsfw_mode: legacy.nsfw_mode === 'on' || legacy.nsfw_mode === 'off'
+              ? legacy.nsfw_mode
+              : legacy.nsfw_enabled === true ? 'on' : legacy.nsfw_enabled === false ? 'off' : 'inherit',
+          }
+        });
+        delete legacy.default_style;
+        delete legacy.default_model_type;
+        delete legacy.default_workflow_id;
+        delete legacy.output_spec;
+        delete legacy.nsfw_mode;
+        delete legacy.nsfw_enabled;
+        legacy.image_generation = image_generation;
+        await database.run('UPDATE project SET settings = ? WHERE id = ?', JSON.stringify(legacy), project.id);
+      }
+
+      for (const table of ['character', 'character_version']) {
+        const exists = await database.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table);
+        if (!exists) continue;
+        const rows = await database.all(`SELECT id, visual_tags FROM ${table}`);
+        for (const row of rows) {
+          if (!row.visual_tags) continue;
+          let tags: any;
+          try { tags = JSON.parse(row.visual_tags); } catch { continue; }
+          if (!tags || typeof tags !== 'object' || Array.isArray(tags)) continue;
+          delete tags.model_type;
+          if (tags.assets && typeof tags.assets === 'object') delete tags.assets.model_type;
+          if (tags.base_model && typeof tags.base_model === 'object') delete tags.base_model.model_type;
+          await database.run(`UPDATE ${table} SET visual_tags = ? WHERE id = ?`, JSON.stringify(tags), row.id);
+        }
+      }
+      logger.info(`Normalized image settings for ${projects.length} projects`);
+      if (clearedWorkflows.length) {
+        logger.warn(`Cleared unavailable or incompatible image workflows for project IDs: ${clearedWorkflows.join(', ')}`);
+      }
     }
   }
 ];

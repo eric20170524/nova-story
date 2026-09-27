@@ -39,7 +39,7 @@ import {
     resolveTierBFromSettings,
     type TierBCapability
 } from './tier_b_adapters';
-import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
+import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
 import {
     createProgressPublisher,
@@ -51,6 +51,7 @@ import {
     type ImageOutputTarget,
 } from './image_output_spec';
 import { GpuLeaseService } from './gpu_lease_service';
+import { selectComfyWorkflow } from './comfy_workflow_selection';
 
 // Re-export for tests and callers that imported from generation_service
 export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
@@ -440,6 +441,7 @@ export const compileComfyWorkflow = async (
     adapterCapability?: AdapterAvailability | TierBCapability | null
 ) => {
     let workflow: any;
+    let selectedWorkflowFamily: ImageModelFamily | null = null;
     const requestedModel = String(
         workflowData?.model_type
         || workflowData?.reference_model_type
@@ -449,45 +451,20 @@ export const compileComfyWorkflow = async (
     if (isComfyWorkflow(workflowData)) {
         workflow = parseWorkflowContent(workflowData);
     } else {
-        const selectedWorkflowFile = runtimeSettings.comfyui?.selected_workflow_file
-            || runtimeSettings.comfyui?.default_workflow;
-        const selectedWorkflowName = selectedWorkflowFile
-            ? path.basename(String(selectedWorkflowFile), '.json')
-            : null;
-        const modelKey = requestedModel || 'pony';
-        // Preferred workflow by model family
-        const normalizedKey = normalizeImageModelFamily(modelKey);
-        const preferredName =
-            normalizedKey === 'sd15'
-                ? 'sd15_draft_12gb'
-                : normalizedKey === 'redcraft_krea2'
-                    ? 'redcraft_krea2_12gb'
-                    : 'pony_xl_12gb';
-        const fallbackName = 'pony_xl_12gb';
-        // Explicit model_type on the request must win over a global UI default.
-        const explicitModel =
-            Boolean(workflowData?.model_type || workflowData?.reference_model_type);
-
-        let row = null as any;
-        if (explicitModel) {
-            row = await db.get('SELECT content FROM workflow WHERE name = ?', preferredName);
-        }
-        if (!row && selectedWorkflowName) {
-            row = await db.get('SELECT content FROM workflow WHERE name = ?', selectedWorkflowName);
-        }
-        if (!row) {
-            row = await db.get('SELECT content FROM workflow WHERE name = ?', preferredName);
-        }
-        if (!row && preferredName !== fallbackName) {
-            row = await db.get('SELECT content FROM workflow WHERE name = ?', fallbackName);
-        }
-        if (!row) {
-            throw new Error(`No ComfyUI workflow is configured for model '${modelKey}'`);
-        }
-        workflow = parseWorkflowContent(row.content);
+        const selected = await selectComfyWorkflow(workflowData, runtimeSettings, {
+            byId: async (id) => (await db.get('SELECT id, name, content FROM workflow WHERE id = ?', id)) || null,
+            byName: async (name) => (await db.get('SELECT id, name, content FROM workflow WHERE name = ?', name)) || null
+        });
+        workflow = parseWorkflowContent(selected.row.content);
+        selectedWorkflowFamily = selected.family;
+        for (const note of selected.notes) logger.warn(note);
+        const checkpoint = Object.values(workflow).find(
+            (node: any) => node?.class_type === 'CheckpointLoaderSimple'
+        ) as any;
         logger.info(
-            `Comfy workflow resolved: name preference=${preferredName} explicitModel=${explicitModel} `
-            + `(request model_type=${modelKey})`
+            `Comfy workflow resolved: id=${selected.row.id} name=${selected.row.name} `
+            + `source=${selected.source} model=${selected.family} `
+            + `checkpoint=${checkpoint?.inputs?.ckpt_name || 'custom'}`
         );
     }
 
@@ -514,10 +491,11 @@ export const compileComfyWorkflow = async (
         ? 'flux'
         : isRedCraftKrea2
             ? 'redcraft_krea2'
-            : normalizeImageModelFamily(
-                requestedModel
-                || (ckptLooksSd15 ? 'sd15' : 'pony')
-            );
+            : selectedWorkflowFamily
+                || normalizeImageModelFamily(
+                    requestedModel
+                    || (ckptLooksSd15 ? 'sd15' : 'pony')
+                );
     const advancedSettings = runtimeSettings.advanced || {};
 
     // Request override → project nsfw_mode → system advanced.nsfw_enabled
@@ -525,21 +503,13 @@ export const compileComfyWorkflow = async (
     const nsfwEnabled = resolveEffectiveNsfw({
         systemNsfwEnabled: Boolean(advancedSettings.nsfw_enabled),
         projectSettings,
-        requestOverride:
-            typeof workflowData?.nsfw_enabled === 'boolean'
-                ? workflowData.nsfw_enabled
-                : null
     });
 
-    // Prefer explicit style_preset; fall back to project default_style
+    // Project style is authoritative for every image task.
     const enrichedWorkflowData = {
         ...workflowData,
         style_preset:
-            workflowData?.style_preset
-            || workflowData?.style
-            || workflowData?.visual_style
-            || projectSettings.default_style
-            || null,
+            projectSettings.image_generation?.style || null,
         nsfw_enabled: nsfwEnabled
     };
 
@@ -556,7 +526,15 @@ export const compileComfyWorkflow = async (
         basePrompt: subjectSafePrompt
     });
 
-    const effectivePrompt = applyPromptEnhancement(subjectSafePrompt, plan.enhancement);
+    const autismMixScene = modelFamily === 'pony'
+        && String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'autismmix_artist'
+        && String(enrichedWorkflowData.gen_type || '').toLowerCase() === 'scene'
+        && mode === 'standard';
+    const effectivePrompt = applyPromptEnhancement(
+        subjectSafePrompt,
+        plan.enhancement,
+        { qualityFirst: autismMixScene }
+    );
     const preserveTemplateConditioning =
         modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
 
@@ -565,7 +543,10 @@ export const compileComfyWorkflow = async (
             workflowData?.negative_prompt || '',
             enrichedWorkflowData.subject_type
         ),
-        plan.enhancement.negativeExtra
+        plan.enhancement.negativeExtra,
+        autismMixScene
+            ? 'western comic, thick ink outlines, comic strip, triptych, split screen, multiple panels, 3d render, photorealistic'
+            : ''
     ];
     // Saved shot negatives and the joined booster can still carry nsfw/nude from
     // an earlier SFW pass. Drop those blockers once adult mode is on.
@@ -574,19 +555,20 @@ export const compileComfyWorkflow = async (
         negativePrompt = stripSfwSuppressionFromNegative(negativePrompt);
     }
 
-    // FLUX prefers lower CFG; SD1.5 draft prefers fewer steps; RedCraft Krea2 defaults to 10 steps & CFG 1.0; Pony defaults otherwise
-    const defaultSteps = Number(
-        generationParams?.steps
-        || (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : modelFamily === 'redcraft_krea2' ? 10 : 25)
-    );
-    const defaultCfg = Number(
-        generationParams?.cfg
-        || (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' ? 1.0 : 7)
-    );
-
     const samplerNodes = Object.values(workflow).filter(
         (node: any) => node?.class_type?.includes('KSampler')
     ) as any[];
+    // Keep the selected workflow's sampling recipe unless the request overrides it.
+    const defaultSteps = Number(
+        generationParams?.steps
+        ?? samplerNodes[0]?.inputs?.steps
+        ?? (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : modelFamily === 'redcraft_krea2' ? 10 : 25)
+    );
+    const defaultCfg = Number(
+        generationParams?.cfg
+        ?? samplerNodes[0]?.inputs?.cfg
+        ?? (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' ? 1.0 : 7)
+    );
 
     for (const sampler of samplerNodes) {
         const positiveId = Array.isArray(sampler.inputs?.positive) ? String(sampler.inputs.positive[0]) : null;
@@ -594,7 +576,7 @@ export const compileComfyWorkflow = async (
 
         if (positiveId && workflow[positiveId]?.inputs) {
             const templateText = String(workflow[positiveId].inputs.text || '').trim();
-            // Scene action owns the CLIP front window; template quality/framing tokens merge after.
+            // Keep template conditioning while applying the selected style's prompt order.
             workflow[positiveId].inputs.text = preserveTemplateConditioning && templateText
                 ? mergeClipPositivePrompt({
                     scene: subjectSafePrompt,
@@ -603,6 +585,7 @@ export const compileComfyWorkflow = async (
                       plan.enhancement.suffix,
                     ].filter(Boolean).join(', '),
                     templateText,
+                    qualityFirst: autismMixScene,
                   })
                 : effectivePrompt;
         }
@@ -616,7 +599,11 @@ export const compileComfyWorkflow = async (
                 : negativePrompt;
         }
 
-        sampler.inputs.seed = Math.floor(Math.random() * 1_000_000_000);
+        const requestedSeed = Number(generationParams?.seed);
+        sampler.inputs.seed = Number.isSafeInteger(requestedSeed) && requestedSeed >= 0
+            && generationParams?.seed != null
+            ? requestedSeed
+            : Math.floor(Math.random() * 1_000_000_000);
         sampler.inputs.steps = defaultSteps;
         sampler.inputs.cfg = defaultCfg;
         if (generationParams?.sampler_name) {
@@ -1006,24 +993,6 @@ export class GenerationService {
                         );
                         if (chapterRow?.project_id) {
                             sceneProjectId = Number(chapterRow.project_id);
-                            const projectRow = await db.get(
-                                'SELECT settings FROM project WHERE id = ?',
-                                chapterRow.project_id
-                            );
-                            if (projectRow) {
-                                const projectSettings = parseProjectSettings(projectRow.settings);
-                                effectiveWorkflowData = {
-                                    ...effectiveWorkflowData,
-                                    project_settings: {
-                                        ...projectSettings,
-                                        ...(effectiveWorkflowData.project_settings || {})
-                                    },
-                                    style_preset:
-                                        effectiveWorkflowData.style_preset
-                                        || projectSettings.default_style
-                                        || null
-                                };
-                            }
                         }
                     }
                 } else if (sceneId >= 900_000 || workflowData?.character_id) {
@@ -1046,17 +1015,33 @@ export class GenerationService {
                         }
                     }
                 }
+                if (sceneProjectId == null) {
+                    throw new Error(`No project found for image generation scene ${sceneId}`);
+                }
+                const projectRow = await db.get(
+                    'SELECT settings FROM project WHERE id = ?',
+                    sceneProjectId
+                );
+                if (!projectRow) {
+                    throw new Error(`Project ${sceneProjectId} was not found`);
+                }
+                const projectSettings = parseProjectSettings(projectRow.settings);
+                const projectImageSettings = getProjectImageSettings(projectSettings);
+                effectiveWorkflowData = {
+                    ...effectiveWorkflowData,
+                    project_settings: projectSettings,
+                    model_type: projectImageSettings.model,
+                    style_preset: projectImageSettings.style,
+                    workflow_id: undefined,
+                    selected_workflow_id: undefined,
+                };
             } catch (e) {
-                logger.warn(`[Task ${taskId}] Could not load project settings for scene ${sceneId}: ${e}`);
+                throw new Error(`Could not load project image settings for scene ${sceneId}: ${e}`);
             }
 
             const nsfwEnabled = resolveEffectiveNsfw({
                 systemNsfwEnabled: Boolean(settings.advanced?.nsfw_enabled),
                 projectSettings: parseProjectSettings(effectiveWorkflowData.project_settings),
-                requestOverride:
-                    typeof effectiveWorkflowData.nsfw_enabled === 'boolean'
-                        ? effectiveWorkflowData.nsfw_enabled
-                        : null
             });
             effectiveWorkflowData.nsfw_enabled = nsfwEnabled;
             logger.info(

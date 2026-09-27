@@ -1,6 +1,7 @@
 import { parseProjectImportFile } from './import_file';
 import type { NovaStoryJsonImportProject } from './novastory_json_model';
 import type { NovelImportDraft, NovelImportUnmappedSection } from './types';
+import { canonicalProjectSettings } from '../project_settings';
 
 export type ProjectImportPreviewFormat = 'text' | 'markdown' | 'docx' | 'json';
 
@@ -62,7 +63,7 @@ const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
     project: {
       title: draft.project.title,
       description: draft.project.description || null,
-      settings: { ...(draft.project.settings || {}) },
+      settings: canonicalProjectSettings(draft.project.settings),
     },
     chapters,
     counts: {
@@ -97,7 +98,7 @@ const previewFromJson = (
     project: {
       title: project.project.title,
       description: project.project.description,
-      settings: { ...project.project.settings },
+      settings: canonicalProjectSettings(project.project.settings),
     },
     chapters,
     counts: {

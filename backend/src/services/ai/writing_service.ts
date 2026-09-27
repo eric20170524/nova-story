@@ -275,7 +275,6 @@ export function mergeVisualTagsDocument(
       },
     },
     assets: existing.assets || {},
-    model_type: existing.model_type || 'pony',
   };
   return next;
 }

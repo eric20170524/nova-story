@@ -113,7 +113,7 @@ Pony CLIP 前窗权重大。编译顺序固定：
 - 同时加权主体不得超过 1 个；权重建议 1.3–1.45，禁止一镜五个 `(x:1.4)`。
 - 概念预算：1 主体 + 1 动作 + ≤3 名词锚点。
 - 八音盒微距就不要园区倒影；园区复苏全景就不要齿轮齿面。超预算则拆镜，不塞进同一 prompt。
-- 项目风格词（dreamcore amusement park、古风仙侠）来自 Project `default_style` / `buildPromptEnhancement` suffix，不写进 compiler 前缀。
+- 项目风格词（dreamcore amusement park、古风仙侠）来自 Project `image_generation.style` / `buildPromptEnhancement` suffix，不写进 compiler 前缀。
 
 ## 5. 角色锁
 

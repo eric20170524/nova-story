@@ -100,14 +100,7 @@ export const DirectorMode: React.FC = () => {
   const [genSampler, setGenSampler] = useState('euler_ancestral');
   const [genScheduler, setGenScheduler] = useState('normal');
 
-  const [selectedStyle, setSelectedStyle] = useState<string>(() => {
-    const saved = projectId
-      ? localStorage.getItem(`director_project_${projectId}_style`)
-      : null;
-    const styles = getVisualStyles();
-    if (saved && styles.some((s) => s.value === saved)) return saved;
-    return STANDARD_VISUAL_STYLES[0].value;
-  });
+  const [selectedStyle, setSelectedStyle] = useState<string>(STANDARD_VISUAL_STYLES[0].value);
   const [styleStrength, setStyleStrength] = useState<number>(1.0); // 0.1 to 2.0
   
   // Decoupled Asset Mode
@@ -137,6 +130,7 @@ export const DirectorMode: React.FC = () => {
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
+  const [projectWorkflowId, setProjectWorkflowId] = useState<number | null>(null);
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
     aspect_ratio: '3:4',
     resolution: 'standard',
@@ -165,14 +159,6 @@ export const DirectorMode: React.FC = () => {
       activeVideoEvtSourcesRef.current.clear();
     };
   }, []);
-
-  // Persist settings
-  useEffect(() => {
-    localStorage.setItem('director_selectedStyle', selectedStyle);
-    if (projectId) {
-      localStorage.setItem(`director_project_${projectId}_style`, selectedStyle);
-    }
-  }, [projectId, selectedStyle]);
 
   // Drop advanced style selection if advanced styles are disabled
   useEffect(() => {
@@ -216,28 +202,18 @@ export const DirectorMode: React.FC = () => {
         const settingsObj = typeof raw === 'string'
           ? (raw ? JSON.parse(raw) : {})
           : (raw && typeof raw === 'object' ? raw : {});
-        if (settingsObj.default_style) {
+        const imageSettings = settingsObj.image_generation || {};
+        if (imageSettings.style) {
           const styles = getVisualStyles();
-          if (styles.some((s) => s.value === settingsObj.default_style)) {
-            setSelectedStyle(settingsObj.default_style);
-            localStorage.setItem('director_selectedStyle', settingsObj.default_style);
-            localStorage.setItem(`director_project_${projectId}_style`, settingsObj.default_style);
+          if (styles.some((s) => s.value === imageSettings.style)) {
+            setSelectedStyle(imageSettings.style);
           }
-        } else {
-          const savedProjectStyle = localStorage.getItem(`director_project_${projectId}_style`);
-          const styles = getVisualStyles();
-          setSelectedStyle(
-            savedProjectStyle && styles.some((s) => s.value === savedProjectStyle)
-              ? savedProjectStyle
-              : STANDARD_VISUAL_STYLES[0].value
-          );
         }
-        if (settingsObj.default_model_type === 'sd15' || settingsObj.default_model_type === 'pony' || settingsObj.default_model_type === 'redcraft_krea2') {
-          setProjectModelType(settingsObj.default_model_type);
-        } else if (settingsObj.default_model_type === 'flux') {
-          setProjectModelType('pony');
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+          setProjectModelType(imageSettings.model);
         }
-        const savedOutputSpec = settingsObj.output_spec || {};
+        setProjectWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
+        const savedOutputSpec = imageSettings.output_spec || {};
         setProjectOutputSpec({
           aspect_ratio: ['3:4', '4:3', '1:1', '16:9', '9:16', 'auto'].includes(savedOutputSpec.aspect_ratio)
             ? savedOutputSpec.aspect_ratio
@@ -250,13 +226,8 @@ export const DirectorMode: React.FC = () => {
             : 'fixed',
         });
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
-        if (settingsObj.nsfw_mode === 'on' || settingsObj.nsfw_mode === 'off' || settingsObj.nsfw_mode === 'inherit') {
-          mode = settingsObj.nsfw_mode;
-        } else if (typeof settingsObj.nsfw_enabled === 'boolean') {
-          mode = settingsObj.nsfw_enabled ? 'on' : 'off';
-        }
+        if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') mode = imageSettings.nsfw_mode;
         setProjectNsfwMode(mode);
-        localStorage.setItem(`director_project_${projectId}_nsfw_mode`, mode);
       } catch {
         /* ignore */
       }
@@ -548,16 +519,12 @@ export const DirectorMode: React.FC = () => {
       const backendAssetMode = assetMode === 'contact_sheet_3x3' ? 'cinematic_grid' : 'standard';
 
       let characterRefUrl: string | null = null;
-      let referenceModelType: 'pony' | 'sd15' | 'redcraft_krea2' = projectModelType || 'pony';
       let characterLora: string | null = null;
 
       if (mentionedChars.length > 0) {
         const char = mentionedChars[0];
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
-          if (char.model_type === 'sd15') referenceModelType = 'sd15';
-          else if (char.model_type === 'redcraft_krea2') referenceModelType = 'redcraft_krea2';
-          else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }
 
@@ -590,7 +557,6 @@ export const DirectorMode: React.FC = () => {
           style_preset: selectedStyle,
           style_strength: styleStrength,
           mode: backendAssetMode,
-          model_type: referenceModelType,
           shot_type: scene.shot_type || null,
           camera_movement: scene.camera_movement || null,
           camera_angle: scene.camera_angle || null,
@@ -601,16 +567,11 @@ export const DirectorMode: React.FC = () => {
           character_appearance_prompt: appearanceSnippets.join(', '),
           character_appearance_snippets: appearanceSnippets,
           character_lora: characterLora,
-          reference_model_type: referenceModelType,
           denoise: useLegacyImg2ImgHint && characterRefUrl ? 0.62 : 1.0,
           gen_type: 'scene',
           reference_tier: characterRefUrl || compositionRefUrl ? 'A+B' : 'A',
           new_version: Boolean(options.newVersion),
-          project_settings: {
-            nsfw_mode: projectNsfwMode,
-            default_style: selectedStyle,
-            output_spec: effectiveOutputSpec,
-          },
+          output_spec: effectiveOutputSpec,
           generation_params: showAdvancedParams ? {
              steps: genSteps,
              cfg: genCfg,
@@ -844,16 +805,12 @@ export const DirectorMode: React.FC = () => {
 
     try {
       let characterRefUrl: string | null = null;
-      let referenceModelType: 'pony' | 'sd15' | 'redcraft_krea2' = projectModelType || 'pony';
       let characterLora: string | null = null;
 
       if (mentionedChars.length > 0) {
         const char = mentionedChars[0];
         if (char.avatar_url || char.turnaround_url || char.face_url) {
           characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
-          if (char.model_type === 'sd15') referenceModelType = 'sd15';
-          else if (char.model_type === 'redcraft_krea2') referenceModelType = 'redcraft_krea2';
-          else if (char.model_type === 'pony') referenceModelType = 'pony';
         }
       }
 
@@ -871,7 +828,6 @@ export const DirectorMode: React.FC = () => {
         style_preset: selectedStyle,
         style_strength: styleStrength,
         mode: 'standard',
-        model_type: referenceModelType,
         shot_type: scene.shot_type || null,
         camera_movement: scene.camera_movement || null,
         camera_angle: scene.camera_angle || null,
@@ -881,17 +837,13 @@ export const DirectorMode: React.FC = () => {
         character_appearance_prompt: appearanceSnippets.join(', '),
         character_appearance_snippets: appearanceSnippets,
         character_lora: characterLora,
-        reference_model_type: referenceModelType,
         gen_type: 'scene',
         reference_tier: characterRefUrl ? 'A+B' : 'A',
         new_version: false,
-        project_settings: {
-          nsfw_mode: projectNsfwMode,
-          default_style: selectedStyle,
-          output_spec: {
-            ...projectOutputSpec,
-            aspect_ratio: '16:9'
-          }
+        output_spec: {
+          ...projectOutputSpec,
+          aspect_ratio: '16:9',
+          orientation_policy: 'fixed',
         },
         generation_params: showAdvancedParams ? {
           steps: genSteps,
@@ -1372,6 +1324,10 @@ export const DirectorMode: React.FC = () => {
         onBatchGenerate={handleBatchGenerate}
         onStopBatchGenerate={handleStopBatchGenerate}
         projectModelType={projectModelType}
+        projectWorkflowName={projectWorkflowId == null
+          ? t('project_settings.workflow_auto', '自动匹配')
+          : workflows.find((workflow) => workflow.id === projectWorkflowId)?.name
+            || t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}
         effectiveNsfw={effectiveNsfw}
         outputSpec={projectOutputSpec}
         videoProfile={videoProfile}

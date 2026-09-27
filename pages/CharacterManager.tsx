@@ -31,7 +31,6 @@ export const CharacterManager: React.FC = () => {
 
   // Turnaround Sheet Modal State
   const [sheetModalChar, setSheetModalChar] = useState<Character | null>(null);
-  const [modelType, setModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [genType, setGenType] = useState<'turnaround' | 'portrait'>('turnaround');
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -64,15 +63,14 @@ export const CharacterManager: React.FC = () => {
       try {
         const raw = proj?.settings;
         const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
-        if (s.default_style) setProjectStyle(s.default_style);
-        if (s.default_model_type === 'sd15' || s.default_model_type === 'pony' || s.default_model_type === 'redcraft_krea2') {
-          setProjectModelType(s.default_model_type);
-        } else if (s.default_model_type === 'flux') {
-          setProjectModelType('pony');
+        const imageSettings = s.image_generation || {};
+        if (imageSettings.style) setProjectStyle(imageSettings.style);
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+          setProjectModelType(imageSettings.model);
         }
-        if (s.nsfw_mode === 'on' || s.nsfw_mode === 'off' || s.nsfw_mode === 'inherit') {
-          setProjectNsfwMode(s.nsfw_mode);
-        }
+        if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') {
+          setProjectNsfwMode(imageSettings.nsfw_mode);
+        } else setProjectNsfwMode('inherit');
       } catch { /* ignore */ }
     });
   };
@@ -201,7 +199,6 @@ export const CharacterManager: React.FC = () => {
       ...full,
       timeline_map: full.timeline_map || {},
       assets: full.assets || {},
-      model_type: full.model_type || 'pony',
       base_model: {
         ...(full.base_model || {}),
         tags: { ...flat },
@@ -341,8 +338,6 @@ export const CharacterManager: React.FC = () => {
   // Open Turnaround Sheet Generator
   const openSheetModal = async (char: Character, overrideGenType?: 'turnaround' | 'portrait') => {
     setSheetModalChar(char);
-    const mType = (projectModelType || char.model_type || 'pony') as 'pony' | 'sd15' | 'redcraft_krea2';
-    setModelType(mType);
 
     const availableRef = char.avatar_url || char.turnaround_url || null;
     const initialUseRef = !!availableRef;
@@ -360,7 +355,6 @@ export const CharacterManager: React.FC = () => {
     try {
       const res = await api.buildCharacterPrompt(
         char.id, 
-        mType, 
         initialGenType, 
         char.description,
         initialUseRef,
@@ -381,7 +375,6 @@ export const CharacterManager: React.FC = () => {
   };
 
   const handleRebuildPrompt = async (
-    selectedModel: 'pony' | 'sd15' | 'redcraft_krea2', 
     selectedGen: 'turnaround' | 'portrait',
     withRef: boolean = useRefPortrait,
     refUrl: string | null = refImageUrl
@@ -391,7 +384,6 @@ export const CharacterManager: React.FC = () => {
     try {
       const res = await api.buildCharacterPrompt(
         sheetModalChar.id, 
-        selectedModel, 
         selectedGen, 
         sheetModalChar.description,
         withRef,
@@ -428,18 +420,12 @@ export const CharacterManager: React.FC = () => {
       const payload: any = {
         prompt: prompt,
         negative_prompt: negativePrompt,
-        model_type: modelType,
         mode: 'standard',
         gen_type: genType,
-        style_preset: projectStyle,
-        nsfw_enabled: effectiveNsfw,
+        character_id: sheetModalChar.id,
         reference_tier: 'A',
         // Tier B composition slot reserved (portrait/turnaround only need identity)
         composition_ref_url: null,
-        project_settings: {
-          default_style: projectStyle,
-          nsfw_mode: projectNsfwMode
-        }
       };
 
       // Tier A: single character ref → classic img2img for portrait/turnaround only
@@ -488,7 +474,6 @@ export const CharacterManager: React.FC = () => {
       for (let i = 0; i < characters.length; i++) {
         if (stopBatchRef.current) break;
         const char = characters[i];
-        const mType = (char.model_type === 'sd15' ? 'sd15' : char.model_type === 'redcraft_krea2' ? 'redcraft_krea2' : 'pony') as 'pony' | 'sd15' | 'redcraft_krea2';
 
         // 1) Portrait
         setBatchProgress(`${i + 1}/${characters.length} ${char.name} · portrait…`);
@@ -499,46 +484,40 @@ export const CharacterManager: React.FC = () => {
         });
         try {
           const portraitPrompt = await api.buildCharacterPrompt(
-            char.id, mType, 'portrait', char.description, false
+            char.id, 'portrait', char.description, false
           );
           const portraitRes = await api.generateAsset({
             prompt: portraitPrompt.prompt,
             negative_prompt: portraitPrompt.negative_prompt,
-            model_type: mType,
             mode: 'standard',
             gen_type: 'portrait',
-            style_preset: projectStyle,
-            nsfw_enabled: effectiveNsfw,
-            project_settings: { default_style: projectStyle, nsfw_mode: projectNsfwMode }
+            character_id: char.id,
           }, 999991 + char.id);
           if (!portraitRes.task_id) throw new Error('No task id');
           const portraitUrl = await waitForAssetTask(portraitRes.task_id);
-          await api.updateCharacter(char.id, { avatar_url: portraitUrl, model_type: mType });
+          await api.updateCharacter(char.id, { avatar_url: portraitUrl });
 
           if (stopBatchRef.current) break;
 
           // 2) Turnaround with portrait as ref
           setBatchProgress(`${i + 1}/${characters.length} ${char.name} · turnaround…`);
           const turnPrompt = await api.buildCharacterPrompt(
-            char.id, mType, 'turnaround', char.description, true, portraitUrl
+            char.id, 'turnaround', char.description, true, portraitUrl
           );
           const turnRes = await api.generateAsset({
             prompt: turnPrompt.prompt,
             negative_prompt: turnPrompt.negative_prompt,
-            model_type: mType,
             mode: 'standard',
             gen_type: 'turnaround',
-            style_preset: projectStyle,
-            nsfw_enabled: effectiveNsfw,
+            character_id: char.id,
             ref_image_url: portraitUrl,
             character_ref_url: portraitUrl,
             composition_ref_url: null,
             reference_tier: 'A',
-            project_settings: { default_style: projectStyle, nsfw_mode: projectNsfwMode }
           }, 999992 + char.id);
           if (!turnRes.task_id) throw new Error('No task id');
           const turnUrl = await waitForAssetTask(turnRes.task_id);
-          await api.updateCharacter(char.id, { turnaround_url: turnUrl, model_type: mType });
+          await api.updateCharacter(char.id, { turnaround_url: turnUrl });
           ok += 1;
         } catch (err) {
           console.error(err);
@@ -580,9 +559,7 @@ export const CharacterManager: React.FC = () => {
         }
       }
 
-      const updatePayload: any = {
-        model_type: modelType
-      };
+      const updatePayload: any = {};
       if (assetType === 'turnaround') {
         updatePayload.turnaround_url = generatedImageUrl;
       } else {
@@ -724,8 +701,7 @@ export const CharacterManager: React.FC = () => {
       <TurnaroundModal
         character={sheetModalChar}
         onClose={() => setSheetModalChar(null)}
-        modelType={modelType}
-        setModelType={setModelType}
+        modelType={projectModelType}
         genType={genType}
         setGenType={setGenType}
         prompt={prompt}
@@ -741,7 +717,7 @@ export const CharacterManager: React.FC = () => {
         setRefImageUrl={setRefImageUrl}
         projectStyle={projectStyle}
         effectiveNsfw={effectiveNsfw}
-        onRebuildPrompt={(mt, gt, useRef, refUrl) => handleRebuildPrompt(mt as any, gt as any, useRef, refUrl)}
+        onRebuildPrompt={(gt, useRef, refUrl) => handleRebuildPrompt(gt as any, useRef, refUrl)}
         onGenerateSheetImage={handleGenerateSheetImage}
         onSaveAssetToCharacter={saveAssetToCharacter}
         onUploadPortrait={async (file) => {
@@ -752,7 +728,7 @@ export const CharacterManager: React.FC = () => {
               setUseRefPortrait(true);
               setCharacters((prev) => prev.map((c) => (c.id === sheetModalChar.id ? updated : c)));
               showToast(t("casting.upload_portrait_success"), 'success');
-              handleRebuildPrompt(modelType, genType, true, updated.avatar_url);
+              handleRebuildPrompt(genType, true, updated.avatar_url);
             } catch {
               showToast(t("casting.upload_portrait_fail"), 'error');
             }

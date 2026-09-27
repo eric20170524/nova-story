@@ -190,6 +190,12 @@ test('SettingsManager masks remote_password in toPublicSettings and preserves on
     const originalSettings = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf-8') : null;
 
     try {
+        SettingsManager.saveSettings({
+            comfyui: {
+                remote_password: 'mock_password_123'
+            }
+        });
+
         const saved = SettingsManager.saveSettings({
             comfyui: {
                 mode: 'remote',

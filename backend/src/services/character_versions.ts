@@ -42,7 +42,6 @@ const assetSummary = (visualTagsRaw: unknown) => {
     face_url: assets.face_url || tags.face_url || null,
     has_avatar: Boolean(assets.avatar_url || tags.avatar_url),
     has_turnaround: Boolean(assets.turnaround_url || tags.turnaround_url),
-    model_type: tags.model_type || assets.model_type || 'pony'
   };
 };
 

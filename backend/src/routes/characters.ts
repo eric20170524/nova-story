@@ -13,10 +13,8 @@ import {
   resolveStaticAssetPath
 } from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
-import {
-  buildCharacterPromptHeader,
-  normalizeImageModelFamily
-} from '../services/image_generation_policy';
+import { buildCharacterPromptHeader } from '../services/image_generation_policy';
+import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import {
   activateCharacterVersion,
   annotateCharacterWithVersions,
@@ -43,7 +41,6 @@ const serializeCharacter = (row: any) => {
     avatar_url: assets.avatar_url || null,
     turnaround_url: assets.turnaround_url || null,
     face_url: assets.face_url || null,
-    model_type: serialized.visual_tags?.model_type || 'pony'
   };
 };
 
@@ -123,7 +120,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
             }
           },
           assets: existingTags.assets || {},
-          model_type: existingTags.model_type || 'pony'
         };
 
         let characterId: number;
@@ -215,7 +211,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (data.turnaround_url) assets.turnaround_url = data.turnaround_url;
     if (data.face_url) assets.face_url = data.face_url;
     tags.assets = assets;
-    tags.model_type = data.model_type || 'pony';
+    delete tags.model_type;
+    delete assets.model_type;
 
     const tagsStr = JSON.stringify(tags);
 
@@ -280,7 +277,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (data.face_url !== undefined) assets.face_url = data.face_url;
     tags.assets = assets;
 
-    if (data.model_type !== undefined) tags.model_type = data.model_type;
+    delete tags.model_type;
+    delete assets.model_type;
 
     // Always update visual_tags since we merge virtual fields into it
     updateFields.push('visual_tags = ?');
@@ -314,7 +312,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const { id } = paramsSchema.parse(request.params);
 
     const bodySchema = z.object({
-      model_type: z.string().default('pony'),
       gen_type: z.string().default('turnaround'),
       custom_description: z.string().optional().nullable(),
       use_ref_portrait: z.boolean().default(true),
@@ -337,6 +334,12 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const combinedDesc = `${desc}, ${tagStr}`.replace(/,\s*$/, "");
+    // A design sheet needs stable identity and costume attributes, not the character's
+    // narrative description (which can contain expressions and scene actions).
+    const turnaroundTagKeys = ['hair', 'eyes', 'skin_tone', 'face_features', 'build', 'clothing', 'accessories'];
+    const turnaroundAppearance = turnaroundTagKeys
+      .flatMap((key) => typeof baseTags[key] === 'string' ? [baseTags[key]] : [])
+      .join(', ') || combinedDesc;
 
     const assets = tags?.assets || {};
     const refUrl = req.ref_image_url || assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url;
@@ -346,10 +349,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const isMale = maleKeywords.some(kw => checkStr.includes(kw));
     const genderTag = isMale ? "1boy, solo, male" : "1girl, solo, female";
 
-    const nsfwEnabled = Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
-    // Retired FLUX product path maps to pony for clients; custom flux strings still normalize for headers
-    const modelFamily = normalizeImageModelFamily(req.model_type);
-    const effectiveModelType = modelFamily === 'flux' ? 'pony' : modelFamily;
+    const project = await db.get('SELECT settings FROM project WHERE id = ?', dbChar.project_id);
+    const projectSettings = parseProjectSettings(project?.settings);
+    const nsfwEnabled = resolveEffectiveNsfw({
+      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
+      projectSettings,
+    });
+    const effectiveModelType = getProjectImageSettings(projectSettings).model;
     const header = buildCharacterPromptHeader(
       effectiveModelType,
       nsfwEnabled,
@@ -367,7 +373,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     if (req.gen_type === "turnaround") {
       // Appearance base only — GenerationService runs 3 full-body panels + stitch
-      prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${combinedDesc}${refHint}`;
+      prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${turnaroundAppearance}`;
     } else {
       prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
     }

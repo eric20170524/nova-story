@@ -30,7 +30,7 @@
 | Projects | `GET /projects/` | 项目列表 |
 | | `POST /projects/` | 创建项目 |
 | | `GET /projects/{id}` | 项目详情 |
-| | `PUT /projects/{id}` | 更新项目（含 `settings`：默认风格 / `default_model_type` / `nsfw_mode` 等） |
+| | `PUT /projects/{id}` | 更新项目；`settings.image_generation` 包含唯一项目模型、可选同模型工作流、画风、画布和 NSFW 策略 |
 | | `DELETE /projects/{id}` | 事务级联删除项目 |
 | | `POST /projects/import` | 从 TXT 导入项目、章节和角色声明 |
 | | `POST /projects/{id}/duplicate` | 完整复制项目 |

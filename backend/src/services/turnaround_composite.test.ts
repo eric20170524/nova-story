@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extractAppearanceBase,
   buildTurnaroundViewPrompt,
+  buildTurnaroundPanelWorkflowData,
   stitchTurnaroundSheet,
   shouldUseTurnaroundComposite,
   TURNAROUND_VIEWS
@@ -19,6 +20,75 @@ test('extractAppearanceBase strips multi-view sheet jargon', () => {
   assert.match(cleaned, /moon-white dress/);
 });
 
+test('turnaround prompt keeps stable design and removes scene mood', () => {
+  const cleaned = extractAppearanceBase(
+    '1girl, long black hair, ice-blue eyes, melting expression, half-open inner robe, moon-white xianxia dress, enchanted mirror'
+  );
+  assert.match(cleaned, /long black hair/);
+  assert.match(cleaned, /moon-white xianxia dress/);
+  assert.doesNotMatch(cleaned, /melting|half-open/i);
+  assert.doesNotMatch(cleaned, /mirror/i);
+  const side = buildTurnaroundViewPrompt(cleaned, TURNAROUND_VIEWS[1]!, 'pony');
+  assert.match(side.prompt, /neutral expression|A-pose/i);
+  assert.match(side.prompt, /90 degree left side profile/i);
+  assert.doesNotMatch(side.prompt, /character reference sheet|character design sheet panel/i);
+});
+
+test('panels default to text only; front adapter requires explicit opt-in', () => {
+  const base = {
+    model_type: 'pony',
+    nsfw_enabled: true,
+    project_settings: { default_workflow_id: 7 },
+    character_adapter_weight: 0.75
+  };
+  for (const view of TURNAROUND_VIEWS) {
+    const panel = buildTurnaroundPanelWorkflowData(base, view, 'prompt', 'negative', '/portrait.png');
+    assert.equal(panel.character_ref_url, undefined);
+    assert.equal(panel.force_no_character_adapter, true);
+    assert.equal(panel.nsfw_enabled, false);
+    assert.deepEqual(panel.project_settings, { default_workflow_id: 7 });
+  }
+
+  const front = buildTurnaroundPanelWorkflowData(
+    { ...base, turnaround_front_adapter: true },
+    TURNAROUND_VIEWS[0]!,
+    'prompt',
+    'negative',
+    '/portrait.png'
+  );
+  assert.equal(front.character_ref_url, '/portrait.png');
+  assert.equal(front.character_adapter_weight, 0.35);
+  assert.equal(front.force_no_character_adapter, false);
+  const back = buildTurnaroundPanelWorkflowData(
+    base,
+    TURNAROUND_VIEWS[2]!,
+    'prompt',
+    'negative',
+    '/portrait.png'
+  );
+  assert.equal(back.character_ref_url, undefined);
+
+  const disabled = buildTurnaroundPanelWorkflowData(
+    { ...base, turnaround_front_adapter: false },
+    TURNAROUND_VIEWS[0]!,
+    'prompt',
+    'negative',
+    '/portrait.png'
+  );
+  assert.equal(disabled.character_ref_url, undefined);
+  assert.equal(disabled.force_no_character_adapter, true);
+
+  const noPortrait = buildTurnaroundPanelWorkflowData(
+    base,
+    TURNAROUND_VIEWS[0]!,
+    'prompt',
+    'negative',
+    null
+  );
+  assert.equal(noPortrait.character_ref_url, undefined);
+  assert.equal(noPortrait.force_no_character_adapter, true);
+});
+
 test('buildTurnaroundViewPrompt is single-figure full body per angle', () => {
   const base = '1girl, long black hair, ice-blue eyes, moon-white xianxia dress';
   for (const view of TURNAROUND_VIEWS) {
@@ -32,6 +102,18 @@ test('buildTurnaroundViewPrompt is single-figure full body per angle', () => {
     if (view.id === 'side') assert.match(prompt, /side view|profile/i);
     if (view.id === 'back') assert.match(prompt, /back view|from behind/i);
   }
+});
+
+test('robe turnaround retains covered outfit and excludes decorative background', () => {
+  const { prompt, negative_prompt } = buildTurnaroundViewPrompt(
+    '1girl, moon-white layered silk robes, black hair',
+    TURNAROUND_VIEWS[1]!,
+    'pony'
+  );
+  assert.match(prompt, /shoulders and back fully covered/);
+  assert.match(negative_prompt, /strapless gown/);
+  assert.match(negative_prompt, /halo|gradient background/);
+  assert.match(negative_prompt, /archway/);
 });
 
 test('shouldUseTurnaroundComposite respects escape hatch', () => {

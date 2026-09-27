@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ProjectImportInputError } from './import_file';
 import { buildProjectImportPreview } from './import_preview';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS } from '../project_settings';
 
 const MARKDOWN = [
   '# 失声的梦核游乐园',
@@ -120,7 +121,7 @@ test('native JSON preview excludes orphan director nodes and explains why', asyn
   assert.equal(preview.counts.scenes, 1);
   assert.equal(preview.counts.coverage_groups, 1);
   assert.equal(preview.counts.coverage_shots, 1);
-  assert.deepEqual(preview.project.settings, {});
+  assert.deepEqual(preview.project.settings, { image_generation: DEFAULT_PROJECT_IMAGE_SETTINGS });
   assert.ok(preview.warnings.some((warning) => /settings/i.test(warning)));
   assert.ok(preview.warnings.some((warning) => /missing chapter/i.test(warning)));
   assert.ok(preview.warnings.some((warning) => /missing scene/i.test(warning)));

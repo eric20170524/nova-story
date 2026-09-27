@@ -779,10 +779,17 @@ export const mergeClipPositivePrompt = (parts: {
   framing?: string;
   templateText?: string;
   quality?: string;
+  qualityFirst?: boolean;
 }): string => {
   const sceneTokens = splitCsvPromptTokens(parts.scene);
+  const sceneContent: string[] = [];
   const framingTokens: string[] = [];
   const qualityTokens: string[] = [];
+
+  for (const token of sceneTokens) {
+    if (parts.qualityFirst && isQualityPromptToken(token)) qualityTokens.push(token);
+    else sceneContent.push(token);
+  }
 
   const pushClassified = (token: string) => {
     if (isQualityPromptToken(token)) qualityTokens.push(token);
@@ -798,7 +805,22 @@ export const mergeClipPositivePrompt = (parts: {
 
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const token of [...sceneTokens, ...framingTokens, ...qualityTokens]) {
+  if (parts.qualityFirst) {
+    qualityTokens.sort((left, right) => {
+      const priority = (token: string): number => {
+        const score = token.match(/^score_(\d+)(?:_up)?$/i);
+        if (score) return 9 - Number(score[1]);
+        if (/^source_anime$/i.test(token)) return 20;
+        if (/^source_cartoon$/i.test(token)) return 21;
+        return 30;
+      };
+      return priority(left) - priority(right);
+    });
+  }
+  const orderedTokens = parts.qualityFirst
+    ? [...qualityTokens, ...sceneContent, ...framingTokens]
+    : [...sceneContent, ...framingTokens, ...qualityTokens];
+  for (const token of orderedTokens) {
     const key = token.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1079,12 +1101,14 @@ export const buildPromptEnhancement = (options: {
 
 export const applyPromptEnhancement = (
   basePrompt: string,
-  enhancement: PromptEnhancement
+  enhancement: PromptEnhancement,
+  options: { qualityFirst?: boolean } = {}
 ): string => {
   // Scene action first; shared framing / style / quality follow (CLIP front window).
   return mergeClipPositivePrompt({
     scene: basePrompt,
     framing: joinUniqueCsv([enhancement.prefix, enhancement.suffix]),
+    qualityFirst: options.qualityFirst,
   });
 };
 

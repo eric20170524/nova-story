@@ -3,13 +3,12 @@ import { db } from '../../db/database';
 import { parseProjectImportFile } from './import_file';
 import { restoreNovaStoryJsonProject } from './novastory_json_import';
 import type { NovelImportDraft } from './types';
+import { canonicalProjectSettings } from '../project_settings';
 
 export { draftFromTextProject } from './text_adapter';
 
 const buildPersistedSettings = (draft: NovelImportDraft) => {
-  const settings: Record<string, unknown> = {
-    ...(draft.project.settings || {}),
-  };
+  const settings: Record<string, unknown> = canonicalProjectSettings(draft.project.settings);
 
   settings.import_info = {
     source: draft.source,
