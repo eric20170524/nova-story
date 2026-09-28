@@ -256,7 +256,14 @@ export class VideoGenerationService {
 
     let keyframeAsset = request.keyframe_asset_id ? await MediaAssetService.getAssetById(request.keyframe_asset_id) : null;
     if (!keyframeAsset && scene?.asset_url) {
-      const existing = await db.get('SELECT * FROM media_asset WHERE url = ?', scene.asset_url);
+      const existing = await db.get(
+        `SELECT * FROM media_asset
+         WHERE url = ? AND project_id = ? AND scene_id = ? AND media_type = 'image' AND status != 'archived'
+         ORDER BY id DESC LIMIT 1`,
+        scene.asset_url,
+        projectId,
+        scene.id
+      );
       if (existing) {
         keyframeAsset = existing;
         request.keyframe_asset_id = existing.id;

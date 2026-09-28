@@ -18,7 +18,9 @@ import {
   Film,
   X,
   Link2,
-  Layers
+  Layers,
+  ChevronDown,
+  ZoomIn
 } from 'lucide-react';
 import {
   Scene,
@@ -31,6 +33,7 @@ import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
 import { API_BASE_URL } from '../../constants';
 import { api } from '../../services/api';
+import { useImagePreview } from '../ImageLightbox';
 
 interface SceneVideoPlayerProps {
   scene: Scene;
@@ -120,6 +123,82 @@ const assetLabel = (asset: MediaAsset, prefix?: string) => {
   return `${prefix ? `${prefix} · ` : ''}#${asset.id} ${name}`;
 };
 
+type ImageChoiceValue = number | 'storyboard';
+type ImageChoice = { value: ImageChoiceValue; label: string; url: string };
+
+const formatMediaUrl = (url?: string | null) => {
+  if (!url) return '';
+  if (/^(https?:|data:|blob:)/.test(url)) return url;
+  return `${API_BASE_URL.replace(/\/api\/?$/, '')}${url.startsWith('/') ? '' : '/'}${url}`;
+};
+
+const ReferenceImagePicker: React.FC<{
+  choices: ImageChoice[];
+  value: ImageChoiceValue | null;
+  onChange: (value: ImageChoiceValue | null) => void;
+  emptyLabel: string;
+}> = ({ choices, value, onChange, emptyLabel }) => {
+  const [expanded, setExpanded] = useState(false);
+  const { openPreview, lightbox } = useImagePreview();
+  const selected = choices.find((choice) => choice.value === value);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          className="min-w-0 flex-1 flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 p-1.5 text-left text-xs text-slate-800 dark:text-slate-200 hover:border-indigo-400 transition-colors"
+        >
+          {selected ? (
+            <img src={formatMediaUrl(selected.url)} alt="" className="h-11 w-16 shrink-0 rounded object-cover bg-slate-200 dark:bg-slate-800" />
+          ) : (
+            <span className="h-11 w-16 shrink-0 rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400"><ImageIcon size={17} /></span>
+          )}
+          <span className="min-w-0 flex-1 truncate">{selected?.label || emptyLabel}</span>
+          <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+        {selected && (
+          <button
+            type="button"
+            onClick={() => openPreview(formatMediaUrl(selected.url))}
+            title="放大预览"
+            aria-label={`放大预览 ${selected.label}`}
+            className="px-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300"
+          >
+            <ZoomIn size={15} />
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="max-h-48 overflow-y-auto custom-scrollbar rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-1 space-y-1">
+          <button
+            type="button"
+            onClick={() => { onChange(null); setExpanded(false); }}
+            className={`w-full rounded-md px-2 py-1.5 text-left text-[11px] ${value == null ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+          >
+            {emptyLabel}
+          </button>
+          {choices.map((choice) => (
+            <button
+              key={choice.value}
+              type="button"
+              onClick={() => { onChange(choice.value); setExpanded(false); }}
+              className={`w-full flex items-center gap-2 rounded-md p-1.5 text-left text-[11px] ${value === choice.value ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+            >
+              <img src={formatMediaUrl(choice.url)} alt="" loading="lazy" className="h-12 w-20 shrink-0 rounded object-cover bg-slate-100 dark:bg-slate-800" />
+              <span className="min-w-0 break-all line-clamp-2">{choice.label}</span>
+              {value === choice.value && <Check size={13} className="ml-auto shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+      {lightbox}
+    </div>
+  );
+};
+
 export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   scene,
   mediaAssets = [],
@@ -149,7 +228,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     } catch {}
     return 'minimax_h3_hongchao_a2a_12gb';
   });
-  const [selectedKeyframeId, setSelectedKeyframeId] = useState<number | null>(null);
+  const [selectedKeyframeId, setSelectedKeyframeId] = useState<ImageChoiceValue | null>(null);
   const [selectedLastFrameId, setSelectedLastFrameId] = useState<number | null>(null);
   const [selectedGuideFrameId, setSelectedGuideFrameId] = useState<number | null>(null);
   const [guideFrameIdx, setGuideFrameIdx] = useState<number>(60);
@@ -183,6 +262,23 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const guideFrameChoices = Array.from(
     new Map([...guideReferenceAssets, ...keyframeAssets, ...explicitLastFrameAssets].map((asset) => [asset.id, asset])).values()
   );
+  const storyboardChoice: ImageChoice | null = scene.asset_url && !keyframeAssets.some((asset) => asset.url === scene.asset_url)
+    ? { value: 'storyboard', label: '当前分镜图（自动关联）', url: scene.asset_url }
+    : null;
+  const firstFrameChoices: ImageChoice[] = [
+    ...keyframeAssets.map((asset) => ({ value: asset.id, label: assetLabel(asset, asset.url === scene.asset_url ? '当前分镜图' : '16:9 关键帧'), url: asset.url })),
+    ...(storyboardChoice ? [storyboardChoice] : [])
+  ];
+  const guideImageChoices: ImageChoice[] = guideFrameChoices.map((asset) => ({
+    value: asset.id,
+    label: assetLabel(asset, asset.role === 'guide_frame_reference' ? 'Guide' : asset.role === 'composition_reference' ? 'Comp' : asset.role === 'video_keyframe' ? 'Keyframe' : 'Last'),
+    url: asset.url
+  }));
+  const lastImageChoices: ImageChoice[] = lastFrameChoices.map((asset) => ({
+    value: asset.id,
+    label: assetLabel(asset, asset.role === 'video_keyframe' ? 'K / First Frame' : 'Last'),
+    url: asset.url
+  }));
 
   const selectedAsset = selectedAssetId != null
     ? videoAssets.find((asset) => asset.id === selectedAssetId)
@@ -215,8 +311,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
   useEffect(() => {
     const validKeyframeIds = new Set(keyframeAssets.map((asset) => asset.id));
-    if (selectedKeyframeId == null || !validKeyframeIds.has(selectedKeyframeId)) {
-      setSelectedKeyframeId(latestAsset(keyframeAssets)?.id ?? null);
+    if (selectedKeyframeId == null || (selectedKeyframeId === 'storyboard' ? !storyboardChoice : !validKeyframeIds.has(selectedKeyframeId))) {
+      setSelectedKeyframeId(latestAsset(keyframeAssets)?.id ?? storyboardChoice?.value ?? null);
     }
 
     const validLastIds = new Set(lastFrameChoices.map((asset) => asset.id));
@@ -242,6 +338,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     }
   }, [
     keyframeAssets.map((asset) => asset.id).join(','),
+    scene.asset_url,
     lastFrameChoices.map((asset) => asset.id).join(','),
     characterReferenceAssets.map((asset) => asset.id).join(','),
     motionReferenceAssets.map((asset) => asset.id).join(','),
@@ -272,12 +369,6 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     if (videoRef.current) {
       videoRef.current.loop = nextLoop;
     }
-  };
-
-  const formatMediaUrl = (url?: string | null) => {
-    if (!url) return '';
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return `${API_BASE_URL.replace(/\/api$/, '')}${url.startsWith('/') ? '' : '/'}${url}`;
   };
 
   const videoUrl = formatMediaUrl(activeAsset?.url || taskState?.output_url || taskState?.raw_video_url);
@@ -356,14 +447,15 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
 
   const submitConfiguredGeneration = () => {
     if (!onGenerateVideo) return;
-    if (!selectedKeyframeId) {
+    if (selectedKeyframeId == null) {
       showToast('请先选择或上传 First Frame', 'warning');
       return;
     }
 
     onGenerateVideo({
       workflowId,
-      keyframeAssetId: selectedKeyframeId,
+      // 0 asks backend preflight to register/reuse this Scene's current storyboard image.
+      keyframeAssetId: selectedKeyframeId === 'storyboard' ? 0 : selectedKeyframeId,
       lastFrameAssetId: isRef2va ? undefined : (selectedLastFrameId || undefined),
       characterRefAssetIds: isFl2va ? [] : selectedCharacterRefIds,
       motionRefAssetId: isFl2va ? undefined : (selectedMotionRefId || undefined),
@@ -481,16 +573,15 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
               </span>
               {renderUploadButton('video_keyframe', '上传', 'image/*', <Upload size={10} />)}
             </div>
-            <select
-              value={selectedKeyframeId ?? ''}
-              onChange={(event) => setSelectedKeyframeId(event.target.value ? Number(event.target.value) : null)}
-              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-colors"
-            >
-              <option value="">未选择 First Frame</option>
-              {keyframeAssets.map((asset) => (
-                <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
-              ))}
-            </select>
+            <ReferenceImagePicker
+              choices={firstFrameChoices}
+              value={selectedKeyframeId}
+              onChange={setSelectedKeyframeId}
+              emptyLabel="未选择 First Frame"
+            />
+            {storyboardChoice && selectedKeyframeId === 'storyboard' && (
+              <div className="text-[10px] text-indigo-600 dark:text-indigo-300">已关联当前 Scene 的分镜图；生成时自动注册为首帧素材。</div>
+            )}
           </div>
 
           {isMultiframe && (
@@ -502,18 +593,12 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 </span>
                 {renderUploadButton('guide_frame_reference', '上传', 'image/*', <Upload size={10} />)}
               </div>
-              <select
-                value={selectedGuideFrameId ?? ''}
-                onChange={(event) => setSelectedGuideFrameId(event.target.value ? Number(event.target.value) : null)}
-                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-colors"
-              >
-                <option value="">未指定 Guide Frame（默认回退首帧）</option>
-                {guideFrameChoices.map((asset) => (
-                  <option key={asset.id} value={asset.id}>
-                    {assetLabel(asset, asset.role === 'guide_frame_reference' ? 'Guide' : asset.role === 'composition_reference' ? 'Comp' : asset.role === 'video_keyframe' ? 'Keyframe' : 'Last')}
-                  </option>
-                ))}
-              </select>
+              <ReferenceImagePicker
+                choices={guideImageChoices}
+                value={selectedGuideFrameId}
+                onChange={(value) => setSelectedGuideFrameId(typeof value === 'number' ? value : null)}
+                emptyLabel="未指定 Guide Frame（默认回退首帧）"
+              />
               <div className="flex items-center gap-2 pt-1">
                 <span className="text-[10px] text-slate-600 dark:text-slate-400">固定至帧位置 (frame_idx):</span>
                 <input
@@ -559,19 +644,13 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
               <div className="text-[10px] text-amber-600 dark:text-amber-400">Ref2VA 不支持硬尾帧；该输入会被明确排除。</div>
             ) : (
               <>
-                <select
-                  value={selectedLastFrameId ?? ''}
-                  onChange={(event) => setSelectedLastFrameId(event.target.value ? Number(event.target.value) : null)}
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-colors"
-                >
-                  <option value="">不指定 Last Frame</option>
-                  {lastFrameChoices.map((asset) => (
-                    <option key={asset.id} value={asset.id}>
-                      {assetLabel(asset, asset.role === 'video_keyframe' ? 'K / First Frame' : 'Last')}
-                    </option>
-                  ))}
-                </select>
-                {selectedKeyframeId && (
+                <ReferenceImagePicker
+                  choices={lastImageChoices}
+                  value={selectedLastFrameId}
+                  onChange={(value) => setSelectedLastFrameId(typeof value === 'number' ? value : null)}
+                  emptyLabel="不指定 Last Frame"
+                />
+                {typeof selectedKeyframeId === 'number' && (
                   <button
                     type="button"
                     onClick={() => setSelectedLastFrameId(selectedKeyframeId)}
@@ -606,7 +685,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                       onChange={() => toggleCharacterRef(asset.id)}
                       className="w-3.5 h-3.5 rounded bg-white dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span className="truncate text-[11px] text-slate-700 dark:text-slate-300">{assetLabel(asset)}</span>
+                    <img src={formatMediaUrl(asset.url)} alt="" loading="lazy" className="h-10 w-14 shrink-0 rounded object-cover bg-slate-200 dark:bg-slate-800" />
+                    <span className="min-w-0 break-all line-clamp-2 text-[11px] text-slate-700 dark:text-slate-300">{assetLabel(asset)}</span>
                   </label>
                 ))}
               </div>
@@ -644,7 +724,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
           </div>
           <button
             type="button"
-            disabled={!selectedKeyframeId || uploadingRole != null}
+            disabled={selectedKeyframeId == null || uploadingRole != null}
             onClick={submitConfiguredGeneration}
             className="flex-shrink-0 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-md shadow-indigo-600/20 transition-all"
           >
