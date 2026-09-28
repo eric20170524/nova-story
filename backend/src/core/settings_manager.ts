@@ -116,8 +116,10 @@ export class SettingsManager {
         }
 
         if (settings.comfyui) {
-            if (process.env.COMFYUI_MODE) {
-                settings.comfyui.mode = process.env.COMFYUI_MODE;
+            // The macOS launcher selects remote mode for this process without
+            // changing the user's saved settings or backend/.env file.
+            if (process.env.NOVASTORY_COMFYUI_MODE || process.env.COMFYUI_MODE) {
+                settings.comfyui.mode = process.env.NOVASTORY_COMFYUI_MODE || process.env.COMFYUI_MODE;
             }
             if (process.env.COMFYUI_REMOTE_URL) {
                 settings.comfyui.remote_base_url = process.env.COMFYUI_REMOTE_URL;

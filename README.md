@@ -29,6 +29,8 @@ npm run dev
 .\start_all.ps1
 ```
 
+macOS 可在 Finder 中双击 `start_all.command` 启动、双击 `stop_all.command` 停止；也可在终端运行 `./start_all.command` 和 `./stop_all.command`。启动脚本会在缺少依赖时运行 `npm install`，并在当前进程中默认使用远端 ComfyUI。请先在 `backend/.env` 或应用设置中配置远端地址和凭据；脚本不会启动或停止本机 ComfyUI、Ollama。启动日志位于 `local/launcher/novastory.log`。
+
 打开浏览器访问：**http://127.0.0.1:3000**（不要依赖局域网 IP，除非你明确开启了外网绑定）。
 
 ## 安全默认
