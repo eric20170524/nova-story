@@ -19,12 +19,12 @@ export class OpenAIProvider implements AIProvider {
         apiKey: string,
         model: string = 'gpt-4o',
         baseUrl?: string,
-        options: { isOllama?: boolean } = {}
+        options: { isOllama?: boolean; timeoutMs?: number } = {}
     ) {
         this.openai = new OpenAI({
             apiKey,
             baseURL: baseUrl,
-            timeout: options.isOllama ? 120_000 : 60_000,
+            timeout: options.timeoutMs ?? (options.isOllama ? 120_000 : 60_000),
         });
         this.model = model;
         this.imageModel = 'dall-e-3';

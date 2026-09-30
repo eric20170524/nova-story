@@ -9,6 +9,11 @@ import {
   type AgentAction,
 } from '../../schemas/agent_os';
 import { WritingService } from './writing_service';
+import { ScriptService } from '../script_service';
+import {
+  ScriptGenerationService,
+  ScriptGenerationError,
+} from './script_generation_service';
 
 export type ExecuteItemResult = {
   op: string;
@@ -22,6 +27,11 @@ export type ExecuteContext = {
   chapterId?: string | null;
   language?: string | null;
   apply: boolean;
+  surface?: 'story' | 'script' | 'director' | 'characters' | 'settings' | null;
+  scriptId?: number | null;
+  scriptSceneId?: string | null;
+  token?: string;
+  provider?: any;
 };
 
 /**
@@ -36,17 +46,74 @@ export function isFullChapterRewriteIntent(instructions: string): boolean {
   );
 }
 
+function parseSceneOrdinal(token: string): number | null {
+  if (/^\d+$/.test(token)) {
+    const value = Number(token);
+    return value > 0 ? value : null;
+  }
+  const digit: Record<string, number> = {
+    一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+  };
+  if (token === '十') return 10;
+  if (/^十[一二三四五六七八九]$/.test(token)) return 10 + (digit[token[1]!] || 0);
+  if (/^[一二三四五六七八九]十$/.test(token)) return (digit[token[0]!] || 0) * 10;
+  if (/^[一二三四五六七八九]十[一二三四五六七八九]$/.test(token)) {
+    return (digit[token[0]!] || 0) * 10 + (digit[token[2]!] || 0);
+  }
+  if (token.length === 1 && digit[token]) return digit[token];
+  return null;
+}
+
+/**
+ * Turn a route hint into a scene id that exists on the document.
+ * Ordinals win over the editor selection. Unrelated text does not.
+ */
+export function resolveScriptSceneTarget(
+  scenes: Array<{ id: string }>,
+  hints: {
+    actionSceneId?: string | null;
+    instructions?: string | null;
+    contextSceneId?: string | null;
+  }
+): string | null {
+  const known = new Set(scenes.map((scene) => scene.id));
+  const actionSceneId = (hints.actionSceneId || '').trim();
+  if (actionSceneId && known.has(actionSceneId)) return actionSceneId;
+
+  const text = `${actionSceneId} ${hints.instructions || ''}`;
+  const ordinal = text.match(/第\s*([0-9一二三四五六七八九十]+)\s*场/);
+  if (ordinal) {
+    const index = parseSceneOrdinal(ordinal[1] || '');
+    if (index && scenes[index - 1]) return scenes[index - 1]!.id;
+    return null;
+  }
+
+  const asksForCurrent = /当前场|这一场|当前分场|选定分场/.test(text);
+  const contextSceneId = (hints.contextSceneId || '').trim();
+  if (asksForCurrent && contextSceneId && known.has(contextSceneId)) {
+    return contextSceneId;
+  }
+  if (!actionSceneId && contextSceneId && known.has(contextSceneId)) {
+    return contextSceneId;
+  }
+  return null;
+}
+
 async function assertChapterInProject(
   chapterId: string,
   projectId: number
 ): Promise<any> {
   const chapter = await db.get(
-    'SELECT * FROM chapter WHERE id = ? AND project_id = ?',
-    chapterId,
-    projectId
+    'SELECT * FROM chapter WHERE id = ?',
+    chapterId
   );
   if (!chapter) {
     throw new Error(`Chapter ${chapterId} not found in project ${projectId}`);
+  }
+  if (chapter.project_id !== projectId) {
+    throw new Error(
+      `Cross-project chapter reference rejected: Chapter ${chapterId} belongs to project ${chapter.project_id}, not ${projectId}`
+    );
   }
   return chapter;
 }
@@ -124,7 +191,17 @@ export class AgentExecutor {
   static parseAction(raw: unknown): AgentAction {
     // Accept nested/aliased LLM shapes at execute time too (confirm card path)
     const normalized = normalizeAgentAction(raw) || raw;
-    return AgentActionSchema.parse(normalized);
+    const parsed: any = AgentActionSchema.parse(normalized);
+    const rawSurface =
+      raw && typeof raw === 'object' && typeof (raw as any).surface === 'string'
+        ? (raw as any).surface
+        : (normalized && typeof normalized === 'object' && typeof (normalized as any).surface === 'string'
+          ? (normalized as any).surface
+          : undefined);
+    if (rawSurface && !parsed.surface) {
+      parsed.surface = rawSurface;
+    }
+    return parsed;
   }
 
   static async executeAll(
@@ -217,6 +294,14 @@ export class AgentExecutor {
       }
 
       case 'DRAFT_CONTENT': {
+        if (ctx.surface === 'script' || (action as any).surface === 'script') {
+          return {
+            op,
+            status: 'error',
+            message: '在剧本页面禁止直接调用小说正文重写或续写，请使用短剧剧本生成与分场改写服务',
+          };
+        }
+
         const chapterId =
           action.targetChapterId || ctx.chapterId || undefined;
         if (!chapterId) {
@@ -229,71 +314,88 @@ export class AgentExecutor {
           ? `${action.instructions}\n\n【强制格式】输出完整小说正文：禁止保留【场景】【画面】【动作指令】【视觉特效】等分镜/剧本标签；用连贯叙述与感官描写重写全章，不要只写续写片段。`
           : action.instructions;
 
-        const draft = await WritingService.generateChapterDraft({
-          projectId: ctx.projectId,
-          chapterId,
-          instructions: rewriteInstructions,
-          targetWordCount: action.targetWordCount || (replaceMode ? 1200 : undefined),
-          includeExisting: true,
-          // Rewrite: treat existing body as source text to transform, not a tail to extend
-          mode: replaceMode ? 'rewrite' : 'append',
-          // Metadata only when applying; previews must not pollute DB
-          generateMetadata: false,
-        });
+        try {
+          const draft = await WritingService.generateChapterDraft({
+            projectId: ctx.projectId,
+            chapterId,
+            instructions: rewriteInstructions,
+            targetWordCount: action.targetWordCount || (replaceMode ? 1200 : undefined),
+            includeExisting: true,
+            // Rewrite: treat existing body as source text to transform, not a tail to extend
+            mode: replaceMode ? 'rewrite' : 'append',
+            // Metadata only when applying; previews must not pollute DB
+            generateMetadata: false,
+          });
 
-        // Final body that should appear in the editor / DB
-        let finalContent = draft.content;
-        let condensed = draft.condensed;
+          if (!draft.content || !draft.content.trim()) {
+            return {
+              op,
+              status: 'error',
+              message: '模型返回空内容，未修改章节正文',
+              data: { chapterId },
+            };
+          }
 
-        if (ctx.apply) {
-          if (replaceMode) {
-            finalContent = draft.content;
+          // Final body that should appear in the editor / DB
+          let finalContent = draft.content;
+          let condensed = draft.condensed;
+
+          if (ctx.apply) {
+            if (replaceMode) {
+              finalContent = draft.content;
+            } else {
+              const chapter = await db.get(
+                'SELECT content FROM chapter WHERE id = ?',
+                chapterId
+              );
+              finalContent =
+                (chapter?.content ? String(chapter.content) + '\n\n' : '') +
+                draft.content;
+            }
+
+            const regeneratedCondensed =
+              await WritingService.generateCondensedForContent(
+                ctx.projectId,
+                finalContent,
+                chapterId
+              );
+            condensed = regeneratedCondensed;
             await db.run(
-              'UPDATE chapter SET content = ? WHERE id = ?',
+              'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
               finalContent,
-              chapterId
-            );
-          } else {
-            const chapter = await db.get(
-              'SELECT content FROM chapter WHERE id = ?',
-              chapterId
-            );
-            finalContent =
-              (chapter?.content ? String(chapter.content) + '\n\n' : '') +
-              draft.content;
-            await db.run(
-              'UPDATE chapter SET content = ? WHERE id = ?',
-              finalContent,
+              condensed,
               chapterId
             );
           }
-          // Condensed must describe the full accepted chapter
-          condensed =
-            (await WritingService.regenerateCondensedFromChapter(
-              ctx.projectId,
-              chapterId
-            )) || condensed;
-        }
 
-        return {
-          op,
-          status: 'success',
-          message: ctx.apply
-            ? replaceMode
-              ? 'Chapter rewritten (replaced full body)'
-              : 'Draft applied to chapter (appended)'
-            : 'Draft generated (not applied)',
-          data: {
-            chapterId,
-            // Always return the FULL chapter body for UI sync
-            content: finalContent,
-            fragment: replaceMode ? undefined : draft.content,
-            mode: replaceMode ? 'rewrite' : 'append',
-            condensed,
-            nextPlot: draft.nextPlot,
-            applied: ctx.apply,
-          },
-        };
+          return {
+            op,
+            status: 'success',
+            message: ctx.apply
+              ? replaceMode
+                ? 'Chapter rewritten (replaced full body)'
+                : 'Draft applied to chapter (appended)'
+              : 'Draft generated (not applied)',
+            data: {
+              chapterId,
+              // Always return the FULL chapter body for UI sync
+              content: finalContent,
+              fragment: replaceMode ? undefined : draft.content,
+              mode: replaceMode ? 'rewrite' : 'append',
+              condensed,
+              nextPlot: draft.nextPlot,
+              applied: ctx.apply,
+            },
+          };
+        } catch (e: any) {
+          logger.warn(`DRAFT_CONTENT failed: ${e?.message || e}`);
+          return {
+            op,
+            status: 'error',
+            message: e?.message || String(e),
+            data: { chapterId },
+          };
+        }
       }
 
       case 'UPDATE_CHAPTER_SUMMARY': {
@@ -408,6 +510,14 @@ export class AgentExecutor {
       case 'CINEMATIC_REWRITE':
       case 'ADD_CONFLICT':
       case 'REVERSE_PLOT': {
+        if (ctx.surface === 'script' || (action as any).surface === 'script') {
+          return {
+            op,
+            status: 'error',
+            message: '在剧本页面禁止直接调用小说正文技能覆盖章节，请使用剧本分场改写服务',
+          };
+        }
+
         const chapterId =
           (action as any).targetChapterId || ctx.chapterId || undefined;
         if (!chapterId) {
@@ -436,24 +546,48 @@ export class AgentExecutor {
             instructions: action.instructions,
           };
         }
-        const rewritten = await WritingService.executeSkill({
-          projectId: ctx.projectId,
-          chapterId,
-          skill: skillArg,
-        });
-        if (ctx.apply) {
-          await db.run(
-            'UPDATE chapter SET content = ? WHERE id = ?',
-            rewritten,
-            chapterId
-          );
+        try {
+          const rewritten = await WritingService.executeSkill({
+            projectId: ctx.projectId,
+            chapterId,
+            skill: skillArg,
+          });
+          if (!rewritten || !rewritten.trim()) {
+            return {
+              op,
+              status: 'error',
+              message: '技能执行返回空内容，未修改章节正文',
+              data: { chapterId },
+            };
+          }
+          if (ctx.apply) {
+            const condensed = await WritingService.generateCondensedForContent(
+              ctx.projectId,
+              rewritten,
+              chapterId
+            );
+            await db.run(
+              'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+              rewritten,
+              condensed,
+              chapterId
+            );
+          }
+          return {
+            op,
+            status: 'success',
+            message: ctx.apply ? 'Skill rewrite applied' : 'Skill rewrite ready',
+            data: { chapterId, content: rewritten, applied: ctx.apply },
+          };
+        } catch (e: any) {
+          logger.warn(`Skill rewrite failed: ${e?.message || e}`);
+          return {
+            op,
+            status: 'error',
+            message: e?.message || String(e),
+            data: { chapterId },
+          };
         }
-        return {
-          op,
-          status: 'success',
-          message: ctx.apply ? 'Skill rewrite applied' : 'Skill rewrite ready',
-          data: { chapterId, content: rewritten, applied: ctx.apply },
-        };
       }
 
       case 'RUN_CONSISTENCY_CHECK': {
@@ -623,6 +757,141 @@ export class AgentExecutor {
           message: `Updated character ${action.name}`,
           data: action,
         };
+      }
+
+      case 'GENERATE_SCRIPT_OUTLINE': {
+        const chapterId = action.chapterId || ctx.chapterId;
+        if (!chapterId) {
+          return { op, status: 'error', message: '请指定要生成改编提纲的章节' };
+        }
+        await assertChapterInProject(chapterId, ctx.projectId);
+        try {
+          const script = await ScriptService.createOrGetScript(chapterId);
+          const requestKey = `agent_outline_${chapterId}_${Date.now()}`;
+          const candidate = await ScriptGenerationService.generateOutlineCandidate({
+            scriptId: script.id,
+            expectedRevision: script.revision,
+            requestKey,
+            instructions: action.instructions,
+            token: ctx.token,
+            provider: ctx.provider,
+          });
+          return {
+            op,
+            status: 'success',
+            message: '已生成短剧改编提纲候选，请在剧本编辑器中审核采纳',
+            data: {
+              chapterId,
+              scriptId: script.id,
+              candidateId: candidate.id,
+              candidateRevision: candidate.candidate_revision,
+              candidate,
+            },
+          };
+        } catch (e: any) {
+          logger.warn(`GENERATE_SCRIPT_OUTLINE failed: ${e?.message || e}`);
+          return {
+            op,
+            status: 'error',
+            message: e?.message || String(e),
+            data: { chapterId },
+          };
+        }
+      }
+
+      case 'GENERATE_SCRIPT': {
+        const chapterId = action.chapterId || ctx.chapterId;
+        if (!chapterId) {
+          return { op, status: 'error', message: '请指定要生成剧本的章节' };
+        }
+        await assertChapterInProject(chapterId, ctx.projectId);
+        try {
+          const script = await ScriptService.createOrGetScript(chapterId);
+          const requestKey = `agent_script_${chapterId}_${Date.now()}`;
+          const candidate = await ScriptGenerationService.generateFullScriptCandidate({
+            scriptId: script.id,
+            expectedRevision: script.revision,
+            requestKey,
+            instructions: action.instructions,
+            token: ctx.token,
+            provider: ctx.provider,
+          });
+          return {
+            op,
+            status: 'success',
+            message: '已生成完整分场短剧剧本候选，请在剧本编辑器中审核采纳',
+            data: {
+              chapterId,
+              scriptId: script.id,
+              candidateId: candidate.id,
+              candidateRevision: candidate.candidate_revision,
+              candidate,
+            },
+          };
+        } catch (e: any) {
+          logger.warn(`GENERATE_SCRIPT failed: ${e?.message || e}`);
+          return {
+            op,
+            status: 'error',
+            message: e?.message || String(e),
+            data: { chapterId },
+          };
+        }
+      }
+
+      case 'REWRITE_SCRIPT_SCENE': {
+        const chapterId = action.chapterId || ctx.chapterId;
+        if (!chapterId) {
+          return { op, status: 'error', message: '请指定章节' };
+        }
+        await assertChapterInProject(chapterId, ctx.projectId);
+        let targetSceneId: string | null = null;
+        try {
+          const script = await ScriptService.createOrGetScript(chapterId);
+          targetSceneId = resolveScriptSceneTarget(script.document.scenes, {
+            actionSceneId: action.scriptSceneId,
+            instructions: action.instructions,
+            contextSceneId: ctx.scriptSceneId,
+          });
+          if (!targetSceneId) {
+            return {
+              op,
+              status: 'error',
+              message: '请指定要改写的分场。在剧本页选定一场，或说明第几场。',
+            };
+          }
+          const requestKey = `agent_rewrite_${chapterId}_${targetSceneId}_${Date.now()}`;
+          const candidate = await ScriptGenerationService.generateSceneRewriteCandidate({
+            scriptId: script.id,
+            targetSceneId,
+            expectedRevision: script.revision,
+            requestKey,
+            instructions: action.instructions,
+            token: ctx.token,
+            provider: ctx.provider,
+          });
+          return {
+            op,
+            status: 'success',
+            message: `已生成第 ${script.document.scenes.findIndex((scene) => scene.id === targetSceneId) + 1} 场的改写候选，请在剧本编辑器中审核采纳`,
+            data: {
+              chapterId,
+              scriptId: script.id,
+              candidateId: candidate.id,
+              targetSceneId,
+              candidateRevision: candidate.candidate_revision,
+              candidate,
+            },
+          };
+        } catch (e: any) {
+          logger.warn(`REWRITE_SCRIPT_SCENE failed: ${e?.message || e}`);
+          return {
+            op,
+            status: 'error',
+            message: e?.message || String(e),
+            data: { chapterId, scriptSceneId: targetSceneId },
+          };
+        }
       }
 
       default:

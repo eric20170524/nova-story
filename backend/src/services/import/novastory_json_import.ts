@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 import { db } from '../../db/database';
 import type { NovaStoryJsonImportProject } from './novastory_json_model';
 import { canonicalProjectSettings } from '../project_settings';
+import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../../schemas/script';
+import { remapCopiedScriptChanges } from '../script_copy';
+import { ScriptService } from '../script_service';
+import { ensureSceneVersionBaseline } from '../scene_versions';
 
 const tableExists = async (tableName: string) => {
   const table = await db.get(
@@ -28,7 +32,7 @@ export const restoreNovaStoryJsonProject = async (
   const availableTables = new Set(
     (
       await Promise.all(
-        ['character', 'scene', 'coverage_group', 'coverage_shot'].map(async (name) => ({
+        ['character', 'scene', 'coverage_group', 'coverage_shot', 'chapter_script', 'script_change', 'scene_version', 'glossary'].map(async (name) => ({
           name,
           exists: await tableExists(name),
         }))
@@ -75,9 +79,10 @@ export const restoreNovaStoryJsonProject = async (
       );
     }
 
+    const characterIdMap = new Map<number, number>();
     if (availableTables.has('character')) {
       for (const character of importProject.characters) {
-        await db.run(
+        const charRes = await db.run(
           `INSERT INTO character
             (project_id, name, role, description, visual_tags)
            VALUES (?, ?, ?, ?, ?)`,
@@ -87,6 +92,105 @@ export const restoreNovaStoryJsonProject = async (
           character.description,
           withoutCharacterModel(character.visualTags)
         );
+        const newCharId = charRes.lastID;
+        if (character.sourceId !== undefined && newCharId !== undefined) {
+          characterIdMap.set(Number(character.sourceId), Number(newCharId));
+        }
+      }
+    }
+
+    if (availableTables.has('glossary')) {
+      for (const item of importProject.glossary) {
+        await db.run(
+          'INSERT INTO glossary (project_id, term, definition, category) VALUES (?, ?, ?, ?)',
+          projectId,
+          item.term,
+          item.definition,
+          item.category
+        );
+      }
+    }
+
+    const scriptIdMap = new Map<number, number>();
+    if (availableTables.has('chapter_script') && Array.isArray(importProject.scripts)) {
+      for (const script of importProject.scripts) {
+        const newChapterId = chapterIdMap.get(script.sourceChapterId);
+        if (!newChapterId) continue;
+
+        const remappedDocument = remapScriptDocumentCharacters(script.document, characterIdMap);
+
+        const targetChapter = await db.get(
+          'SELECT title, content FROM chapter WHERE id = ?',
+          newChapterId
+        );
+
+        let snapshot = remapScriptSourceSnapshot(script.sourceSnapshot, newChapterId, characterIdMap);
+        let contentHash = script.sourceContentHash;
+        let contextHash = script.sourceContextHash;
+
+        if (!snapshot || !contentHash) {
+          const fresh = await ScriptService.createSourceSnapshot(
+            newChapterId,
+            targetChapter?.title || '',
+            targetChapter?.content || '',
+            projectId
+          );
+          snapshot = fresh;
+          contentHash = fresh.contentHash;
+          contextHash = fresh.contextHash;
+        } else if (!importProject.glossaryProvided) {
+          const restored = await ScriptService.loadSourceContext(projectId);
+          contextHash = restored.contextHash;
+          snapshot = { ...snapshot, contextHash };
+        }
+
+        const scriptResult = await db.run(
+          `INSERT INTO chapter_script (
+            chapter_id, revision, status, document_json, source_snapshot_json,
+            source_content_hash, source_context_hash, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          newChapterId,
+          script.revision,
+          script.status,
+          JSON.stringify(remappedDocument),
+          JSON.stringify(snapshot),
+          contentHash,
+          contextHash
+        );
+
+        const newScriptId = Number(scriptResult.lastID);
+        if (script.sourceId !== undefined && newScriptId) {
+          scriptIdMap.set(Number(script.sourceId), newScriptId);
+        }
+
+        if (availableTables.has('script_change') && newScriptId && Array.isArray(script.changes)) {
+          for (const ch of script.changes) {
+            const changeId = randomUUID();
+            let beforeDoc = ch.beforeJson;
+            let afterDoc = ch.afterJson;
+
+            await db.run(
+              `INSERT INTO script_change (
+                id, script_id, kind, base_revision, candidate_revision,
+                request_key, state, before_json, after_json, source_snapshot_json,
+                generation_info_json, applied_revision, result_json, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              changeId,
+              newScriptId,
+              ch.kind,
+              ch.baseRevision,
+              ch.candidateRevision,
+              ch.requestKey ? `imp_${changeId}_${ch.requestKey}` : changeId,
+              ch.state,
+              beforeDoc,
+              afterDoc,
+              ch.sourceSnapshotJson,
+              ch.generationInfoJson,
+              ch.appliedRevision,
+              ch.resultJson
+            );
+          }
+        }
       }
     }
 
@@ -99,6 +203,8 @@ export const restoreNovaStoryJsonProject = async (
             `Normalized scene still references missing chapter "${scene.sourceChapterId}"`
           );
         }
+
+        const remappedShotSpec = remapShotSpecScriptId(scene.shotSpec, scriptIdMap);
 
         const sceneResult = await db.run(
           `INSERT INTO scene (
@@ -117,14 +223,19 @@ export const restoreNovaStoryJsonProject = async (
           scene.cameraMovement,
           scene.cameraAngle,
           scene.negativePrompt,
-          scene.shotSpec,
+          remappedShotSpec,
           scene.assetStatus,
           scene.taskId,
           scene.assetUrl
         );
 
+        const newSceneId = Number(sceneResult.lastID);
         if (scene.sourceId && sceneResult.lastID !== undefined) {
-          sceneIdMap.set(scene.sourceId, Number(sceneResult.lastID));
+          sceneIdMap.set(scene.sourceId, newSceneId);
+        }
+
+        if (availableTables.has('scene_version') && newSceneId) {
+          await ensureSceneVersionBaseline(newSceneId);
         }
       }
     }
@@ -162,6 +273,8 @@ export const restoreNovaStoryJsonProject = async (
           );
         }
 
+        const remappedCoverageShotSpec = remapShotSpecScriptId(shot.shotSpec, scriptIdMap);
+
         await db.run(
           `INSERT INTO coverage_shot (
             coverage_group_id, slot, shot_size, camera_angle, camera_movement,
@@ -176,7 +289,7 @@ export const restoreNovaStoryJsonProject = async (
           shot.narrativePurpose,
           shot.visualPrompt,
           shot.negativePrompt ?? null,
-          shot.shotSpec ?? null,
+          remappedCoverageShotSpec,
           shot.shotIntent ?? null,
           shot.assetStatus,
           shot.taskId,
@@ -185,6 +298,8 @@ export const restoreNovaStoryJsonProject = async (
       }
     }
 
+    const destinationScripts = await db.all(`SELECT cs.id FROM chapter_script cs JOIN chapter c ON c.id = cs.chapter_id WHERE c.project_id = ?`, projectId);
+    await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, destinationScripts.map((script: any) => script.id));
     await db.exec('COMMIT');
     return await db.get('SELECT * FROM project WHERE id = ?', projectId);
   } catch (error) {

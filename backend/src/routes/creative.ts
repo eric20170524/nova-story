@@ -73,6 +73,11 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
         });
 
         if (apply) {
+          if (!result.content || !result.content.trim()) {
+            return reply.status(502).send({
+              detail: '模型返回空内容，未修改正文',
+            });
+          }
           const chapter = await db.get(
             'SELECT content FROM chapter WHERE id = ?',
             chapterId
@@ -85,20 +90,23 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
                 : '';
           const merged =
             (base ? base + '\n\n' : '') + result.content;
-          await db.run(
-            'UPDATE chapter SET content = ? WHERE id = ?',
-            merged,
-            chapterId
-          );
-          // Condensed must describe full accepted chapter, not only the new fragment
+
           const condensed =
-            await WritingService.regenerateCondensedFromChapter(
+            await WritingService.generateCondensedForContent(
               projectId,
+              merged,
               chapterId
             );
+          await db.run(
+            'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+            merged,
+            condensed,
+            chapterId
+          );
+
           return {
             content: result.content,
-            condensed: condensed || result.condensed,
+            condensed,
             next_plot: result.nextPlot,
           };
         }
@@ -131,7 +139,8 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
         content: await LLMService.generateDraft(body.instructions, contextText),
       };
     } catch (error: any) {
-      return reply.status(500).send({
+      const isBudgetError = String(error?.message || '').includes('需分段或缩小选区');
+      return reply.status(isBudgetError ? 400 : (error?.statusCode === 502 ? 502 : 500)).send({
         detail: `Draft generation failed: ${error?.message || String(error)}`,
       });
     }
@@ -245,17 +254,30 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
         skill,
       });
 
+      if (!content || !content.trim()) {
+        return reply.status(502).send({
+          detail: '技能执行返回空内容，未修改正文',
+        });
+      }
+
       if (body.apply) {
-        await db.run(
-          'UPDATE chapter SET content = ? WHERE id = ?',
+        const condensed = await WritingService.generateCondensedForContent(
+          body.project_id,
           content,
+          body.chapter_id
+        );
+        await db.run(
+          'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+          content,
+          condensed,
           body.chapter_id
         );
       }
 
       return { content, applied: Boolean(body.apply) };
     } catch (error: any) {
-      return reply.status(500).send({
+      const isBudgetError = String(error?.message || '').includes('需分段或缩小选区');
+      return reply.status(isBudgetError ? 400 : (error?.statusCode === 502 ? 502 : 500)).send({
         detail: `Skill execution failed: ${error?.message || String(error)}`,
       });
     }

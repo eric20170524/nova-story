@@ -89,11 +89,21 @@ test('upgrades a legacy main database schema idempotently', async () => {
       );
     }
 
+    const scriptTable = await legacyDatabase.get(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chapter_script'"
+    );
+    assert.ok(scriptTable, 'legacy upgrade did not create chapter_script table');
+
+    const changeTable = await legacyDatabase.get(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'script_change'"
+    );
+    assert.ok(changeTable, 'legacy upgrade did not create script_change table');
+
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 013_project_image_generation
-    assert.equal(migrationCount.count, 13);
+    // 001_core through 014_chapter_script
+    assert.equal(migrationCount.count, 14);
   } finally {
     await legacyDatabase.close();
   }

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const SurfaceSchema = z.enum(['story', 'script', 'director', 'characters', 'settings']);
+export type SurfaceType = z.infer<typeof SurfaceSchema>;
+
 /** Agent OS action ops (DreamWaver-aligned + Nova director tools). Flat chapters — no volume ops. */
 
 export const CreativeOps = z.discriminatedUnion('op', [
@@ -8,14 +11,17 @@ export const CreativeOps = z.discriminatedUnion('op', [
     instructions: z.string(),
     targetChapterId: z.string().optional(),
     targetWordCount: z.number().int().positive().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('ANSWER_QUESTION'),
     answer: z.string(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('QUERY_DATABASE'),
     query: z.string(),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
@@ -24,21 +30,25 @@ export const StructureOps = z.discriminatedUnion('op', [
     op: z.literal('UPDATE_CHAPTER_SUMMARY'),
     chapterId: z.string(),
     newSummary: z.string(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('RENAME_CHAPTER'),
     chapterId: z.string(),
     newTitle: z.string(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('DELETE_CHAPTER'),
     chapterId: z.string(),
     reason: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('MOVE_CHAPTER'),
     chapterId: z.string(),
     positionIndex: z.number().int().min(0),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
@@ -51,6 +61,7 @@ export const ProjectMetaOps = z.discriminatedUnion('op', [
     style: z.string().optional(),
     main_plot: z.string().optional(),
     character_relations: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
@@ -60,6 +71,7 @@ export const SkillOps = z.discriminatedUnion('op', [
     technique: z.enum(['montage', 'close_up', 'sensory']),
     instructions: z.string(),
     targetChapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('ADD_CONFLICT'),
@@ -67,6 +79,7 @@ export const SkillOps = z.discriminatedUnion('op', [
     intensity: z.enum(['low', 'high']).optional(),
     instructions: z.string().optional(),
     targetChapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('REVERSE_PLOT'),
@@ -74,16 +87,19 @@ export const SkillOps = z.discriminatedUnion('op', [
     targetCharacter: z.string().optional(),
     instructions: z.string().optional(),
     targetChapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
 export const WorldOps = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('RUN_CONSISTENCY_CHECK'),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('APPLY_CHAPTER_IMPACT'),
     chapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
@@ -92,25 +108,52 @@ export const DirectorOps = z.discriminatedUnion('op', [
     op: z.literal('GENERATE_TIMELINE'),
     chapterId: z.string().optional(),
     mode: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('ANALYZE_CHAPTER'),
     chapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   /** Read-only: extract characters + traits with evidence from chapter body. Does NOT write DB. */
   z.object({
     op: z.literal('ANALYZE_CHAPTER_CHARACTERS'),
     chapterId: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('GET_CHARACTER'),
     name: z.string(),
+    surface: SurfaceSchema.optional(),
   }),
   z.object({
     op: z.literal('UPDATE_CHARACTER'),
     name: z.string(),
     description: z.string().optional(),
     visual_tags: z.record(z.string(), z.any()).optional(),
+    surface: SurfaceSchema.optional(),
+  }),
+]);
+
+export const ScriptOps = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('GENERATE_SCRIPT_OUTLINE'),
+    chapterId: z.string().optional(),
+    instructions: z.string().optional(),
+    surface: SurfaceSchema.optional(),
+  }),
+  z.object({
+    op: z.literal('GENERATE_SCRIPT'),
+    chapterId: z.string().optional(),
+    instructions: z.string().optional(),
+    surface: SurfaceSchema.optional(),
+  }),
+  z.object({
+    op: z.literal('REWRITE_SCRIPT_SCENE'),
+    chapterId: z.string().optional(),
+    scriptSceneId: z.string().optional(),
+    instructions: z.string().optional(),
+    surface: SurfaceSchema.optional(),
   }),
 ]);
 
@@ -121,6 +164,7 @@ export const AgentActionSchema = z.union([
   SkillOps,
   WorldOps,
   DirectorOps,
+  ScriptOps,
 ]);
 
 export const AgentOsDecisionSchema = z.object({
@@ -153,6 +197,9 @@ export const AgentRouteIntentSchema = z.enum([
   'UPDATE_PROJECT_META',
   'GET_CHARACTER',
   'UPDATE_CHARACTER',
+  'GENERATE_SCRIPT_OUTLINE',
+  'GENERATE_SCRIPT',
+  'REWRITE_SCRIPT_SCENE',
 ]);
 
 export const AgentRouteSchema = z
@@ -183,6 +230,9 @@ export const MUTATING_OPS = new Set([
   'APPLY_CHAPTER_IMPACT',
   'GENERATE_TIMELINE',
   'UPDATE_CHARACTER',
+  'GENERATE_SCRIPT_OUTLINE',
+  'GENERATE_SCRIPT',
+  'REWRITE_SCRIPT_SCENE',
   // ANALYZE_CHAPTER / ANALYZE_CHAPTER_CHARACTERS / ANSWER / QUERY / CONSISTENCY are read-only
 ]);
 
@@ -286,6 +336,27 @@ export function routeToActions(
       if (!name) return [{ op: 'ANSWER_QUESTION', answer: '请提供角色名。' }];
       return [{ op: 'UPDATE_CHARACTER', name, description: focus }];
     }
+    case 'GENERATE_SCRIPT_OUTLINE':
+      return [{
+        op: 'GENERATE_SCRIPT_OUTLINE',
+        chapterId,
+        instructions: focus || msg,
+      }];
+    case 'GENERATE_SCRIPT':
+      return [{
+        op: 'GENERATE_SCRIPT',
+        chapterId,
+        instructions: focus || msg,
+      }];
+    case 'REWRITE_SCRIPT_SCENE': {
+      const sceneId = /^sc_[A-Za-z0-9_-]+$/.test(focus.trim()) ? focus.trim() : undefined;
+      return [{
+        op: 'REWRITE_SCRIPT_SCENE',
+        chapterId,
+        ...(sceneId ? { scriptSceneId: sceneId } : {}),
+        instructions: msg,
+      }];
+    }
     default:
       return [{ op: 'ANSWER_QUESTION', answer: msg }];
   }
@@ -362,7 +433,8 @@ export function cleanCharacterName(raw: string): string {
  */
 export function tryIntentShortcut(
   message: string,
-  preferredOp?: string | null
+  preferredOp?: string | null,
+  routeHint?: string | null
 ): AgentRoute | null {
   if (preferredOp && AgentRouteIntentSchema.safeParse(preferredOp).success) {
     // preferred_op still respects explicit write negation for impact
@@ -388,6 +460,29 @@ export function tryIntentShortcut(
 
   const m = String(message || '').trim();
   if (!m) return null;
+
+  const isScriptRoute = routeHint === 'script';
+
+  // Dedicated script surface shortcuts (SC12)
+  if (isScriptRoute) {
+    if (/改编提纲|生成提纲|短剧提纲|集纲/.test(m)) {
+      return { intent: 'GENERATE_SCRIPT_OUTLINE', chapterScope: 'current', focus: m.slice(0, 400) };
+    }
+    if (/生成剧本|改编剧本|整章剧本|短剧剧本|分场剧本/.test(m)) {
+      return { intent: 'GENERATE_SCRIPT', chapterScope: 'current', focus: m.slice(0, 400) };
+    }
+    const numberedScene = /第\s*[0-9一二三四五六七八九十]+\s*场/.test(m);
+    const sceneRewrite = /改写|重写/.test(m) && /场|分场|剧本/.test(m);
+    if (numberedScene || sceneRewrite) {
+      const sceneMatch = m.match(/第\s*([0-9一二三四五六七八九十]+)\s*场|这一场|当前场|当前分场|选定分场/);
+      const sceneTarget = sceneMatch ? sceneMatch[0] : '';
+      return {
+        intent: 'REWRITE_SCRIPT_SCENE',
+        chapterScope: 'current',
+        focus: sceneTarget,
+      };
+    }
+  }
 
   const writeNegated = hasWriteNegation(m);
   const wantsWrite = hasExplicitWriteIntent(m);
@@ -503,6 +598,15 @@ const OP_ALIASES: Record<string, string> = {
   CHARACTER_ANALYSIS: 'ANALYZE_CHAPTER_CHARACTERS',
   ANSWER: 'ANSWER_QUESTION',
   QUERY: 'QUERY_DATABASE',
+  GENERATE_SCRIPT_OUTLINE: 'GENERATE_SCRIPT_OUTLINE',
+  SCRIPT_OUTLINE: 'GENERATE_SCRIPT_OUTLINE',
+  OUTLINE_GEN: 'GENERATE_SCRIPT_OUTLINE',
+  GENERATE_SCRIPT: 'GENERATE_SCRIPT',
+  SCRIPT_GEN: 'GENERATE_SCRIPT',
+  GEN_SCRIPT: 'GENERATE_SCRIPT',
+  REWRITE_SCRIPT_SCENE: 'REWRITE_SCRIPT_SCENE',
+  SCRIPT_SCENE_REWRITE: 'REWRITE_SCRIPT_SCENE',
+  REWRITE_SCENE: 'REWRITE_SCRIPT_SCENE',
 };
 
 function resolveOpName(raw: unknown): string | null {
@@ -643,6 +747,9 @@ export const AgentExecuteRequestSchema = z.object({
   language: z.string().optional().nullable(),
   actions: z.array(z.record(z.string(), z.any())).min(1),
   apply: z.boolean().default(true),
+  surface: SurfaceSchema.optional().nullable(),
+  script_id: z.number().int().optional().nullable(),
+  script_scene_id: z.string().optional().nullable(),
 });
 
 export const AgentExecuteResultSchema = z.object({

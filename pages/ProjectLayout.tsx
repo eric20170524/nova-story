@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
-import { BookOpen, Users, Clapperboard, Settings, Sparkles, Sun, Moon } from 'lucide-react';
+import { BookOpen, Film, Users, Clapperboard, Settings, Sparkles, Sun, Moon } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
 import { api } from '../services/api';
@@ -52,6 +52,7 @@ export const ProjectLayout: React.FC = () => {
 
           <div className="flex items-center gap-1 sm:gap-2">
             <TabLink to={`/project/${id}/story`} icon={<BookOpen size={16} />} label={t('project_nav.story')} />
+            <TabLink to={`/project/${id}/script`} icon={<Film size={16} />} label={t('project_nav.script')} />
             <TabLink to={`/project/${id}/characters`} icon={<Users size={16} />} label={t('project_nav.characters')} />
             <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />
           </div>

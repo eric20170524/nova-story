@@ -26,6 +26,7 @@ export interface ProjectImportPreview {
     chapter_contents: number;
     characters: number;
     glossary: number;
+    scripts?: number;
     scenes: number;
     coverage_groups: number;
     coverage_shots: number;

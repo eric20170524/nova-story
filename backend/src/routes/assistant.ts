@@ -27,6 +27,9 @@ export const assistantRoutes: FastifyPluginAsync = async (app) => {
       chapterId: input.chapter_id,
       language: input.language,
       apply: input.apply !== false,
+      surface: input.surface,
+      scriptId: input.script_id,
+      scriptSceneId: input.script_scene_id,
     });
     return AgentExecuteResultSchema.parse({ results });
   });

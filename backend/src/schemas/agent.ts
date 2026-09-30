@@ -6,8 +6,12 @@ export const AgentContextSchema = z.object({
   scene_id: z.string().optional().nullable(),
   selected_text: z.string().optional().nullable(),
   language: z.string().default('zh').optional().nullable(),
-  /** Current app route hint, e.g. story | director | characters */
+  /** Current app route hint, e.g. story | script | director | characters */
   route: z.string().optional().nullable(),
+  /** Surface context: story | script | director | characters | settings */
+  surface: z.enum(['story', 'script', 'director', 'characters', 'settings']).optional().nullable(),
+  script_id: z.number().int().optional().nullable(),
+  script_scene_id: z.string().optional().nullable(),
   /**
    * UI chip preferred intent — skips fragile free-form planning.
    * Must match AgentRouteIntentSchema values when set.

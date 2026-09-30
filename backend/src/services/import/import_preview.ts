@@ -31,6 +31,7 @@ export interface ProjectImportPreview {
     chapter_contents: number;
     characters: number;
     glossary: number;
+    scripts?: number;
     scenes: number;
     coverage_groups: number;
     coverage_shots: number;
@@ -72,6 +73,7 @@ const previewFromDraft = (draft: NovelImportDraft): ProjectImportPreview => {
       chapter_contents: chapters.filter((chapter) => chapter.has_content).length,
       characters: draft.characters.length,
       glossary: draft.glossary.length,
+      scripts: 0,
       scenes: 0,
       coverage_groups: 0,
       coverage_shots: 0,
@@ -106,7 +108,8 @@ const previewFromJson = (
       chapter_summaries: chapters.filter((chapter) => Boolean(chapter.summary)).length,
       chapter_contents: chapters.filter((chapter) => chapter.has_content).length,
       characters: project.characters.length,
-      glossary: 0,
+      glossary: project.glossary.length,
+      scripts: project.scripts ? project.scripts.length : 0,
       scenes: project.scenes.length,
       coverage_groups: project.coverageGroups.length,
       coverage_shots: project.coverageShots.length,

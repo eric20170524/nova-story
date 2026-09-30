@@ -47,6 +47,12 @@ const describeAction = (action: AgentAction, t: (k: string, f?: string) => strin
       return `${t('agent.op_get_char', 'Get character')}: ${action.name}`;
     case 'UPDATE_CHARACTER':
       return `${t('agent.op_update_char', 'Update character')}: ${action.name}`;
+    case 'GENERATE_SCRIPT_OUTLINE':
+      return t('agent.op_script_outline', 'Generate adaptation outline');
+    case 'GENERATE_SCRIPT':
+      return t('agent.op_script_gen', 'Generate structured screenplay');
+    case 'REWRITE_SCRIPT_SCENE':
+      return `${t('agent.op_script_rewrite', 'Rewrite screenplay scene')}${action.scriptSceneId ? ` (${action.scriptSceneId})` : ''}`;
     case 'ANSWER_QUESTION':
       return t('agent.op_answer', 'Answer');
     case 'QUERY_DATABASE':

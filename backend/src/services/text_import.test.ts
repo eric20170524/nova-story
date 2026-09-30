@@ -203,9 +203,11 @@ test('imports qiongming-style text through the HTTP route and persists its chapt
   assert.deepEqual(exportedProject.summary, {
     chapters: 3,
     characters: 1,
+    scripts: 0,
     scenes: 1,
     coverage_groups: 1,
-    coverage_shots: 1
+    coverage_shots: 1,
+    glossary: 0
   });
 
   const boundary = '--------------------------boundary123';

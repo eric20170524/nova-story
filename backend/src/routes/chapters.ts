@@ -100,6 +100,15 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
       await db.run(
+        `DELETE FROM script_change
+         WHERE script_id IN (
+           SELECT id FROM chapter_script WHERE chapter_id = ?
+         )`,
+        id
+      );
+      await db.run('DELETE FROM chapter_script WHERE chapter_id = ?', id);
+
+      await db.run(
         `DELETE FROM coverage_shot
          WHERE coverage_group_id IN (
            SELECT coverage_group.id
@@ -112,6 +121,13 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       await db.run(
         `DELETE FROM coverage_group
          WHERE source_scene_id IN (
+           SELECT id FROM scene WHERE chapter_id = ?
+         )`,
+        id
+      );
+      await db.run(
+        `DELETE FROM scene_version
+         WHERE scene_id IN (
            SELECT id FROM scene WHERE chapter_id = ?
          )`,
         id

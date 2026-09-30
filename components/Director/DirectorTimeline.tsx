@@ -47,12 +47,14 @@ interface DirectorTimelineProps {
   onPromoteVideoAsset?: (assetId: number) => void;
   onReprocessVideoAsset?: (assetId: number) => void;
   onCancelVideoTask?: (taskId: string) => void;
+  chapterScript?: { id: number; revision: number; status: string } | null;
 }
 
 export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   timeline,
   loading,
   selectedChapterId,
+  chapterScript,
   onGenerateTimeline,
   onGenerateNarration,
   generatingNarration,
@@ -256,6 +258,52 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                               <span className="text-[10px] bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-400 px-1.5 py-0.5 rounded-md font-mono font-medium">
                                 {scene.duration}s
                               </span>
+                              {(() => {
+                                let spec: any = null;
+                                try {
+                                  spec = typeof scene.shot_spec === 'string' ? JSON.parse(scene.shot_spec) : scene.shot_spec;
+                                } catch {}
+                                const source = spec?.source;
+                                if (!source) return null;
+
+                                if (source.type === 'script') {
+                                  const isOutdated = Boolean(
+                                    chapterScript?.revision &&
+                                    source.script_revision &&
+                                    source.script_revision < chapterScript.revision
+                                  );
+                                  return (
+                                    <span
+                                      className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-medium flex items-center gap-1 ${
+                                        isOutdated
+                                          ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60'
+                                          : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60'
+                                      }`}
+                                      title={
+                                        isOutdated
+                                          ? `剧本已更新至 r${chapterScript?.revision}，本镜头来自旧版本 r${source.script_revision}，来源已过期`
+                                          : `来自剧本 r${source.script_revision} (${source.script_scene_id || '分场'})`
+                                      }
+                                    >
+                                      {isOutdated && <AlertCircle size={10} className="text-amber-600 dark:text-amber-400" />}
+                                      <span>
+                                        {isOutdated
+                                          ? `来源过期 r${source.script_revision} < r${chapterScript?.revision}`
+                                          : `剧本 r${source.script_revision}`}
+                                      </span>
+                                    </span>
+                                  );
+                                }
+
+                                if (source.type === 'chapter') {
+                                  return (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                                      小说直出
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                               {/* Version switcher for A/B testing copy + image */}
                               <div className="flex items-center gap-1">
                                 <select

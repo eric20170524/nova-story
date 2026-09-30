@@ -66,6 +66,12 @@ const getOpTitle = (op: string, t: (k: string, f?: string) => string): string =>
       return t('agent.op_analyze_chars', '本章角色与性格');
     case 'DRAFT_CONTENT':
       return t('agent.op_draft', '正文生成/续写');
+    case 'GENERATE_SCRIPT_OUTLINE':
+      return t('agent.op_script_outline', '短剧改编提纲生成');
+    case 'GENERATE_SCRIPT':
+      return t('agent.op_script_gen', '短剧分场剧本生成');
+    case 'REWRITE_SCRIPT_SCENE':
+      return t('agent.op_script_rewrite', '短剧分场改写');
     default:
       return t(`agent.op_${op.toLowerCase()}`, op);
   }
@@ -527,6 +533,45 @@ const SingleResultCard: React.FC<{
             ))
           )}
         </div>
+      </div>
+    );
+  }
+
+  // 6. Script Candidate Generation
+  if (
+    item.op === 'GENERATE_SCRIPT_OUTLINE' ||
+    item.op === 'GENERATE_SCRIPT' ||
+    item.op === 'REWRITE_SCRIPT_SCENE'
+  ) {
+    const isSuccess = item.status === 'success';
+    return (
+      <div
+        className={`p-3.5 rounded-xl border text-xs shadow-xs space-y-2 ${
+          isSuccess
+            ? 'bg-indigo-50/70 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-500/30'
+            : 'bg-red-50/70 dark:bg-red-950/20 border-red-200 dark:border-red-500/30'
+        }`}
+      >
+        <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
+          {isSuccess ? (
+            <CheckCircle2 size={16} className="text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+          ) : (
+            <AlertTriangle size={16} className="text-red-600 dark:text-red-400 flex-shrink-0" />
+          )}
+          <span>{getOpTitle(item.op, t)}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-500 font-mono">
+            {item.status}
+          </span>
+        </div>
+        <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+          {item.message || (isSuccess ? '已生成待审核候选' : '生成失败')}
+        </p>
+        {isSuccess && (item.data as any)?.candidateId && (
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-white/70 dark:bg-slate-900/60 p-2 rounded-lg border border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between">
+            <span>候选 ID: <code className="font-mono text-indigo-600 dark:text-indigo-400">{(item.data as any).candidateId}</code></span>
+            <span>请前往“短剧剧本”页面审核采纳</span>
+          </div>
+        )}
       </div>
     );
   }

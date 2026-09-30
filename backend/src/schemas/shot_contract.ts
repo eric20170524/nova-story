@@ -24,6 +24,16 @@ export type SubjectScale = (typeof SUBJECT_SCALES)[number];
 export const ShotIntentSchema = z.enum(SHOT_INTENTS);
 export const SubjectScaleSchema = z.enum(SUBJECT_SCALES);
 
+export const ShotSourceReferenceSchema = z.object({
+  type: z.enum(['chapter', 'script']),
+  script_id: z.number().int().optional().nullable(),
+  script_revision: z.number().int().optional().nullable(),
+  script_scene_id: z.string().optional().nullable(),
+  block_ids: z.array(z.string()).optional().nullable(),
+});
+
+export type ShotSourceReference = z.infer<typeof ShotSourceReferenceSchema>;
+
 /**
  * Structured beat / shot contract written to scene.shot_spec.
  * visual_prompt is intentionally NOT required here — compiler fills it.
@@ -46,6 +56,7 @@ export const ShotContractFieldsSchema = z.object({
   subject_scale: SubjectScaleSchema.optional(),
   uniqueness_key: z.string().trim().min(2).max(240).optional(),
   must_not: z.array(z.string().trim().min(1).max(120)).optional().default([]),
+  source: ShotSourceReferenceSchema.optional().nullable(),
 });
 
 export type ShotContractFields = z.infer<typeof ShotContractFieldsSchema>;
@@ -73,6 +84,7 @@ export const packShotSpec = (shot: {
   uniqueness_key?: string | null;
   must_not?: string[] | null;
   shot_type?: string | null;
+  source?: ShotSourceReference | null;
 }): string => {
   const location = String(shot.location || '').trim();
   const primary_action = String(shot.primary_action || '').trim();
@@ -88,6 +100,16 @@ export const packShotSpec = (shot: {
       ? buildUniquenessKey({ location, primary_action, key_props })
       : '');
 
+  const source = shot.source
+    ? {
+        type: shot.source.type,
+        script_id: shot.source.script_id ?? null,
+        script_revision: shot.source.script_revision ?? null,
+        script_scene_id: shot.source.script_scene_id ?? null,
+        block_ids: Array.isArray(shot.source.block_ids) ? shot.source.block_ids : null,
+      }
+    : null;
+
   const payload = {
     shot_intent: shot.shot_intent || null,
     location: location || null,
@@ -99,6 +121,7 @@ export const packShotSpec = (shot: {
     uniqueness_key: uniqueness_key || null,
     must_not: Array.isArray(shot.must_not) ? shot.must_not : [],
     shot_type: shot.shot_type || null,
+    source,
   };
   return JSON.stringify(payload);
 };

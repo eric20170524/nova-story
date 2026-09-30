@@ -7,6 +7,8 @@ import { ProjectImportInputError } from '../services/import/import_file';
 import { commitProjectImportFile } from '../services/import/project_import';
 import { DEFAULT_PROJECT_IMAGE_SETTINGS, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
 import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
+import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
+import { remapCopiedScriptChanges } from '../services/script_copy';
 
 // Dummy implementation of current_user auth
 // Real implementation should parse JWT/headers as needed
@@ -86,7 +88,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
     const availableTables = new Set(
       (
         await Promise.all(
-          ['character', 'scene', 'coverage_group', 'coverage_shot'].map(async (name) => ({
+          ['character', 'scene', 'coverage_group', 'coverage_shot', 'chapter_script', 'script_change', 'glossary'].map(async (name) => ({
             name,
             exists: await tableExists(name)
           }))
@@ -96,7 +98,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         .map(({ name }) => name)
     );
 
-    const [chapters, rawCharacters, rawScenes, coverageGroups, coverageShots] = await Promise.all([
+    const [chapters, rawCharacters, rawScenes, coverageGroups, coverageShots, rawScripts, glossary] = await Promise.all([
       db.all(
         'SELECT * FROM chapter WHERE project_id = ? ORDER BY "index" ASC, id ASC',
         id
@@ -142,6 +144,22 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                       coverage_shot.id ASC`,
             id
           )
+        : Promise.resolve([]),
+      availableTables.has('chapter_script')
+        ? db.all(
+            `SELECT cs.*
+             FROM chapter_script cs
+             INNER JOIN chapter c ON c.id = cs.chapter_id
+             WHERE c.project_id = ?
+             ORDER BY c."index" ASC, cs.id ASC`,
+            id
+          )
+        : Promise.resolve([]),
+      availableTables.has('glossary')
+        ? db.all(
+            'SELECT term, definition, category FROM glossary WHERE project_id = ? ORDER BY id ASC',
+            id
+          )
         : Promise.resolve([])
     ]);
 
@@ -154,16 +172,58 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       shot_spec: parseStoredJson(scene.shot_spec)
     }));
 
+    const scriptChanges = availableTables.has('script_change') && rawScripts.length > 0
+      ? await db.all(
+          `SELECT sc.*
+           FROM script_change sc
+           INNER JOIN chapter_script cs ON cs.id = sc.script_id
+           INNER JOIN chapter c ON c.id = cs.chapter_id
+           WHERE c.project_id = ?
+           ORDER BY cs.id ASC, sc.created_at ASC`,
+          id
+        )
+      : [];
+
+    const scripts = rawScripts.map((s: any) => ({
+      id: s.id,
+      chapter_id: s.chapter_id,
+      revision: s.revision,
+      status: s.status,
+      document: parseStoredJson(s.document_json),
+      source_snapshot: parseStoredJson(s.source_snapshot_json),
+      source_content_hash: s.source_content_hash,
+      source_context_hash: s.source_context_hash,
+      changes: scriptChanges
+        .filter((c: any) => c.script_id === s.id)
+        .map((c: any) => ({
+          id: c.id,
+          kind: c.kind,
+          base_revision: c.base_revision,
+          candidate_revision: c.candidate_revision,
+          request_key: c.request_key,
+          state: c.state,
+          before_json: parseStoredJson(c.before_json),
+          after_json: parseStoredJson(c.after_json),
+          source_snapshot_json: parseStoredJson(c.source_snapshot_json),
+          generation_info_json: parseStoredJson(c.generation_info_json),
+          applied_revision: c.applied_revision,
+          result_json: parseStoredJson(c.result_json),
+          created_at: c.created_at,
+          updated_at: c.updated_at,
+        }))
+    }));
+
     const exportData = {
       format: 'novastory-project',
-      version: 1,
+      version: 2,
       exported_at: new Date().toISOString(),
       project: {
         ...project,
         settings: parseStoredJson(project.settings)
       },
       screenplay: {
-        chapters
+        chapters,
+        scripts
       },
       character_center: {
         characters
@@ -173,12 +233,15 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         coverage_groups: coverageGroups,
         coverage_shots: coverageShots
       },
+      glossary,
       summary: {
         chapters: chapters.length,
         characters: characters.length,
+        scripts: scripts.length,
         scenes: scenes.length,
         coverage_groups: coverageGroups.length,
-        coverage_shots: coverageShots.length
+        coverage_shots: coverageShots.length,
+        glossary: glossary.length
       }
     };
 
@@ -257,6 +320,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      const characterIdMap = new Map<number, number>();
       const characters = await db.all(
         'SELECT * FROM character WHERE project_id = ? ORDER BY id ASC',
         id
@@ -275,6 +339,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         );
         const newCharId = charRes.lastID;
         if (newCharId !== undefined) {
+          characterIdMap.set(character.id, Number(newCharId));
           const charVersions = await db.all(
             'SELECT * FROM character_version WHERE character_id = ? ORDER BY version ASC',
             character.id
@@ -293,6 +358,92 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      const scriptIdMap = new Map<number, number>();
+      const projectAvailableTables = new Set(
+        (
+          await Promise.all(
+            ['chapter_script', 'script_change'].map(async (name) => ({
+              name,
+              exists: await tableExists(name)
+            }))
+          )
+        )
+          .filter(({ exists }) => exists)
+          .map(({ name }) => name)
+      );
+
+      if (projectAvailableTables.has('chapter_script')) {
+        const sourceScripts = await db.all(
+          `SELECT cs.*
+           FROM chapter_script cs
+           INNER JOIN chapter c ON c.id = cs.chapter_id
+           WHERE c.project_id = ?`,
+          id
+        );
+
+        for (const script of sourceScripts) {
+          const newChapterId = chapterIdMap.get(script.chapter_id);
+          if (!newChapterId) continue;
+
+          let document = parseStoredJson(script.document_json);
+          document = remapScriptDocumentCharacters(document, characterIdMap);
+
+          const snapshot = remapScriptSourceSnapshot(parseStoredJson(script.source_snapshot_json), newChapterId, characterIdMap);
+
+          const scriptRes = await db.run(
+            `INSERT INTO chapter_script (
+              chapter_id, revision, status, document_json, source_snapshot_json,
+              source_content_hash, source_context_hash, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            newChapterId,
+            script.revision,
+            script.status,
+            JSON.stringify(document),
+            JSON.stringify(snapshot),
+            script.source_content_hash,
+            script.source_context_hash
+          );
+          const newScriptId = Number(scriptRes.lastID);
+          if (newScriptId) {
+            scriptIdMap.set(script.id, newScriptId);
+          }
+
+          if (projectAvailableTables.has('script_change') && newScriptId) {
+            const changes = await db.all(
+              'SELECT * FROM script_change WHERE script_id = ? ORDER BY created_at ASC',
+              script.id
+            );
+            for (const ch of changes) {
+              const newChangeId = randomUUID();
+              let beforeDoc = parseStoredJson(ch.before_json);
+              let afterDoc = parseStoredJson(ch.after_json);
+
+              await db.run(
+                `INSERT INTO script_change (
+                  id, script_id, kind, base_revision, candidate_revision,
+                  request_key, state, before_json, after_json, source_snapshot_json,
+                  generation_info_json, applied_revision, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                newChangeId,
+                newScriptId,
+                ch.kind,
+                ch.base_revision,
+                ch.candidate_revision,
+                ch.request_key ? `dup_${newChangeId}_${ch.request_key}` : newChangeId,
+                ch.state,
+                beforeDoc ? JSON.stringify(beforeDoc) : ch.before_json,
+                afterDoc ? JSON.stringify(afterDoc) : ch.after_json,
+                ch.source_snapshot_json,
+                ch.generation_info_json,
+                ch.applied_revision,
+                ch.result_json
+              );
+            }
+          }
+        }
+      }
+
+      const sceneIdMap = new Map<string, number>();
       let sceneCount = 0;
       for (const [sourceChapterId, newChapterId] of chapterIdMap.entries()) {
         const scenes = await db.all(
@@ -300,6 +451,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           sourceChapterId
         );
         for (const scene of scenes) {
+          const remappedShotSpec = remapShotSpecScriptId(scene.shot_spec, scriptIdMap);
           const sceneRes = await db.run(
             `INSERT INTO scene (
               chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration,
@@ -317,7 +469,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
             scene.camera_movement ?? null,
             scene.camera_angle ?? null,
             scene.negative_prompt ?? null,
-            scene.shot_spec ?? null,
+            remappedShotSpec,
             scene.asset_status || 'idle',
             scene.asset_url ?? null,
             scene.task_id ?? null,
@@ -327,6 +479,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           sceneCount += 1;
 
           if (newSceneId !== undefined) {
+            sceneIdMap.set(String(scene.id), Number(newSceneId));
             const sceneVersions = await db.all(
               'SELECT * FROM scene_version WHERE scene_id = ? ORDER BY version ASC',
               scene.id
@@ -374,6 +527,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                   cg.id
                 );
                 for (const shot of shots) {
+                  const remappedCoverageShotSpec = remapShotSpecScriptId(shot.shot_spec, scriptIdMap);
                   await db.run(
                     `INSERT INTO coverage_shot (
                       coverage_group_id, slot, shot_size, camera_angle, camera_movement,
@@ -388,7 +542,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                     shot.narrative_purpose ?? null,
                     shot.visual_prompt ?? null,
                     shot.negative_prompt ?? null,
-                    shot.shot_spec ?? null,
+                    remappedCoverageShotSpec,
                     shot.shot_intent ?? null,
                     shot.asset_status || 'idle',
                     shot.task_id ?? null,
@@ -401,12 +555,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, [...scriptIdMap.values()]);
       await db.exec('COMMIT');
       return reply.status(201).send({
         project: await db.get('SELECT * FROM project WHERE id = ?', newProjectId),
         counts: {
           chapters: chapters.length,
           characters: characters.length,
+          scripts: scriptIdMap.size,
           scenes: sceneCount,
           glossary: glossaryItems.length
         }
@@ -675,6 +831,23 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
 
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      await db.run(
+        `DELETE FROM script_change
+         WHERE script_id IN (
+           SELECT cs.id
+           FROM chapter_script cs
+           INNER JOIN chapter c ON c.id = cs.chapter_id
+           WHERE c.project_id = ?
+         )`,
+        id
+      );
+      await db.run(
+        `DELETE FROM chapter_script
+         WHERE chapter_id IN (
+           SELECT id FROM chapter WHERE project_id = ?
+         )`,
+        id
+      );
       await db.run(
         `DELETE FROM coverage_shot
          WHERE coverage_group_id IN (

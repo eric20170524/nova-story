@@ -25,6 +25,8 @@ import {
 } from '../constants';
 
 const LOCAL_OLLAMA_MODEL = 'novastory-qwen3:8b';
+const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
+const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
@@ -269,6 +271,24 @@ export const SettingsPage: React.FC = () => {
     });
   };
 
+  const applyGemmaRemote = () => {
+    setSettings((prev: any) => ({
+      ...prev,
+      llm_provider: 'openai',
+      llm_model: GEMMA4_REMOTE_MODEL,
+      openai_base_url: GEMMA4_REMOTE_BASE_URL,
+      llm: {
+        ...(prev.llm || {}),
+        provider: 'openai',
+        model: GEMMA4_REMOTE_MODEL,
+        base_url: GEMMA4_REMOTE_BASE_URL,
+        api_key: prev.llm?.api_key === 'ollama' ? '' : (prev.llm?.api_key || ''),
+        has_api_key: ['ollama', 'local_llm'].includes(prev.llm?.provider || prev.llm_provider)
+          ? false : Boolean(prev.llm?.has_api_key),
+      },
+    }));
+  };
+
   const handleLLMChange = (key: string, value: any) => {
     setSettings((prev: any) => {
       const currentLLM = prev.llm || {};
@@ -479,13 +499,17 @@ export const SettingsPage: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
-                      (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                      (settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
+                        ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
+                        : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
                         ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'
                         : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
                         ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
                         : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300'
                     }`}>
-                      {((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
+                      {(settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
+                        ? 'GEMMA 4 31B'
+                        : ((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
                         ? '离线模式'
                         : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
                     </span>
@@ -512,7 +536,7 @@ export const SettingsPage: React.FC = () => {
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                       模型提供方 (Provider)
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <button
                         type="button"
                         onClick={() => handleLLMChange('provider', 'gemini')}
@@ -531,12 +555,26 @@ export const SettingsPage: React.FC = () => {
                         onClick={() => handleLLMChange('provider', 'openai')}
                         className={`p-3.5 rounded-xl border text-left transition-all ${
                           (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                          && (settings.llm?.model || settings.llm_model) !== GEMMA4_REMOTE_MODEL
                             ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
                             : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
                         }`}
                       >
                         <div className="text-sm font-bold mb-0.5">OpenAI API 兼容</div>
                         <div className="text-xs opacity-75">支持 DeepSeek, Claude, ChatGPT 或自建转发中转</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={applyGemmaRemote}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          (settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">远端 Gemma 4 31B</div>
+                        <div className="text-xs opacity-75">算力机 GPU 3，OpenAI 兼容接口，模型名 gemma-4-31b</div>
                       </button>
 
                       <button

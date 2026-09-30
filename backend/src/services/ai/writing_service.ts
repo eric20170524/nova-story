@@ -33,6 +33,7 @@ const BUDGET = {
   skillContext: 1800,
   existingContent: 1500,
   skillContent: 3500,
+  rewriteContent: 6000,
   chapterSummary: 300,
   metaContent: 6000,
   outlinesTotal: 4000,
@@ -650,6 +651,9 @@ export class WritingService {
       bundle.overrides
     );
     const creativeConstraints = buildCreativeConstraints(bundle.bible);
+    const contentForm = '短篇小说（小说叙述与对话）';
+    const formatRules =
+      '小说叙述体规范：直接输出小说正文，用连贯叙述与生动对话展开情节，禁止输出【场景】【画面】【动作指令】【视觉特效】等分镜/剧本标签。直接输出正文，不要输出标题，不要输出任何解释性文字或代码块。';
 
     const memoryPrompt = [
       creativeConstraints ? `[创作约束]\n${creativeConstraints}` : '',
@@ -669,11 +673,16 @@ export class WritingService {
           : String(chapter.content || '');
       // Rewrite needs more of the source body; append only needs the tail
       const budget = rewriteMode
-        ? Math.max(BUDGET.existingContent, 6000)
+        ? Math.max(BUDGET.existingContent, BUDGET.rewriteContent)
         : BUDGET.existingContent;
+      if (rewriteMode && source.length > budget) {
+        throw new Error(
+          `原文字数(${source.length})超出全文重写预算(${budget}字)，需分段或缩小选区`
+        );
+      }
       existing = source
         ? rewriteMode
-          ? source.slice(0, budget)
+          ? source
           : source.slice(-budget)
         : '';
     }
@@ -702,7 +711,12 @@ export class WritingService {
         ? '(原文为空 — 请按章纲撰写完整小说正文)'
         : '(空 — 请从章纲开写)';
 
+    const writingModeNote = rewriteMode
+      ? '【模式=全文重写】只输出完整新小说正文，不要“续写”、不要保留【画面】【动作指令】等标签。'
+      : '【模式=续写】在已有正文之后自然接写。';
+
     const prompt = formatPrompt(getPrompt('writing_chapter_gen', bundle.overrides), {
+      contentForm,
       title: bundle.bible.title,
       genre: bundle.bible.genre || '',
       style: bundle.bible.style || '',
@@ -721,9 +735,8 @@ export class WritingService {
       nextChapterConstraint: nextConstraint,
       instructions: options.instructions,
       targetWordCount: options.targetWordCount || (rewriteMode ? 1200 : 800),
-      writingModeNote: rewriteMode
-        ? '【模式=全文重写】只输出完整新正文，不要“续写”、不要保留【画面】【动作指令】等标签。'
-        : '【模式=续写】在已有正文之后自然接写。',
+      formatRules,
+      writingModeNote,
     });
 
     const provider = LLMService.getProvider();
@@ -788,6 +801,30 @@ export class WritingService {
   }
 
   /**
+   * Compute condensed content from raw text in memory without persisting to DB.
+   */
+  static async generateCondensedForContent(
+    projectId: number,
+    content: string,
+    chapterId?: string | null
+  ): Promise<string> {
+    if (!content || !content.trim()) throw new Error('压缩摘要生成失败：正文为空');
+    const bundle = await loadWritingBundle(projectId, chapterId);
+    const metaPrompt = formatPrompt(
+      getPrompt('writing_metadata_gen', bundle.overrides),
+      { content: head(String(content), BUDGET.metaContent) }
+    );
+    const meta = await LLMService.generateStructuredWithRetry(
+      metaPrompt,
+      MetadataSchema
+    );
+    if (!meta?.condensed?.trim()) {
+      throw Object.assign(new Error('压缩摘要生成失败，未修改正文'), { statusCode: 502 });
+    }
+    return meta.condensed;
+  }
+
+  /**
    * After content is accepted into the chapter, recompute condensed from full text.
    */
   static async regenerateCondensedFromChapter(
@@ -800,18 +837,14 @@ export class WritingService {
       projectId
     );
     if (!chapter?.content) return undefined;
-    const bundle = await loadWritingBundle(projectId, chapterId);
-    const metaPrompt = formatPrompt(
-      getPrompt('writing_metadata_gen', bundle.overrides),
-      { content: head(String(chapter.content), BUDGET.metaContent) }
+    const condensed = await WritingService.generateCondensedForContent(
+      projectId,
+      chapter.content,
+      chapterId
     );
-    const meta = await LLMService.generateStructuredWithRetry(
-      metaPrompt,
-      MetadataSchema
-    );
-    if (meta?.condensed) {
-      await WritingService.applyMetadata(chapterId, meta.condensed);
-      return meta.condensed;
+    if (condensed) {
+      await WritingService.applyMetadata(chapterId, condensed);
+      return condensed;
     }
     return undefined;
   }
@@ -1041,8 +1074,9 @@ export class WritingService {
   static async executeSkill(options: {
     projectId: number;
     chapterId: string;
+    contentOverride?: string | null;
     skill:
-      | { op: 'CINEMATIC_REWRITE'; technique: string; instructions: string }
+      | { op: 'CINEMATIC_REWRITE'; technique: string; instructions?: string }
       | {
           op: 'ADD_CONFLICT';
           conflictType: string;
@@ -1060,63 +1094,111 @@ export class WritingService {
     const chapter = bundle.chapters.find((c) => c.id === options.chapterId);
     if (!chapter) throw new Error('Chapter not found');
 
+    const rawContent =
+      options.contentOverride != null
+        ? String(options.contentOverride)
+        : String(chapter.content || '');
+
+    if (rawContent.length > BUDGET.skillContent) {
+      throw new Error(
+        `原文字数(${rawContent.length})超出单次技能处理预算(${BUDGET.skillContent}字)，需分段或缩小选区`
+      );
+    }
+    const content = rawContent.trim()
+      ? rawContent
+      : '(原文为空，请根据章纲撰写完整正文)';
+
     const creativeConstraints = buildCreativeConstraints(bundle.bible);
+    const nextConstraint = buildNextChapterConstraint(
+      bundle.layered?.nextChapterSummary,
+      bundle.overrides
+    );
+    const contentForm = '短篇小说（小说叙述与对话）';
+
     const contextSummary = head(
       [
         `Title: ${bundle.bible.title}`,
-        `Genre: ${bundle.bible.genre || ''}`,
+        bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
+        bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
+        bundle.bible.main_plot
+          ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
+          : '',
         creativeConstraints,
         bundle.supplementalContext ? `[补充资料]\n${bundle.supplementalContext}` : '',
+        bundle.characters.length
+          ? `Characters: ${budgetedCharacters(bundle.characters)}`
+          : '',
+        bundle.glossary.length
+          ? `Glossary: ${budgetedGlossary(bundle.glossary)}`
+          : '',
         `Chapter: ${chapter.title}`,
-        `Summary: ${chapter.summary || ''}`,
+        chapter.summary ? `Summary: ${chapter.summary}` : '',
       ]
         .filter(Boolean)
         .join('\n'),
       BUDGET.skillContext
     );
-    const content = head(
-      String(chapter.content || '(No content, write from summary)'),
-      BUDGET.skillContent
-    );
 
     let prompt = '';
     const skill = options.skill;
+    const userInstructions =
+      skill.instructions && skill.instructions.trim()
+        ? skill.instructions.trim()
+        : '保持剧情连贯与人物设定';
 
     if (skill.op === 'CINEMATIC_REWRITE') {
       const techniqueInstr: Record<string, string> = {
-        montage: '蒙太奇：快节奏转场，跳过流水账，聚焦变化与对比。',
-        close_up: '特写：微表情、生理反应、关键物件细节。',
-        sensory: '感官沉浸：视听嗅触与温度氛围。',
+        montage:
+          'Use Montage (蒙太奇). Fast-paced transitions, skip boring parts, focus on change and contrast.',
+        close_up:
+          "Use Close-up (特写). Focus on micro-expressions, physical reactions, and specific details. 'Show, Don't Tell'.",
+        sensory:
+          'Use Sensory Immersion (感官沉浸). Engage sight, sound, smell, touch, and temperature.',
       };
       prompt = formatPrompt(getPrompt('skill_cinematic', bundle.overrides), {
         technique: skill.technique,
-        techniqueInstructions: techniqueInstr[skill.technique] || skill.technique,
-        instructions: skill.instructions,
+        techniqueInstructions:
+          techniqueInstr[skill.technique] || skill.technique,
+        instructions: userInstructions,
+        contentForm,
         context: contextSummary,
+        nextChapterConstraint: nextConstraint,
         content,
       });
     } else if (skill.op === 'ADD_CONFLICT') {
       const typeInstr: Record<string, string> = {
-        variable_intrusion: '变量侵入：第三方/意外事件打破平衡。',
-        extreme_pressure: '极限施压：时间/生存/两难逼迫立刻行动。',
+        variable_intrusion:
+          'Variable Intrusion (变量侵入). Introduce a third party or unexpected event that disrupts the current balance.',
+        extreme_pressure:
+          'Extreme Pressure (极限施压). Add a time limit, survival threat, or dilemma that forces immediate action.',
       };
       prompt = formatPrompt(getPrompt('skill_conflict', bundle.overrides), {
         type: skill.conflictType,
-        typeInstructions: typeInstr[skill.conflictType] || skill.conflictType,
+        typeInstructions:
+          typeInstr[skill.conflictType] || skill.conflictType,
         intensity: skill.intensity,
+        instructions: userInstructions,
+        contentForm,
         context: contextSummary,
+        nextChapterConstraint: nextConstraint,
         content,
       });
     } else {
       const typeInstr: Record<string, string> = {
-        motive_switch: '动机偷梁换柱：行为相同，隐藏动机相反。',
-        character_peel: '人设剥洋葱：揭示与标签矛盾的隐藏层。',
+        motive_switch:
+          'Motive Switch (动机偷梁换柱). The action remains the same, but the hidden motive is revealed to be the opposite of what was expected.',
+        character_peel:
+          'Character Peel (人设剥洋葱). Reveal a hidden layer of the character that contradicts their established label.',
       };
       prompt = formatPrompt(getPrompt('skill_reversal', bundle.overrides), {
         type: skill.reversalType,
-        typeInstructions: typeInstr[skill.reversalType] || skill.reversalType,
-        target: skill.targetCharacter || '主角或关键配角',
+        typeInstructions:
+          typeInstr[skill.reversalType] || skill.reversalType,
+        target: skill.targetCharacter || 'Main Character or Antagonist',
+        instructions: userInstructions,
+        contentForm,
         context: contextSummary,
+        nextChapterConstraint: nextConstraint,
         content,
       });
     }

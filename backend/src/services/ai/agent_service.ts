@@ -36,11 +36,17 @@ export class AgentService {
         // ANSWER_QUESTION with placeholder: expand via free-text if answer is just the user message
         actions = await this.hydrateAnswerQuestions(actions, request);
 
+        const surface =
+          request.context.surface ||
+          (request.context.route === 'script' ? 'script' : undefined);
         const results = await AgentExecutor.executeAll(actions, {
           projectId,
           chapterId: request.context.chapter_id,
           language: request.context.language,
           apply: true,
+          surface: surface as any,
+          scriptId: request.context.script_id,
+          scriptSceneId: request.context.script_scene_id,
         });
         autoResults = results;
         autoNotes = results.map(
@@ -195,7 +201,7 @@ export class AgentService {
       userMessage: request.message,
       chapterId: request.context.chapter_id,
       chapterTitle,
-      routeHint: request.context.route,
+      routeHint: request.context.route || request.context.surface || null,
       preferredOp,
       historyTail: history,
       overrides: overrides as any,

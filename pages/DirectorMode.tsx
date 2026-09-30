@@ -91,6 +91,7 @@ export const DirectorMode: React.FC = () => {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [timeline, setTimeline] = useState<Scene[]>([]);
+  const [chapterScript, setChapterScript] = useState<{ id: number; revision: number; status: string } | null>(null);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   
   // Advanced Generation Params State
@@ -299,6 +300,7 @@ export const DirectorMode: React.FC = () => {
     setLoading(true);
     api.getTimeline(chapterId)
       .then(data => {
+        setChapterScript(data?.script || null);
         if (data && data.timeline) {
           const scenes = data.timeline.map((s: Scene) => ({ 
             ...s, 
@@ -312,7 +314,10 @@ export const DirectorMode: React.FC = () => {
           setTimeline([]);
         }
       })
-      .catch(() => setTimeline([]))
+      .catch(() => {
+        setTimeline([]);
+        setChapterScript(null);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -1284,6 +1289,7 @@ export const DirectorMode: React.FC = () => {
         timeline={timeline}
         loading={loading}
         selectedChapterId={selectedChapterId}
+        chapterScript={chapterScript}
         onGenerateTimeline={triggerGenerateTimeline}
         onGenerateNarration={handleGenerateNarration}
         generatingNarration={generatingNarration}

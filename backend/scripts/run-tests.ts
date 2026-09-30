@@ -41,6 +41,7 @@ const main = async () => {
   ];
   const child = spawn(command, args, {
     stdio: 'inherit',
+    env: { ...process.env, DATABASE_URL: ':memory:' },
     shell: process.platform === 'win32',
   });
 

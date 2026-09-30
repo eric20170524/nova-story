@@ -338,6 +338,9 @@ class ApiService {
     language?: string | null;
     actions: any[];
     apply?: boolean;
+    surface?: 'story' | 'script' | 'director' | 'characters' | 'settings' | null;
+    script_id?: number | null;
+    script_scene_id?: string | null;
   }) =>
     this.request<{ results: Array<{ op: string; status: string; message?: string; data?: any }> }>(
       '/assistant/execute',
@@ -566,6 +569,130 @@ class ApiService {
       details?: string[];
       status?: any;
     }>('/settings/vram/free-comfy', { method: 'POST' });
+
+  // --- Track 5: Structured Screenplay / Script API ---
+  getChapterScript = (chapterId: string) =>
+    this.request<{ exists: boolean; script: any | null }>(`/chapters/${chapterId}/script`);
+
+  createChapterScript = (chapterId: string, title?: string) =>
+    this.request<{ script: any }>(`/chapters/${chapterId}/script`, {
+      method: 'POST',
+      body: title ? { title } : {},
+    });
+
+  getScript = (scriptId: number) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}`);
+
+  saveManualScript = (scriptId: number, document: any, expectedRevision: number, requestKey?: string) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}`, {
+      method: 'PUT',
+      body: { document, expected_revision: expectedRevision, request_key: requestKey },
+    });
+
+  confirmScript = (scriptId: number, expectedRevision: number, forceSourceRefresh?: boolean, requestKey?: string) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}/confirm`, {
+      method: 'POST',
+      body: { expected_revision: expectedRevision, force_source_refresh: forceSourceRefresh, request_key: requestKey },
+    });
+
+  restoreScript = (scriptId: number, expectedRevision: number, requestKey?: string) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}/restore`, {
+      method: 'POST',
+      body: { expected_revision: expectedRevision, request_key: requestKey },
+    });
+
+  refreshScriptSource = (scriptId: number, expectedRevision: number, requestKey?: string) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}/refresh-source`, {
+      method: 'POST',
+      body: { expected_revision: expectedRevision, request_key: requestKey },
+    });
+
+  exportScriptMarkdown = (scriptId: number) =>
+    this.request<{ format: string; markdown: string }>(`/scripts/${scriptId}/export?format=markdown`);
+
+  createScriptCandidate = (
+    scriptId: number,
+    payload: {
+      kind: 'outline' | 'script' | 'scene';
+      expected_revision: number;
+      request_key: string;
+      after_json?: string;
+      before_json?: string;
+      generation_info?: Record<string, any>;
+      instructions?: string;
+      target_duration_sec?: number;
+      target_scene_id?: string;
+    }
+  ) =>
+    this.request<{ candidate: any }>(`/scripts/${scriptId}/candidates`, {
+      method: 'POST',
+      body: payload,
+    });
+
+  updateScriptCandidate = (
+    scriptId: number,
+    changeId: string,
+    payload: {
+      expected_revision: number;
+      expected_candidate_revision?: number;
+      after_json: string;
+    }
+  ) =>
+    this.request<{ candidate: any }>(`/scripts/${scriptId}/candidates/${changeId}`, {
+      method: 'PATCH',
+      body: payload,
+    });
+
+  applyScriptCandidate = (
+    scriptId: number,
+    changeId: string,
+    payload: {
+      expected_revision: number;
+      expected_candidate_revision?: number;
+      request_key?: string;
+    }
+  ) =>
+    this.request<{ script: any }>(`/scripts/${scriptId}/candidates/${changeId}/apply`, {
+      method: 'POST',
+      body: payload,
+    });
+
+  discardScriptCandidate = (scriptId: number, changeId: string) =>
+    this.request<{ message: string; changeId: string }>(`/scripts/${scriptId}/candidates/${changeId}/discard`, {
+      method: 'POST',
+    });
+
+  createStoryboardCandidate = (
+    scriptId: number,
+    payload: {
+      expected_revision: number;
+      request_key: string;
+      instructions?: string;
+    }
+  ) =>
+    this.request<{ candidate: any }>(`/scripts/${scriptId}/storyboard-candidates`, {
+      method: 'POST',
+      body: payload,
+    });
+
+  applyStoryboardCandidate = (
+    scriptId: number,
+    changeId: string,
+    payload: {
+      expected_revision: number;
+      expected_candidate_revision?: number;
+      request_key?: string;
+    }
+  ) =>
+    this.request<{
+      success: boolean;
+      count: number;
+      scene_ids: number[];
+      already_applied?: boolean;
+    }>(`/scripts/${scriptId}/storyboard-candidates/${changeId}/apply`, {
+      method: 'POST',
+      body: payload,
+    });
 }
 
 export const api = new ApiService();

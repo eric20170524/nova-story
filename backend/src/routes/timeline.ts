@@ -48,10 +48,16 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
     const scenes = await db.all('SELECT * FROM scene WHERE chapter_id = ? ORDER BY `index` ASC', chapter_id);
     const timeline = await annotateScenesWithVersions(scenes || []);
 
+    const script = await db.get(
+      'SELECT id, revision, status FROM chapter_script WHERE chapter_id = ?',
+      chapter_id
+    );
+
     return {
       chapter_id: chapter.id,
       storyboard_mode: 'narrative',
-      timeline
+      timeline,
+      script: script ? { id: script.id, revision: script.revision, status: script.status } : null,
     };
   });
 

@@ -53,7 +53,7 @@ export function buildRoutePrompt(input: RouteDecideInput): string {
 export async function resolveAgentRoute(
   input: RouteDecideInput
 ): Promise<{ route: AgentRoute; source: RouteDecideResult['source'] } | null> {
-  const shortcut = tryIntentShortcut(input.userMessage, input.preferredOp);
+  const shortcut = tryIntentShortcut(input.userMessage, input.preferredOp, input.routeHint);
   if (shortcut) {
     const parsed = AgentRouteSchema.safeParse(shortcut);
     if (parsed.success) {
@@ -120,6 +120,9 @@ function defaultResponseForIntent(intent: string, userMessage: string): string {
     QUERY_DATABASE: '正在查询项目数据。',
     RENAME_CHAPTER: '将重命名章节；请确认。',
     DELETE_CHAPTER: '将删除章节；请确认。',
+    GENERATE_SCRIPT_OUTLINE: '将为当前章节生成短剧改编提纲（关键事件与结尾钩子）；确认后保存为候选。',
+    GENERATE_SCRIPT: '将基于提纲生成完整分场短剧剧本；确认后保存为剧本草稿。',
+    REWRITE_SCRIPT_SCENE: '将对指定剧本分场进行局部改写；确认后更新该场动作与对白。',
   };
   return map[intent] || `已理解：${userMessage.slice(0, 80)}`;
 }

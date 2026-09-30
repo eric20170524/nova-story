@@ -196,6 +196,7 @@ export async function generateAndReplaceNarrativeTimeline(options: {
       uniqueness_key,
       must_not: item.must_not || item.shot_spec?.must_not || [],
       shot_type: item.shot_type,
+      source: { type: 'chapter' },
     });
     return {
       ...item,

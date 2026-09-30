@@ -26,12 +26,18 @@ export interface ProjectExport {
     coverage_groups: Array<CoverageGroup & Record<string, any>>;
     coverage_shots: Array<CoverageShot & Record<string, any>>;
   };
+  glossary?: Array<{
+    term: string;
+    definition?: string | null;
+    category?: string | null;
+  }>;
   summary: {
     chapters: number;
     characters: number;
     scenes: number;
     coverage_groups: number;
     coverage_shots: number;
+    glossary?: number;
   };
 }
 
@@ -107,6 +113,7 @@ export interface Scene {
   asset_status?: 'idle' | 'generating' | 'completed' | 'failed';
   asset_url?: string; // URL to generated image
   task_id?: string; // ComfyUI task ID
+  shot_spec?: string | Record<string, any>;
   /** Active generation/content version (1-based) */
   active_version?: number;
   /** Available versions for A/B switching */

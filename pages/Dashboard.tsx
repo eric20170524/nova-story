@@ -466,7 +466,8 @@ export const Dashboard: React.FC = () => {
                   </div>
 
                   {importPreview.mode === 'novastory-project' && (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">Scripts <span className="font-semibold text-slate-800 dark:text-slate-200">{importPreview.counts.scripts ?? 0}</span></div>
                       <div className="text-xs text-slate-500 dark:text-slate-400">Scenes <span className="font-semibold text-slate-800 dark:text-slate-200">{importPreview.counts.scenes}</span></div>
                       <div className="text-xs text-slate-500 dark:text-slate-400">Coverage <span className="font-semibold text-slate-800 dark:text-slate-200">{importPreview.counts.coverage_groups}</span></div>
                       <div className="text-xs text-slate-500 dark:text-slate-400">Shots <span className="font-semibold text-slate-800 dark:text-slate-200">{importPreview.counts.coverage_shots}</span></div>

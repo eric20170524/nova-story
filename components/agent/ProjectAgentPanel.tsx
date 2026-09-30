@@ -139,6 +139,8 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
     notifyDataChanged,
     activeChapterId,
     setActiveChapterId,
+    activeScriptId,
+    activeScriptSceneId,
     pendingPrompt,
     clearPendingPrompt,
     applyContent,
@@ -190,9 +192,29 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
     if (p.includes('/director')) return 'director';
     if (p.includes('/characters')) return 'characters';
     if (p.includes('/settings')) return 'settings';
+    if (p.includes('/script')) return 'script';
     if (p.includes('/story')) return 'story';
     return 'project';
   })();
+
+  const currentSurface =
+    routeHint === 'script' ||
+    routeHint === 'story' ||
+    routeHint === 'director' ||
+    routeHint === 'characters' ||
+    routeHint === 'settings'
+      ? routeHint
+      : undefined;
+
+  const [pendingSurface, setPendingSurface] = useState<string | null>(null);
+
+  // Invalidate leftover pending actions from a different surface when switching pages (P1-2 / SC12)
+  useEffect(() => {
+    if (pendingActions && pendingSurface && pendingSurface !== currentSurface) {
+      setPendingActions(null);
+      setPendingSurface(null);
+    }
+  }, [currentSurface, pendingActions, pendingSurface]);
 
   const handleSend = useCallback(
     async (textToSend?: string, preferredOp?: string | null) => {
@@ -204,6 +226,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       if (textToSend === undefined) setInput('');
       setLoading(true);
       setPendingActions(null);
+      setPendingSurface(null);
 
       try {
         const history = messages.slice(-10).map((m) => ({
@@ -217,7 +240,14 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             chapter_id: chapterId || undefined,
             language,
             route: routeHint,
-          },
+            surface: currentSurface,
+            ...(routeHint === 'script'
+              ? {
+                  script_id: activeScriptId ?? undefined,
+                  script_scene_id: activeScriptSceneId ?? undefined,
+                }
+              : {}),
+          } as any,
           history,
           preferredOp
         );
@@ -228,6 +258,12 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             ? [{ op: response.action.tool_name, ...response.action.arguments }]
             : [];
 
+        // Tag actions with originating surface
+        const taggedActions: AgentAction[] = actions.map((a) => ({
+          ...a,
+          surface: (a as any).surface || currentSurface,
+        }));
+
         const results =
           response.results && response.results.length > 0
             ? (response.results as ExecutionResultItem[])
@@ -237,7 +273,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
           role: 'agent',
           content: response.response || '',
           thought: response.thought,
-          actions,
+          actions: taggedActions,
           results,
           needs_confirmation: Boolean(response.needs_confirmation),
         };
@@ -246,10 +282,14 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         // Auto-executed skills with apply:true must update the open editor
         syncAppliedEditorContent(results, applyContent);
 
-        if (response.needs_confirmation && actions.length > 0) {
-          setPendingActions(actions);
-        } else if (actions.length > 0 && !response.needs_confirmation) {
-          notifyDataChanged();
+        if (response.needs_confirmation && taggedActions.length > 0) {
+          setPendingActions(taggedActions);
+          setPendingSurface(currentSurface || null);
+        } else if (taggedActions.length > 0 && !response.needs_confirmation) {
+          const changedChapterId = (results || []).find(
+            (item) => item.data && typeof item.data.chapterId === 'string'
+          )?.data?.chapterId;
+          notifyDataChanged({ chapterId: changedChapterId || chapterId });
           onRefresh?.();
         }
       } catch (e) {
@@ -269,6 +309,8 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       messages,
       projectId,
       chapterId,
+      activeScriptId,
+      activeScriptSceneId,
       language,
       routeHint,
       notifyDataChanged,
@@ -300,6 +342,13 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         language,
         actions: pendingActions,
         apply: true,
+        surface: currentSurface,
+        ...(routeHint === 'script'
+          ? {
+              script_id: activeScriptId ?? undefined,
+              script_scene_id: activeScriptSceneId ?? undefined,
+            }
+          : {}),
       });
 
       const results = (result.results || []) as ExecutionResultItem[];
@@ -324,7 +373,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       // Confirm→execute writes skill body to DB; keep editor in sync to avoid save overwrite
       syncAppliedEditorContent(results, applyContent);
 
-      notifyDataChanged();
+      const changedChapterId = results.find(
+        (item) => item.data && typeof item.data.chapterId === 'string'
+      )?.data?.chapterId;
+      notifyDataChanged({ chapterId: changedChapterId || chapterId });
       onRefresh?.();
     } catch (e) {
       console.error(e);
@@ -347,6 +399,33 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
     preferredOp?: string;
   }> => {
     switch (routeHint) {
+      case 'script':
+        return [
+          {
+            label: t('agent.chip_script_outline', '生成改编提纲'),
+            prompt: t(
+              'agent.prompt_script_outline',
+              '为当前章节生成短剧改编提纲（关键事件与结尾钩子）'
+            ),
+            preferredOp: 'GENERATE_SCRIPT_OUTLINE',
+          },
+          {
+            label: t('agent.chip_script_generate', '生成分场剧本'),
+            prompt: t(
+              'agent.prompt_script_generate',
+              '基于已采纳提纲生成完整分场短剧剧本'
+            ),
+            preferredOp: 'GENERATE_SCRIPT',
+          },
+          {
+            label: t('agent.chip_script_rewrite_scene', '改写当前分场'),
+            prompt: t(
+              'agent.prompt_script_rewrite_scene',
+              '改写当前选定分场的动作与对白，不影响其他分场'
+            ),
+            preferredOp: 'REWRITE_SCRIPT_SCENE',
+          },
+        ];
       case 'story':
         return [
           {

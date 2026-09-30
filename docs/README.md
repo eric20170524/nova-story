@@ -23,7 +23,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 
 | 合同 | 路径 | 核心职责 |
 | --- | --- | --- |
-| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | 统一三条活动 Track（Prompt 编译器、H3 生视频、RedCraft INT4/8）的唯一任务事实源 |
+| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | Prompt 编译器、H3 生视频、RedCraft、小说故事创作与结构化剧本的唯一任务事实源 |
 | **产品范围** | [1_PRD.md](./1_PRD.md) | MVP 业务边界与产品规范 |
 | **架构红线** | [2_ARCHITECTURE.md](./2_ARCHITECTURE.md) | 技术栈红线、目标管道约束（深入分层见 `architecture/`） |
 | **UI 规则** | [3_UI_RULES.md](./3_UI_RULES.md) | i18n 规范、Tailwind、Toast、可测试性属性规则 |
@@ -46,7 +46,8 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | 系统整体分层架构与运行时数据流 | [architecture_cn.md](./architecture/architecture_cn.md) |
 | 后端已实现能力完整清单 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) |
 | Agent OS / 小说创作核心落地计划 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) |
-| 新书与 Agent OS 对齐核查、10 万字内短剧/短篇小说建设方案 | [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) |
+| 新书与 Agent OS 对齐核查、10 万字内小说故事建设方案 | [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) |
+| 小说故事与短剧剧本分层、Toonflow 核心能力收敛方案 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) |
 | 红潮 Hybrid H3 A2A 生视频方案与 TODO | [红潮_Hybrid_H3_A2A_生视频最佳实践与TODO.md](./video/红潮_Hybrid_H3_A2A_生视频最佳实践与TODO.md) |
 
 ---
@@ -67,7 +68,8 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [architecture_cn.md](./architecture/architecture_cn.md) | ✅ 现行 | 系统分层总览、Node/Fastify 服务端、前端及工作流拓扑 |
 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) | ✅ 现行 | 后端已落地能力清单（DB 迁移、API、生图、版本管理、Agent） |
 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) | ⚠️ 落地中 | Agent OS 写作内核规格、多 Action 自愈决策与分层记忆体系 |
-| [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) | 📝 代码核查与建设方案 | 对照 DreamWaverAI 当前代码，覆盖新书到交付；范围为 5–10 万字、上限 10 万字的短剧/短篇小说 |
+| [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) | 📝 代码核查与建设方案 | DreamWaverAI 对齐核查；故事正文上限 10 万字；旧双形态要求按独立剧本方案修订 |
+| [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) | ✅ S0–S4 已闭环 | 故事→改编提纲→分场剧本→安全交接导演分镜；支持备份往返、级联清理、项目复制与来源过期检测 |
 
 ### 3. 生视频子系统 (`docs/video/`)
 | 文档 | 状态 | 核心说明 |

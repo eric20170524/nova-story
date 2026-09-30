@@ -6,6 +6,7 @@ import type { AIProvider } from './ai/base';
 import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
 import { Prompts } from './prompts';
+import { isRemoteGemmaLlm } from './llm_presets';
 
 import {
     TimelineResponseSchema,
@@ -24,6 +25,16 @@ export type LLMProviderConfig = {
     model?: string;
 };
 
+export function resolveLlmApiKey(llmConfig: LLMProviderConfig, providerType: string): string {
+    const isOllama = providerType === 'ollama';
+    const configuredKey = String(llmConfig.api_key || '').trim();
+    if (isOllama) return 'ollama';
+    if (isRemoteGemmaLlm(llmConfig)) {
+        return configuredKey && configuredKey !== 'ollama' ? configuredKey : '';
+    }
+    return configuredKey || appSettings.OPENAI_API_KEY;
+}
+
 export class LLMService {
     static getProvider(token?: string, configOverride?: LLMProviderConfig): AIProvider {
         const sysSettings = SettingsManager.loadSettings();
@@ -35,10 +46,18 @@ export class LLMService {
             const isOllama = providerType === 'ollama';
             const effectiveBaseUrl = baseUrl || (isOllama ? DEFAULT_OLLAMA_BASE_URL : undefined);
             const effectiveModel = llmConfig.model || (isOllama ? DEFAULT_OLLAMA_MODEL : 'gpt-4o');
-            const effectiveApiKey = isOllama
-                ? 'ollama'
-                : (llmConfig.api_key || appSettings.OPENAI_API_KEY);
-            return new OpenAIProvider(effectiveApiKey, effectiveModel, effectiveBaseUrl, { isOllama });
+            const remoteGemma = isRemoteGemmaLlm({
+                model: effectiveModel,
+                base_url: effectiveBaseUrl,
+            });
+            const effectiveApiKey = resolveLlmApiKey(
+                { ...llmConfig, model: effectiveModel, base_url: effectiveBaseUrl },
+                providerType
+            );
+            return new OpenAIProvider(effectiveApiKey, effectiveModel, effectiveBaseUrl, {
+                isOllama,
+                timeoutMs: remoteGemma ? 300_000 : undefined,
+            });
         }
 
         if (providerType === 'grok') {
@@ -59,6 +78,11 @@ export class LLMService {
      * provider selected for other writing tasks. */
     static getLocalProvider(): AIProvider {
         const configured = SettingsManager.loadSettings().llm || {};
+        const configuredModel = String(configured.model || '');
+        const configuredBase = String(configured.base_url || '');
+        if (isRemoteGemmaLlm({ model: configuredModel, base_url: configuredBase })) {
+            return LLMService.getProvider();
+        }
         const configuredProvider = String(configured.provider || '').toLowerCase();
         const isConfiguredLocal = ['ollama', 'local_llm'].includes(configuredProvider);
         return new OpenAIProvider(

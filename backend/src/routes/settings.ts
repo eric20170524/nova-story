@@ -4,6 +4,7 @@ import path from 'path';
 import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
+import { mergeVerifyLlmConfig } from '../services/llm_presets';
 import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 import { VramService } from '../services/vram_service';
 import { ComfyUIService } from '../services/ai/comfyui_service';
@@ -98,15 +99,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const config = request.body as any;
     const stored = SettingsManager.loadSettings();
     const bodyLlm = (config.llm || config || {}) as LLMProviderConfig;
-    // Merge secrets from server-side storage when UI sent redacted/empty key
-    const llmConfig: LLMProviderConfig = {
-      ...(stored.llm || {}),
-      ...bodyLlm,
-      api_key:
-        bodyLlm.api_key && String(bodyLlm.api_key).trim()
-          ? bodyLlm.api_key
-          : stored.llm?.api_key
-    };
+    const llmConfig: LLMProviderConfig = mergeVerifyLlmConfig(stored.llm, bodyLlm);
     const providerType = (llmConfig.provider || 'gemini').toLowerCase();
 
     try {

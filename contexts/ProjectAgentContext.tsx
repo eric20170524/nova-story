@@ -18,9 +18,12 @@ type ProjectAgentContextValue = {
   toggle: () => void;
   /** Bump when agent mutates project data so pages can reload */
   refreshToken: number;
-  notifyDataChanged: () => void;
+  notifyDataChanged: (detail?: { chapterId?: string | null }) => void;
   activeChapterId: string | null;
   setActiveChapterId: (id: string | null) => void;
+  activeScriptId: number | null;
+  activeScriptSceneId: string | null;
+  setActiveScriptContext: (scriptId: number | null, sceneId: string | null) => void;
   sendPrompt: (prompt: string) => void;
   pendingPrompt: string | null;
   clearPendingPrompt: () => void;
@@ -49,13 +52,15 @@ export const ProjectAgentProvider: React.FC<{
       return null;
     }
   });
+  const [activeScriptId, setActiveScriptId] = useState<number | null>(null);
+  const [activeScriptSceneId, setActiveScriptSceneId] = useState<string | null>(null);
 
   const toggle = useCallback(() => setOpen((v) => !v), []);
-  const notifyDataChanged = useCallback(() => {
+  const notifyDataChanged = useCallback((detail?: { chapterId?: string | null }) => {
     setRefreshToken((n) => n + 1);
     window.dispatchEvent(
       new CustomEvent('novastory-agent-data-changed', {
-        detail: { projectId },
+        detail: { projectId, chapterId: detail?.chapterId ?? null },
       })
     );
   }, [projectId]);
@@ -76,6 +81,14 @@ export const ProjectAgentProvider: React.FC<{
   const applyContent = useCallback<ApplyHandler>((content, opts) => {
     applyHandlerRef.current?.(content, opts);
   }, []);
+
+  const setActiveScriptContext = useCallback(
+    (scriptId: number | null, sceneId: string | null) => {
+      setActiveScriptId(scriptId);
+      setActiveScriptSceneId(sceneId);
+    },
+    []
+  );
 
   const setActiveChapterIdStable = useCallback(
     (id: string | null) => {
@@ -100,6 +113,9 @@ export const ProjectAgentProvider: React.FC<{
       notifyDataChanged,
       activeChapterId,
       setActiveChapterId: setActiveChapterIdStable,
+      activeScriptId,
+      activeScriptSceneId,
+      setActiveScriptContext,
       sendPrompt,
       pendingPrompt,
       clearPendingPrompt,
@@ -113,6 +129,9 @@ export const ProjectAgentProvider: React.FC<{
       notifyDataChanged,
       activeChapterId,
       setActiveChapterIdStable,
+      activeScriptId,
+      activeScriptSceneId,
+      setActiveScriptContext,
       sendPrompt,
       pendingPrompt,
       clearPendingPrompt,

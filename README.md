@@ -10,8 +10,8 @@
 # 安装依赖（仓库根）
 npm install
 
-# 配置后端密钥与路径（勿提交）
-# backend/.env 示例：
+# 配置后端密钥与路径（勿提交）。只使用 backend/.env，仓库根目录的 .env 不会被读取。
+# 从 backend/.env.example 复制：
 #   LLM_PROVIDER=gemini
 #   LLM_API_KEY=...
 #   LLM_MODEL=gemini-2.5-flash

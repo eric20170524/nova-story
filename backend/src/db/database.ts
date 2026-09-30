@@ -536,6 +536,54 @@ const migrations: Migration[] = [
         logger.warn(`Cleared unavailable or incompatible image workflows for project IDs: ${clearedWorkflows.join(', ')}`);
       }
     }
+  },
+  {
+    version: '014_chapter_script',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS chapter_script (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chapter_id VARCHAR(36) NOT NULL UNIQUE,
+          revision INTEGER NOT NULL DEFAULT 1,
+          status VARCHAR(20) NOT NULL DEFAULT 'draft',
+          document_json TEXT NOT NULL,
+          source_snapshot_json TEXT NOT NULL,
+          source_content_hash VARCHAR(64) NOT NULL,
+          source_context_hash VARCHAR(64) NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(chapter_id) REFERENCES chapter(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_chapter_script_chapter
+          ON chapter_script(chapter_id);
+
+        CREATE TABLE IF NOT EXISTS script_change (
+          id VARCHAR(36) PRIMARY KEY,
+          script_id INTEGER NOT NULL,
+          kind VARCHAR(30) NOT NULL,
+          base_revision INTEGER NOT NULL,
+          candidate_revision INTEGER NOT NULL,
+          request_key VARCHAR(100) NOT NULL,
+          state VARCHAR(20) NOT NULL DEFAULT 'pending',
+          before_json TEXT,
+          after_json TEXT,
+          source_snapshot_json TEXT,
+          generation_info_json TEXT,
+          applied_revision INTEGER,
+          result_json TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_script_change_script
+          ON script_change(script_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_script_change_script_req_key
+          ON script_change(script_id, request_key);
+      `);
+    }
   }
 ];
 

@@ -12,7 +12,7 @@ import {
 import { formatVisualLockTokens } from '../services/reference_generation_policy';
 import { compilePonyPrompt, type CharacterLockRef } from '../services/pony_prompt_compiler';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
-import { packShotSpec } from '../schemas/shot_contract';
+import { packShotSpec, type ShotSourceReference } from '../schemas/shot_contract';
 import { sanitizeVisualPrompt } from '../services/visual_prompt_sanitizer';
 
 const parseTags = (raw: unknown): any => {
@@ -53,7 +53,8 @@ const buildCharacterProfiles = (characters: any[], chapterId?: string | number |
 export const compileCoverageCandidate = (
   candidate: any,
   characterLocks: CharacterLockRef[],
-  index: number
+  index: number,
+  sourceRef?: ShotSourceReference | null
 ) => {
   const location = String(candidate.location || '').trim();
   const primary_action = String(candidate.primary_action || '').trim();
@@ -105,6 +106,7 @@ export const compileCoverageCandidate = (
     subject_scale,
     must_not: candidate.must_not || [],
     shot_type,
+    source: candidate.source || sourceRef || null,
   });
 
   return {
@@ -189,10 +191,18 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    let sourceRef: ShotSourceReference | null = null;
+    try {
+      if (sourceScene.shot_spec) {
+        const parsed = JSON.parse(sourceScene.shot_spec);
+        if (parsed.source) sourceRef = parsed.source;
+      }
+    } catch {}
+
     let compiledCandidates;
     try {
       compiledCandidates = candidates.map((candidate, index) =>
-        compileCoverageCandidate(candidate, characterLocks, index)
+        compileCoverageCandidate(candidate, characterLocks, index, sourceRef)
       );
     } catch (error: any) {
       return reply.status(500).send({

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import { getConfigDirectory } from './paths';
+import { applyKnownRemoteLlm } from '../services/llm_presets';
 
 const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
@@ -115,6 +116,8 @@ export class SettingsManager {
             settings.llm.model = llmModelEnv;
         }
 
+        applyKnownRemoteLlm(settings);
+
         if (settings.comfyui) {
             // The macOS launcher selects remote mode for this process without
             // changing the user's saved settings or backend/.env file.
@@ -215,21 +218,39 @@ export class SettingsManager {
             const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
             return `${content}${separator}${key}=${value}\n`;
         };
+        const deleteEnvValue = (content: string, key: string) =>
+            content.replace(new RegExp(`^${key}=.*(?:\r?\n|$)`, 'm'), '');
 
         // Extract secrets to .env — blank / placeholder means "keep existing"
-        if (newSettingsCopy.llm && newSettingsCopy.llm.api_key !== undefined) {
-            const apiKey = String(newSettingsCopy.llm.api_key || '').trim();
+        if (newSettingsCopy.llm) {
+            const provider = String(
+                newSettingsCopy.llm.provider || currentSettings.llm?.provider || ''
+            ).toLowerCase();
+            const isLocalProvider = provider === 'ollama' || provider === 'local_llm';
+            const storedKey = String(
+                process.env.LLM_API_KEY || currentSettings.llm?.api_key || ''
+            ).trim();
+            const apiKey = newSettingsCopy.llm.api_key === undefined
+                ? ''
+                : String(newSettingsCopy.llm.api_key || '').trim();
             const keepExisting =
-                !apiKey
+                newSettingsCopy.llm.api_key === undefined
+                || !apiKey
                 || apiKey === '********'
                 || apiKey === '••••••••'
                 || /^•+$/.test(apiKey);
-            const isOllamaPlaceholder =
-                (newSettingsCopy.llm.provider === 'ollama'
-                    || newSettingsCopy.llm.provider === 'local_llm')
-                && (apiKey === 'ollama' || keepExisting);
+            const placeholderLeftBehind =
+                !isLocalProvider
+                && (apiKey === 'ollama' || (keepExisting && storedKey === 'ollama'));
 
-            if (!keepExisting && !isOllamaPlaceholder) {
+            if (placeholderLeftBehind) {
+                envContent = deleteEnvValue(envContent, 'LLM_API_KEY');
+                delete process.env.LLM_API_KEY;
+            } else if (
+                newSettingsCopy.llm.api_key !== undefined
+                && !keepExisting
+                && !(isLocalProvider && apiKey === 'ollama')
+            ) {
                 envContent = upsertEnvValue(envContent, 'LLM_API_KEY', apiKey);
             }
 
