@@ -15,7 +15,6 @@ import { projectDocumentRoutes } from './routes/project_documents';
 import { settingsRoutes } from './routes/settings';
 import { workflowRoutes } from './routes/workflows';
 import { characterRoutes } from './routes/characters';
-import { comicRoutes } from './routes/comics';
 import { timelineRoutes } from './routes/timeline';
 import { assetRoutes } from './routes/assets';
 import { chapterRoutes } from './routes/chapters';
@@ -27,11 +26,14 @@ import { scriptRoutes } from './routes/scripts';
 import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
 import { VideoStartupRecoveryService } from './services/video/video_startup_recovery';
+import { logger } from './core/logging';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
-  const app = Fastify({
-    logger: options.logger ?? true
-  });
+  const app = Fastify(
+    options.logger === false
+      ? { logger: false }
+      : { loggerInstance: logger }
+  );
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
@@ -118,7 +120,6 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(settingsRoutes, { prefix: '/api/settings' });
   await app.register(workflowRoutes, { prefix: '/api/workflows' });
   await app.register(characterRoutes, { prefix: '/api/characters' });
-  await app.register(comicRoutes, { prefix: '/api/comics' });
   await app.register(timelineRoutes, { prefix: '/api/timeline' });
   await app.register(assetRoutes, { prefix: '/api/assets' });
   await app.register(creativeRoutes, { prefix: '/api/agent' });

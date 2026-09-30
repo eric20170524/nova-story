@@ -5,6 +5,13 @@ import { parseProjectSettings } from '../project_settings';
 import { loadEnabledProjectDocumentContext } from '../project_documents';
 import { LLMService } from '../llm';
 import {
+  ChapterContinuitySchema,
+  CHAPTER_CONTINUITY_INSTRUCTIONS,
+  mergeChapterContinuity,
+  mergeChapterImpactSettings,
+  type ChapterContinuity,
+} from './chapter_impact_settings';
+import {
   ChapterCharacterAnalysisSchema,
   type ChapterCharacterAnalysis,
 } from '../../schemas/llm';
@@ -170,6 +177,12 @@ export type ChapterImpactResult = {
   personalityMerged: boolean;
   /** True when any character received non-empty visual_tags from impact. */
   visualTagsMerged: boolean;
+  chapterContinuity: ChapterContinuity;
+  mainPlotEntry?: string;
+  characterRelationsEntry?: string;
+  mainPlotChanged?: boolean;
+  characterRelationsChanged?: boolean;
+  applied?: boolean;
 };
 
 /** Keys stored as structured meta inside visual_tags JSON — never overwrite with appearance strings. */
@@ -375,6 +388,7 @@ export function mergeImpactWithCharacterAnalysis(
       definition?: string | null;
       category?: string | null;
     }>;
+    chapterContinuity?: ChapterContinuity;
   },
   analysis: ChapterCharacterAnalysis
 ): ChapterImpactResult {
@@ -458,6 +472,7 @@ export function mergeImpactWithCharacterAnalysis(
     newOrUpdatedGlossary: impact.newOrUpdatedGlossary || [],
     personalityMerged,
     visualTagsMerged,
+    chapterContinuity: impact.chapterContinuity || ChapterContinuitySchema.parse({}),
   };
 }
 
@@ -473,6 +488,7 @@ const ImpactVisualTagsSchema = z
   .nullable();
 
 const ImpactSchema = z.object({
+  chapterContinuity: ChapterContinuitySchema,
   newOrUpdatedCharacters: z
     .array(
       z.object({
@@ -850,8 +866,8 @@ export class WritingService {
   }
 
   /**
-   * Extract world delta (characters + glossary + visual tags) and chapter personality,
-   * then optionally persist into character / glossary tables.
+   * Extract chapter facts and personality, then optionally persist all libraries
+   * and chapter-specific plot / relationship settings in one transaction.
    * Personality → character.description; appearance → character.visual_tags.
    */
   static async analyzeChapterImpact(
@@ -862,26 +878,56 @@ export class WritingService {
     const bundle = await loadWritingBundle(projectId, chapterId);
     const chapter = bundle.chapters.find((c) => c.id === chapterId);
     if (!chapter) throw new Error('Chapter not found');
-
-    const prompt = formatPrompt(getPrompt('analysis_impact', bundle.overrides), {
-      characters: budgetedCharacters(bundle.characters),
-      glossary: budgetedGlossary(bundle.glossary),
-      chapterTitle: chapter.title,
-      content: head(String(chapter.content || ''), 5000),
-    });
+    const content = String(chapter.content || '').trim();
+    if (!content) throw new Error('Chapter content is empty');
+    const analyzeImpact = async () => {
+      const chunks = splitChapterIntoAnalysisChunks(content);
+      const parts: z.infer<typeof ImpactSchema>[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const prompt = formatPrompt(getPrompt('analysis_impact', bundle.overrides), {
+          characters: budgetedCharacters(bundle.characters),
+          glossary: budgetedGlossary(bundle.glossary),
+          mainPlot: head(bundle.bible.main_plot || '', 1200),
+          characterRelations: head(bundle.bible.character_relations || '', 1200),
+          chapterTitle: chunks.length > 1 ? `${chapter.title}（分段 ${i + 1}/${chunks.length}）` : chapter.title,
+          content: chunks[i],
+        });
+        const raw = await LLMService.generateStructuredWithRetry(
+          `${prompt}\n\n${CHAPTER_CONTINUITY_INSTRUCTIONS}`,
+          ImpactSchema
+        );
+        if (!raw) throw new Error(`Chapter impact analysis failed (part ${i + 1}/${chunks.length})`);
+        parts.push(ImpactSchema.parse(raw));
+      }
+      const characters = new Map<string, z.infer<typeof ImpactSchema>['newOrUpdatedCharacters'][number]>();
+      const glossary = new Map<string, z.infer<typeof ImpactSchema>['newOrUpdatedGlossary'][number]>();
+      for (const part of parts) {
+        for (const row of part.newOrUpdatedCharacters) {
+          const name = row.name.trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          const previous = characters.get(key);
+          characters.set(key, {
+            name,
+            role: row.role ?? previous?.role,
+            description: row.description ?? previous?.description,
+            visual_tags: { ...previous?.visual_tags, ...normalizeVisualTags(row.visual_tags) },
+          });
+        }
+        for (const row of part.newOrUpdatedGlossary) {
+          const term = row.term.trim();
+          if (term) glossary.set(term, { ...glossary.get(term), ...row, term });
+        }
+      }
+      return {
+        newOrUpdatedCharacters: [...characters.values()],
+        newOrUpdatedGlossary: [...glossary.values()],
+        chapterContinuity: mergeChapterContinuity(parts.map((part) => part.chapterContinuity)),
+      };
+    };
 
     const [impactRaw, analysis] = await Promise.all([
-      LLMService.generateStructuredWithRetry(prompt, ImpactSchema).then(
-        (d) =>
-          d || {
-            newOrUpdatedCharacters: [] as z.infer<
-              typeof ImpactSchema
-            >['newOrUpdatedCharacters'],
-            newOrUpdatedGlossary: [] as z.infer<
-              typeof ImpactSchema
-            >['newOrUpdatedGlossary'],
-          }
-      ),
+      analyzeImpact(),
       WritingService.analyzeChapterCharacters(projectId, chapterId).catch(
         (err) => {
           logger.warn(
@@ -894,84 +940,120 @@ export class WritingService {
     ]);
 
     const data = mergeImpactWithCharacterAnalysis(impactRaw, analysis);
+    data.applied = false;
 
-    if (apply) {
-      for (const ch of data.newOrUpdatedCharacters) {
-        const existing = await db.get(
-          `SELECT id, role, description, visual_tags FROM character
-           WHERE project_id = ? AND TRIM(name) = TRIM(?) COLLATE NOCASE
-           LIMIT 1`,
-          projectId,
-          ch.name
-        );
-        const personality = formatPersonalityBlock(ch);
-        const impactBio = stripPersonalitySections(ch.description || '');
-        const finalDesc = mergeCharacterDescription(
-          existing?.description,
-          impactBio,
-          personality
-        );
-        const role =
-          ch.role ||
-          existing?.role ||
-          mapRoleInChapterToRole(ch.roleInChapter) ||
-          'supporting';
-        const incomingVisual = normalizeVisualTags(ch.visual_tags);
-        const mergedVisualDoc = mergeVisualTagsDocument(
-          existing?.visual_tags,
-          incomingVisual
-        );
-        const visualJson = JSON.stringify(mergedVisualDoc || {});
+    if (apply) await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const latestChapter = await db.get(
+        'SELECT id, title, "index", content FROM chapter WHERE id = ? AND project_id = ?',
+        chapterId, projectId
+      );
+      if (!latestChapter || latestChapter.content !== chapter.content) {
+        throw new Error('Chapter changed during impact analysis; please retry');
+      }
+      // Re-read settings after generation so concurrent author edits are preserved.
+      const project = await db.get('SELECT settings FROM project WHERE id = ?', projectId);
+      if (!project) throw new Error('Project not found');
+      const chapters = await db.all('SELECT id, title, "index" FROM chapter WHERE project_id = ?', projectId);
+      const merged = mergeChapterImpactSettings(
+        parseProjectSettings(project.settings), latestChapter, chapters, data.chapterContinuity
+      );
+      data.mainPlotEntry = merged.entry.main_plot;
+      data.characterRelationsEntry = merged.entry.character_relations;
+      data.mainPlotChanged = merged.changed.main_plot;
+      data.characterRelationsChanged = merged.changed.character_relations;
 
-        if (existing) {
-          await db.run(
-            'UPDATE character SET role = ?, description = ?, visual_tags = ? WHERE id = ?',
-            role,
-            finalDesc || existing.description || '',
-            visualJson,
-            existing.id
-          );
-          ch.description = finalDesc || existing.description || '';
-          ch.role = role;
-          ch.visual_tags = Object.keys(incomingVisual).length
-            ? incomingVisual
-            : ch.visual_tags;
-        } else {
-          await db.run(
-            'INSERT INTO character (project_id, name, role, description, visual_tags) VALUES (?, ?, ?, ?, ?)',
+      if (apply) {
+        for (const ch of data.newOrUpdatedCharacters) {
+          const existing = await db.get(
+            `SELECT id, role, description, visual_tags FROM character
+             WHERE project_id = ? AND TRIM(name) = TRIM(?) COLLATE NOCASE
+             LIMIT 1`,
             projectId,
-            ch.name,
-            role,
-            finalDesc || '',
-            visualJson
+            ch.name
           );
-          ch.description = finalDesc || '';
-          ch.role = role;
+          const personality = formatPersonalityBlock(ch);
+          const impactBio = stripPersonalitySections(ch.description || '');
+          const finalDesc = mergeCharacterDescription(
+            existing?.description,
+            impactBio,
+            personality
+          );
+          const role =
+            ch.role ||
+            existing?.role ||
+            mapRoleInChapterToRole(ch.roleInChapter) ||
+            'supporting';
+          const incomingVisual = normalizeVisualTags(ch.visual_tags);
+          const mergedVisualDoc = mergeVisualTagsDocument(
+            existing?.visual_tags,
+            incomingVisual
+          );
+          const visualJson = JSON.stringify(mergedVisualDoc || {});
+
+          if (existing) {
+            await db.run(
+              'UPDATE character SET role = ?, description = ?, visual_tags = ? WHERE id = ?',
+              role,
+              finalDesc || existing.description || '',
+              visualJson,
+              existing.id
+            );
+            ch.description = finalDesc || existing.description || '';
+            ch.role = role;
+            ch.visual_tags = Object.keys(incomingVisual).length
+              ? incomingVisual
+              : ch.visual_tags;
+          } else {
+            await db.run(
+              'INSERT INTO character (project_id, name, role, description, visual_tags) VALUES (?, ?, ?, ?, ?)',
+              projectId,
+              ch.name,
+              role,
+              finalDesc || '',
+              visualJson
+            );
+            ch.description = finalDesc || '';
+            ch.role = role;
+          }
         }
-      }
-      for (const g of data.newOrUpdatedGlossary) {
-        const existing = await db.get(
-          'SELECT id FROM glossary WHERE project_id = ? AND term = ?',
-          projectId,
-          g.term
+        for (const g of data.newOrUpdatedGlossary) {
+          const existing = await db.get(
+            'SELECT id FROM glossary WHERE project_id = ? AND term = ?',
+            projectId,
+            g.term
+          );
+          if (existing) {
+            await db.run(
+              'UPDATE glossary SET definition = COALESCE(?, definition), category = COALESCE(?, category) WHERE id = ?',
+              g.definition ?? null,
+              g.category ?? null,
+              existing.id
+            );
+          } else {
+            await db.run(
+              'INSERT INTO glossary (project_id, term, definition, category) VALUES (?, ?, ?, ?)',
+              projectId,
+              g.term,
+              g.definition ?? null,
+              g.category ?? null
+            );
+          }
+        }
+        await db.run(
+          'UPDATE chapter SET status = ? WHERE id = ? AND project_id = ?',
+          'completed', chapterId, projectId
         );
-        if (existing) {
-          await db.run(
-            'UPDATE glossary SET definition = COALESCE(?, definition), category = COALESCE(?, category) WHERE id = ?',
-            g.definition ?? null,
-            g.category ?? null,
-            existing.id
-          );
-        } else {
-          await db.run(
-            'INSERT INTO glossary (project_id, term, definition, category) VALUES (?, ?, ?, ?)',
-            projectId,
-            g.term,
-            g.definition ?? null,
-            g.category ?? null
-          );
-        }
+        await db.run(
+          'UPDATE project SET settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          JSON.stringify(merged.settings), projectId
+        );
+        await db.exec('COMMIT');
+        data.applied = true;
       }
+    } catch (error) {
+      if (apply) await db.exec('ROLLBACK');
+      throw error;
     }
 
     return data;
@@ -1204,7 +1286,7 @@ export class WritingService {
     }
 
     const provider = LLMService.getProvider();
-    return stripThink(await provider.generateText(prompt));
+    return stripThink(await provider.generateText(prompt, undefined, { stream: true }));
   }
 
   static async loadBundleForAgent(projectId: number, chapterId?: string | null) {

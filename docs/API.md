@@ -68,7 +68,7 @@
 | | `POST /agent/draft` | AI 续写（可选 `project_id`/`chapter_id`/`context_text` 分层记忆；默认不写 condensed，除非 `apply`） |
 | | `POST /agent/analyze` | 内容分析 |
 | | `POST /agent/consistency` | 全书逻辑体检 `{ project_id }` → `{ issues[] }` |
-| | `POST /agent/impact` | 定稿世界观演化 `{ project_id, chapter_id, apply? }` |
+| | `POST /agent/impact` | 定稿同步角色、术语、主线时间线与人物关系 `{ project_id, chapter_id, apply? }` |
 | | `POST /agent/skill` | 写作技能（电影化/冲突/反转） |
 | | `GET /agent/context/{chapter_id}` | 获取章节、结构、角色与术语表上下文 |
 | Assistant | `POST /assistant/chat` | Agent OS 决策（多 actions + needs_confirmation） |
@@ -81,9 +81,6 @@
 | | `GET /assets/status/{task_id}` | 获取任务状态 |
 | | `GET /assets/stream/{task_id}` | SSE 任务进度 |
 | | `POST /assets/cancel` | 中断 ComfyUI 当前任务 |
-| Comics | `POST /comics/{chapter_id}/generate` | 生成单章带字幕漫画页和 PDF；保留兼容的部分页语义 |
-| | `GET /comics/project/{project_id}/status` | 检查整本漫画 readiness，列出缺 Timeline / 缺图章节和 Scene |
-| | `POST /comics/project/{project_id}/generate` | 严格按章节/Scene 顺序生成整本漫画 PDF；任一正式 Scene 缺图则 409 |
 | Workflows | `GET /workflows/files` | 内置工作流文件列表 |
 | | `GET /workflows/` | 工作流列表 |
 | | `POST /workflows/` | 创建工作流 |
@@ -106,6 +103,21 @@ POST /api/timeline/generate
   "mode": "narrative"
 }
 ```
+
+### 章节定稿同步
+
+`POST /api/agent/impact` 与 `APPLY_CHAPTER_IMPACT` 使用同一流程。`apply` 默认 `true`：在同一事务中同步角色、术语、`project.settings.main_plot`（角色状态、事件、伏笔）与 `project.settings.character_relations`；`false` 返回预览，不写库。
+
+结果保留 `newOrUpdatedCharacters`、`newOrUpdatedGlossary` 等字段，并包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `chapterContinuity` | `characterStates`、`events`、`foreshadowing`、`characterRelations` 四组本章事实（字符串数组） |
+| `mainPlotEntry` / `characterRelationsEntry` | 本章写入两项设定的文本 |
+| `mainPlotChanged` / `characterRelationsChanged` | 本次合并是否改变对应设定（预览时表示拟变更） |
+| `applied` | 是否已提交写入 |
+
+章节自动记录保存在 `settings.chapter_impact_entries`，重新定稿替换本章原记录并保留作者设定。长章分段提取并合并，任何分段提取失败则不提交；分析期间正文变化需重试。旧版执行没有这些记录，需要重新定稿补齐。
 
 ### 生图
 
@@ -197,45 +209,3 @@ POST /api/scenes/coverage/99/promote
   "position": "after"
 }
 ```
-
-### 整本漫画 PDF
-
-自动化时先做 readiness 检查：
-
-```http
-GET /api/comics/project/12/status
-```
-
-只有返回：
-
-```json
-{
-  "ready": true,
-  "total_chapters": 10,
-  "ready_chapters": 10,
-  "total_scenes": 86,
-  "ready_scenes": 86
-}
-```
-
-才进入严格整本生成：
-
-```http
-POST /api/comics/project/12/generate
-```
-
-成功完成必须同时满足：
-
-```text
-status == completed
-generated_count == total_scenes
-pdf_url 非空
-```
-
-页面顺序固定为：
-
-```text
-Chapter.index ASC → Scene.index ASC
-```
-
-如果某章没有 Timeline，或任何正式 Scene 没有 `asset_url`，接口返回 HTTP 409，并在 `details.chapters[]` 中给出 `blocker` 和 `missing_scene_ids`。不会生成并宣称一个漏页的“完整 PDF”。

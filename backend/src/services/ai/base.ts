@@ -14,7 +14,7 @@ export type ImageGenerationOptions = {
 };
 
 export interface AIProvider {
-    generateText(prompt: string, systemInstruction?: string): Promise<string>;
+    generateText(prompt: string, systemInstruction?: string, options?: { stream?: boolean }): Promise<string>;
 
     // In Node.js with Zod, we pass the ZodSchema to be parsed instead of a Pydantic Model
     generateStructured<T>(

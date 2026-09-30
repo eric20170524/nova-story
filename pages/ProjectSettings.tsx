@@ -12,8 +12,9 @@ import {
   styleLoraRecipeLocaleKey,
   type VisualStyleDef,
 } from '../constants';
+import { ProjectDocumentsPanel } from '../components/ProjectDocumentsPanel';
 
-type SettingsTab = 'overview' | 'story' | 'glossary' | 'advanced';
+type SettingsTab = 'overview' | 'story' | 'glossary' | 'documents' | 'advanced';
 
 const fieldClass =
   'w-full bg-slate-50/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 transition-all shadow-sm';
@@ -386,6 +387,7 @@ export const ProjectSettings: React.FC = () => {
   const tabs: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'overview', label: t('project_settings.tab_overview'), icon: <Palette size={14} /> },
     { id: 'story', label: t('project_settings.tab_story'), icon: <BookOpen size={14} /> },
+    { id: 'documents', label: t('project_settings.tab_documents', '附加资料'), icon: <FileText size={14} /> },
     { id: 'glossary', label: t('project_settings.tab_glossary'), icon: <Library size={14} /> },
     { id: 'advanced', label: t('project_settings.tab_advanced'), icon: <SlidersHorizontal size={14} /> },
   ];
@@ -477,6 +479,20 @@ export const ProjectSettings: React.FC = () => {
                     {[genre, storyStyle, tone].filter(Boolean).join(' · ') ||
                       mainPlot.trim() ||
                       t('project_settings.story_empty_hint')}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  data-testid="project-settings-documents-jump"
+                  onClick={() => setTab('documents')}
+                  className="w-full rounded-xl border border-dashed border-slate-300 dark:border-slate-700/80 bg-slate-50/70 dark:bg-slate-950/40 px-3.5 py-3 text-left transition-colors hover:border-indigo-500/50 hover:bg-indigo-50/30 dark:hover:bg-slate-950/70 shadow-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-300">{t('project_documents.title', '项目附加资料')}</div>
+                    <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">查看资料库 →</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    TXT / Markdown 大纲与背景资料；不污染正文，按需开启 AI 上下文。
                   </p>
                 </button>
               </SectionCard>
@@ -810,6 +826,12 @@ export const ProjectSettings: React.FC = () => {
                 )}
               </ul>
             </SectionCard>
+          )}
+
+          {tab === 'documents' && id && (
+            <div className="space-y-4">
+              <ProjectDocumentsPanel projectId={id} embedded />
+            </div>
           )}
 
           {tab === 'advanced' && (

@@ -31,7 +31,7 @@ export class OpenAIProvider implements AIProvider {
         this.isOllama = options.isOllama === true;
     }
 
-    async generateText(prompt: string, systemInstruction?: string): Promise<string> {
+    async generateText(prompt: string, systemInstruction?: string, options?: { stream?: boolean }): Promise<string> {
         try {
             const messages: any[] = [];
             if (systemInstruction) {
@@ -39,7 +39,7 @@ export class OpenAIProvider implements AIProvider {
             }
             messages.push({ role: 'user', content: prompt });
 
-            const request: any = {
+            const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
                 model: this.model,
                 messages,
                 temperature: 0.85,
@@ -51,6 +51,25 @@ export class OpenAIProvider implements AIProvider {
             }
 
             logger.info(`[OpenAI Prompt Input]: ${truncateLog(prompt)}`);
+            if (options?.stream) {
+                // Receive long rewrites incrementally so the upstream proxy does not
+                // have to wait for the entire chapter before receiving a response.
+                const stream = await this.openai.chat.completions.create({ ...request, stream: true });
+                let content = '';
+                let finishReason: string | null = null;
+                for await (const chunk of stream) {
+                    const choice = chunk.choices.find((item) => item.index === 0);
+                    content += choice?.delta?.content || '';
+                    if (choice?.finish_reason) finishReason = choice.finish_reason;
+                }
+                // A closed connection or token limit must never turn a partial
+                // rewrite into a successful replacement of the original chapter.
+                if (finishReason !== 'stop' || !content.trim()) {
+                    throw new Error(`改写生成未完整结束（${finishReason || '连接中断或空响应'}），未修改章节正文`);
+                }
+                logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
+                return content;
+            }
             const response = await this.openai.chat.completions.create(request);
 
             const content = response.choices[0]?.message?.content || '';
@@ -59,6 +78,9 @@ export class OpenAIProvider implements AIProvider {
             return content;
         } catch (error) {
             logger.error(`OpenAI generateText error: ${error}`);
+            if ((error as any)?.status === 524) {
+                throw Object.assign(new Error('模型服务响应超时（HTTP 524），未生成完整正文。请稍后重试，或检查模型服务与网关超时配置。'), { status: 524, cause: error });
+            }
             throw error;
         }
     }

@@ -202,10 +202,12 @@ test('BE-A1: 三类技能 Prompt 均包含用户指令、下一章边界、作�
   );
 
   let capturedPrompt = '';
+  let capturedOptions: any;
   const originalGetProvider = LLMService.getProvider;
   (LLMService as any).getProvider = () => ({
-    generateText: async (prompt: string) => {
+    generateText: async (prompt: string, _system: string, options: any) => {
       capturedPrompt = prompt;
+      capturedOptions = options;
       return '生成改写正文片段';
     },
   });
@@ -222,6 +224,7 @@ test('BE-A1: 三类技能 Prompt 均包含用户指令、下一章边界、作�
       },
     });
     assert.match(capturedPrompt, /强化气闸舱内外气压差与呼吸声/);
+    assert.equal(capturedOptions?.stream, true);
     assert.match(capturedPrompt, /NEGATIVE CONSTRAINTS/);
     assert.match(capturedPrompt, /在反应堆区域遭遇未知的仿生机械体/);
     assert.match(capturedPrompt, /短篇小说/);
@@ -338,31 +341,41 @@ test('BE-A1: 模型空响应或抛出异常时 DB 正文逐字不变', async () 
     (LLMService as any).getProvider = originalGetProvider;
   }
 
-  // Case 2: Model throws an exception (network failure / timeout)
-  (LLMService as any).getProvider = () => ({
-    generateText: async () => {
-      throw new Error('Connection refused / timeout');
-    },
-  });
+  // Case 2: Network failure, gateway timeout, or incomplete stream must preserve
+  // both the original body and its condensed metadata.
+  await db.run('UPDATE chapter SET condensed_content = ? WHERE id = ?', '原始浓缩摘要', chapterId);
+  for (const failure of [
+    new Error('Connection refused / timeout'),
+    Object.assign(new Error('模型服务响应超时（HTTP 524）'), { status: 524 }),
+    new Error('改写生成未完整结束（length），未修改章节正文'),
+  ]) {
+    (LLMService as any).getProvider = () => ({
+      generateText: async (_prompt: string, _system: string, options: any) => {
+        assert.equal(options?.stream, true);
+        throw failure;
+      },
+    });
+    try {
+      const resFail = await AgentExecutor.executeAll(
+        [
+          {
+            op: 'CINEMATIC_REWRITE',
+            technique: 'sensory',
+            instructions: '测试异常',
+            targetChapterId: chapterId,
+          },
+        ],
+        { projectId, chapterId, apply: true }
+      );
+      assert.equal(resFail[0]?.status, 'error');
+      assert.equal(resFail[0]?.message, failure.message);
 
-  try {
-    const resFail = await AgentExecutor.executeAll(
-      [
-        {
-          op: 'CINEMATIC_REWRITE',
-          technique: 'sensory',
-          instructions: '测试异常',
-          targetChapterId: chapterId,
-        },
-      ],
-      { projectId, chapterId, apply: true }
-    );
-    assert.equal(resFail[0]?.status, 'error');
-
-    const row = await db.get('SELECT content FROM chapter WHERE id = ?', chapterId);
-    assert.equal(row.content, originalContent);
-  } finally {
-    (LLMService as any).getProvider = originalGetProvider;
+      const row = await db.get('SELECT content, condensed_content FROM chapter WHERE id = ?', chapterId);
+      assert.equal(row.content, originalContent);
+      assert.equal(row.condensed_content, '原始浓缩摘要');
+    } finally {
+      (LLMService as any).getProvider = originalGetProvider;
+    }
   }
 });
 

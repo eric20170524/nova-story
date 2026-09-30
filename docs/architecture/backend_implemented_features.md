@@ -11,12 +11,28 @@
 - 单场景 9 镜头 coverage 的生成、应用与提升
 - AI 续写、内容分析、上下文读取和导演助手工具调用
 - **Agent OS（写作内核）**：多 Action 决策 + Zod 自愈；`POST /assistant/execute` 确认后执行；分层记忆与负向约束续写；一致性体检 / 定稿影响 / 写作技能；项目术语表 `glossary`；见 [agent_os_plan_cn.md](./agent_os_plan_cn.md)
+- **本章定稿同步**：`APPLY_CHAPTER_IMPACT` 与 `POST /agent/impact` 共用完整正文提取，角色（含性格/外观）、术语、`settings.main_plot`（角色状态 / 事件 / 伏笔）、`settings.character_relations` 一并提交；`apply:false` 只预览。自动记录按章节排序，同章重新定稿替换原记录，保留已有作者设定。执行报告展示两项设定的更新结果。
 - 角色抽取、跨章节外观演化、素材上传与头像裁剪
 - **场景 / 角色内容版本**：基线版本、新建版本、激活版本、资产同步（A/B 试图）
 - 图片任务：`generation_task` SQLite 持久化、状态查询、SSE、Redis 可选 Pub/Sub  
 - 取消：按任务关联的 ComfyUI `prompt_id` 删队列 + interrupt；重启后 orphan processing → interrupted
-- 漫画字幕栅格化与 PDF 输出
 - **角色三视图**：分视生成（front/side/back）+ 横向拼接（`turnaround_composite.ts`）
+
+### 本章定稿验收矩阵
+
+2026-09-30 验证：模型返回使用测试桩，API / Agent 执行链路与 SQLite 写入、回滚使用真实实现；报告使用浏览器核验示例排版。
+
+| 场景 | 验收结果 |
+| --- | --- |
+| 定稿应用 | 角色性格、外观、术语、主线时间线与人物关系全部写入 |
+| 只读预览 | 返回时间线与关系预览，不改角色、术语或项目设定；报告明确未写入 |
+| 重新定稿 / 多章 | 同章自动记录替换，按章节顺序排列，保留作者设定和其他配置 |
+| 长章末尾 | 原 5000 字截断后的事件、伏笔也参与提取与合并 |
+| 生成失败 / 数据库拒绝写入 | 返回失败，角色、术语、设定没有部分提交 |
+| 生成期间修改 | 正文变化拒绝应用；设定变化重新读取后合并 |
+| 仅设定有变化 | 无角色或术语增量时，报告仍显示时间线与关系更新 |
+
+回归用例：`backend/src/services/ai/chapter_impact.test.ts`、`components/agent/AgentExecutionResultCard.test.tsx`。
 
 ## AI 与媒体
 

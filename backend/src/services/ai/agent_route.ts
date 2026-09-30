@@ -109,7 +109,7 @@ function defaultResponseForIntent(intent: string, userMessage: string): string {
   const map: Record<string, string> = {
     ANALYZE_CHAPTER_CHARACTERS: '正在从本章正文提取角色与性格特征（只读预览，不写入角色库）。',
     ANALYZE_CHAPTER: '正在分析本章剧情推进与新实体。',
-    APPLY_CHAPTER_IMPACT: '将提取本章人物、性格、视觉特征与术语；确认后写入角色库与世界观。',
+    APPLY_CHAPTER_IMPACT: '将提取本章人物、性格、视觉特征、术语、时间线（角色状态、事件、伏笔）与人物关系；确认后更新角色库与设定库。',
     CINEMATIC_REWRITE: '将对当前章进行电影感/小说体重写；确认后写入正文。',
     DRAFT_CONTENT: '将按指令续写或重写正文；确认后写入章节。',
     ADD_CONFLICT: '将为本章注入戏剧冲突；确认后写入。',

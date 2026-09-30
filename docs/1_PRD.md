@@ -16,7 +16,6 @@ NovaStory 是本地优先的 **小说 → 分镜 → 漫画** 工作台：用户
   → 每镜 visual_prompt 可审、可改、可版本化
   → ComfyUI（默认 Pony XL）出图
   → 验收图片 / 只重做失败镜
-  → 单章或整本漫画 PDF
 ```
 
 Aha：读者不看字幕也能从画面认出「按了导览图上的音符按钮」，而不是连续六张同一条走廊里的猫。
@@ -43,8 +42,6 @@ Aha：读者不看字幕也能从画面认出「按了导览图上的音符按�
 - 小说导入 / 编辑 / Agent OS 写作
 - 角色 portrait / turnaround
 - ComfyUI 工作流、LoRA 策略、档位 A/B
-- 漫画 PDF / readiness
-- 整本 `novel-to-comic` 编排（见 `skills/novel-to-comic/SKILL.md`）
 
 ## 4. 🚫 明确不做的事
 

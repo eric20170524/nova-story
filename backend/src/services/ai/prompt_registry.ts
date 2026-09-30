@@ -45,7 +45,7 @@ GENERATE_SCRIPT_OUTLINE | GENERATE_SCRIPT | REWRITE_SCRIPT_SCENE
 
 Rules:
 - Character list + personality from THIS chapter (preview only) → ANALYZE_CHAPTER_CHARACTERS (read-only)
-- Finalize: write characters (bio + personality into description) and glossary → APPLY_CHAPTER_IMPACT
+- Finalize: write characters (bio + personality), glossary, chapter plot timeline (states/events/foreshadowing) and relationships → APPLY_CHAPTER_IMPACT
 - Plot entities only → ANALYZE_CHAPTER
 - Full novel rewrite / remove 画面动作指令 → CINEMATIC_REWRITE or DRAFT_CONTENT
 - Page=script: 改编提纲 → GENERATE_SCRIPT_OUTLINE; 生成剧本 → GENERATE_SCRIPT; 改写指定场次 → REWRITE_SCRIPT_SCENE (never use CINEMATIC_REWRITE on script page)
@@ -326,11 +326,13 @@ JSON 结构如下：
 2. **铺垫要求**: 本章的任务是为上述事件做铺垫。请把剧情推到爆发的前一秒（例如：刚看到敌人、刚踏入陷阱、刚发现秘密），然后戛然而止。
 3. **悬念控制**: 必须在冲突即将发生但尚未发生时结束本章，留下强烈的悬念 (断章艺术)。`,
 
-  analysis_impact: `你是一位小说连载的“世界观管理员”。你的任务是阅读最新的章节内容，并更新人物档案和专有名词表。
+  analysis_impact: `你是一位小说连载的“世界观管理员”。阅读定稿章节，提取人物档案、专有名词、本章时间线与人物关系变化。
 
 --- 现有数据 ---
 当前人物: {{characters}}
 当前专有名词: {{glossary}}
+既有主线剧情（含规划，不能当作本章事实）: {{mainPlot}}
+既有人物关系: {{characterRelations}}
 
 --- 最新章节 ---
 标题: {{chapterTitle}}

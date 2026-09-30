@@ -41,6 +41,19 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ detail: 'Project not found' });
     }
 
+    const existingChapters = (await db.all(
+      'SELECT id, title, "index", status FROM chapter WHERE project_id = ? ORDER BY "index" ASC',
+      chapter.project_id
+    )) as Array<{ id: string; title: string; index: number; status: string }>;
+    if (existingChapters.length > 0) {
+      const lastChapter = existingChapters[existingChapters.length - 1]!;
+      if (lastChapter.status !== 'completed') {
+        return reply.status(400).send({
+          detail: `上一章（${lastChapter.title}）尚未定稿，请先完成「定稿：更新世界观」后再创建新章节`,
+        });
+      }
+    }
+
     await db.run(
       'INSERT INTO chapter (id, project_id, "index", title, content, status) VALUES (?, ?, ?, ?, ?, ?)',
       chapter.id,

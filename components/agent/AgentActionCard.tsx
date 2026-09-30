@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, Check, X, Terminal } from 'lucide-react';
+import { AlertTriangle, Check, X, Terminal, Loader2 } from 'lucide-react';
 import { useLanguage } from '../../LanguageContext';
 
 export type AgentAction = Record<string, any> & { op: string };
@@ -75,30 +75,51 @@ export const AgentActionCard: React.FC<AgentActionCardProps> = ({
 
   return (
     <div
-      className={`rounded-2xl border p-4 space-y-3 shadow-md transition-all ${
+      className={`rounded-2xl border p-4 space-y-3 shadow-md transition-all relative overflow-hidden ${
         hasDelete
           ? 'border-red-300 dark:border-red-500/40 bg-red-50/90 dark:bg-red-950/30'
           : 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-950/20'
       }`}
     >
-      <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
-        {hasDelete ? (
-          <AlertTriangle size={15} className="text-red-600 dark:text-red-400" />
-        ) : (
-          <Terminal size={15} className="text-indigo-600 dark:text-indigo-400" />
+      {executing && (
+        <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-100 dark:bg-indigo-950 overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 animate-[shimmer_1.5s_infinite] w-full" />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+        <div className="flex items-center gap-2">
+          {hasDelete ? (
+            <AlertTriangle size={15} className="text-red-600 dark:text-red-400" />
+          ) : (
+            <Terminal size={15} className="text-indigo-600 dark:text-indigo-400" />
+          )}
+          <span>
+            {t('agent.action_plan', '执行方案')} ({actions.length})
+          </span>
+        </div>
+        {executing && (
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-400">
+            <Loader2 size={12} className="animate-spin" />
+            <span>{t('agent.executing', '正在执行…')}</span>
+          </div>
         )}
-        <span>
-          {t('agent.action_plan', '执行方案')} ({actions.length})
-        </span>
       </div>
       <ul className="space-y-1.5">
         {actions.map((action, idx) => (
           <li
             key={idx}
-            className="text-xs text-slate-800 dark:text-slate-300 font-mono bg-white dark:bg-slate-900/60 rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-800 shadow-xs"
+            className={`text-xs text-slate-800 dark:text-slate-300 font-mono bg-white dark:bg-slate-900/60 rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between gap-2 ${
+              executing ? 'border-indigo-300/80 dark:border-indigo-600/50 bg-indigo-50/40 dark:bg-indigo-950/30' : ''
+            }`}
           >
-            <span className="text-indigo-600 dark:text-indigo-400 font-semibold mr-1.5">{action.op}</span>
-            <span className="text-slate-600 dark:text-slate-400">— {describeAction(action, t)}</span>
+            <div className="min-w-0 truncate">
+              <span className="text-indigo-600 dark:text-indigo-400 font-semibold mr-1.5">{action.op}</span>
+              <span className="text-slate-600 dark:text-slate-400">— {describeAction(action, t)}</span>
+            </div>
+            {executing && (
+              <Loader2 size={12} className="animate-spin text-indigo-500 flex-shrink-0" />
+            )}
           </li>
         ))}
       </ul>
@@ -113,7 +134,11 @@ export const AgentActionCard: React.FC<AgentActionCardProps> = ({
               : 'bg-indigo-600 hover:bg-indigo-500 text-white'
           }`}
         >
-          <Check size={14} />
+          {executing ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Check size={14} />
+          )}
           {executing
             ? t('agent.executing', '正在执行…')
             : hasDelete

@@ -1060,10 +1060,19 @@ export const ScriptEditor: React.FC = () => {
                     : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
                 }`}
               >
-                <div className="flex items-center justify-between w-full">
+                <div className="flex items-center justify-between w-full gap-2">
                   <span className="truncate font-medium text-sm">
                     第 {ch.index} 章 {ch.title}
                   </span>
+                  {ch.status === 'completed' ? (
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40 flex-shrink-0">
+                      {t('story.status_completed', '已定稿')}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700 flex-shrink-0">
+                      {t('story.status_draft', '草稿')}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
                   <BookOpen size={11} />

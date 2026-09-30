@@ -14,7 +14,8 @@
     "build:frontend": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "npm test --workspace backend",
+    "test": "npm test --workspace backend && npm run test:agent-ui",
+    "test:agent-ui": "node --import tsx --test services/agent_execution.test.ts components/agent/AgentExecutionResultCard.test.tsx",
     "check": "npm run typecheck && npm run build"
   },
   "dependencies": {

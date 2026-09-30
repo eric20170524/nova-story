@@ -8,9 +8,6 @@ import {
   getSceneAssetPath,
   getCharacterAssetPath,
   getUploadAssetPath,
-  getComicSceneAssetPath,
-  getComicChapterAssetPath,
-  getComicProjectAssetPath,
   resolveStaticAssetPath
 } from './paths';
 
@@ -97,38 +94,6 @@ test('resolves legacy flat static path gracefully', () => {
   try {
     fs.unlinkSync(legacyFile);
   } catch {}
-});
-
-test('generates structured comic paths for scenes, chapters, and projects', () => {
-  const sceneResult = getComicSceneAssetPath({
-    projectId: 10,
-    chapterId: 'ch-1',
-    sceneId: 55,
-  });
-  assert.equal(
-    sceneResult.url,
-    '/static/comics/projects/10/chapters/ch-1/scenes/comic_scene_55.jpg'
-  );
-  assert.ok(fs.existsSync(sceneResult.dir));
-
-  const chapterResult = getComicChapterAssetPath({
-    projectId: 10,
-    chapterId: 'ch-1',
-  });
-  assert.equal(
-    chapterResult.url,
-    '/static/comics/projects/10/chapters/ch-1/chapter_ch-1_comic.pdf'
-  );
-  assert.ok(fs.existsSync(chapterResult.dir));
-
-  const projectResult = getComicProjectAssetPath({
-    projectId: 10,
-  });
-  assert.equal(
-    projectResult.url,
-    '/static/comics/projects/10/project_10_comic.pdf'
-  );
-  assert.ok(fs.existsSync(projectResult.dir));
 });
 
 

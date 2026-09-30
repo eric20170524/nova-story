@@ -21,6 +21,7 @@ export interface ProjectSettings {
   style?: string;
   main_plot?: string;
   character_relations?: string;
+  chapter_impact_entries?: Record<string, { main_plot: string; character_relations: string }>;
   story_tags?: string[];
   pov?: string;
   tone?: string;

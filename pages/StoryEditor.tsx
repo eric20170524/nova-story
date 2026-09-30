@@ -235,6 +235,19 @@ export const StoryEditor: React.FC = () => {
 
   const handleCreateChapter = async () => {
     if (!projectId) return;
+    if (chapters.length > 0) {
+      const lastChapter = chapters[chapters.length - 1];
+      if (lastChapter.status !== 'completed') {
+        showToast(
+          t(
+            'story.prev_chapter_not_finalized_alert',
+            `上一章（${lastChapter.title}）尚未定稿。章节定稿有严格次序，请先完成「定稿：更新世界观」后再创建新章。`
+          ).replace('{title}', lastChapter.title),
+          'warning'
+        );
+        return;
+      }
+    }
     const newIndex = chapters.length > 0 ? Math.max(...chapters.map(c => c.index)) + 1 : 1;
     const title = `${t('story.new_chapter_prefix', 'Chapter')} ${newIndex}`;
     try {
@@ -249,9 +262,9 @@ export const StoryEditor: React.FC = () => {
       setChapters(updated);
       setSelectedChapter(newChapter);
       showToast(t('story.chapter_created', 'Chapter created'), 'success');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showToast(t('story.failed_create_chapter', 'Failed to create chapter'), 'error');
+      showToast(err.message || t('story.failed_create_chapter', 'Failed to create chapter'), 'error');
     }
   };
 
@@ -344,6 +357,7 @@ export const StoryEditor: React.FC = () => {
       if (!ok) return;
     }
     if (agentCtx) {
+      agentCtx.setOpen(true);
       agentCtx.sendPrompt(promptText);
     }
   };
@@ -366,6 +380,10 @@ export const StoryEditor: React.FC = () => {
     maxHeight: "100%",
   }), [t]);
 
+  const lastChapter = chapters.length > 0 ? chapters[chapters.length - 1] : null;
+  const isPrevChapterUnfinalized = Boolean(lastChapter && lastChapter.status !== 'completed');
+  const lastChapterTitle = lastChapter ? lastChapter.title : '';
+
   return (
     <div className="flex h-full w-full min-h-0 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Chapter Sidebar */}
@@ -374,8 +392,16 @@ export const StoryEditor: React.FC = () => {
           <h3 className="font-bold text-slate-800 dark:text-slate-200 hidden lg:block text-sm">{t('story.chapters')}</h3>
           <button
             onClick={handleCreateChapter}
-            className="p-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-600 dark:text-indigo-400 rounded-xl mx-auto lg:mx-0 transition-all shadow-xs"
-            title={t('story.new_chapter', '新建章节')}
+            className={`p-1.5 rounded-xl mx-auto lg:mx-0 transition-all shadow-xs ${
+              isPrevChapterUnfinalized
+                ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/60'
+                : 'bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-600 dark:text-indigo-400'
+            }`}
+            title={
+              isPrevChapterUnfinalized
+                ? t('story.cannot_create_unfinalized_tip', `上一章（${lastChapterTitle}）尚未定稿，请先完成定稿更新世界观`).replace('{title}', lastChapterTitle)
+                : t('story.new_chapter', '新建章节')
+            }
           >
             <Plus size={17} />
           </button>
@@ -392,9 +418,18 @@ export const StoryEditor: React.FC = () => {
               }`}
               title={chapter.title}
             >
-              <div className="flex items-center gap-2 overflow-hidden flex-1">
+              <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
                 <FileText size={15} className={`flex-shrink-0 ${selectedChapter?.id === chapter.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`} />
                 <span className="truncate hidden lg:block">{chapter.title}</span>
+                {chapter.status === 'completed' ? (
+                  <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40 flex-shrink-0">
+                    {t('story.status_completed', '已定稿')}
+                  </span>
+                ) : (
+                  <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700 flex-shrink-0">
+                    {t('story.status_draft', '草稿')}
+                  </span>
+                )}
               </div>
               
               <div className="hidden lg:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -628,7 +663,7 @@ export const StoryEditor: React.FC = () => {
                         handleTriggerAgentAction(
                           t(
                             'agent.prompt_impact',
-                            '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库'
+                            '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库，同时更新主线剧情时间线（角色状态、事件、伏笔）与人物关系'
                           )
                         )
                       }
@@ -666,11 +701,32 @@ export const StoryEditor: React.FC = () => {
 
             {/* Save Button */}
             <button 
-              onClick={handleSave}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-indigo-500/20"
+              onClick={() => handleSave()}
+              disabled={!selectedChapter}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-indigo-500/20 disabled:opacity-40"
             >
               <Save size={14} /> 
               <span>{t('story.save')}</span>
+            </button>
+
+            {/* Finalize Worldview Button */}
+            <button
+              type="button"
+              onClick={() =>
+                handleTriggerAgentAction(
+                  t(
+                    'agent.prompt_impact',
+                    '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库，同时更新主线剧情时间线（角色状态、事件、伏笔）与人物关系'
+                  )
+                )
+              }
+              disabled={!selectedChapter}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-emerald-600/20 disabled:opacity-40"
+              title={t('story.impact_btn', '定稿：更新世界观')}
+            >
+              <BookOpen size={14} />
+              <span className="hidden sm:inline">{t('story.impact_btn', '定稿：更新世界观')}</span>
+              <span className="sm:hidden">{t('story.impact_short', '定稿')}</span>
             </button>
           </div>
         </div>

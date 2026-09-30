@@ -19,7 +19,6 @@ import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES 
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
-import { ComicViewer } from '../components/ComicViewer';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
@@ -126,7 +125,6 @@ export const DirectorMode: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [generatingNarration, setGeneratingNarration] = useState(false);
-  const [renderingVideo, setRenderingVideo] = useState(false);
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
@@ -138,12 +136,6 @@ export const DirectorMode: React.FC = () => {
     orientation_policy: 'fixed',
   });
   const [systemNsfw, setSystemNsfw] = useState(false);
-
-  // Comic State
-  const [generatingComic, setGeneratingComic] = useState(false);
-  const [comicPages, setComicPages] = useState<any[]>([]);
-  const [comicPdf, setComicPdf] = useState<string | null>(null);
-  const [showComicViewer, setShowComicViewer] = useState(false);
 
   // Batch Generation State
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
@@ -1256,27 +1248,6 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
-  const handleGenerateComic = async () => {
-    if (!selectedChapterId) return;
-    setGeneratingComic(true);
-    try {
-        const res = await api.generateComic(selectedChapterId);
-        if (res.pages) {
-            setComicPages(res.pages);
-            setComicPdf(res.pdf_url);
-            setShowComicViewer(true);
-            showToast(t("director.comic_generated", "Comic generated successfully"), 'success');
-        } else {
-            showToast(t("director.comic_no_pages", "No pages generated."), 'error');
-        }
-    } catch (e) {
-        console.error(e);
-        showToast(t("director.comic_failed", "Failed to generate comic. Ensure all scenes have images."), 'error');
-    } finally {
-        setGeneratingComic(false);
-    }
-  };
-
   return (
     <div className="flex-1 flex overflow-hidden bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 h-full w-full min-h-0">
       <DirectorSidebar
@@ -1318,13 +1289,6 @@ export const DirectorMode: React.FC = () => {
         setStyleStrength={setStyleStrength}
         assetMode={assetMode}
         setAssetMode={setAssetMode}
-        renderingVideo={renderingVideo}
-        onRenderVideo={() => {}}
-        generatingComic={generatingComic}
-        onGenerateComic={handleGenerateComic}
-        comicPages={comicPages}
-        showComicViewer={showComicViewer}
-        setShowComicViewer={setShowComicViewer}
         timeline={timeline}
         isBatchGenerating={isBatchGenerating}
         onBatchGenerate={handleBatchGenerate}
@@ -1382,14 +1346,6 @@ export const DirectorMode: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
-
-      {showComicViewer && (
-        <ComicViewer
-          pages={comicPages}
-          pdfUrl={comicPdf}
-          onClose={() => setShowComicViewer(false)}
-        />
       )}
     </div>
   );

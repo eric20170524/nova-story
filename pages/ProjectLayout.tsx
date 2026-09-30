@@ -9,7 +9,6 @@ import {
   useProjectAgent,
 } from '../contexts/ProjectAgentContext';
 import { ProjectAgentPanel } from '../components/agent/ProjectAgentPanel';
-import { ProjectDocumentsPanel } from '../components/ProjectDocumentsPanel';
 
 export const ProjectLayout: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -95,9 +94,6 @@ export const ProjectLayout: React.FC = () => {
 
         {/* Global Agent OS floating panel */}
         <ProjectAgentPanel projectId={id} />
-
-        {/* Project-scoped supplemental documents */}
-        <ProjectDocumentsPanel projectId={id} />
       </div>
     </ProjectAgentProvider>
   );

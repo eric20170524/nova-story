@@ -26,7 +26,7 @@ const typeLabel = (value: ProjectDocumentType) =>
 
 const isContextEnabled = (value: number | boolean | undefined) => value === true || value === 1;
 
-export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
+export const ProjectDocumentsPanel: React.FC<{ projectId: string; embedded?: boolean }> = ({ projectId, embedded = false }) => {
   const { t } = useLanguage();
   const { showToast } = useToast();
   const numericProjectId = Number(projectId);
@@ -52,8 +52,8 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
   };
 
   useEffect(() => {
-    if (open) void loadDocuments();
-  }, [open, numericProjectId]);
+    if (embedded || open) void loadDocuments();
+  }, [open, embedded, numericProjectId]);
 
   const resetUpload = () => {
     setFile(null);
@@ -125,6 +125,157 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
     }
   };
 
+  const contentBody = (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 p-4 space-y-3 shadow-sm transition-colors">
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-200">
+          <Plus size={16} className="text-indigo-600 dark:text-indigo-400" /> 添加资料
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[150px_1fr]">
+          <select
+            value={documentType}
+            disabled={busy}
+            onChange={(event) => {
+              setDocumentType(event.target.value as ProjectDocumentType);
+              setPreview(null);
+            }}
+            className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-xs"
+          >
+            {TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+          <input
+            type="file"
+            accept=".txt,text/plain,.md,.markdown,text/markdown"
+            disabled={busy}
+            onChange={(event) => {
+              setFile(event.target.files?.[0] || null);
+              setPreview(null);
+            }}
+            className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-700 dark:text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:dark:bg-indigo-500/10 file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-indigo-600 file:dark:text-indigo-300 shadow-xs"
+          />
+        </div>
+
+        {preview && (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3.5 text-xs shadow-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold text-slate-900 dark:text-slate-200">{preview.title}</span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{preview.source.format.toUpperCase()}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+              <span>{preview.content_characters} 字符</span>
+              <span>{preview.line_count} 行</span>
+              {preview.heading_count > 0 && <span>{preview.heading_count} 个标题</span>}
+            </div>
+            <div className="mt-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/5 px-2.5 py-1.5 text-xs text-emerald-800 dark:text-emerald-300/80 border border-emerald-200/60 dark:border-emerald-800/40">
+              安全预览：不会修改章节正文，不会修改 Story Bible；保存后 AI 上下文默认关闭。
+            </div>
+            {preview.duplicate_document && (
+              <div className="mt-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
+                重复资料：已存在“{preview.duplicate_document.name}”。
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            disabled={!file || busy || Boolean(preview?.duplicate_document)}
+            onClick={handlePreviewOrCommit}
+            className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-500 shadow-md shadow-indigo-600/20 transition-all"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {preview ? '确认添加' : '解析预览'}
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-2.5 flex items-center justify-between">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800 dark:text-slate-300">已添加资料</h3>
+            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-500">只有手动开启的资料才会按固定预算进入写作上下文。</p>
+          </div>
+          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{documents.length}</span>
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
+        ) : documents.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-400 dark:text-slate-600">暂无附加资料</div>
+        ) : (
+          <div className="space-y-2.5">
+            {documents.map((document) => {
+              let metadata: Record<string, unknown> = {};
+              try { metadata = document.metadata_json ? JSON.parse(document.metadata_json) : {}; } catch { metadata = {}; }
+              const contextEnabled = isContextEnabled(document.context_enabled);
+              return (
+                <div key={document.id} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3.5 shadow-sm transition-colors">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-bold text-slate-900 dark:text-slate-200">{document.name}</div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                        <span className="font-medium text-indigo-600 dark:text-indigo-400">{typeLabel(document.document_type)}</span>
+                        <span>{document.source_format.toUpperCase()}</span>
+                        {typeof metadata.content_characters === 'number' && <span>{metadata.content_characters} 字符</span>}
+                      </div>
+                      {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-400 dark:text-slate-600">{document.source_filename}</div>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(document)}
+                      className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                      aria-label="删除附加资料"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-2.5">
+                    <div>
+                      <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">AI 写作上下文</div>
+                      <div className="text-[11px] text-slate-400 dark:text-slate-500">开启后按类型优先级和总量预算截取。</div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={contextBusyId !== null}
+                      onClick={() => void handleContextToggle(document)}
+                      className={`min-w-20 rounded-full border px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
+                        contextEnabled
+                          ? 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 shadow-xs'
+                          : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      {contextBusyId === document.id ? '更新中…' : contextEnabled ? '已开启' : '关闭'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900/50 p-5 sm:p-6 shadow-sm transition-colors">
+          <div className="mb-4">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+              <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
+              {t('project_documents.title', '项目附加资料')}
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              支持上传 TXT / Markdown 外部参考资料（大纲、世界观、人物笔记）。独立隔离保存，不自动覆盖正文或 Story Bible；可按需开启 AI 写作上下文。
+            </p>
+          </div>
+          {contentBody}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <button
@@ -151,133 +302,7 @@ export const ProjectDocumentsPanel: React.FC<{ projectId: string }> = ({ project
             </div>
 
             <div className="space-y-5 p-5">
-              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900 p-4 space-y-3 shadow-sm transition-colors">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-200">
-                  <Plus size={16} className="text-indigo-600 dark:text-indigo-400" /> 添加资料
-                </div>
-                <div className="grid gap-3 sm:grid-cols-[150px_1fr]">
-                  <select
-                    value={documentType}
-                    disabled={busy}
-                    onChange={(event) => {
-                      setDocumentType(event.target.value as ProjectDocumentType);
-                      setPreview(null);
-                    }}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-xs"
-                  >
-                    {TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                  <input
-                    type="file"
-                    accept=".txt,text/plain,.md,.markdown,text/markdown"
-                    disabled={busy}
-                    onChange={(event) => {
-                      setFile(event.target.files?.[0] || null);
-                      setPreview(null);
-                    }}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-700 dark:text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:dark:bg-indigo-500/10 file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-indigo-600 file:dark:text-indigo-300 shadow-xs"
-                  />
-                </div>
-
-                {preview && (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3.5 text-xs shadow-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-slate-900 dark:text-slate-200">{preview.title}</span>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{preview.source.format.toUpperCase()}</span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-                      <span>{preview.content_characters} 字符</span>
-                      <span>{preview.line_count} 行</span>
-                      {preview.heading_count > 0 && <span>{preview.heading_count} 个标题</span>}
-                    </div>
-                    <div className="mt-3 rounded-lg bg-emerald-50 dark:bg-emerald-500/5 px-2.5 py-1.5 text-xs text-emerald-800 dark:text-emerald-300/80 border border-emerald-200/60 dark:border-emerald-800/40">
-                      安全预览：不会修改章节正文，不会修改 Story Bible；保存后 AI 上下文默认关闭。
-                    </div>
-                    {preview.duplicate_document && (
-                      <div className="mt-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
-                        重复资料：已存在“{preview.duplicate_document.name}”。
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={!file || busy || Boolean(preview?.duplicate_document)}
-                    onClick={handlePreviewOrCommit}
-                    className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-500 shadow-md shadow-indigo-600/20 transition-all"
-                  >
-                    {busy && <Loader2 size={14} className="animate-spin" />}
-                    {preview ? '确认添加' : '解析预览'}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-800 dark:text-slate-300">已添加资料</h3>
-                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-500">只有手动开启的资料才会按固定预算进入写作上下文。</p>
-                  </div>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">{documents.length}</span>
-                </div>
-                {loading ? (
-                  <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" size={20} /></div>
-                ) : documents.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-400 dark:text-slate-600">暂无附加资料</div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {documents.map((document) => {
-                      let metadata: Record<string, unknown> = {};
-                      try { metadata = document.metadata_json ? JSON.parse(document.metadata_json) : {}; } catch { metadata = {}; }
-                      const contextEnabled = isContextEnabled(document.context_enabled);
-                      return (
-                        <div key={document.id} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3.5 shadow-sm transition-colors">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-bold text-slate-900 dark:text-slate-200">{document.name}</div>
-                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                                <span className="font-medium text-indigo-600 dark:text-indigo-400">{typeLabel(document.document_type)}</span>
-                                <span>{document.source_format.toUpperCase()}</span>
-                                {typeof metadata.content_characters === 'number' && <span>{metadata.content_characters} 字符</span>}
-                              </div>
-                              {document.source_filename && <div className="mt-1 truncate text-[11px] text-slate-400 dark:text-slate-600">{document.source_filename}</div>}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleDelete(document)}
-                              className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                              aria-label="删除附加资料"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-2.5">
-                            <div>
-                              <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">AI 写作上下文</div>
-                              <div className="text-[11px] text-slate-400 dark:text-slate-500">开启后按类型优先级和总量预算截取。</div>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={contextBusyId !== null}
-                              onClick={() => void handleContextToggle(document)}
-                              className={`min-w-20 rounded-full border px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
-                                contextEnabled
-                                  ? 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 shadow-xs'
-                                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                              }`}
-                            >
-                              {contextBusyId === document.id ? '更新中…' : contextEnabled ? '已开启' : '关闭'}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              {contentBody}
             </div>
           </div>
         </div>

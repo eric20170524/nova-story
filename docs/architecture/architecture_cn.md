@@ -10,7 +10,7 @@ React/Vite
     ▼
 Fastify/TypeScript
     ├── Project / Chapter / Character (+ visual versions)
-    ├── Timeline / Scene versions / Coverage / Comics
+    ├── Timeline / Scene versions / Coverage
     ├── Creative Agent / Assistant
     ├── LLM Provider Layer
     └── Media Provider Layer
@@ -34,7 +34,6 @@ Fastify/TypeScript
    - 本地默认 **Pony XL** 成片 / **SD1.5** 草稿；
    - 策略层统一 NSFW、风格 booster、LoRA 栈与参考门禁；
    - 结果写入静态目录并更新 Scene（可写入场景版本资产）。
-6. 漫画服务读取已生成素材，栅格化字幕并输出页面和 PDF。
 
 ## 本地生图分层
 

@@ -25,8 +25,9 @@
 
 ## 4. 日志
 
-- 实现：`backend/src/core/logging.ts`（pino）
-- 文件：`backend/logs/novastory.log`
+- 实现：`backend/src/core/logging.ts`（pino + pino-roll）
+- 文件：`backend/logs/novastory.log`（按天滚动生成，如 `novastory.YYYY-MM-DD.1.log`）
+- 保留策略：默认保留近 3 天日志；可通过环境变量 `LOG_RETENTION_DAYS`（或 `NOVASTORY_LOG_RETENTION_DAYS`）进行配置
 - 级别：INFO 常规、ERROR 异常、DEBUG 本地
 - 禁止把 API Key、参考图绝对路径里的密钥写入日志
 - 禁止 `catch` 后吞掉错误

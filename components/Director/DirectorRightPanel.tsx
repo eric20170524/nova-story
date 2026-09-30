@@ -1,15 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import {
   Loader2,
-  Video,
-  BookOpen,
   X,
   Sliders,
   Zap,
   PlayCircle,
   Square,
-  Library,
   Film,
   ShieldCheck,
   Cpu,
@@ -17,9 +13,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Scene, AssetMode, ImageOutputSpec, VideoProfile, VideoPreset, VideoCapabilities } from '../../types';
-import { API_BASE_URL, formatVisualStyleLabel, getVisualStyles, styleLoraRecipeLocaleKey, type VisualStyleDef } from '../../constants';
+import { formatVisualStyleLabel, getVisualStyles, styleLoraRecipeLocaleKey, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
-import { useToast } from '../../ToastContext';
 import { api } from '../../services/api';
 
 export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
@@ -33,13 +28,6 @@ interface DirectorRightPanelProps {
   setStyleStrength?: (val: number) => void;
   assetMode: AssetMode;
   setAssetMode: (mode: AssetMode) => void;
-  renderingVideo: boolean;
-  onRenderVideo: () => void;
-  generatingComic: boolean;
-  onGenerateComic: () => void;
-  comicPages: any[];
-  showComicViewer: boolean;
-  setShowComicViewer: (show: boolean) => void;
   timeline: Scene[];
   isBatchGenerating?: boolean;
   onBatchGenerate?: () => void;
@@ -71,13 +59,6 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   setStyleStrength,
   assetMode,
   setAssetMode,
-  renderingVideo,
-  onRenderVideo,
-  generatingComic,
-  onGenerateComic,
-  comicPages,
-  showComicViewer,
-  setShowComicViewer,
   timeline,
   onBatchGenerate,
   onStopBatchGenerate,
@@ -98,11 +79,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   isBatchGeneratingVideo = false,
   onStopBatchGenerateVideo
 }) => {
-  const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
-  const { showToast } = useToast();
   const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
-  const [generatingProjectComic, setGeneratingProjectComic] = useState(false);
   const [videoCaps, setVideoCaps] = useState<VideoCapabilities | null>(null);
   const [checkingCaps, setCheckingCaps] = useState(false);
 
@@ -137,56 +115,6 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   const activeStyleLabel = activeStyleDef
     ? formatVisualStyleLabel(activeStyleDef, t(`director.styles.${activeStyleDef.value}`) || activeStyleDef.label)
     : selectedStyle;
-
-  const handleGenerateProjectComic = async () => {
-    const numericProjectId = Number(projectId);
-    if (!Number.isFinite(numericProjectId) || generatingProjectComic) return;
-
-    setGeneratingProjectComic(true);
-    try {
-      const readiness = await api.getProjectComicStatus(numericProjectId);
-      if (!readiness.ready) {
-        const missingScenes = Math.max(0, readiness.total_scenes - readiness.ready_scenes);
-        const noTimeline = readiness.chapters.filter((chapter) => chapter.blocker === 'no_scenes').length;
-        showToast(
-          t(
-            'director.project_comic_not_ready',
-            `整本漫画尚未就绪：${readiness.ready_chapters}/${readiness.total_chapters} 章完成，${noTimeline} 章缺少分镜，${missingScenes} 个 Scene 缺图。`
-          ),
-          'warning'
-        );
-        return;
-      }
-
-      const result = await api.generateProjectComic(numericProjectId);
-      if (
-        result.status !== 'completed'
-        || result.generated_count !== result.total_scenes
-        || !result.pdf_url
-      ) {
-        throw new Error('Project comic generation did not produce a complete PDF');
-      }
-
-      const pdfUrl = result.pdf_url.startsWith('http')
-        ? result.pdf_url
-        : `${API_BASE_URL.replace('/api', '')}${result.pdf_url}`;
-      window.open(pdfUrl, '_blank');
-      showToast(
-        t(
-          'director.project_comic_generated',
-          `整本漫画已生成：${result.total_chapters} 章 / ${result.generated_count} 页。`
-        ),
-        'success'
-      );
-    } catch (error) {
-      showToast(
-        error instanceof Error ? error.message : t('director.project_comic_failed', '整本漫画生成失败'),
-        'error'
-      );
-    } finally {
-      setGeneratingProjectComic(false);
-    }
-  };
 
   return (
     <>
@@ -464,49 +392,6 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                    </div>
                  </div>
                </div>
-            </div>
-
-            {/* Export & Production */}
-            <div className="space-y-4">
-               <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                 <Video size={13} />
-                 {t('director.export_production', 'Export & production')}
-               </h4>
-               
-               <div className="space-y-2">
-                  <button 
-                    onClick={onGenerateComic}
-                    disabled={generatingComic || timeline.length === 0}
-                    className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                  >
-                     {generatingComic ? <Loader2 className="animate-spin" size={14} /> : <BookOpen size={14} />}
-                     {t('director.generate_comic', '生成本章漫画')}
-                  </button>
-
-                  <button
-                    onClick={() => void handleGenerateProjectComic()}
-                    disabled={generatingProjectComic || !projectId}
-                    className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-600/20 dark:hover:bg-indigo-600/30 border border-indigo-200 dark:border-indigo-500/40 text-indigo-700 dark:text-indigo-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
-                    title="严格模式：所有章节必须已有分镜，且每个正式 Scene 都必须有图片"
-                  >
-                    {generatingProjectComic ? <Loader2 className="animate-spin" size={14} /> : <Library size={14} />}
-                    {t('director.generate_project_comic', '生成整本漫画 PDF')}
-                  </button>
-
-                  <p className="px-1 text-[10px] leading-relaxed text-slate-400 dark:text-slate-500">
-                    {t('director.project_comic_strict_hint', '整本导出采用严格模式：任一章节缺少分镜或任一 Scene 缺图时不会生成不完整 PDF。')}
-                  </p>
-               </div>
-
-               {comicPages.length > 0 && (
-                  <button 
-                     onClick={() => setShowComicViewer(true)}
-                     className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-600/20 dark:hover:bg-indigo-600/30 border border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all"
-                  >
-                     <BookOpen size={14} />
-                     {t('director.view_comic')} ({comicPages.length}P)
-                  </button>
-               )}
             </div>
 
             {/* Stats */}

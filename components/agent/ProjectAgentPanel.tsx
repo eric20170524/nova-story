@@ -11,6 +11,12 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
+import {
+  selectAppliedSkillContent,
+  shouldRefreshAfterExecution,
+  shouldRetainPendingAgentActions,
+  summarizeAgentExecution,
+} from '../../services/agent_execution';
 import { useLanguage } from '../../LanguageContext';
 import { useProjectAgent } from '../../contexts/ProjectAgentContext';
 import { AgentActionCard, type AgentAction } from './AgentActionCard';
@@ -40,31 +46,14 @@ interface ProjectAgentPanelProps {
 
 const historyKey = (projectId: string) => `novastory_agent_history_${projectId}`;
 
-const SKILL_CONTENT_OPS = new Set([
-  'CINEMATIC_REWRITE',
-  'ADD_CONFLICT',
-  'REVERSE_PLOT',
-  'DRAFT_CONTENT',
-]);
-
-/** When executor already wrote content to DB (applied=true), push it into the story editor. */
+/** When executor already wrote this chapter's body, push it into the open editor. */
 function syncAppliedEditorContent(
   results: ExecutionResultItem[] | undefined,
+  editorChapterId: string | null | undefined,
   applyContent: (content: string, opts?: { alreadyPersisted?: boolean }) => void
 ) {
-  if (!results?.length) return;
-  for (const item of results) {
-    if (item.status === 'error') continue;
-    const data = item.data;
-    const content = typeof data?.content === 'string' ? data.content : '';
-    if (!content) continue;
-    const applied = Boolean(data?.applied);
-    const isSkill = SKILL_CONTENT_OPS.has(item.op);
-    if (applied && isSkill) {
-      applyContent(content, { alreadyPersisted: true });
-      return; // one chapter body at a time
-    }
-  }
+  const content = selectAppliedSkillContent(results, editorChapterId);
+  if (content) applyContent(content, { alreadyPersisted: true });
 }
 
 /** One-click copy for Agent OS bubbles / input. */
@@ -166,6 +155,9 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
   const [pendingActions, setPendingActions] = useState<AgentAction[] | null>(
     null
   );
+  const [pendingChapterId, setPendingChapterId] = useState<string | null>(null);
+  const chapterIdRef = useRef(chapterId);
+  chapterIdRef.current = chapterId;
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -208,13 +200,24 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
 
   const [pendingSurface, setPendingSurface] = useState<string | null>(null);
 
-  // Invalidate leftover pending actions from a different surface when switching pages (P1-2 / SC12)
+  const clearPendingAgentActions = () => {
+    setPendingActions(null);
+    setPendingSurface(null);
+    setPendingChapterId(null);
+  };
+
+  // Drop confirm/retry cards when the page or chapter they belong to changes.
   useEffect(() => {
-    if (pendingActions && pendingSurface && pendingSurface !== currentSurface) {
-      setPendingActions(null);
-      setPendingSurface(null);
+    if (!pendingActions) return;
+    if (!shouldRetainPendingAgentActions({
+      pendingChapterId,
+      currentChapterId: chapterId ?? null,
+      pendingSurface,
+      currentSurface: currentSurface ?? null,
+    })) {
+      clearPendingAgentActions();
     }
-  }, [currentSurface, pendingActions, pendingSurface]);
+  }, [chapterId, currentSurface, pendingActions, pendingChapterId, pendingSurface]);
 
   const handleSend = useCallback(
     async (textToSend?: string, preferredOp?: string | null) => {
@@ -227,6 +230,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       setLoading(true);
       setPendingActions(null);
       setPendingSurface(null);
+      setPendingChapterId(null);
 
       try {
         const history = messages.slice(-10).map((m) => ({
@@ -276,21 +280,26 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
           actions: taggedActions,
           results,
           needs_confirmation: Boolean(response.needs_confirmation),
+          error: results?.some((item) => item.status === 'error'),
         };
         setMessages((prev) => [...prev, agentMsg]);
 
         // Auto-executed skills with apply:true must update the open editor
-        syncAppliedEditorContent(results, applyContent);
+        syncAppliedEditorContent(results, chapterIdRef.current, applyContent);
 
         if (response.needs_confirmation && taggedActions.length > 0) {
           setPendingActions(taggedActions);
           setPendingSurface(currentSurface || null);
+          setPendingChapterId(chapterId ?? null);
         } else if (taggedActions.length > 0 && !response.needs_confirmation) {
-          const changedChapterId = (results || []).find(
+          const successfulResults = (results || []).filter((item) => item.status === 'success');
+          const changedChapterId = successfulResults.find(
             (item) => item.data && typeof item.data.chapterId === 'string'
           )?.data?.chapterId;
-          notifyDataChanged({ chapterId: changedChapterId || chapterId });
-          onRefresh?.();
+          if (shouldRefreshAfterExecution(successfulResults, chapterIdRef.current)) {
+            notifyDataChanged({ chapterId: changedChapterId || chapterIdRef.current });
+            onRefresh?.();
+          }
         }
       } catch (e) {
         console.error(e);
@@ -334,11 +343,12 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
 
   const handleExecute = async () => {
     if (!pendingActions?.length) return;
+    const boundChapterId = pendingChapterId ?? chapterId ?? null;
     setExecuting(true);
     try {
       const result = await api.executeAgentActions({
         project_id: Number(projectId),
-        chapter_id: chapterId || undefined,
+        chapter_id: boundChapterId || undefined,
         language,
         actions: pendingActions,
         apply: true,
@@ -352,6 +362,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       });
 
       const results = (result.results || []) as ExecutionResultItem[];
+      const outcome = summarizeAgentExecution(pendingActions, results);
       const lines = results
         .map(
           (r) =>
@@ -363,21 +374,29 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         ...prev,
         {
           role: 'agent',
-          content: `${t('agent.execute_done', 'Execution finished')}:\n${lines}`,
+          content: `${t(outcome.titleKey)}:\n${lines}`,
           results,
           executed: true,
+          error: outcome.failed,
         },
       ]);
-      setPendingActions(null);
+      if (outcome.retryActions.length) {
+        setPendingActions(outcome.retryActions);
+        setPendingChapterId(boundChapterId);
+      } else {
+        clearPendingAgentActions();
+      }
 
-      // Confirm→execute writes skill body to DB; keep editor in sync to avoid save overwrite
-      syncAppliedEditorContent(results, applyContent);
+      // Confirm→execute writes skill body to DB; keep the matching editor in sync
+      syncAppliedEditorContent(results, chapterIdRef.current, applyContent);
 
       const changedChapterId = results.find(
-        (item) => item.data && typeof item.data.chapterId === 'string'
+        (item) => item.status === 'success' && item.data && typeof item.data.chapterId === 'string'
       )?.data?.chapterId;
-      notifyDataChanged({ chapterId: changedChapterId || chapterId });
-      onRefresh?.();
+      if (shouldRefreshAfterExecution(results, chapterIdRef.current)) {
+        notifyDataChanged({ chapterId: changedChapterId || chapterIdRef.current });
+        onRefresh?.();
+      }
     } catch (e) {
       console.error(e);
       setMessages((prev) => [
@@ -480,7 +499,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             label: t('agent.chip_impact', '定稿：更新世界观'),
             prompt: t(
               'agent.prompt_impact',
-              '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库'
+              '本章已定稿，请提取角色（含性格特征）、世界观术语并更新到角色库与设定库，同时更新主线剧情时间线（角色状态、事件、伏笔）与人物关系'
             ),
             preferredOp: 'APPLY_CHAPTER_IMPACT',
           },
@@ -641,14 +660,30 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             actions={pendingActions}
             executing={executing}
             onConfirm={handleExecute}
-            onDismiss={() => setPendingActions(null)}
+            onDismiss={clearPendingAgentActions}
           />
         )}
 
+        {executing && (
+          <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-indigo-50/90 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 text-xs sm:text-sm shadow-sm animate-pulse">
+            <div className="relative flex items-center justify-center">
+              <Loader2 size={16} className="animate-spin text-indigo-600 dark:text-indigo-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                {t('agent.executing_title', '正在执行指令方案…')}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                {t('agent.executing_desc', '正在同步世界观设定、改写正文并写入项目数据库')}
+              </div>
+            </div>
+          </div>
+        )}
+
         {loading && (
-          <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 text-xs p-2">
-            <Loader2 size={13} className="animate-spin" />
-            <span>{t('agent.thinking')}</span>
+          <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100/90 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-xs shadow-xs">
+            <Loader2 size={14} className="animate-spin text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+            <span className="font-medium">{t('agent.thinking', 'Agent OS 正在深度思考与规划…')}</span>
           </div>
         )}
         <div ref={messagesEndRef} />

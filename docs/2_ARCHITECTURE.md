@@ -81,7 +81,6 @@ backend/src/db/           迁移
 components/ Director/     分镜 UI
 pages/DirectorMode.tsx
 locales.ts                前后端可见文案的唯一词典
-skills/novel-to-comic/    小说→整本漫画编排（本 Sprint 不改流程阶段）
 ```
 
 ## 5. 🛠️ 自测与验证命令

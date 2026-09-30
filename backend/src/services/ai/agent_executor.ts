@@ -620,6 +620,8 @@ export class AgentExecutor {
         if (impact.visualTagsMerged) {
           notes.push('appearance→visual_tags');
         }
+        if (impact.mainPlotChanged) notes.push('timeline→main_plot');
+        if (impact.characterRelationsChanged) notes.push('relationships→character_relations');
         const noteStr = notes.length ? `; ${notes.join(', ')}` : '';
         return {
           op,

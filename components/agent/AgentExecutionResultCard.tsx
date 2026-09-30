@@ -91,6 +91,21 @@ const SingleResultCard: React.FC<{
     setTimeout(() => setCopied(false), 1500);
   };
 
+  // Status takes precedence over operation-specific success layouts, including
+  // historical failures restored from sessionStorage.
+  if (item.status !== 'success') {
+    const failed = item.status === 'error';
+    return (
+      <div role={failed ? 'alert' : 'status'} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs flex items-start gap-2">
+        <AlertTriangle size={15} className={failed ? 'text-rose-500' : 'text-slate-500'} />
+        <div>
+          <span className="font-bold">{getOpTitle(item.op, t)} · {failed ? t('agent.execute_fail', '执行失败') : t('agent.execute_skipped', '已跳过')}</span>
+          {item.message && <p className="mt-1 whitespace-pre-wrap">{item.message}</p>}
+        </div>
+      </div>
+    );
+  }
+
   // 1. APPLY_CHAPTER_IMPACT
   if (item.op === 'APPLY_CHAPTER_IMPACT') {
     const impact = item.data || {};
@@ -98,7 +113,12 @@ const SingleResultCard: React.FC<{
     const glossary: any[] = impact.newOrUpdatedGlossary || [];
     const personalityMerged = Boolean(impact.personalityMerged);
     const visualTagsMerged = Boolean(impact.visualTagsMerged);
-    const hasData = characters.length > 0 || glossary.length > 0;
+    const preview = impact.applied === false;
+    const settingReports = [
+      { title: t('agent.impact_main_plot', '主线剧情 · 时间线（角色状态、事件、伏笔）'), entry: impact.mainPlotEntry, changed: impact.mainPlotChanged },
+      { title: t('agent.impact_relations', '人物关系'), entry: impact.characterRelationsEntry, changed: impact.characterRelationsChanged },
+    ].filter((report) => report.entry || report.changed);
+    const hasData = characters.length > 0 || glossary.length > 0 || settingReports.length > 0;
 
     return (
       <div className="rounded-2xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/20 overflow-hidden text-xs shadow-sm transition-colors">
@@ -129,21 +149,40 @@ const SingleResultCard: React.FC<{
                 {personalityMerged && (
                   <p className="text-[11px] text-emerald-900 dark:text-emerald-300 bg-white dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-xl px-3 py-2 shadow-xs">
                     {t(
-                      'agent.impact_personality_merged',
-                      '已将性格特征合并写入角色 description'
+                      preview ? 'agent.impact_personality_preview' : 'agent.impact_personality_merged',
+                      preview ? '已提取性格特征，尚未写入角色库' : '已将性格特征合并写入角色库'
                     )}
                   </p>
                 )}
                 {visualTagsMerged && (
                   <p className="text-[11px] text-sky-900 dark:text-sky-300 bg-white dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/40 rounded-xl px-3 py-2 shadow-xs">
                     {t(
-                      'agent.impact_visual_tags_merged',
-                      '已将视觉特征合并写入角色 visual_tags'
+                      preview ? 'agent.impact_visual_tags_preview' : 'agent.impact_visual_tags_merged',
+                      preview ? '已提取视觉特征，尚未写入角色库' : '已将视觉特征合并写入角色库'
                     )}
                   </p>
                 )}
               </div>
             )}
+
+            {settingReports.map((report) => (
+              <div key={report.title} className="space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                  <FileText size={13} className="text-emerald-600 dark:text-emerald-400" />
+                  <span>{report.title}</span>
+                  <span className="text-emerald-700 dark:text-emerald-300">
+                    {preview
+                      ? t('agent.impact_settings_preview', '预览，未写入')
+                      : report.changed
+                        ? t('agent.impact_settings_written', '已更新设定')
+                        : t('agent.impact_settings_synced', '设定已同步')}
+                  </span>
+                </div>
+                <p className="bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-xl p-3 whitespace-pre-wrap leading-relaxed text-slate-700 dark:text-slate-400">
+                  {report.entry || t('agent.impact_settings_cleared', '已移除本章旧记录')}
+                </p>
+              </div>
+            ))}
 
             {characters.length > 0 && (
               <div className="space-y-2">

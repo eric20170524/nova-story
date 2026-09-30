@@ -450,33 +450,6 @@ class ApiService {
     return result;
   };
 
-  generateComic = (chapterId: string) =>
-    this.request<any>(`/comics/${chapterId}/generate`, { method: 'POST' });
-
-  getProjectComicStatus = (projectId: number) =>
-    this.request<{
-      project_id: number;
-      title: string;
-      ready: boolean;
-      total_chapters: number;
-      ready_chapters: number;
-      total_scenes: number;
-      ready_scenes: number;
-      chapters: Array<{
-        chapter_id: string;
-        index: number;
-        title: string;
-        total_scenes: number;
-        ready_scenes: number;
-        missing_scene_ids: number[];
-        ready: boolean;
-        blocker: 'no_scenes' | 'missing_assets' | null;
-      }>;
-    }>(`/comics/project/${projectId}/status`);
-
-  generateProjectComic = (projectId: number) =>
-    this.request<any>(`/comics/project/${projectId}/generate`, { method: 'POST' });
-
   // Video Pipeline
   getVideoCapabilities = () => this.request<VideoCapabilities>('/videos/capabilities');
   preflightVideo = (data: VideoGenerationRequest) =>

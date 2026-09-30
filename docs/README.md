@@ -38,7 +38,6 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 
 | 你想… | 推荐阅读 |
 | --- | --- |
-| 从已导入小说一路创作到整本漫画 PDF | [novel-to-comic Skill](../skills/novel-to-comic/SKILL.md) |
 | 在 3060 上安装 ComfyUI 与模型 | [comfyui_local_setup_guide_3060.md](./deployment/comfyui_local_setup_guide_3060.md) |
 | 本地生图选型 Pony vs SD1.5、为何不用 FLUX | [local_image_generation_deployment_cn.md](./deployment/local_image_generation_deployment_cn.md) |
 | 角色参考 / IP-Adapter / ControlNet 何时生效与门禁 | [local_image_reference_policy_cn.md](./deployment/local_image_reference_policy_cn.md) |
