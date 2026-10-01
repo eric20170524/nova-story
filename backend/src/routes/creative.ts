@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/database';
+import { CHAPTER_CONTENT_UNFINALIZE_SQL } from '../schemas/story_plan';
 import { LLMService } from '../services/llm';
 import { WritingService } from '../services/ai/writing_service';
 
@@ -98,7 +99,7 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
               chapterId
             );
           await db.run(
-            'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+            `UPDATE chapter SET content = ?, condensed_content = ?, ${CHAPTER_CONTENT_UNFINALIZE_SQL} WHERE id = ?`,
             merged,
             condensed,
             chapterId
@@ -267,7 +268,7 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
           body.chapter_id
         );
         await db.run(
-          'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+          `UPDATE chapter SET content = ?, condensed_content = ?, ${CHAPTER_CONTENT_UNFINALIZE_SQL} WHERE id = ?`,
           content,
           condensed,
           body.chapter_id

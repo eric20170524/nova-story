@@ -1,6 +1,8 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/database';
+import { hashChapterContent, PlanningError } from '../schemas/story_plan';
+import { CHAPTER_CONTENT_UNFINALIZE_SQL, StoryPlanService } from '../services/story_plan_service';
 
 const ChapterCreateSchema = z.object({
   id: z.string().min(1),
@@ -36,37 +38,26 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/', async (request, reply) => {
     const chapter = ChapterCreateSchema.parse(request.body);
-    const project = await db.get('SELECT id FROM project WHERE id = ?', chapter.project_id);
-    if (!project) {
-      return reply.status(404).send({ detail: 'Project not found' });
-    }
-
-    const existingChapters = (await db.all(
-      'SELECT id, title, "index", status FROM chapter WHERE project_id = ? ORDER BY "index" ASC',
-      chapter.project_id
-    )) as Array<{ id: string; title: string; index: number; status: string }>;
-    if (existingChapters.length > 0) {
-      const lastChapter = existingChapters[existingChapters.length - 1]!;
-      if (lastChapter.status !== 'completed') {
-        return reply.status(400).send({
-          detail: `上一章（${lastChapter.title}）尚未定稿，请先完成「定稿：更新世界观」后再创建新章节`,
-        });
+    try {
+      const created = await StoryPlanService.createManualChapter({
+        projectId: chapter.project_id,
+        id: chapter.id,
+        title: chapter.title,
+        content: chapter.content,
+      });
+      return reply.status(201).send(created);
+    } catch (error) {
+      if (error instanceof PlanningError && error.code === 'PREVIOUS_CHAPTER_NOT_FINALIZED') {
+        return reply.status(400).send({ detail: error.message });
       }
+      if (error instanceof PlanningError && error.code === 'PROJECT_NOT_FOUND') {
+        return reply.status(404).send({ detail: 'Project not found' });
+      }
+      if (error instanceof PlanningError) {
+        return reply.status(error.status).send({ code: error.code, detail: error.message });
+      }
+      throw error;
     }
-
-    await db.run(
-      'INSERT INTO chapter (id, project_id, "index", title, content, status) VALUES (?, ?, ?, ?, ?, ?)',
-      chapter.id,
-      chapter.project_id,
-      chapter.index,
-      chapter.title,
-      chapter.content ?? null,
-      'draft'
-    );
-
-    return reply.status(201).send(
-      await db.get('SELECT * FROM chapter WHERE id = ?', chapter.id)
-    );
   });
 
   app.patch('/:id', async (request, reply) => {
@@ -77,27 +68,56 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ detail: 'Chapter not found' });
     }
 
-    const fields: string[] = [];
-    const values: unknown[] = [];
-    for (const field of [
-      'title',
-      'content',
-      'summary',
-      'status',
-      'condensed_content',
-    ] as const) {
-      if (update[field] !== undefined) {
-        fields.push(`${field} = ?`);
-        values.push(update[field]);
-      }
-    }
+    const contentChanged = update.content !== undefined && update.content !== existing.content;
+    const outlineChanged = update.title !== undefined || update.summary !== undefined;
+    const completeWithoutContentChange = update.status === 'completed' && !contentChanged;
 
-    if (fields.length > 0) {
-      await db.run(
-        `UPDATE chapter SET ${fields.join(', ')} WHERE id = ?`,
-        ...values,
-        id
-      );
+    await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const fields: string[] = [];
+      const values: unknown[] = [];
+      if (update.title !== undefined) {
+        fields.push('title = ?');
+        values.push(update.title);
+      }
+      if (update.summary !== undefined) {
+        fields.push('summary = ?');
+        values.push(update.summary);
+      }
+      if (update.condensed_content !== undefined) {
+        fields.push('condensed_content = ?');
+        values.push(update.condensed_content);
+      }
+      if (contentChanged) {
+        fields.push('content = ?');
+        values.push(update.content);
+        fields.push(CHAPTER_CONTENT_UNFINALIZE_SQL);
+      } else if (completeWithoutContentChange) {
+        fields.push('status = ?');
+        values.push('completed');
+        fields.push('finalized_content_hash = ?');
+        values.push(hashChapterContent(existing.content));
+      } else if (update.status !== undefined) {
+        fields.push('status = ?');
+        values.push(update.status);
+      }
+      if (fields.length > 0) {
+        await db.run(
+          `UPDATE chapter SET ${fields.join(', ')} WHERE id = ?`,
+          ...values,
+          id
+        );
+      }
+      if (outlineChanged) {
+        await StoryPlanService.syncLinkedOutlineUnlocked(existing.project_id, id);
+      }
+      await db.exec('COMMIT');
+    } catch (error) {
+      await db.exec('ROLLBACK');
+      if (error instanceof PlanningError) {
+        return reply.status(error.status).send({ code: error.code, detail: error.message });
+      }
+      throw error;
     }
 
     return db.get('SELECT * FROM chapter WHERE id = ?', id);
@@ -146,6 +166,7 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
         id
       );
       await db.run('DELETE FROM scene WHERE chapter_id = ?', id);
+      await StoryPlanService.retireLinkedChapter(existing.project_id, id);
       await db.run('DELETE FROM chapter WHERE id = ?', id);
       await db.exec('COMMIT');
       return { status: 'success', id };
@@ -190,6 +211,7 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await db.run('UPDATE chapter SET "index" = ? WHERE id = ?', new_index, id);
+      await StoryPlanService.reorderFromChapters(chapter.project_id);
       await db.exec('COMMIT');
       return { status: 'moved', new_index };
     } catch (error) {

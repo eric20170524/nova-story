@@ -5,6 +5,7 @@ import { canonicalProjectSettings } from '../project_settings';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../../schemas/script';
 import { remapCopiedScriptChanges } from '../script_copy';
 import { ScriptService } from '../script_service';
+import { StoryPlanDocumentSchema, newPlanEntryId } from '../../schemas/story_plan';
 import { ensureSceneVersionBaseline } from '../scene_versions';
 
 const tableExists = async (tableName: string) => {
@@ -60,22 +61,52 @@ export const restoreNovaStoryJsonProject = async (
     }
 
     const chapterIdMap = new Map<string, string>();
+    const entryIdMap = new Map<string, string>();
+    const parsedPlan = importProject.storyPlan
+      ? StoryPlanDocumentSchema.safeParse(importProject.storyPlan.document)
+      : null;
+    if (parsedPlan?.success) {
+      for (const entry of parsedPlan.data.chapters) entryIdMap.set(entry.id, newPlanEntryId());
+    }
     for (const chapter of importProject.chapters) {
       const newChapterId = randomUUID();
       if (chapter.sourceId) {
         chapterIdMap.set(chapter.sourceId, newChapterId);
       }
+      let planEntryId: string | null = null;
+      if (parsedPlan?.success && chapter.planEntryId) {
+        planEntryId = entryIdMap.get(chapter.planEntryId) || newPlanEntryId();
+        entryIdMap.set(chapter.planEntryId, planEntryId);
+      }
       await db.run(
         `INSERT INTO chapter
-          (id, project_id, "index", title, content, summary, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (id, project_id, "index", title, content, summary, status, plan_entry_id, target_word_count, finalized_content_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         newChapterId,
         projectId,
         chapter.index,
         chapter.title,
         chapter.content,
         chapter.summary,
-        chapter.status
+        chapter.status,
+        planEntryId,
+        chapter.targetWordCount ?? null,
+        chapter.finalizedContentHash ?? null
+      );
+    }
+    if (parsedPlan?.success && importProject.storyPlan) {
+      const document = {
+        ...parsedPlan.data,
+        chapters: parsedPlan.data.chapters.map((entry) => ({
+          ...entry,
+          id: entryIdMap.get(entry.id) || newPlanEntryId(),
+        })),
+      };
+      await db.run(
+        'INSERT INTO story_plan (project_id, revision, document_json) VALUES (?, ?, ?)',
+        projectId,
+        importProject.storyPlan.revision || 1,
+        JSON.stringify(StoryPlanDocumentSchema.parse(document))
       );
     }
 

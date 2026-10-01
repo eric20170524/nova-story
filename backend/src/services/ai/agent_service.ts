@@ -12,9 +12,23 @@ import {
   resolveAgentRoute,
 } from './agent_route';
 import { AgentExecutor } from './agent_executor';
+import { StoryPlanningService } from './story_planning_service';
+import { extractExplicitSummary, resolvePlanOrdinal } from '../../schemas/story_plan';
+import { StoryPlanService } from '../story_plan_service';
 
 function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+
+export function usesStoryIdeation(
+  context: { conversation_mode?: string | null; surface?: string | null },
+  preferredOp?: string | null
+): boolean {
+  return context.conversation_mode === 'ideation'
+    && context.surface === 'story'
+    && preferredOp !== 'PLAN_STORY'
+    && preferredOp !== 'PLAN_CHAPTERS'
+    && preferredOp !== 'CREATE_NEXT_CHAPTER';
 }
 
 export class AgentService {
@@ -25,8 +39,57 @@ export class AgentService {
         return this.projectlessChat(request);
       }
 
+      const preferredOp =
+        request.context.preferred_op
+        || null;
+      const ideation = usesStoryIdeation(request.context, preferredOp);
+      if (ideation) {
+        const reply = await StoryPlanningService.brainstorm(
+          projectId,
+          request.message,
+          request.history as Array<{ role?: string; content?: string }>
+        );
+        return {
+          thought: 'ideation',
+          response: reply,
+          actions: [{ op: 'ANSWER_QUESTION', answer: reply }],
+          results: [],
+          needs_confirmation: false,
+        };
+      }
+
       const decision = await this.decide(request, projectId);
-      let actions = decision.actions || [];
+      let actions: any[] = [];
+      for (const action of decision.actions || []) {
+        const planning = request.context.planning;
+        if (action.op === 'PLAN_STORY') {
+          actions.push({
+            ...action,
+            instructions: request.message,
+            requestKey: planning?.requestKey || action.requestKey,
+            history: request.history,
+          });
+          continue;
+        }
+        if (action.op === 'PLAN_CHAPTERS') {
+          actions.push(await this.attachPlanChapterTargets(action, request, projectId));
+          continue;
+        }
+        if (action.op === 'CREATE_NEXT_CHAPTER') {
+          actions.push({
+            ...action,
+            instructions: request.message,
+            requestKey: planning?.requestKey || action.requestKey,
+          });
+          continue;
+        }
+        if (action.op === 'UPDATE_CHAPTER_SUMMARY') {
+          const explicit = extractExplicitSummary(request.message);
+          actions.push(explicit ? { ...action, newSummary: explicit } : action);
+          continue;
+        }
+        actions.push(action);
+      }
       const confirm = needsConfirmation(actions);
 
       // Auto-run read-only actions so the user gets answers immediately
@@ -72,6 +135,8 @@ export class AgentService {
             r.op === 'ANALYZE_CHAPTER_CHARACTERS'
             || r.op === 'ANALYZE_CHAPTER'
             || r.op === 'RUN_CONSISTENCY_CHECK'
+            || r.op === 'PLAN_STORY'
+            || r.op === 'PLAN_CHAPTERS'
         );
         if (!hasRichCard) {
           responseText += '\n\n' + autoNotes.join('\n');
@@ -104,6 +169,41 @@ export class AgentService {
         results: [],
         needs_confirmation: false,
       };
+    }
+  }
+
+  /**
+   * A revise request such as “改写第一章规划” has no ids yet.
+   * Keep an explicit target list, and otherwise map the ordinal onto the live plan.
+   */
+  private async attachPlanChapterTargets(action: any, request: AgentRequest, projectId: number) {
+    const planning = request.context.planning;
+    const mode = planning?.mode && planning.mode !== 'blueprint' ? planning.mode : action.mode;
+    const explicit = planning?.targetPlanIds?.length
+      ? planning.targetPlanIds
+      : (Array.isArray(action.targetPlanIds) && action.targetPlanIds.length ? action.targetPlanIds : undefined);
+    let targetPlanIds = explicit;
+    if (mode === 'revise' && !targetPlanIds?.length) {
+      targetPlanIds = await this.resolveReviseTarget(projectId, request.message);
+    }
+    return {
+      ...action,
+      instructions: request.message,
+      mode,
+      targetPlanIds,
+      batchSize: planning?.batchSize || action.batchSize,
+      requestKey: planning?.requestKey || action.requestKey,
+      history: request.history,
+    };
+  }
+
+  private async resolveReviseTarget(projectId: number, message: string): Promise<string[] | undefined> {
+    try {
+      const view = await StoryPlanService.getView(projectId);
+      const id = resolvePlanOrdinal(view.document.chapters, message);
+      return id ? [id] : undefined;
+    } catch {
+      return undefined;
     }
   }
 

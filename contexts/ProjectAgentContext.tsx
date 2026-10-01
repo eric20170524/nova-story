@@ -12,20 +12,33 @@ type ApplyHandler = (
   opts?: { alreadyPersisted?: boolean }
 ) => void;
 
+export type AgentPromptRequest = {
+  text: string;
+  conversationMode?: 'ideation' | 'command';
+  preferredOp?: string;
+  planning?: {
+    mode?: 'blueprint' | 'initial' | 'extend' | 'revise';
+    targetPlanIds?: string[];
+    batchSize?: number;
+    requestKey?: string;
+  };
+  dispatchId?: string;
+};
+
 type ProjectAgentContextValue = {
   open: boolean;
   setOpen: (open: boolean) => void;
   toggle: () => void;
   /** Bump when agent mutates project data so pages can reload */
   refreshToken: number;
-  notifyDataChanged: (detail?: { chapterId?: string | null }) => void;
+  notifyDataChanged: (detail?: { chapterId?: string | null; affectsContent?: boolean }) => void;
   activeChapterId: string | null;
   setActiveChapterId: (id: string | null) => void;
   activeScriptId: number | null;
   activeScriptSceneId: string | null;
   setActiveScriptContext: (scriptId: number | null, sceneId: string | null) => void;
-  sendPrompt: (prompt: string) => void;
-  pendingPrompt: string | null;
+  sendPrompt: (prompt: string | AgentPromptRequest) => void;
+  pendingPrompt: string | AgentPromptRequest | null;
   clearPendingPrompt: () => void;
   registerApplyHandler: (handler: ApplyHandler | null) => void;
   /** Push rewritten chapter body into the active story editor (if registered). */
@@ -41,7 +54,7 @@ export const ProjectAgentProvider: React.FC<{
   projectId: string;
 }> = ({ children, projectId }) => {
   const [open, setOpen] = useState(false);
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<string | AgentPromptRequest | null>(null);
   // Ref (not state): registering a handler must not re-render Provider / change context identity
   const applyHandlerRef = useRef<ApplyHandler | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -56,16 +69,20 @@ export const ProjectAgentProvider: React.FC<{
   const [activeScriptSceneId, setActiveScriptSceneId] = useState<string | null>(null);
 
   const toggle = useCallback(() => setOpen((v) => !v), []);
-  const notifyDataChanged = useCallback((detail?: { chapterId?: string | null }) => {
+  const notifyDataChanged = useCallback((detail?: { chapterId?: string | null; affectsContent?: boolean }) => {
     setRefreshToken((n) => n + 1);
     window.dispatchEvent(
       new CustomEvent('novastory-agent-data-changed', {
-        detail: { projectId, chapterId: detail?.chapterId ?? null },
+        detail: {
+          projectId,
+          chapterId: detail?.chapterId ?? null,
+          affectsContent: detail?.affectsContent,
+        },
       })
     );
   }, [projectId]);
 
-  const sendPrompt = useCallback((prompt: string) => {
+  const sendPrompt = useCallback((prompt: string | AgentPromptRequest) => {
     setOpen(true);
     setPendingPrompt(prompt);
   }, []);

@@ -60,3 +60,20 @@ test('finalization preview never claims to have written settings or character tr
   assert.match(html, /尚未写入角色库/);
   assert.doesNotMatch(html, /已更新设定|已将性格特征合并写入|已将视觉特征合并写入/);
 });
+
+test('finalization exposes automatic next-chapter failures without hiding the completed finalization', () => {
+  const html = renderResult('APPLY_CHAPTER_IMPACT', 'success', {
+    applied: true,
+    autoNext: { status: 'failed', code: 'PLAN_CONFLICT', message: '规划已被其他操作更新' },
+  });
+  assert.match(html, /role="alert"/);
+  assert.match(html, /章节已定稿，但自动创建下一章失败/);
+  assert.match(html, /规划已被其他操作更新/);
+  assert.match(html, /再次定稿重试/);
+  assert.doesNotMatch(html, /执行失败/);
+  const created = renderResult('APPLY_CHAPTER_IMPACT', 'success', { applied: true, autoNext: { status: 'created' } });
+  assert.match(created, /下一章已创建/);
+  assert.doesNotMatch(created, /role="alert"/);
+  const preview = renderResult('APPLY_CHAPTER_IMPACT', 'success', { applied: false, autoNext: { status: 'failed' } });
+  assert.doesNotMatch(preview, /自动创建下一章失败/);
+});

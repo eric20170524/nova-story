@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { extractExplicitSummary } from './story_plan';
 
 export const SurfaceSchema = z.enum(['story', 'script', 'director', 'characters', 'settings']);
 export type SurfaceType = z.infer<typeof SurfaceSchema>;
@@ -21,6 +22,35 @@ export const CreativeOps = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('QUERY_DATABASE'),
     query: z.string(),
+    surface: SurfaceSchema.optional(),
+  }),
+]);
+
+export const PlanOps = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('PLAN_STORY'),
+    instructions: z.string().optional(),
+    requestKey: z.string().optional(),
+    history: z.array(z.record(z.string(), z.any())).optional(),
+    surface: SurfaceSchema.optional(),
+  }),
+  z.object({
+    op: z.literal('PLAN_CHAPTERS'),
+    instructions: z.string().optional(),
+    mode: z.enum(['initial', 'extend', 'revise']).optional(),
+    targetPlanIds: z.array(z.string()).optional(),
+    batchSize: z.number().int().min(1).max(5).optional(),
+    requestKey: z.string().optional(),
+    history: z.array(z.record(z.string(), z.any())).optional(),
+    surface: SurfaceSchema.optional(),
+  }),
+  z.object({
+    op: z.literal('CREATE_NEXT_CHAPTER'),
+    instructions: z.string().optional(),
+    planEntryId: z.string().optional(),
+    expectedRevision: z.number().int().optional(),
+    expectedLastChapterId: z.string().nullable().optional(),
+    requestKey: z.string().optional(),
     surface: SurfaceSchema.optional(),
   }),
 ]);
@@ -159,6 +189,7 @@ export const ScriptOps = z.discriminatedUnion('op', [
 
 export const AgentActionSchema = z.union([
   CreativeOps,
+  PlanOps,
   StructureOps,
   ProjectMetaOps,
   SkillOps,
@@ -200,6 +231,9 @@ export const AgentRouteIntentSchema = z.enum([
   'GENERATE_SCRIPT_OUTLINE',
   'GENERATE_SCRIPT',
   'REWRITE_SCRIPT_SCENE',
+  'PLAN_STORY',
+  'PLAN_CHAPTERS',
+  'CREATE_NEXT_CHAPTER',
 ]);
 
 export const AgentRouteSchema = z
@@ -233,6 +267,8 @@ export const MUTATING_OPS = new Set([
   'GENERATE_SCRIPT_OUTLINE',
   'GENERATE_SCRIPT',
   'REWRITE_SCRIPT_SCENE',
+  'CREATE_NEXT_CHAPTER',
+  // PLAN_STORY / PLAN_CHAPTERS produce a candidate and run without a second confirm.
   // ANALYZE_CHAPTER / ANALYZE_CHAPTER_CHARACTERS / ANSWER / QUERY / CONSISTENCY are read-only
 ]);
 
@@ -307,6 +343,14 @@ export function routeToActions(
     case 'UPDATE_CHAPTER_SUMMARY':
       if (!chapterId) return [{ op: 'ANSWER_QUESTION', answer: '请先选择章节。' }];
       return [{ op: 'UPDATE_CHAPTER_SUMMARY', chapterId, newSummary: focus || msg }];
+    case 'PLAN_STORY':
+      return [{ op: 'PLAN_STORY', instructions: msg }];
+    case 'PLAN_CHAPTERS': {
+      const mode = focus === 'initial' || focus === 'extend' || focus === 'revise' ? focus : 'extend';
+      return [{ op: 'PLAN_CHAPTERS', instructions: msg, mode }];
+    }
+    case 'CREATE_NEXT_CHAPTER':
+      return [{ op: 'CREATE_NEXT_CHAPTER', instructions: msg }];
     case 'DELETE_CHAPTER':
       if (!chapterId) return [{ op: 'ANSWER_QUESTION', answer: '请先选择要删除的章节。' }];
       return [{ op: 'DELETE_CHAPTER', chapterId, reason: focus || 'user request' }];
@@ -450,7 +494,12 @@ export function tryIntentShortcut(
     }
     return {
       intent: preferredOp as AgentRouteIntent,
-      chapterScope: preferredOp === 'RUN_CONSISTENCY_CHECK' ? 'none' : 'current',
+      chapterScope: preferredOp === 'RUN_CONSISTENCY_CHECK'
+        || preferredOp === 'PLAN_STORY'
+        || preferredOp === 'PLAN_CHAPTERS'
+        || preferredOp === 'CREATE_NEXT_CHAPTER'
+        ? 'none'
+        : 'current',
       focus:
         preferredOp === 'RENAME_CHAPTER'
           ? (extractRenameTitle(message) || message.slice(0, 400))
@@ -481,6 +530,32 @@ export function tryIntentShortcut(
         chapterScope: 'current',
         focus: sceneTarget,
       };
+    }
+  }
+
+  if (!isScriptRoute) {
+    const explicitSummary = extractExplicitSummary(m);
+    if (explicitSummary) {
+      return {
+        intent: 'UPDATE_CHAPTER_SUMMARY',
+        chapterScope: 'current',
+        focus: explicitSummary.slice(0, 400),
+      };
+    }
+    if (/整理开书设定|整理成设定|生成开书设定|整理设定/.test(m)) {
+      return { intent: 'PLAN_STORY', chapterScope: 'none', focus: m.slice(0, 400) };
+    }
+    if (!/修改|修订|改写/.test(m) && /扩展.{0,8}章|后续.{0,8}章规划|后续规划|规划后续|生成章纲|章节规划/.test(m)) {
+      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'extend' };
+    }
+    if (/第\s*[0-9一二三四五六七八九十]+\s*章/.test(m) && /章纲|规划/.test(m) && /改写|修改|修订/.test(m)) {
+      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'revise' };
+    }
+    if (/规划前几章|初始化规划/.test(m) && !/修改|修订|改写/.test(m)) {
+      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'initial' };
+    }
+    if (/创建下一章|开始第一章|自动创建下一章/.test(m)) {
+      return { intent: 'CREATE_NEXT_CHAPTER', chapterScope: 'none', focus: m.slice(0, 400) };
     }
   }
 

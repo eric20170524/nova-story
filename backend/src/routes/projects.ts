@@ -9,6 +9,20 @@ import { DEFAULT_PROJECT_IMAGE_SETTINGS, getProjectImageSettings, parseProjectSe
 import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
 import { remapCopiedScriptChanges } from '../services/script_copy';
+import { StoryPlanDocumentSchema, newPlanEntryId } from '../schemas/story_plan';
+
+const exportStoryPlan = async (projectId: number) => {
+  if (!(await tableExists('story_plan'))) return null;
+  const row = await db.get(
+    'SELECT revision, document_json FROM story_plan WHERE project_id = ?',
+    projectId
+  );
+  if (!row) return null;
+  return {
+    revision: Number(row.revision),
+    document: parseStoredJson(row.document_json),
+  };
+};
 
 // Dummy implementation of current_user auth
 // Real implementation should parse JWT/headers as needed
@@ -234,6 +248,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         coverage_shots: coverageShots
       },
       glossary,
+      story_plan: await exportStoryPlan(id),
       summary: {
         chapters: chapters.length,
         characters: characters.length,
@@ -298,6 +313,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const chapterIdMap = new Map<string, string>();
+      const entryIdMap = new Map<string, string>();
+      const sourcePlan = await tableExists('story_plan')
+        ? await db.get('SELECT revision, document_json FROM story_plan WHERE project_id = ?', id)
+        : null;
+      if (sourcePlan?.document_json) {
+        const parsed = StoryPlanDocumentSchema.safeParse(JSON.parse(String(sourcePlan.document_json)));
+        if (parsed.success) {
+          for (const entry of parsed.data.chapters) entryIdMap.set(entry.id, newPlanEntryId());
+        }
+      }
       const chapters = await db.all(
         'SELECT * FROM chapter WHERE project_id = ? ORDER BY "index" ASC',
         id
@@ -305,10 +330,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       for (const chapter of chapters) {
         const newChapterId = randomUUID();
         chapterIdMap.set(chapter.id, newChapterId);
+        let planEntryId: string | null = null;
+        if (chapter.plan_entry_id) {
+          planEntryId = entryIdMap.get(String(chapter.plan_entry_id)) || newPlanEntryId();
+          entryIdMap.set(String(chapter.plan_entry_id), planEntryId);
+        }
         await db.run(
           `INSERT INTO chapter
-            (id, project_id, "index", title, content, summary, status, condensed_content)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, project_id, "index", title, content, summary, status, condensed_content,
+             plan_entry_id, target_word_count, finalized_content_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newChapterId,
           newProjectId,
           chapter.index,
@@ -316,8 +347,29 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
           chapter.content ?? null,
           chapter.summary ?? null,
           chapter.status || 'draft',
-          chapter.condensed_content ?? null
+          chapter.condensed_content ?? null,
+          planEntryId,
+          chapter.target_word_count ?? null,
+          chapter.finalized_content_hash ?? null
         );
+      }
+      if (sourcePlan?.document_json) {
+        const parsed = StoryPlanDocumentSchema.safeParse(JSON.parse(String(sourcePlan.document_json)));
+        if (parsed.success) {
+          const document = {
+            ...parsed.data,
+            chapters: parsed.data.chapters.map((entry) => ({
+              ...entry,
+              id: entryIdMap.get(entry.id) || newPlanEntryId(),
+            })),
+          };
+          await db.run(
+            'INSERT INTO story_plan (project_id, revision, document_json) VALUES (?, ?, ?)',
+            newProjectId,
+            Number(sourcePlan.revision) || 1,
+            JSON.stringify(document)
+          );
+        }
       }
 
       const characterIdMap = new Map<number, number>();

@@ -12,6 +12,7 @@ import { db } from './db/database';
 import { projectRoutes } from './routes/projects';
 import { projectImportRoutes } from './routes/project_import';
 import { projectDocumentRoutes } from './routes/project_documents';
+import { storyPlanRoutes } from './routes/story_plan';
 import { settingsRoutes } from './routes/settings';
 import { workflowRoutes } from './routes/workflows';
 import { characterRoutes } from './routes/characters';
@@ -26,6 +27,7 @@ import { scriptRoutes } from './routes/scripts';
 import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
 import { VideoStartupRecoveryService } from './services/video/video_startup_recovery';
+import { StoryPlanService } from './services/story_plan_service';
 import { logger } from './core/logging';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
@@ -115,6 +117,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
 
   await app.register(projectImportRoutes, { prefix: '/api/projects' });
   await app.register(projectDocumentRoutes, { prefix: '/api/projects' });
+  await app.register(storyPlanRoutes, { prefix: '/api/projects' });
   await app.register(projectRoutes, { prefix: '/api/projects' });
   await app.register(chapterRoutes, { prefix: '/api/chapters' });
   await app.register(settingsRoutes, { prefix: '/api/settings' });
@@ -134,6 +137,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   // 2) let video-specific recovery resume raw/history-backed work;
   // 3) only then interrupt generic/image tasks that have no durable worker.
   try {
+    await StoryPlanService.markInterruptedGenerations();
     await VideoStartupRecoveryService.reconcileActivePromptsOnStartup();
     await VideoGenerationService.markOrphanedTasks();
     await AssetTaskStore.markOrphanedProcessingInterrupted();

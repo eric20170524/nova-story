@@ -211,6 +211,33 @@ test('routeToActions builds ANALYZE_CHAPTER_CHARACTERS without mutate', () => {
   assert.equal(AgentActionSchema.safeParse(actions[0]).success, true);
 });
 
+test('planning shortcuts keep chapter body commands available', () => {
+  const premise = tryIntentShortcut('请整理开书设定', null, 'story');
+  assert.equal(premise?.intent, 'PLAN_STORY');
+  assert.equal(premise?.chapterScope, 'none');
+
+  const revise = tryIntentShortcut('帮我改章纲', null, 'story');
+  assert.equal(revise, null);
+  const numbered = tryIntentShortcut('改写第一章规划', null, 'story');
+  assert.equal(numbered?.intent, 'PLAN_CHAPTERS');
+  assert.equal(numbered?.focus, 'revise');
+  const extend = tryIntentShortcut('规划后续', null, 'story');
+  assert.equal(extend?.intent, 'PLAN_CHAPTERS');
+  assert.equal(extend?.focus, 'extend');
+
+  const explicit = tryIntentShortcut('把章纲改为雨夜决战', null, 'story');
+  assert.equal(explicit?.intent, 'UPDATE_CHAPTER_SUMMARY');
+  const summaryActions = routeToActions(explicit!, { chapterId: 'ch-1', userMessage: '把章纲改为雨夜决战' });
+  assert.equal(summaryActions[0]?.newSummary, '雨夜决战');
+
+  const conflict = tryIntentShortcut('为当前章节增加冲突', null, 'story');
+  assert.equal(conflict?.intent, 'ADD_CONFLICT');
+  assert.equal(tryIntentShortcut('根据章纲续写', null, 'story')?.intent, 'DRAFT_CONTENT');
+  assert.equal(tryIntentShortcut('按章纲注入冲突', null, 'story')?.intent, 'ADD_CONFLICT');
+  assert.equal(needsConfirmation([{ op: 'PLAN_CHAPTERS' }]), false);
+  assert.equal(needsConfirmation([{ op: 'CREATE_NEXT_CHAPTER' }]), true);
+});
+
 test('splitChapterIntoAnalysisChunks covers middle of long text', async () => {
   const {
     splitChapterIntoAnalysisChunks,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  executionAffectsEditorContent,
   selectAppliedSkillContent,
   shouldRefreshAfterExecution,
   shouldRetainPendingAgentActions,
@@ -58,4 +59,19 @@ test('applied skill text syncs only when the result chapter is the open editor c
   assert.equal(selectAppliedSkillContent(results, null), null);
   assert.equal(shouldRefreshAfterExecution(results, 'chapter-a'), true);
   assert.equal(shouldRefreshAfterExecution(results, 'chapter-b'), false);
+});
+
+test('creating the next chapter does not mark the open chapter body as changed', () => {
+  assert.equal(executionAffectsEditorContent([
+    { status: 'success', op: 'CREATE_NEXT_CHAPTER' },
+  ]), false);
+  assert.equal(executionAffectsEditorContent([
+    { status: 'success', op: 'PLAN_STORY' },
+    { status: 'success', op: 'ANSWER_QUESTION' },
+  ]), false);
+  assert.equal(executionAffectsEditorContent([
+    { status: 'success', op: 'CREATE_NEXT_CHAPTER' },
+    { status: 'success', op: 'DRAFT_CONTENT', data: { chapterId: 'chapter-a' } },
+  ]), true);
+  assert.equal(executionAffectsEditorContent([{ status: 'error', op: 'CREATE_NEXT_CHAPTER' }]), true);
 });

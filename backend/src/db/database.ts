@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import sqlite3 from 'sqlite3';
 import { open, type Database } from 'sqlite';
 import fs from 'fs';
@@ -584,6 +585,71 @@ const migrations: Migration[] = [
           ON script_change(script_id, request_key);
       `);
     }
+  },
+  {
+    version: '015_story_plan',
+    up: async (database) => {
+      const projectTable = await database.get(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project'"
+      );
+      if (!projectTable) return;
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS story_plan (
+          project_id INTEGER PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL DEFAULT 1,
+          document_json TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS story_plan_change (
+          id TEXT PRIMARY KEY,
+          project_id INTEGER NOT NULL REFERENCES story_plan(project_id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('generating','pending','applied','rejected','failed','stale')),
+          request_key TEXT NOT NULL,
+          request_hash TEXT NOT NULL,
+          request_payload_json TEXT,
+          base_revision INTEGER NOT NULL,
+          candidate_revision INTEGER NOT NULL DEFAULT 1,
+          source_snapshot_json TEXT,
+          before_json TEXT,
+          after_json TEXT,
+          patches_json TEXT,
+          apply_payload_hash TEXT,
+          result_json TEXT,
+          error_code TEXT,
+          applied_revision INTEGER,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, request_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_story_plan_change_project
+          ON story_plan_change(project_id, state);
+      `);
+      const chapterTable = await database.get(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chapter'"
+      );
+      if (chapterTable) {
+        const chapterColumns = await database.all('PRAGMA table_info(chapter)');
+        const names = new Set((chapterColumns as Array<{ name: string }>).map((column) => column.name));
+        if (!names.has('plan_entry_id')) {
+          await database.exec('ALTER TABLE chapter ADD COLUMN plan_entry_id TEXT');
+        }
+        if (!names.has('target_word_count')) {
+          await database.exec('ALTER TABLE chapter ADD COLUMN target_word_count INTEGER');
+        }
+        if (!names.has('finalized_content_hash')) {
+          await database.exec('ALTER TABLE chapter ADD COLUMN finalized_content_hash TEXT');
+        }
+        await database.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS ix_chapter_plan_entry
+            ON chapter(project_id, plan_entry_id)
+            WHERE plan_entry_id IS NOT NULL;
+        `);
+      }
+    }
   }
 ];
 
@@ -688,6 +754,69 @@ export const initDb = async () => {
   }
 };
 
+const transactionContext = new AsyncLocalStorage<true>();
+let transactionTail: Promise<void> = Promise.resolve();
+let openTransactionRelease: (() => void) | null = null;
+
+const isTransactionStart = (sql: string) => /^\s*BEGIN\b/i.test(sql);
+const isTransactionEnd = (sql: string) =>
+  /^\s*COMMIT\b/i.test(sql) || /^\s*ROLLBACK(?!\s+TO\b)/i.test(sql);
+
+// One shared sqlite3 connection. A second BEGIN on that connection throws
+// "cannot start a transaction within a transaction", so BEGIN waits until the
+// open transaction COMMITs or ROLLBACKs. The wait token lives here, not in
+// AsyncLocalStorage: enterWith does not survive from db.exec back to its caller.
+const acquireTransactionLock = (): Promise<() => void> => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = transactionTail;
+  transactionTail = gate;
+  return previous.then(() => release);
+};
+
+export async function withImmediateTransaction<T>(work: () => Promise<T>): Promise<T> {
+  const database = await initDb();
+  // A direct db.exec('BEGIN') inside this work must not take the lock again.
+  // The store is only visible to the caller of run(); sqlite still rejects the
+  // nested BEGIN instead of waiting on the lock this function already holds.
+  if (transactionContext.getStore()) {
+    await database.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const result = await work();
+      await database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await database.exec('ROLLBACK');
+      } catch {
+        /* The transaction may already be closed. */
+      }
+      throw error;
+    }
+  }
+
+  const release = await acquireTransactionLock();
+  try {
+    await database.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const result = await transactionContext.run(true, () => work());
+      await database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await database.exec('ROLLBACK');
+      } catch {
+        /* The transaction may already be closed. */
+      }
+      throw error;
+    }
+  } finally {
+    release();
+  }
+}
+
 export const db = {
   get: async (sql: string, ...params: any[]) => {
     const database = await initDb();
@@ -703,6 +832,27 @@ export const db = {
   },
   exec: async (sql: string) => {
     const database = await initDb();
+    if (isTransactionStart(sql)) {
+      if (transactionContext.getStore()) return database.exec(sql);
+      const release = await acquireTransactionLock();
+      try {
+        const result = await database.exec(sql);
+        openTransactionRelease = release;
+        return result;
+      } catch (error) {
+        release();
+        throw error;
+      }
+    }
+    if (isTransactionEnd(sql)) {
+      const release = transactionContext.getStore() ? null : openTransactionRelease;
+      if (!transactionContext.getStore()) openTransactionRelease = null;
+      try {
+        return await database.exec(sql);
+      } finally {
+        release?.();
+      }
+    }
     return database.exec(sql);
   }
 };

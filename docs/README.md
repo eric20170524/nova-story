@@ -46,6 +46,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | 后端已实现能力完整清单 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) |
 | Agent OS / 小说创作核心落地计划 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) |
 | 新书与 Agent OS 对齐核查、10 万字内小说故事建设方案 | [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) |
+| 构思开书、自动新章、修订与扩展章纲的方案与任务 | [总体方案](./architecture/novel_creation_workflow_plan_2026-09-30.md)、[后端任务及核心代码](./architecture/novel_creation_backend_tasks_2026-09-30.md)、[前端任务及核心代码](./architecture/novel_creation_frontend_tasks_2026-09-30.md) |
 | 小说故事与短剧剧本分层、Toonflow 核心能力收敛方案 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) |
 | 红潮 Hybrid H3 A2A 生视频方案与 TODO | [红潮_Hybrid_H3_A2A_生视频最佳实践与TODO.md](./video/红潮_Hybrid_H3_A2A_生视频最佳实践与TODO.md) |
 
@@ -68,6 +69,9 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) | ✅ 现行 | 后端已落地能力清单（DB 迁移、API、生图、版本管理、Agent） |
 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) | ⚠️ 落地中 | Agent OS 写作内核规格、多 Action 自愈决策与分层记忆体系 |
 | [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) | 📝 代码核查与建设方案 | DreamWaverAI 对齐核查；故事正文上限 10 万字；旧双形态要求按独立剧本方案修订 |
+| [novel_creation_workflow_plan_2026-09-30.md](./architecture/novel_creation_workflow_plan_2026-09-30.md) | 📝 实施设计 | 三项小说创作流程的代码缺口、数据边界、接口与 NC01–NC14 验收矩阵 |
+| [novel_creation_backend_tasks_2026-09-30.md](./architecture/novel_creation_backend_tasks_2026-09-30.md) | 📝 后端交接 | DreamWaver 原始片段、Zod/SQL、规划候选、精确修订和幂等建章核心代码 |
+| [novel_creation_frontend_tasks_2026-09-30.md](./architecture/novel_creation_frontend_tasks_2026-09-30.md) | 📝 前端交接 | Agent 模式、规划与候选卡、类型/API、重试及编辑保护核心代码 |
 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) | ✅ S0–S4 已闭环 | 故事→改编提纲→分场剧本→安全交接导演分镜；支持备份往返、级联清理、项目复制与来源过期检测 |
 
 ### 3. 生视频子系统 (`docs/video/`)

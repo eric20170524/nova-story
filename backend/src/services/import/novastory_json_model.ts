@@ -7,6 +7,9 @@ export interface NovaStoryJsonImportChapter {
   content: string | null;
   summary: string | null;
   status: string;
+  planEntryId?: string | null;
+  targetWordCount?: number | null;
+  finalizedContentHash?: string | null;
 }
 
 export interface NovaStoryJsonImportCharacter {
@@ -111,6 +114,7 @@ export interface NovaStoryJsonImportProject {
   scenes: NovaStoryJsonImportScene[];
   coverageGroups: NovaStoryJsonImportCoverageGroup[];
   coverageShots: NovaStoryJsonImportCoverageShot[];
+  storyPlan: { revision: number; document: Record<string, unknown> } | null;
   warnings: string[];
 }
 
@@ -345,6 +349,9 @@ export const normalizeNovaStoryJsonProject = (
       status: typeof raw.status === 'string' && raw.status.trim()
         ? raw.status.trim()
         : 'draft',
+      planEntryId: optionalText(raw.plan_entry_id),
+      targetWordCount: raw.target_word_count == null ? null : finiteNumber(raw.target_word_count, 0) || null,
+      finalizedContentHash: optionalText(raw.finalized_content_hash),
     });
   }
 
@@ -554,6 +561,19 @@ export const normalizeNovaStoryJsonProject = (
     scenes,
     coverageGroups,
     coverageShots,
+    storyPlan: readStoryPlan(jsonContent, warnings),
     warnings,
   };
 };
+
+function readStoryPlan(jsonContent: Record<string, any>, warnings: string[]) {
+  if (jsonContent.story_plan == null) return null;
+  if (!isRecord(jsonContent.story_plan) || !isRecord(jsonContent.story_plan.document)) {
+    warnings.push('story_plan was not an object and was ignored');
+    return null;
+  }
+  return {
+    revision: finiteNumber(jsonContent.story_plan.revision, 1),
+    document: jsonContent.story_plan.document,
+  };
+}

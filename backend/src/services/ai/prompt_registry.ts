@@ -11,6 +11,7 @@ export type PromptKey =
   | 'structure_novel_gen'
   | 'structure_volume_gen'
   | 'structure_extend'
+  | 'structure_revise'
   | 'writing_chapter_gen'
   | 'writing_metadata_gen'
   | 'constraint_next_chapter'
@@ -41,12 +42,15 @@ ANSWER_QUESTION | DRAFT_CONTENT | CINEMATIC_REWRITE | ADD_CONFLICT | REVERSE_PLO
 RUN_CONSISTENCY_CHECK | APPLY_CHAPTER_IMPACT | GENERATE_TIMELINE | ANALYZE_CHAPTER |
 ANALYZE_CHAPTER_CHARACTERS | QUERY_DATABASE | RENAME_CHAPTER | UPDATE_CHAPTER_SUMMARY |
 DELETE_CHAPTER | MOVE_CHAPTER | UPDATE_PROJECT_META | GET_CHARACTER | UPDATE_CHARACTER |
-GENERATE_SCRIPT_OUTLINE | GENERATE_SCRIPT | REWRITE_SCRIPT_SCENE
+GENERATE_SCRIPT_OUTLINE | GENERATE_SCRIPT | REWRITE_SCRIPT_SCENE |
+PLAN_STORY | PLAN_CHAPTERS | CREATE_NEXT_CHAPTER
 
 Rules:
 - Character list + personality from THIS chapter (preview only) → ANALYZE_CHAPTER_CHARACTERS (read-only)
 - Finalize: write characters (bio + personality), glossary, chapter plot timeline (states/events/foreshadowing) and relationships → APPLY_CHAPTER_IMPACT
 - Plot entities only → ANALYZE_CHAPTER
+- 整理开书设定 / 构思设定 → PLAN_STORY. 生成或扩展章节规划 → PLAN_CHAPTERS. 创建下一章 → CREATE_NEXT_CHAPTER.
+- 把章纲改为一段完整新摘要 → UPDATE_CHAPTER_SUMMARY. 帮我改章纲 / 修订规划 → PLAN_CHAPTERS.
 - Full novel rewrite / remove 画面动作指令 → CINEMATIC_REWRITE or DRAFT_CONTENT
 - Page=script: 改编提纲 → GENERATE_SCRIPT_OUTLINE; 生成剧本 → GENERATE_SCRIPT; 改写指定场次 → REWRITE_SCRIPT_SCENE (never use CINEMATIC_REWRITE on script page)
 - chapterScope: "current" if needs active chapter, else "none"
@@ -101,6 +105,7 @@ Ops:
 6. Director: GENERATE_TIMELINE | ANALYZE_CHAPTER | GET_CHARACTER { name } | UPDATE_CHARACTER { name, description?, visual_tags? }
 7. Q&A: ANSWER_QUESTION { answer } | QUERY_DATABASE { query }
 8. Script (when on script page): GENERATE_SCRIPT_OUTLINE { chapterId?, instructions? } | GENERATE_SCRIPT { chapterId?, instructions? } | REWRITE_SCRIPT_SCENE { scriptSceneId?, chapterId?, instructions? }
+9. Planning: PLAN_STORY | PLAN_CHAPTERS { mode: initial|extend|revise } | CREATE_NEXT_CHAPTER. These do not write chapter body text.
 
 Response schema (CRITICAL — flat "op" string, NEVER nest op as object):
 {
@@ -131,10 +136,10 @@ Invalid output (truncated):
 Fix and return ONLY valid JSON with FLAT op strings:
 { "thought": "...", "response": "...", "actions": [ { "op": "CINEMATIC_REWRITE", "technique": "sensory", "instructions": "..." } ] }
 NEVER nest: { "op": { "type": "..." } }. Use { "op": "OP_NAME", ...fields }.
-Allowed ops: DRAFT_CONTENT, ANSWER_QUESTION, QUERY_DATABASE, UPDATE_CHAPTER_SUMMARY, RENAME_CHAPTER, DELETE_CHAPTER, MOVE_CHAPTER, UPDATE_PROJECT_META, CINEMATIC_REWRITE, ADD_CONFLICT, REVERSE_PLOT, RUN_CONSISTENCY_CHECK, APPLY_CHAPTER_IMPACT, GENERATE_TIMELINE, ANALYZE_CHAPTER, GET_CHARACTER, UPDATE_CHARACTER, GENERATE_SCRIPT_OUTLINE, GENERATE_SCRIPT, REWRITE_SCRIPT_SCENE.
+Allowed ops: DRAFT_CONTENT, ANSWER_QUESTION, QUERY_DATABASE, UPDATE_CHAPTER_SUMMARY, RENAME_CHAPTER, DELETE_CHAPTER, MOVE_CHAPTER, UPDATE_PROJECT_META, CINEMATIC_REWRITE, ADD_CONFLICT, REVERSE_PLOT, RUN_CONSISTENCY_CHECK, APPLY_CHAPTER_IMPACT, GENERATE_TIMELINE, ANALYZE_CHAPTER, GET_CHARACTER, UPDATE_CHARACTER, GENERATE_SCRIPT_OUTLINE, GENERATE_SCRIPT, REWRITE_SCRIPT_SCENE, PLAN_STORY, PLAN_CHAPTERS, CREATE_NEXT_CHAPTER.
 No markdown fences.`,
 
-  brainstorm_chat: `你是一个拥有最强大脑的专业小说策划顾问。你的名字叫 "DreamWeaver"。
+  brainstorm_chat: `你是一个拥有最强大脑的专业小说策划顾问。你的名字叫 "NovaStory"。
 你的目标是帮助用户构思一部精彩的小说。
 
 --- 历史对话 ---
@@ -161,91 +166,78 @@ No markdown fences.`,
 5. **收束引导**：当感觉用户已经提供了足够的信息（上述 4 个要素基本清晰）时，可以主动询问：“听起来这个故事已经很棒了，我们是否要基于这些想法开始构建世界观？”
 6. **语言**：始终使用中文。`,
 
-  structure_novel_gen: `基于以下的对话内容，整理并生成一份小说的大纲设定。
+  structure_novel_gen: `基于以下对话，整理一份可编辑的开书设定。不要创建章节。
 
 --- 对话内容 ---
 {{conversationContext}}
 
+--- 作者补充 ---
+{{instructions}}
+
 --- 要求 ---
-请返回一个合法的 JSON 对象，不要包含任何 Markdown 格式以外的多余文字。
-JSON 结构如下：
+只返回一个 JSON 对象，不要 Markdown。
+角色 role 只能是 protagonist、antagonist、supporting、extra。
+把核心欲望、恐惧、反差和行为逻辑写进 description，不要另起字段。
+mainPlot 是未来走向，不是已经发生的事实。
 {
   "title": "书名",
   "genre": "类型",
   "style": "风格",
-  "summary": "全文故事梗概 (300字左右)",
-  "mainPlot": "详细设计故事的起承转合，核心冲突，高潮和结局走向",
-  "characterRelations": "描述主要角色之间的情感、利益纠葛和动态关系",
+  "summary": "故事简介",
+  "mainPlot": "未来走向，禁止写成已发生事实",
+  "initialRelations": "开篇时已经成立的人物关系",
+  "plannedRelations": "以后可能变化的关系，尚未发生",
   "characters": [
-    {
-      "name": "姓名",
-      "role": "主角/反派/配角",
-      "description": "外貌与身份描述",
-      "personality": "性格特征",
-      "growthPath": "成长预期",
-      "coreDesire": "核心欲望 (如：复仇、长生、回家)",
-      "fear": "最大恐惧",
-      "maskAndTruth": "外在标签与内在反差 (剥洋葱)",
-      "logic": "自洽的行为逻辑 (反派专用)"
-    }
+    { "name": "姓名", "role": "protagonist", "description": "身份、欲望与行为逻辑", "personality": "性格", "growthPath": "成长预期" }
   ],
   "glossary": [
     { "term": "专有名词", "definition": "解释", "category": "分类" }
   ]
 }`,
 
-  structure_volume_gen: `作为拥有最强大脑的资深网文主编，请根据以下设定规划章节目录。
+  structure_volume_gen: `你是小说主编。请为《{{title}}》规划开篇章节，数量必须正好是 {{chapterCount}}。
 
---- 小说设定 ---
-书名：{{title}}
+--- 设定 ---
 类型：{{genre}}
 简介：{{summary}}
-主线：{{mainPlot}}
+未来走向：{{mainPlot}}
 作品形态：{{contentForm}}
+节奏：{{pacingInstruction}}
+作者要求：{{instructions}}
 
---- 核心要求 (黄金三章法则) ---
-前三章必须严格遵守【黄金三章定律】，这是吸引读者的关键：
-1. **第1章 (切入)**：必须以‘生死危机’或‘巨大信息反差’开篇，并在结尾引出核心悬念。拒绝慢热，拒绝大段背景设定科普。
-2. **第2章 (展示)**：展示核心能力/转机初步威力，解决危机，推进情节。
-3. **第3章 (爆发)**：矛盾彻底爆发，完成第一个小高潮，确立主角的短期目标。
+--- 要求 ---
+1. 每章概要包含关键事件、矛盾和结尾钩子。
+2. 不要指定插入位置，不要输出章节 id。
+3. targetWordCount 为 200 到 10000 的整数。
+4. 只返回 {"chapters":[{"title":"章名","summary":"细纲","targetWordCount":2000}]}，不要 Markdown。`,
 
---- 通用要求 ---
-1. **钩子技术**：每章概要需包含：**【关键事件】+【矛盾冲突】+【结尾钩子(悬念)】**。
-2. **格式严格**：仅返回纯 JSON 格式，**不要**使用 \`\`\`json 代码块包裹，不要有任何开场白或结束语。
+  structure_extend: `你是小说家。请为《{{title}}》在现有规划末尾追加正好 {{chapterCount}} 章。不要改写已有条目，不要重复最后一章。
 
---- Output JSON Structure ---
-[
-  {
-    "title": "第1章：章名（极具吸引力）",
-    "summary": "详细细纲：主角遭遇了什么危机，如何应对，结尾留下了什么悬念。",
-    "targetWordCount": 2000
-  }
-]`,
-
-  structure_extend: `你是一位拥有最强大脑的专业小说家。请继续为《{{title}}》设计后续的大纲。
---- 当前背景 ---
+--- 背景 ---
 类型: {{genre}}
-主线: {{mainPlot}}
+未来走向: {{mainPlot}}
 作品形态: {{contentForm}}
+节奏: {{pacingInstruction}}
+已有后续规划:
+{{existingFuturePlans}}
 
---- 前情提要 ---
-**最新章节结局 (剧情断点):** {{lastChapterContext}}
+--- 前情 ---
+{{lastChapterContext}}
 
---- 续写任务 ---
-请基于上述“剧情断点”，无缝衔接规划后续剧情。
-1. **逻辑连贯**:
-   - 新生成的第一章必须紧密承接“最新章节结局”留下的悬念或事件，严禁逻辑断层。
-   - 必须遵循人物既有的性格和能力设定。
-2. **剧情推进**:
-   - 新的剧情必须伴随【场景切换】或【矛盾升级】。反派或挑战的难度需要递增，避免重复之前的套路。
-3. **概要标准**: 每章概要约 100-150 字，必须包含【核心事件】+【冲突点】+【结尾钩子】。
-语言: 简体中文。
+--- 作者要求 ---
+{{instructions}}
 
---- 输出格式 ---
-请务必严格返回一个纯 JSON 数组，**禁止**使用 \`\`\`json 代码块包裹，不要包含任何解释性文字。
-[
-  { "title": "章名 (极具吸引力)", "summary": "本章详细剧情细纲 (100字左右)", "targetWordCount": 2000 }
-]`,
+新章节必须承接前情，只追加在末尾。只返回 {"chapters":[{"title":"章名","summary":"细纲","targetWordCount":2000}]}，不要 Markdown，不要输出 id。`,
+
+  structure_revise: `你是小说主编。只修订下面列出的规划条目，id 集合必须正好是 {{targetIds}}。不要新增、删除或改动其他章节。
+
+书名：{{title}}
+作者要求：{{instructions}}
+
+待修订条目：
+{{targetPlans}}
+
+只返回 {"chapters":[{"id":"原id","title":"章名","summary":"细纲","targetWordCount":2000}]}。id 必须原样返回。不要 Markdown。`,
 
   writing_chapter_gen: `你是一位拥有最强大脑的专业小说家，正在撰写一个特定章节。
 请严格遵守提供的多层级上下文，以避免出现幻觉、逻辑断层或设定冲突。

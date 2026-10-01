@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
@@ -9,6 +10,9 @@ import {
   type AgentAction,
 } from '../../schemas/agent_os';
 import { WritingService } from './writing_service';
+import { StoryPlanService } from '../story_plan_service';
+import { StoryPlanningService } from './story_planning_service';
+import { CHAPTER_CONTENT_UNFINALIZE_SQL, PlanningError } from '../../schemas/story_plan';
 import { ScriptService } from '../script_service';
 import {
   ScriptGenerationService,
@@ -99,6 +103,16 @@ export function resolveScriptSceneTarget(
   return null;
 }
 
+async function currentPlanRevision(projectId: number): Promise<number> {
+  try {
+    const view = await StoryPlanService.getView(projectId);
+    return view.revision;
+  } catch (error) {
+    if (error instanceof PlanningError && error.code === 'PLAN_NOT_FOUND') return 1;
+    throw error;
+  }
+}
+
 async function assertChapterInProject(
   chapterId: string,
   projectId: number
@@ -150,6 +164,7 @@ async function moveChapterInProject(
       newIndex,
       chapterId
     );
+    await StoryPlanService.reorderFromChapters(projectId);
     await db.exec('COMMIT');
   } catch (e) {
     await db.exec('ROLLBACK');
@@ -179,6 +194,7 @@ async function deleteChapterCascade(chapterId: string, projectId: number): Promi
       chapterId
     );
     await db.run('DELETE FROM scene WHERE chapter_id = ?', chapterId);
+    await StoryPlanService.retireLinkedChapter(projectId, chapterId);
     await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
     await db.exec('COMMIT');
   } catch (e) {
@@ -361,7 +377,7 @@ export class AgentExecutor {
               );
             condensed = regeneratedCondensed;
             await db.run(
-              'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+              `UPDATE chapter SET content = ?, condensed_content = ?, ${CHAPTER_CONTENT_UNFINALIZE_SQL} WHERE id = ?`,
               finalContent,
               condensed,
               chapterId
@@ -399,18 +415,18 @@ export class AgentExecutor {
       }
 
       case 'UPDATE_CHAPTER_SUMMARY': {
-        await assertChapterInProject(action.chapterId, ctx.projectId);
+        const chapter = await assertChapterInProject(action.chapterId, ctx.projectId);
         if (ctx.apply) {
-          await db.run(
-            'UPDATE chapter SET summary = ? WHERE id = ?',
-            action.newSummary,
-            action.chapterId
-          );
+          await StoryPlanService.updateLinkedChapterFields(ctx.projectId, action.chapterId, {
+            summary: action.newSummary,
+          });
         }
         return {
           op,
           status: 'success',
-          message: `Summary updated for ${action.chapterId}`,
+          message: chapter.status === 'completed'
+            ? '章纲已更新。正文未改，可能与已定稿内容不一致。'
+            : `Summary updated for ${action.chapterId}`,
           data: { chapterId: action.chapterId, summary: action.newSummary },
         };
       }
@@ -418,11 +434,9 @@ export class AgentExecutor {
       case 'RENAME_CHAPTER': {
         await assertChapterInProject(action.chapterId, ctx.projectId);
         if (ctx.apply) {
-          await db.run(
-            'UPDATE chapter SET title = ? WHERE id = ?',
-            action.newTitle,
-            action.chapterId
-          );
+          await StoryPlanService.updateLinkedChapterFields(ctx.projectId, action.chapterId, {
+            title: action.newTitle,
+          });
         }
         return {
           op,
@@ -567,7 +581,7 @@ export class AgentExecutor {
               chapterId
             );
             await db.run(
-              'UPDATE chapter SET content = ?, condensed_content = ? WHERE id = ?',
+              `UPDATE chapter SET content = ?, condensed_content = ?, ${CHAPTER_CONTENT_UNFINALIZE_SQL} WHERE id = ?`,
               rewritten,
               condensed,
               chapterId
@@ -892,6 +906,108 @@ export class AgentExecutor {
             status: 'error',
             message: e?.message || String(e),
             data: { chapterId, scriptSceneId: targetSceneId },
+          };
+        }
+      }
+
+      case 'PLAN_STORY':
+      case 'PLAN_CHAPTERS': {
+        try {
+          const revision = await currentPlanRevision(ctx.projectId);
+          const instructions = String(action.instructions || '');
+          const requestKey = action.requestKey
+            || `agent:${op}:${randomUUID()}`;
+          const candidate = op === 'PLAN_STORY'
+            ? await StoryPlanningService.generateBlueprint({
+                projectId: ctx.projectId,
+                requestKey,
+                expectedRevision: revision,
+                message: instructions,
+                history: action.history,
+              })
+            : await StoryPlanningService.generateChapters({
+                projectId: ctx.projectId,
+                requestKey,
+                expectedRevision: revision,
+                message: instructions,
+                history: action.history,
+                mode: action.mode || 'extend',
+                targetPlanIds: action.targetPlanIds,
+                batchSize: action.batchSize,
+              });
+          if (candidate?.state !== 'pending') {
+            const generating = candidate?.state === 'generating';
+            const stale = candidate?.state === 'stale';
+            return {
+              op,
+              status: 'error',
+              message: generating
+                ? '规划仍在生成，请稍后查看故事页'
+                : stale
+                  ? '规划候选已过期，请根据最新内容重新生成'
+                  : '该规划请求已经结束，请重新生成',
+              data: {
+                code: candidate?.error_code || (generating ? 'GENERATION_IN_PROGRESS' : stale ? 'SOURCE_CHANGED' : 'REQUEST_NOT_FINISHED'),
+                candidate_id: candidate?.id,
+                candidate,
+              },
+            };
+          }
+          return {
+            op,
+            status: 'success',
+            message: op === 'PLAN_STORY'
+              ? '已生成开书设定候选，请在故事页审核后采纳'
+              : '已生成章节规划候选，请在故事页审核后采纳',
+            data: {
+              candidate_id: candidate?.id,
+              candidate,
+            },
+          };
+        } catch (error: any) {
+          return {
+            op,
+            status: 'error',
+            message: error?.message || String(error),
+            data: { code: error?.code },
+          };
+        }
+      }
+
+      case 'CREATE_NEXT_CHAPTER': {
+        if (!ctx.apply) {
+          return { op, status: 'success', message: '确认后将创建下一章', data: {} };
+        }
+        try {
+          const view = await StoryPlanService.getView(ctx.projectId);
+          const chapters = (await db.all(
+            'SELECT id, "index" AS idx FROM chapter WHERE project_id = ? ORDER BY "index" ASC, id ASC',
+            ctx.projectId
+          )) as Array<{ id: string; idx: number }>;
+          const last = chapters.at(-1);
+          const entryId = action.planEntryId || view.next_entry_id;
+          if (!entryId) {
+            return { op, status: 'error', message: '没有可创建的下一条规划', data: { code: 'NO_PENDING_PLAN' } };
+          }
+          const result = await StoryPlanService.createNextChapter({
+            project_id: ctx.projectId,
+            plan_entry_id: entryId,
+            expected_revision: action.expectedRevision || view.revision,
+            expected_last_chapter_id: action.expectedLastChapterId ?? (last?.id || null),
+            request_key: action.requestKey || `agent-next:${ctx.projectId}:${entryId}:${view.revision}:${last?.id || 'none'}`,
+          });
+          return {
+            op,
+            status: 'success',
+            message: result.reused ? '下一章已经创建' : '已按规划创建下一章',
+            data: { chapter: result.chapter, plan_revision: result.plan_revision, reused: result.reused },
+          };
+        } catch (error: any) {
+          return {
+            op,
+            status: 'error',
+            message: error?.message || String(error),
+            data: { code: error?.code },
           };
         }
       }

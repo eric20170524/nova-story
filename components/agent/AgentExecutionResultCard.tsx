@@ -72,6 +72,12 @@ const getOpTitle = (op: string, t: (k: string, f?: string) => string): string =>
       return t('agent.op_script_gen', '短剧分场剧本生成');
     case 'REWRITE_SCRIPT_SCENE':
       return t('agent.op_script_rewrite', '短剧分场改写');
+    case 'PLAN_STORY':
+      return t('story.op_plan_story', '开书设定');
+    case 'PLAN_CHAPTERS':
+      return t('story.op_plan_chapters', '章节规划');
+    case 'CREATE_NEXT_CHAPTER':
+      return t('story.op_next_chapter', '创建下一章');
     default:
       return t(`agent.op_${op.toLowerCase()}`, op);
   }
@@ -136,6 +142,16 @@ const SingleResultCard: React.FC<{
           {expanded ? <ChevronUp size={14} className="text-emerald-700 dark:text-emerald-400" /> : <ChevronDown size={14} className="text-emerald-700 dark:text-emerald-400" />}
         </div>
 
+        {!preview && impact.autoNext?.status === 'failed' && (
+          <div role="alert" className="m-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            <p className="font-bold">{t('story.plan_auto_next_failed', '章节已定稿，但自动创建下一章失败')}</p>
+            <p className="mt-1 whitespace-pre-wrap">{impact.autoNext.message}</p>
+            <p className="mt-1">{t('story.plan_auto_next_retry', '处理冲突后可再次定稿重试，或在故事规划中手动创建下一章。')}</p>
+          </div>
+        )}
+        {!preview && impact.autoNext?.status === 'created' && (
+          <p role="status" className="m-3 text-emerald-800 dark:text-emerald-300">{t('story.plan_next_ready', '下一章已创建')}</p>
+        )}
         {expanded && (
           <div className="p-3.5 space-y-3 max-h-[28rem] overflow-y-auto custom-scrollbar">
             {!hasData && (

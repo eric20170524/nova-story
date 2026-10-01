@@ -123,6 +123,9 @@ function defaultResponseForIntent(intent: string, userMessage: string): string {
     GENERATE_SCRIPT_OUTLINE: '将为当前章节生成短剧改编提纲（关键事件与结尾钩子）；确认后保存为候选。',
     GENERATE_SCRIPT: '将基于提纲生成完整分场短剧剧本；确认后保存为剧本草稿。',
     REWRITE_SCRIPT_SCENE: '将对指定剧本分场进行局部改写；确认后更新该场动作与对白。',
+    PLAN_STORY: '正在整理开书设定候选。采纳前不会改动项目或角色。',
+    PLAN_CHAPTERS: '正在生成章节规划候选。采纳前不会创建章节，也不会改写正文。',
+    CREATE_NEXT_CHAPTER: '将按已采纳的下一条规划创建新章节。请确认。',
   };
   return map[intent] || `已理解：${userMessage.slice(0, 80)}`;
 }

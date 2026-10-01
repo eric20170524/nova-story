@@ -183,6 +183,7 @@ export type ChapterImpactResult = {
   mainPlotChanged?: boolean;
   characterRelationsChanged?: boolean;
   applied?: boolean;
+  autoNext?: Awaited<ReturnType<typeof import('../story_plan_service').StoryPlanService.consumePendingAutoNext>>;
 };
 
 /** Keys stored as structured meta inside visual_tags JSON — never overwrite with appearance strings. */
@@ -628,6 +629,32 @@ function budgetedGlossary(glossary: any[]): string {
   );
 }
 
+async function resolveDraftConstraint(
+  projectId: number,
+  chapterId: string,
+  chapters: Array<{ id: string; plan_entry_id?: string | null }>,
+  nextChapterSummary: string | null | undefined,
+  overrides: Parameters<typeof buildNextChapterConstraint>[1]
+): Promise<string> {
+  let summary = nextChapterSummary?.trim() || null;
+  let future = '';
+  try {
+    const plan = await db.get('SELECT document_json FROM story_plan WHERE project_id = ?', projectId);
+    if (plan?.document_json) {
+      const { StoryPlanDocumentSchema, upcomingPlanSummary } = await import('../../schemas/story_plan');
+      const document = StoryPlanDocumentSchema.parse(JSON.parse(String(plan.document_json)));
+      if (!summary) summary = upcomingPlanSummary(document, chapters, chapterId);
+      const direction = String(document.blueprint?.mainPlot || document.blueprint?.summary || '').trim();
+      if (direction) {
+        future = `\n未来计划（尚未发生，禁止写成已发生事实）：${direction.slice(0, 400)}`;
+      }
+    }
+  } catch (error) {
+    logger.warn(`Story plan draft context skipped: ${error}`);
+  }
+  return buildNextChapterConstraint(summary, overrides) + future;
+}
+
 export class WritingService {
   static async generateChapterDraft(options: {
     projectId: number;
@@ -662,10 +689,14 @@ export class WritingService {
 
     const rewriteMode = options.mode === 'rewrite';
     const layered = bundle.layered;
-    const nextConstraint = buildNextChapterConstraint(
+    const nextConstraint = await resolveDraftConstraint(
+      options.projectId,
+      options.chapterId,
+      bundle.chapters,
       layered?.nextChapterSummary,
       bundle.overrides
     );
+    const storedTarget = Number((chapter as { target_word_count?: number }).target_word_count);
     const creativeConstraints = buildCreativeConstraints(bundle.bible);
     const contentForm = '短篇小说（小说叙述与对话）';
     const formatRules =
@@ -750,7 +781,7 @@ export class WritingService {
       existingContent: existingBlock,
       nextChapterConstraint: nextConstraint,
       instructions: options.instructions,
-      targetWordCount: options.targetWordCount || (rewriteMode ? 1200 : 800),
+      targetWordCount: options.targetWordCount || (storedTarget >= 200 ? storedTarget : (rewriteMode ? 1200 : 800)),
       formatRules,
       writingModeNote,
     });
@@ -807,6 +838,11 @@ export class WritingService {
         condensed,
         chapterId
       );
+      const owner = await db.get('SELECT project_id FROM chapter WHERE id = ?', chapterId);
+      if (owner?.project_id) {
+        const { StoryPlanService } = await import('../story_plan_service');
+        await StoryPlanService.syncLinkedOutline(Number(owner.project_id), chapterId);
+      }
     } else {
       await db.run(
         'UPDATE chapter SET condensed_content = ? WHERE id = ?',
@@ -1040,16 +1076,41 @@ export class WritingService {
             );
           }
         }
+        const stored = await db.get(
+          'SELECT content FROM chapter WHERE id = ? AND project_id = ?',
+          chapterId,
+          projectId
+        );
+        const { hashChapterContent } = await import('../../schemas/story_plan');
+        const contentHash = hashChapterContent(stored?.content);
         await db.run(
-          'UPDATE chapter SET status = ? WHERE id = ? AND project_id = ?',
-          'completed', chapterId, projectId
+          'UPDATE chapter SET status = ?, finalized_content_hash = ? WHERE id = ? AND project_id = ?',
+          'completed',
+          contentHash,
+          chapterId,
+          projectId
         );
         await db.run(
           'UPDATE project SET settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
           JSON.stringify(merged.settings), projectId
         );
+        const { StoryPlanService } = await import('../story_plan_service');
+        await StoryPlanService.registerAutoNextInOpenTransaction(projectId, chapterId);
         await db.exec('COMMIT');
         data.applied = true;
+        try {
+          data.autoNext = await StoryPlanService.consumePendingAutoNext(
+            projectId,
+            chapterId
+          );
+        } catch (autoError) {
+          logger.warn(`Auto next chapter failed after finalize: ${autoError}`);
+          data.autoNext = {
+            status: 'failed',
+            code: 'NEXT_CHAPTER_FAILED',
+            message: autoError instanceof Error ? autoError.message : String(autoError),
+          };
+        }
       }
     } catch (error) {
       if (apply) await db.exec('ROLLBACK');
@@ -1191,7 +1252,10 @@ export class WritingService {
       : '(原文为空，请根据章纲撰写完整正文)';
 
     const creativeConstraints = buildCreativeConstraints(bundle.bible);
-    const nextConstraint = buildNextChapterConstraint(
+    const nextConstraint = await resolveDraftConstraint(
+      options.projectId,
+      options.chapterId,
+      bundle.chapters,
       bundle.layered?.nextChapterSummary,
       bundle.overrides
     );

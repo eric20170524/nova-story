@@ -79,6 +79,9 @@ export interface Chapter {
   summary?: string | null;
   condensed_content?: string | null;
   status?: string;
+  plan_entry_id?: string | null;
+  target_word_count?: number | null;
+  finalized_content_hash?: string | null;
 }
 
 export interface GlossaryItem {

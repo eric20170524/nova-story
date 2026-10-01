@@ -64,6 +64,23 @@ export function selectAppliedSkillContent(
   return null;
 }
 
+const PLAN_REFRESH_OPS = new Set([
+  'PLAN_STORY',
+  'PLAN_CHAPTERS',
+  'CREATE_NEXT_CHAPTER',
+  'ANSWER_QUESTION',
+]);
+
+/**
+ * Plan and chat successes refresh lists. They must not pull the open chapter
+ * body back over unsaved typing. Any other successful write still does.
+ */
+export function executionAffectsEditorContent(results: Result[] | undefined): boolean {
+  const successes = (results || []).filter((item) => item.status === 'success');
+  if (!successes.length) return true;
+  return successes.some((item) => !item.op || !PLAN_REFRESH_OPS.has(item.op));
+}
+
 /** Skip the story-editor force refresh when every successful write names another chapter. */
 export function shouldRefreshAfterExecution(
   results: Result[] | undefined,

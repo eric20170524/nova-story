@@ -12,13 +12,14 @@ import {
 import { useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
 import {
+  executionAffectsEditorContent,
   selectAppliedSkillContent,
   shouldRefreshAfterExecution,
   shouldRetainPendingAgentActions,
   summarizeAgentExecution,
 } from '../../services/agent_execution';
 import { useLanguage } from '../../LanguageContext';
-import { useProjectAgent } from '../../contexts/ProjectAgentContext';
+import { useProjectAgent, type AgentPromptRequest } from '../../contexts/ProjectAgentContext';
 import { AgentActionCard, type AgentAction } from './AgentActionCard';
 import {
   AgentExecutionResultCard,
@@ -34,6 +35,7 @@ interface Message {
   needs_confirmation?: boolean;
   error?: boolean;
   executed?: boolean;
+  mode?: 'ideation' | 'command';
 }
 
 interface ProjectAgentPanelProps {
@@ -150,6 +152,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
     return [{ role: 'agent', content: t('agent.welcome_os') }];
   });
   const [input, setInput] = useState('');
+  const [conversationMode, setConversationMode] = useState<'ideation' | 'command'>('command');
   const [loading, setLoading] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [pendingActions, setPendingActions] = useState<AgentAction[] | null>(
@@ -200,6 +203,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
 
   const [pendingSurface, setPendingSurface] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (currentSurface !== 'story') setConversationMode('command');
+  }, [currentSurface]);
+
   const clearPendingAgentActions = () => {
     setPendingActions(null);
     setPendingSurface(null);
@@ -220,11 +227,13 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
   }, [chapterId, currentSurface, pendingActions, pendingChapterId, pendingSurface]);
 
   const handleSend = useCallback(
-    async (textToSend?: string, preferredOp?: string | null) => {
+    async (textToSend?: string, preferredOp?: string | null, promptRequest?: AgentPromptRequest) => {
       const text = (textToSend !== undefined ? textToSend : input).trim();
       if (!text || loading || executing) return;
+      const requestedMode = promptRequest?.conversationMode || conversationMode;
+      const mode = currentSurface === 'story' ? requestedMode : 'command';
 
-      const userMsg: Message = { role: 'user', content: text };
+      const userMsg: Message = { role: 'user', content: text, mode };
       setMessages((prev) => [...prev, userMsg]);
       if (textToSend === undefined) setInput('');
       setLoading(true);
@@ -233,10 +242,13 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       setPendingChapterId(null);
 
       try {
-        const history = messages.slice(-10).map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
+        const history = messages
+          .filter((m) => (mode === 'ideation' ? m.mode === 'ideation' : m.mode !== 'ideation'))
+          .slice(-10)
+          .map((m) => ({
+            role: m.role,
+            content: m.content,
+          }));
         const response = await api.chatWithAgent(
           userMsg.content,
           {
@@ -245,6 +257,8 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             language,
             route: routeHint,
             surface: currentSurface,
+            conversation_mode: mode,
+            planning: promptRequest?.planning,
             ...(routeHint === 'script'
               ? {
                   script_id: activeScriptId ?? undefined,
@@ -275,6 +289,7 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
 
         const agentMsg: Message = {
           role: 'agent',
+          mode,
           content: response.response || '',
           thought: response.thought,
           actions: taggedActions,
@@ -285,7 +300,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         setMessages((prev) => [...prev, agentMsg]);
 
         // Auto-executed skills with apply:true must update the open editor
-        syncAppliedEditorContent(results, chapterIdRef.current, applyContent);
+        const contentResults = results?.filter((item) =>
+          !['PLAN_STORY', 'PLAN_CHAPTERS', 'CREATE_NEXT_CHAPTER', 'ANSWER_QUESTION'].includes(item.op)
+        );
+        syncAppliedEditorContent(contentResults, chapterIdRef.current, applyContent);
 
         if (response.needs_confirmation && taggedActions.length > 0) {
           setPendingActions(taggedActions);
@@ -297,7 +315,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
             (item) => item.data && typeof item.data.chapterId === 'string'
           )?.data?.chapterId;
           if (shouldRefreshAfterExecution(successfulResults, chapterIdRef.current)) {
-            notifyDataChanged({ chapterId: changedChapterId || chapterIdRef.current });
+            notifyDataChanged({
+              chapterId: changedChapterId || chapterIdRef.current,
+              affectsContent: executionAffectsEditorContent(successfulResults),
+            });
             onRefresh?.();
           }
         }
@@ -326,18 +347,22 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       onRefresh,
       applyContent,
       t,
+      conversationMode,
+      currentSurface,
     ]
   );
 
   // Handle external pendingPrompt safely without discarding while loading/executing
   useEffect(() => {
-    if (pendingPrompt && pendingPrompt.trim()) {
+    const text = typeof pendingPrompt === 'string' ? pendingPrompt : pendingPrompt?.text;
+    if (text?.trim()) {
       if (loading || executing) {
         return;
       }
-      const prompt = pendingPrompt.trim();
+      const extra = typeof pendingPrompt === 'string' ? undefined : pendingPrompt;
+      if (extra?.conversationMode && currentSurface === 'story') setConversationMode(extra.conversationMode);
       clearPendingPrompt();
-      handleSend(prompt);
+      handleSend(text.trim(), extra?.preferredOp, extra);
     }
   }, [pendingPrompt, loading, executing, clearPendingPrompt, handleSend]);
 
@@ -394,7 +419,10 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
         (item) => item.status === 'success' && item.data && typeof item.data.chapterId === 'string'
       )?.data?.chapterId;
       if (shouldRefreshAfterExecution(results, chapterIdRef.current)) {
-        notifyDataChanged({ chapterId: changedChapterId || chapterIdRef.current });
+        notifyDataChanged({
+          chapterId: changedChapterId || chapterIdRef.current,
+          affectsContent: executionAffectsEditorContent(results),
+        });
         onRefresh?.();
       }
     } catch (e) {
@@ -690,6 +718,23 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       </div>
 
       <div className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 transition-colors">
+        {currentSurface === 'story' && (
+          <button
+            type="button"
+            data-testid="agent-mode-ideation"
+            aria-pressed={conversationMode === 'ideation'}
+            onClick={() => setConversationMode((mode) => mode === 'ideation' ? 'command' : 'ideation')}
+            className={`mb-2 text-[11px] px-3 py-1 rounded-full border font-medium ${
+              conversationMode === 'ideation'
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+            }`}
+          >
+            {conversationMode === 'ideation'
+              ? t('story.ideation_mode_on', '构思模式')
+              : t('story.command_mode', '创作指令')}
+          </button>
+        )}
         <div className="relative">
           <input
             type="text"

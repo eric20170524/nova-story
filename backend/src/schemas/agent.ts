@@ -17,6 +17,14 @@ export const AgentContextSchema = z.object({
    * Must match AgentRouteIntentSchema values when set.
    */
   preferred_op: z.string().optional().nullable(),
+  /** ideation keeps ordinary chat from creating chapters or characters. */
+  conversation_mode: z.enum(['ideation', 'command']).optional().nullable(),
+  planning: z.object({
+    mode: z.enum(['blueprint', 'initial', 'extend', 'revise']).optional(),
+    targetPlanIds: z.array(z.string()).optional(),
+    batchSize: z.number().int().min(1).max(5).optional(),
+    requestKey: z.string().optional(),
+  }).optional().nullable(),
 });
 
 export const AgentRequestSchema = z.object({

@@ -14,6 +14,10 @@ import type {
   VideoTaskState,
   MediaAsset
 } from '../types';
+import { ApiError } from './api_error';
+import { unsupportedMockResponse } from './mock_fallback';
+
+export { ApiError };
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -54,15 +58,17 @@ class ApiService {
       
       if (!response.ok) {
         let errDetail = `API Error ${response.status}`;
+        let errCode: string | undefined;
         try {
           const errJson = await response.json();
+          errCode = typeof errJson.code === 'string' ? errJson.code : undefined;
           if (errJson.detail) {
             errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
           } else if (errJson.message) {
             errDetail = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
           }
         } catch (_) {}
-        throw new Error(errDetail);
+        throw new ApiError(errDetail, response.status, errCode);
       }
       
       if (response.status === 204) {
@@ -81,6 +87,8 @@ class ApiService {
   }
 
   private getMockResponse<T>(endpoint: string, method: HttpMethod, body?: any): Promise<T> {
+    const unsupported = unsupportedMockResponse<T>(endpoint);
+    if (unsupported) return unsupported;
     return new Promise((resolve) => {
       setTimeout(() => {
         if (endpoint.startsWith('/projects/')) {
@@ -647,6 +655,49 @@ class ApiService {
       method: 'POST',
       body: payload,
     });
+
+  getStoryPlan = (projectId: number) =>
+    this.request<any>(`/projects/${projectId}/story-plan`);
+
+  bootstrapStoryPlan = (projectId: number) =>
+    this.request<any>(`/projects/${projectId}/story-plan/bootstrap`, { method: 'POST', body: {} });
+
+  updateStoryPlan = (projectId: number, expectedRevision: number, document: unknown) =>
+    this.request<any>(`/projects/${projectId}/story-plan`, {
+      method: 'PATCH',
+      body: { expected_revision: expectedRevision, document },
+    });
+
+  listStoryPlanCandidates = (projectId: number, requestKey?: string) =>
+    this.request<any[]>(
+      `/projects/${projectId}/story-plan/candidates${requestKey ? `?request_key=${encodeURIComponent(requestKey)}` : ''}`
+    );
+
+  generateStoryPlan = (projectId: number, body: Record<string, unknown>) =>
+    this.request<any>(`/projects/${projectId}/story-plan/candidates`, { method: 'POST', body });
+
+  editStoryPlanCandidate = (projectId: number, changeId: string, expectedCandidateRevision: number, document: unknown) =>
+    this.request<any>(`/projects/${projectId}/story-plan/candidates/${changeId}`, {
+      method: 'PATCH',
+      body: { expected_candidate_revision: expectedCandidateRevision, document },
+    });
+
+  applyStoryPlanCandidate = (
+    projectId: number,
+    changeId: string,
+    body: { expected_revision: number; expected_candidate_revision: number; selected_patch_ids: string[] }
+  ) =>
+    this.request<any>(`/projects/${projectId}/story-plan/candidates/${changeId}/apply`, { method: 'POST', body });
+
+  rejectStoryPlanCandidate = (projectId: number, changeId: string) =>
+    this.request<any>(`/projects/${projectId}/story-plan/candidates/${changeId}/reject`, { method: 'POST', body: {} });
+
+  createNextPlannedChapter = (projectId: number, body: {
+    plan_entry_id: string;
+    expected_revision: number;
+    expected_last_chapter_id: string | null;
+    request_key: string;
+  }) => this.request<any>(`/projects/${projectId}/story-plan/next-chapter`, { method: 'POST', body });
 
   applyStoryboardCandidate = (
     scriptId: number,

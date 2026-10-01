@@ -103,6 +103,51 @@ test('finalization previews without writes; API and agent persist both settings 
   assert.equal((revised.main_plot.match(/### 第1章/g) || []).length, 1);
 });
 
+test('finalizing identical content retries automatic next chapter after a post-commit plan conflict', async (t) => {
+  const { db, projectId, chapterId } = await fixture();
+  const { WritingService } = await mockAnalysis(t);
+  const { StoryPlanService } = await import('../story_plan_service');
+  await StoryPlanService.bootstrap(projectId);
+  const view = await StoryPlanService.getView(projectId);
+  await StoryPlanService.updateDocument(projectId, view.revision, {
+    ...view.document, autoCreateNextChapter: true,
+    chapters: [...view.document.chapters, {
+      id: 'auto-impact-next', title: '下一章', summary: '处理裂纹', targetWordCount: 2000, disposition: 'active',
+    }],
+  });
+  const originalConsume = StoryPlanService.consumePendingAutoNext;
+  let edited = false;
+  t.mock.method(StoryPlanService, 'consumePendingAutoNext', async (id: number, currentChapterId: string) => {
+    if (!edited) {
+      edited = true;
+      const current = await StoryPlanService.getView(id);
+      await StoryPlanService.updateDocument(id, current.revision, {
+        ...current.document,
+        chapters: current.document.chapters.map((entry) => entry.id === 'auto-impact-next'
+          ? { ...entry, title: '下一章更新', summary: '改为追踪裂纹来源' } : entry),
+      });
+    }
+    return originalConsume.call(StoryPlanService, id, currentChapterId);
+  });
+  const first = await WritingService.analyzeChapterImpact(projectId, chapterId, true);
+  assert.equal(first.applied, true);
+  assert.equal(first.autoNext?.status, 'failed');
+  assert.equal((first.autoNext as any).code, 'PLAN_CONFLICT');
+  const finalized = await db.get('SELECT content, finalized_content_hash, status FROM chapter WHERE id = ?', chapterId);
+  assert.equal(finalized.status, 'completed');
+  assert.ok(finalized.finalized_content_hash);
+  const second = await WritingService.analyzeChapterImpact(projectId, chapterId, true);
+  assert.equal(second.applied, true);
+  assert.equal(second.autoNext?.status, 'created');
+  assert.equal((second.autoNext as any).result.chapter.summary, '改为追踪裂纹来源');
+  const repeated = await WritingService.analyzeChapterImpact(projectId, chapterId, true);
+  assert.equal(repeated.autoNext, null);
+  assert.equal((await db.get('SELECT count(*) AS n FROM chapter WHERE project_id = ?', projectId)).n, 2);
+  assert.equal((await db.get('SELECT content FROM chapter WHERE id = ?', chapterId)).content, finalized.content);
+  const receipts = await db.all('SELECT state FROM story_plan_change WHERE project_id = ? AND kind = ?', projectId, 'next_chapter');
+  assert.deepEqual(receipts, [{ state: 'applied' }]);
+});
+
 test('plot and relationship entries stay in chapter order, preserve author text, and remove revised-away facts', () => {
   const chapters = [{ id: 'first', index: 0, title: '初遇' }, { id: 'second', index: 1, title: '星钥' }];
   const base = { main_plot: '手工主线', character_relations: '手工关系', tone: '保留' };

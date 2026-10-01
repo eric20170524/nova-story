@@ -17,7 +17,6 @@ import {
   Undo2,
   Redo2,
   ShieldAlert,
-  Bot,
   ChevronDown,
   Film,
 } from 'lucide-react';
@@ -28,6 +27,8 @@ import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { useUndo } from '../hooks/useUndo';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
+import { StoryPlanPanel } from '../components/story/StoryPlanPanel';
+import { chapterEditorFields, isChapterEditorDirty, reconcileChapterEditorFields } from '../components/story/chapterEditorState';
 
 export const StoryEditor: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
@@ -39,6 +40,7 @@ export const StoryEditor: React.FC = () => {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
   const [content, setContent, undo, redo, canUndo, canRedo, setContentWithoutHistory] = useUndo('');
   const [summary, setSummary] = useState('');
+  const [title, setTitle] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [showAiMenu, setShowAiMenu] = useState(false);
   const aiMenuBtnRef = useRef<HTMLButtonElement>(null);
@@ -47,16 +49,12 @@ export const StoryEditor: React.FC = () => {
 
   // Keep latest selection/content for async agent reload without stale closures
   const selectedChapterRef = useRef(selectedChapter);
-  const contentRef = useRef(content);
-  useEffect(() => {
-    selectedChapterRef.current = selectedChapter;
-  }, [selectedChapter]);
-  useEffect(() => {
-    contentRef.current = content;
-  }, [content]);
+  const editorFieldsRef = useRef({ title, summary, content });
+  selectedChapterRef.current = selectedChapter;
+  editorFieldsRef.current = { title, summary, content };
 
   const loadChapters = useCallback(
-    async (opts?: { syncEditorIfClean?: boolean; forceSync?: boolean }) => {
+    async (opts?: { forceSync?: boolean }) => {
       if (!projectId) return;
       try {
         const data = await api.getChapters(Number(projectId));
@@ -78,23 +76,16 @@ export const StoryEditor: React.FC = () => {
 
           const freshSelected =
             sorted.find((c) => c.id === current.id) || targetChapter;
-          const prevContent = current.content || '';
-          const localContent = contentRef.current;
-          const serverContent = freshSelected.content || '';
-
-          setSelectedChapter(freshSelected);
-
-          // Agent rewrites always force-pull server body into the editor.
-          // Clean-only sync still avoids clobbering unsaved local typing.
-          const shouldPull =
-            freshSelected.id === current.id &&
-            serverContent !== localContent &&
-            (opts?.forceSync ||
-              (opts?.syncEditorIfClean && localContent === prevContent));
-
-          if (shouldPull) {
-            setContentWithoutHistory(serverContent);
+          if (freshSelected.id === current.id) {
+            const local = editorFieldsRef.current;
+            const merged = reconcileChapterEditorFields(
+              chapterEditorFields(current), local, chapterEditorFields(freshSelected), opts?.forceSync
+            );
+            setTitle(merged.title);
+            setSummary(merged.summary);
+            if (merged.content !== local.content) setContentWithoutHistory(merged.content);
           }
+          setSelectedChapter(freshSelected);
         } else {
           setChapters([]);
         }
@@ -114,8 +105,10 @@ export const StoryEditor: React.FC = () => {
   }, [projectId, loadChapters]);
 
   useEffect(() => {
-    const onAgent = () => {
-      if (projectId) loadChapters({ forceSync: true });
+    const onAgent = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (detail.projectId && String(detail.projectId) !== String(projectId)) return;
+      if (projectId) loadChapters(detail.affectsContent === false ? undefined : { forceSync: true });
     };
     window.addEventListener('novastory-agent-data-changed', onAgent);
     return () => window.removeEventListener('novastory-agent-data-changed', onAgent);
@@ -125,6 +118,7 @@ export const StoryEditor: React.FC = () => {
     if (selectedChapter) {
       setContentWithoutHistory(selectedChapter.content || '');
       setSummary(selectedChapter.summary || '');
+      setTitle(selectedChapter.title || '');
       
       if (projectId) {
         localStorage.setItem(`director_project_${projectId}_chapter`, selectedChapter.id);
@@ -133,6 +127,7 @@ export const StoryEditor: React.FC = () => {
     } else {
       setContentWithoutHistory('');
       setSummary('');
+      setTitle('');
     }
   }, [selectedChapter?.id, projectId]);
 
@@ -235,9 +230,22 @@ export const StoryEditor: React.FC = () => {
 
   const handleCreateChapter = async () => {
     if (!projectId) return;
-    if (chapters.length > 0) {
-      const lastChapter = chapters[chapters.length - 1];
-      if (lastChapter.status !== 'completed') {
+    let currentChapters = chapters;
+    if (isChapterEditorDirty(selectedChapter, { title, summary, content })) {
+      if (!window.confirm(t('story.plan_dirty_confirm', '当前章节有未保存修改。保存并继续？'))) return;
+      if (!(await handleSave({ silent: true }))) return;
+      try {
+        currentChapters = await api.getChapters(Number(projectId));
+        setChapters(currentChapters);
+      } catch (err) {
+        showToast(t('story.failed_load_chapters', 'Failed to load chapters'), 'error');
+        return;
+      }
+    }
+    if (currentChapters.length > 0) {
+      const lastChapter = currentChapters.reduce((last, chapter) => chapter.index > last.index ? chapter : last);
+      const finalized = lastChapter.status === 'completed' && Boolean(lastChapter.finalized_content_hash);
+      if (!finalized) {
         showToast(
           t(
             'story.prev_chapter_not_finalized_alert',
@@ -248,17 +256,17 @@ export const StoryEditor: React.FC = () => {
         return;
       }
     }
-    const newIndex = chapters.length > 0 ? Math.max(...chapters.map(c => c.index)) + 1 : 1;
-    const title = `${t('story.new_chapter_prefix', 'Chapter')} ${newIndex}`;
+    const newIndex = currentChapters.length > 0 ? Math.max(...currentChapters.map(c => c.index)) + 1 : 1;
+    const newChapterTitle = `${t('story.new_chapter_prefix', 'Chapter')} ${newIndex}`;
     try {
       const newChapter = await api.createChapter({
         id: crypto.randomUUID(),
         project_id: Number(projectId),
-        title,
+        title: newChapterTitle,
         content: '',
         index: newIndex
       });
-      const updated = [...chapters, newChapter];
+      const updated = [...currentChapters, newChapter];
       setChapters(updated);
       setSelectedChapter(newChapter);
       showToast(t('story.chapter_created', 'Chapter created'), 'success');
@@ -307,16 +315,25 @@ export const StoryEditor: React.FC = () => {
 
   const handleSave = async (opts?: { silent?: boolean }): Promise<boolean> => {
     if (!selectedChapter) return false;
+    const submitted = { title, content, summary };
     try {
-      const updated = await api.updateChapter(selectedChapter.id, {
-        title: selectedChapter.title,
-        content,
-        summary
-      });
-      setSelectedChapter(updated);
-      setChapters(chapters.map(c => c.id === updated.id ? updated : c));
+      const updated = await api.updateChapter(selectedChapter.id, submitted);
+      if (selectedChapterRef.current?.id === updated.id) {
+        const local = editorFieldsRef.current;
+        const merged = reconcileChapterEditorFields(submitted, local, chapterEditorFields(updated));
+        setTitle(merged.title);
+        setSummary(merged.summary);
+        if (merged.content !== local.content) setContentWithoutHistory(merged.content);
+        setSelectedChapter(updated);
+      }
+      setChapters((current) => current.map(c => c.id === updated.id ? updated : c));
       if (!opts?.silent) {
         showToast(t('story.saved', 'Saved successfully'), 'success');
+      }
+      if (projectId) {
+        window.dispatchEvent(new CustomEvent('novastory-story-plan-changed', {
+          detail: { projectId },
+        }));
       }
       return true;
     } catch (err) {
@@ -336,7 +353,7 @@ export const StoryEditor: React.FC = () => {
       const res = await api.draftText(content, prompt, {
         project_id: Number(projectId),
         chapter_id: selectedChapter.id,
-        target_word_count: 800,
+        ...(selectedChapter.target_word_count ? { target_word_count: selectedChapter.target_word_count } : {}),
       });
       if (res?.content) {
         setContent(content ? `${content}\n\n${res.content}` : res.content);
@@ -381,7 +398,10 @@ export const StoryEditor: React.FC = () => {
   }), [t]);
 
   const lastChapter = chapters.length > 0 ? chapters[chapters.length - 1] : null;
-  const isPrevChapterUnfinalized = Boolean(lastChapter && lastChapter.status !== 'completed');
+  const isPrevChapterUnfinalized = Boolean(
+    lastChapter && !(lastChapter.status === 'completed' && lastChapter.finalized_content_hash)
+  );
+  const editorDirty = isChapterEditorDirty(selectedChapter, { title, summary, content });
   const lastChapterTitle = lastChapter ? lastChapter.title : '';
 
   return (
@@ -467,19 +487,25 @@ export const StoryEditor: React.FC = () => {
 
       {/* Main Full-Width Editor Area */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
+        {projectId && (
+          <StoryPlanPanel
+            projectId={projectId}
+            chapters={chapters}
+            dirty={editorDirty}
+            onSave={() => handleSave({ silent: true })}
+            onChaptersChanged={() => loadChapters()}
+          />
+        )}
         {/* Editor Top Bar */}
         <div className="relative z-20 h-14 border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between px-3 sm:px-6 bg-white/80 dark:bg-[#0c1322]/80 backdrop-blur-md gap-3 flex-shrink-0">
           <input
             type="text"
             className="bg-transparent border-none text-slate-900 dark:text-white font-bold focus:ring-0 flex-1 min-w-0 text-sm sm:text-base truncate placeholder-slate-400"
-            value={selectedChapter?.title || ''}
+            value={title}
             onChange={(e) => {
               const newTitle = e.target.value;
               if (selectedChapter) {
-                setSelectedChapter({ ...selectedChapter, title: newTitle });
-                setChapters((prev) =>
-                  prev.map((c) => (c.id === selectedChapter.id ? { ...c, title: newTitle } : c))
-                );
+                setTitle(newTitle);
               }
             }}
             placeholder={t('story.chapter_title_placeholder')}
@@ -686,17 +712,6 @@ export const StoryEditor: React.FC = () => {
               title={t('story.open_director', '打开导演分镜工作台')}
             >
               <Clapperboard size={16} />
-            </button>
-
-            {/* Open Global Agent OS */}
-            <button
-              type="button"
-              onClick={() => agentCtx?.setOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/40 rounded-xl text-xs font-semibold transition-colors"
-              title={t('agent.open_panel', '打开 Agent OS')}
-            >
-              <Bot size={14} />
-              <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
             </button>
 
             {/* Save Button */}
