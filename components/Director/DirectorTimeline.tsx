@@ -20,7 +20,6 @@ import {
 import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
-import { useProjectAgentOptional } from '../../contexts/ProjectAgentContext';
 import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
@@ -74,7 +73,6 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   onCancelVideoTask
 }) => {
   const { t } = useLanguage();
-  const agentCtx = useProjectAgentOptional();
   const [expandedCards, setExpandedCards] = useState<Set<number | string>>(new Set());
   const [activeMediaTabs, setActiveMediaTabs] = useState<Record<number | string, 'storyboard' | 'keyframe' | 'video'>>({});
   
@@ -193,15 +191,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                 <span className="hidden sm:inline">{t('director.generate_narration', 'Local Narration')}</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => agentCtx?.setOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/40 rounded-xl text-xs sm:text-sm font-semibold transition-colors shadow-2xs"
-              title={t('agent.open_panel', '打开 Agent OS')}
-            >
-              <Sparkles size={14} />
-              <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
-            </button>
+            {/* Generate Timeline Button */}
 
             <button 
               onClick={onGenerateTimeline}
