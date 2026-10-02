@@ -3,6 +3,7 @@ import {
   VideoSpec,
   VideoGenerationRequest
 } from '../../schemas/video';
+import { flattenVisualTagMap } from '../reference_generation_policy';
 
 export interface CompileVideoSpecOptions {
   request: VideoGenerationRequest;
@@ -61,6 +62,14 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
     // FL2VA uses keyframe conditioning rather than Ref2VA ordinal tags.
     return [];
   }
+  if (request.workflow_id === 'grok_imagine_browser') {
+    return [
+      'Use the uploaded storyboard keyframe as the first frame; preserve its composition, setting, lighting and object placement.',
+      ...(request.character_reference_asset_ids.length
+        ? [`The additional uploaded portrait image${request.character_reference_asset_ids.length === 1 ? '' : 's'} depict ${charName}; keep the same face, hairstyle, costume and body proportions throughout this clip.`]
+        : []),
+    ];
+  }
 
   const instructions: string[] = [];
   const isOfficialRef2va = request.workflow_id === 'minimax_h3_ref2va_official_12gb';
@@ -106,7 +115,15 @@ export const VideoSpecCompiler = {
     const dimensions = resolvePresetDimensions(request.preset);
 
     const charName = character?.name || 'Character';
-    const charDesc = character?.description ? cleanPromptForH3(character.description) : '';
+    let visualTags = character?.visual_tags || {};
+    if (typeof visualTags === 'string') {
+      try { visualTags = JSON.parse(visualTags); } catch { visualTags = {}; }
+    }
+    const stableTags = flattenVisualTagMap(visualTags);
+    const stableLook = ['hair', 'face_features', 'distinguishing_mark', 'build', 'clothing']
+      .map(key => String(stableTags[key] || '').trim().slice(0, 120))
+      .filter(Boolean).join(', ');
+    const charDesc = stableLook || (character?.description ? cleanPromptForH3(character.description).slice(0, 240) : '');
     const subjectIdentity = charDesc
       ? `The same character (${charName}), ${charDesc}, face, hairstyle, costume, and lighting remain strictly consistent.`
       : isFl2va

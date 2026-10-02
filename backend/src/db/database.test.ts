@@ -102,8 +102,11 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 015_story_plan
-    assert.equal(migrationCount.count, 15);
+    // 001_core through 017_image_request_idempotency
+    assert.equal(migrationCount.count, 17);
+    for (const name of ['library_asset', 'scene_asset_reference', 'scene_asset_image_snapshot']) {
+      assert.ok(await legacyDatabase.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name));
+    }
   } finally {
     await legacyDatabase.close();
   }

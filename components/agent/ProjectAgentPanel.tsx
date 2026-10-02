@@ -476,14 +476,6 @@ export const ProjectAgentPanel: React.FC<ProjectAgentPanelProps> = ({
       case 'story':
         return [
           {
-            label: t('agent.chip_extract_chars', '提取本章角色'),
-            prompt: t(
-              'agent.prompt_extract_chars',
-              '提取本章出场角色与性格特征（只读分析，不写入角色库）'
-            ),
-            preferredOp: 'ANALYZE_CHAPTER_CHARACTERS',
-          },
-          {
             label: t('agent.chip_analyze_plot', '剧情深度分析'),
             prompt: t(
               'agent.prompt_analyze_plot',

@@ -212,6 +212,15 @@ class ApiService {
     }>('/settings/tier-b-status');
 
   // Characters
+  getLibraryAssets = (projectId: number) => this.request<any[]>(`/projects/${projectId}/asset-library`);
+  createLibraryAsset = (projectId: number, data: any) => this.request<any>(`/projects/${projectId}/asset-library`, { method: 'POST', body: data });
+  updateLibraryAsset = (id: number, revision: number, data: any) => this.request<any>(`/asset-library/${id}`, { method: 'PUT', body: { expected_revision: revision, asset: data } });
+  deleteLibraryAsset = (id: number) => this.request(`/asset-library/${id}`, { method: 'DELETE' });
+  extractLibraryAssets = (chapterId: string) => this.request<any[]>('/asset-library/extract', { method: 'POST', body: { chapter_id: chapterId } });
+  generateLibraryAsset = (id: number) => this.request<{ task_id: string }>(`/asset-library/${id}/generate`, { method: 'POST', body: {} });
+  getAssetTask = (taskId: string) => this.request<any>(`/assets/status/${taskId}`);
+  getSceneAssetReferences = (sceneId: number) => this.request<any[]>(`/timeline/scenes/${sceneId}/asset-references`);
+  bindSceneAssets = (sceneId: number, assetIds: number[]) => this.request<any[]>(`/timeline/scenes/${sceneId}/asset-references`, { method: 'PUT', body: { asset_ids: assetIds } });
   getCharacters = (projectId: number) => this.request<any[]>(`/characters/?project_id=${projectId}`);
   createCharacter = (data: any) => this.request<any>('/characters/', { method: 'POST', body: data });
   updateCharacter = (id: number, data: any) => this.request<any>(`/characters/${id}`, { method: 'PUT', body: data });

@@ -551,6 +551,11 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 目标总时长: 约 {{targetDurationSec}} 秒
 可用角色视觉锁定标签:
 {{characterProfiles}}
+可复用资产库（location 和 key_props 请使用这里的准确名称）：
+{{assetCatalog}}
+导演补充要求：
+{{directorInstructions}}
+location 和 key_props 只能填写资产名称本身，不要添加“场景：”“道具：”等类别前缀。每个镜头只处于一个物理地点；跨地点切换必须拆为不同镜头。
 
 --- 完整分场剧本 ---
 {{scriptContent}}

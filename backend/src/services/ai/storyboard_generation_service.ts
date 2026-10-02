@@ -40,6 +40,7 @@ import {
   formatShotQuotaFailure,
 } from '../shot_intent_quota';
 import { ensureSceneVersionBaseline } from '../scene_versions';
+import { AssetLibraryService } from '../asset_library_service';
 
 export class StoryboardGenerationError extends Error {
   constructor(
@@ -83,6 +84,8 @@ export const RawStoryboardResponseSchema = z.object({
 
 export type RawStoryboardShot = z.infer<typeof RawStoryboardShotSchema>;
 export type RawStoryboardResponse = z.infer<typeof RawStoryboardResponseSchema>;
+
+const stripAssetLabel = (value: string): string => value.replace(/^(?:场景|地点|道具|物品)\s*[：:]\s*/u, '').trim();
 
 function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>) {
     // 8. Coverage and validation gates
@@ -234,7 +237,20 @@ export class StoryboardGenerationService {
       }
       return { ...shot, shot_intent: spec.shot_intent, key_props: spec.key_props };
     });
-    const uniqueness = assertChapterUniqueness(contracts);
+    for (let index = 1; index < contracts.length; index++) {
+      const previousPrompt = String(contracts[index - 1]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
+      const currentPrompt = String(contracts[index]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
+      if (previousPrompt && previousPrompt === currentPrompt) {
+        throw new StoryboardGenerationError(`相邻镜头 ${index} 与 ${index + 1} 的视觉提示完全相同`, 400);
+      }
+    }
+    // Reused sets and character locks dominate the compiled visual prompt. Compare
+    // the changing shot contract instead, while retaining the explicit identity key.
+    const uniqueness = assertChapterUniqueness(contracts.map(shot => ({
+      visual_prompt: [shot.shot_intent, JSON.parse(shot.shot_spec).primary_action,
+        ...shot.key_props].filter(Boolean).join(', '),
+      uniqueness_key: JSON.parse(shot.shot_spec).uniqueness_key,
+    })));
     if (uniqueness.ok === false) throw new StoryboardGenerationError(formatUniquenessFailure(uniqueness.violation), 400);
     const quota = assertChapterShotQuota(contracts, { hasKeyProps: script.document.props.length > 0 || contracts.some((shot) => shot.key_props.length > 0) });
     if (quota.ok === false) throw new StoryboardGenerationError(formatShotQuotaFailure(quota.violation), 400);
@@ -306,6 +322,12 @@ export class StoryboardGenerationService {
     );
 
     // 5. Build prompt
+    const locationNames = new Map(doc.locations.map(location => [location.id, location.name]));
+    const propNames = new Map(doc.props.map(prop => [prop.id, prop.name]));
+    const libraryAssets = await AssetLibraryService.list(script.projectId);
+    const assetCatalog = libraryAssets.length
+      ? `场景名称：${libraryAssets.filter(asset => asset.kind === 'location').map(asset => asset.name).join('、')}\n道具名称：${libraryAssets.filter(asset => asset.kind === 'prop').map(asset => asset.name).join('、')}`
+      : '尚未建立资产库，请沿用剧本中声明的地点和道具名称。';
     const scriptScenesSummary = doc.scenes.map((s, idx) => {
       const blocksDesc = s.blocks
         .map((b) => {
@@ -322,7 +344,8 @@ export class StoryboardGenerationService {
         .join('\n');
 
       return `分场 ${idx + 1} (id: ${s.id}):
-  地点ID: ${s.locationId}, 景别: ${s.interiorExterior === 'exterior' ? '外景' : '内景'}, 时间: ${s.timeOfDay}
+  地点ID: ${s.locationId}, 地点名称: ${locationNames.get(s.locationId) || ''}, 景别: ${s.interiorExterior === 'exterior' ? '外景' : '内景'}, 时间: ${s.timeOfDay}
+  道具名称: ${s.propIds.map(id => propNames.get(id) || id).join('、') || '无'}
   出场角色ID: [${s.characterIds.join(', ')}]
   内容块:
 ${blocksDesc}`;
@@ -332,6 +355,8 @@ ${blocksDesc}`;
       chapterTitle: script.sourceSnapshot?.chapterTitle || `第 ${script.chapterId} 章`,
       targetDurationSec: doc.targetDurationSec || 120,
       characterProfiles: characterProfiles || '(无特定锁定标签)',
+      assetCatalog,
+      directorInstructions: params.instructions?.trim() || '遵循剧本，不增加无关地点和道具。',
       scriptContent: scriptScenesSummary,
     });
 
@@ -359,7 +384,11 @@ ${blocksDesc}`;
       );
     }
 
-    const rawShots = rawResult.shots;
+    const rawShots = rawResult.shots.map(shot => ({
+      ...shot,
+      location: stripAssetLabel(shot.location),
+      key_props: shot.key_props.map(stripAssetLabel),
+    }));
 
     // 7. Hard cap gate: Max 20 shots budget (fail closed, do NOT slice)
     if (rawShots.length > 20) {
@@ -480,11 +509,14 @@ ${blocksDesc}`;
     }
 
     // 10. Run compiler uniqueness & quota gates
-    const uniqueness = assertChapterUniqueness(
-      preparedCandidateShots.map((s) => ({
-        visual_prompt: s.visual_prompt,
-      }))
-    );
+    const uniqueness = assertChapterUniqueness(preparedCandidateShots.map(s => {
+      const spec = JSON.parse(s.shot_spec);
+      return {
+        visual_prompt: [spec.shot_intent, spec.primary_action,
+          ...spec.key_props].filter(Boolean).join(', '),
+        uniqueness_key: spec.uniqueness_key,
+      };
+    }));
     if (uniqueness.ok === false) {
       throw new StoryboardGenerationError(
         formatUniquenessFailure(uniqueness.violation),

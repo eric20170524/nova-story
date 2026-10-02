@@ -11,6 +11,10 @@ export type ImageGenerationOptions = {
   height: number;
   aspectRatio: '3:4' | '4:3' | '1:1' | '16:9' | '9:16';
   imageSize: '512' | '1K' | '2K';
+  /** Local files for providers that can preserve approved visual identity. */
+  referenceImagePaths?: string[];
+  /** Reattach a timed-out built-in Codex image job to the normal generation flow. */
+  resumeJobId?: string;
 };
 
 export interface AIProvider {

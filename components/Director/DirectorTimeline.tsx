@@ -24,6 +24,7 @@ import { SceneCardSkeleton } from '../Skeleton';
 import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
 import { SceneVideoPlayer } from './SceneVideoPlayer';
+import { SceneAssetReferences } from './SceneAssetReferences';
 
 interface DirectorTimelineProps {
   timeline: Scene[];
@@ -241,6 +242,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 
                     return (
                     <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl dark:shadow-md hover:border-indigo-400/50 dark:hover:border-slate-700 transition-all group animate-in fade-in zoom-in-95 duration-200">
+                        <SceneAssetReferences sceneId={Number(scene.id)} />
                         {/* Header */}
                         <div className="p-3 bg-slate-50/80 dark:bg-[#131c2e]/80 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center gap-2">
                             <div className="flex items-center gap-2 min-w-0">

@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { logger } from '../core/logging';
 import { GenerationService } from '../services/generation_service';
-import { db } from '../db/database';
+import { db, withImmediateTransaction } from '../db/database';
+import { hashCanonical } from '../schemas/story_plan';
 import { ComfyUIService } from '../services/ai/comfyui_service';
 import { SettingsManager } from '../core/settings_manager';
 import Redis from 'ioredis';
@@ -32,90 +33,105 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/generate', async (request, reply) => {
     const req = GenerateRequestSchema.parse(request.body);
-    if (Object.values(req.workflow).some((node: any) => node?.class_type)) {
-      return reply.status(400).send({ detail: 'Select image workflows in project settings; direct workflow graphs are not accepted' });
-    }
-    if (!SettingsManager.loadSettings().comfyui?.enabled) {
-      return reply.status(409).send({ detail: 'Project image models require ComfyUI to be enabled' });
-    }
+    let launch: (() => void) | null = null;
+    const response = await withImmediateTransaction(async () => {
+      if (req.request_key) {
+        const previous = await db.get('SELECT * FROM image_generation_request WHERE request_key = ?', req.request_key);
+        if (previous) {
+          if (previous.request_hash !== hashCanonical(req)) return reply.status(409).send({ detail: 'Image request key was already used with different parameters' });
+          const task = await AssetTaskStore.get(previous.task_id);
+          return { task_id: previous.task_id, status: task?.status || 'processing', replayed: true };
+        }
+      }
+      if (Object.values(req.workflow).some((node: any) => node?.class_type)) {
+        return reply.status(400).send({ detail: 'Select image workflows in project settings; direct workflow graphs are not accepted' });
+      }
+      const systemImageSettings = SettingsManager.loadSettings();
+      if (!systemImageSettings.comfyui?.enabled && systemImageSettings.image_provider !== 'codex') {
+        return reply.status(409).send({ detail: 'Image generation requires an enabled ComfyUI or Codex image provider' });
+      }
 
-    logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'})`);
-    const taskId = randomUUID();
+      logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'})`);
+      const taskId = randomUUID();
 
-    // Optional: fork a new scene version before generating (A/B test slot)
-    const asNewVersion = Boolean(
-      req.new_version
-      || req.workflow?.new_version
-      || req.workflow?.create_new_version
-    );
-    const isCharacterScene = req.scene_id >= 900000 || Boolean(req.workflow?.character_id);
-    const projectLink = isCharacterScene
-      ? req.workflow?.character_id
-        ? await db.get('SELECT project_id FROM character WHERE id = ?', Number(req.workflow.character_id))
-        : null
-      : await db.get(
-          'SELECT chapter.project_id FROM scene INNER JOIN chapter ON chapter.id = scene.chapter_id WHERE scene.id = ?',
+      // Optional: fork a new scene version before generating (A/B test slot)
+      const asNewVersion = Boolean(
+        req.new_version
+        || req.workflow?.new_version
+        || req.workflow?.create_new_version
+      );
+      const isCharacterScene = req.scene_id >= 900000 || Boolean(req.workflow?.character_id);
+      const projectLink = isCharacterScene
+        ? req.workflow?.character_id
+          ? await db.get('SELECT project_id FROM character WHERE id = ?', Number(req.workflow.character_id))
+          : null
+        : await db.get(
+            'SELECT chapter.project_id FROM scene INNER JOIN chapter ON chapter.id = scene.chapter_id WHERE scene.id = ?',
+            req.scene_id
+          );
+      if (!projectLink?.project_id) {
+        return reply.status(404).send({ detail: 'Image generation requires a scene or character in a project' });
+      }
+      const projectRow = await db.get('SELECT settings FROM project WHERE id = ?', projectLink.project_id);
+      if (!projectRow) return reply.status(404).send({ detail: 'Project not found' });
+      const projectSettings = parseProjectSettings(projectRow.settings);
+      const imageSettings = getProjectImageSettings(projectSettings);
+      const projectWorkflow = {
+        ...req.workflow,
+        project_settings: projectSettings,
+        model_type: imageSettings.model,
+        reference_model_type: imageSettings.model,
+        style_preset: imageSettings.style,
+        workflow_id: undefined,
+        selected_workflow_id: undefined,
+        nsfw_enabled: undefined,
+      };
+      if (!isCharacterScene) {
+        // Skip synthetic character scene ids (99999xxx)
+        if (asNewVersion) {
+          await createSceneVersion(req.scene_id, {
+            clearAsset: true,
+            activate: true,
+            label: null
+          });
+        } else {
+          await ensureSceneVersionBaseline(req.scene_id);
+        }
+        await db.run(
+          'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
+          'generating',
+          taskId,
           req.scene_id
         );
-    if (!projectLink?.project_id) {
-      return reply.status(404).send({ detail: 'Image generation requires a scene or character in a project' });
-    }
-    const projectRow = await db.get('SELECT settings FROM project WHERE id = ?', projectLink.project_id);
-    if (!projectRow) return reply.status(404).send({ detail: 'Project not found' });
-    const projectSettings = parseProjectSettings(projectRow.settings);
-    const imageSettings = getProjectImageSettings(projectSettings);
-    const projectWorkflow = {
-      ...req.workflow,
-      project_settings: projectSettings,
-      model_type: imageSettings.model,
-      reference_model_type: imageSettings.model,
-      style_preset: imageSettings.style,
-      workflow_id: undefined,
-      selected_workflow_id: undefined,
-      nsfw_enabled: undefined,
-    };
-    if (!isCharacterScene) {
-      // Skip synthetic character scene ids (99999xxx)
-      if (asNewVersion) {
-        await createSceneVersion(req.scene_id, {
-          clearAsset: true,
-          activate: true,
-          label: null
+        await syncActiveVersionAssets(req.scene_id, {
+          asset_status: 'generating',
+          task_id: taskId,
+          asset_url: null
         });
-      } else {
-        await ensureSceneVersionBaseline(req.scene_id);
       }
-      await db.run(
-        'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
-        'generating',
-        taskId,
-        req.scene_id
-      );
-      await syncActiveVersionAssets(req.scene_id, {
-        asset_status: 'generating',
+
+      // Persist task row before fire-and-forget so status survives mid-flight
+      await AssetTaskStore.processing(taskId, req.scene_id);
+      if (req.request_key) await db.run('INSERT INTO image_generation_request (request_key, request_hash, task_id) VALUES (?, ?, ?)', req.request_key, hashCanonical(req), taskId);
+
+      // Fire and forget background task
+      launch = () => { void GenerationService.generateAssets(taskId, projectWorkflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
+        logger.error(`Background task execution failed: ${err}`);
+      }); };
+
+      const scene = !isCharacterScene
+        ? await db.get('SELECT id, active_version FROM scene WHERE id = ?', req.scene_id)
+        : null;
+
+      return {
         task_id: taskId,
-        asset_url: null
-      });
-    }
-
-    // Persist task row before fire-and-forget so status survives mid-flight
-    await AssetTaskStore.processing(taskId, req.scene_id);
-
-    // Fire and forget background task
-    GenerationService.generateAssets(taskId, projectWorkflow, req.scene_id, undefined, req.mode, req.generation_params).catch(err => {
-      logger.error(`Background task execution failed: ${err}`);
+        status: 'processing',
+        active_version: scene?.active_version ?? null,
+        new_version: asNewVersion
+      };
     });
-
-    const scene = !isCharacterScene
-      ? await db.get('SELECT id, active_version FROM scene WHERE id = ?', req.scene_id)
-      : null;
-
-    return {
-      task_id: taskId,
-      status: 'processing',
-      active_version: scene?.active_version ?? null,
-      new_version: asNewVersion
-    };
+    if (launch) (launch as () => void)();
+    return response;
   });
 
   app.get('/status/:task_id', async (request, reply) => {

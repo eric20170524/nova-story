@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { db } from '../../db/database';
+import { db, withImmediateTransaction } from '../../db/database';
+import { hashCanonical } from '../../schemas/story_plan';
 import { logger } from '../../core/logging';
-import { getGeneratedVideosDirectory, getVideoWorkflowsDirectory } from '../../core/paths';
+import { getDataDirectory, getGeneratedVideosDirectory, getVideoWorkflowsDirectory } from '../../core/paths';
 import {
   MediaAsset,
   MediaAssetStatus,
@@ -282,6 +283,22 @@ export class VideoGenerationService {
       }
     }
 
+    if (scene) {
+      const references = await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+        JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ? ORDER BY a.id`, scene.id);
+      for (const ref of references) {
+        if (ref.project_id !== projectId || ref.revision !== ref.asset_revision || ref.status !== 'completed') {
+          blockers.push(`Referenced asset ${ref.name} has changed or is unavailable; rebind and regenerate the keyframe.`);
+        }
+      }
+      const snapshot = keyframeAsset?.url ? await db.get('SELECT references_json FROM scene_asset_image_snapshot WHERE scene_id = ? AND image_url = ?', scene.id, keyframeAsset.url) : null;
+      const current = references.map(ref => ({ id: ref.id, revision: ref.asset_revision }));
+      const previous = snapshot ? JSON.parse(snapshot.references_json).sort((a: any, b: any) => a.id - b.id) : [];
+      if (JSON.stringify(current) !== JSON.stringify(previous)) {
+        blockers.push('Keyframe does not reflect the selected location/prop assets; regenerate it before video generation.');
+      }
+    }
+
     if (!keyframeAsset) {
       blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} does not exist.`);
     } else if (keyframeAsset.media_type !== 'image') {
@@ -364,7 +381,11 @@ export class VideoGenerationService {
       compiledSpec = VideoSpecCompiler.compile({ request, scene, character });
     }
 
-    const estSeconds = request.preset === 'preview_480p_5s' ? 360 : 720;
+    if (request.workflow_id === 'grok_imagine_browser') {
+      warnings.push('Grok Imagine is browser assisted; a signed-in Chrome session must complete the queued request.');
+    }
+    const estSeconds = request.workflow_id === 'grok_imagine_browser'
+      ? 180 : request.preset === 'preview_480p_5s' ? 360 : 720;
     return {
       ready: blockers.length === 0,
       profile: request.profile,
@@ -377,24 +398,43 @@ export class VideoGenerationService {
   }
 
   static async createTask(request: VideoGenerationRequest): Promise<{ task_id: string; queue_position: number }> {
-    const preflightRes = await this.preflight(request);
-    if (!preflightRes.ready) {
-      throw new Error(`Preflight failed: ${preflightRes.blockers.join('; ')}`);
+    const requestHash = hashCanonical(request);
+    const prepared = await withImmediateTransaction(async () => {
+      if (request.request_key) {
+        const previous = await db.get('SELECT * FROM video_generation_request WHERE request_key = ?', request.request_key);
+        if (previous) {
+          if (previous.request_hash !== requestHash) throw new Error('Video request key was already used with different parameters');
+          return { taskId: String(previous.task_id), replayed: true };
+        }
+      }
+      const preflightRes = await this.preflight(request);
+      if (!preflightRes.ready) {
+        throw new Error(`Preflight failed: ${preflightRes.blockers.join('; ')}`);
+      }
+
+      const taskId = `vtask_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const now = new Date().toISOString();
+
+      await db.run(
+        `INSERT INTO generation_task (
+          task_id, scene_id, status, kind, stage, request_json, created_at, updated_at
+        ) VALUES (?, ?, 'processing', 'video', 'queued', ?, ?, ?)`,
+        taskId,
+        request.scene_id,
+        JSON.stringify(request),
+        now,
+        now
+      );
+      if (request.request_key) await db.run('INSERT INTO video_generation_request (request_key, request_hash, task_id) VALUES (?, ?, ?)', request.request_key, requestHash, taskId);
+      return { taskId, replayed: false };
+    });
+    const taskId = prepared.taskId;
+    if (prepared.replayed) return { task_id: taskId, queue_position: GpuLeaseService.getQueuePosition(taskId) };
+
+    if (request.workflow_id === 'grok_imagine_browser') {
+      void this.runBrowserTask(taskId, request);
+      return { task_id: taskId, queue_position: 0 };
     }
-
-    const taskId = `vtask_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const now = new Date().toISOString();
-
-    await db.run(
-      `INSERT INTO generation_task (
-        task_id, scene_id, status, kind, stage, request_json, created_at, updated_at
-      ) VALUES (?, ?, 'processing', 'video', 'queued', ?, ?, ?)`,
-      taskId,
-      request.scene_id,
-      JSON.stringify(request),
-      now,
-      now
-    );
 
     // acquireLease mutates the in-process reservation synchronously before returning
     // its Promise. Reserve before the 202 response so queue_position is the actual
@@ -411,6 +451,72 @@ export class VideoGenerationService {
     });
 
     return { task_id: taskId, queue_position: queuePos };
+  }
+
+  private static async runBrowserTask(taskId: string, request: VideoGenerationRequest): Promise<void> {
+    const publisher = createProgressPublisher(taskId, null);
+    const queue = path.resolve(process.env.NOVASTORY_GROK_VIDEO_QUEUE_DIR || path.join(getDataDirectory(), 'grok-video-jobs'));
+    const requestPath = path.join(queue, `${taskId}.request.json`);
+    const resultPath = path.join(queue, `${taskId}.result.json`);
+    const videoPath = path.join(queue, `${taskId}.mp4`);
+    try {
+      const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
+      const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
+      const projectId = Number(chapter.project_id);
+      const character = await this.resolveCharacterForRequest(request, projectId);
+      const spec = VideoSpecCompiler.compile({ request, scene, character });
+      const keyframe = await MediaAssetService.getAssetById(request.keyframe_asset_id);
+      if (!keyframe) throw new Error('Grok video task has no keyframe');
+      const references = await Promise.all(request.character_reference_asset_ids.map(id => MediaAssetService.getAssetById(id)));
+      fs.mkdirSync(queue, { recursive: true });
+      if (!fs.existsSync(requestPath)) fs.writeFileSync(requestPath, JSON.stringify({
+        task_id: taskId,
+        workflow_id: request.workflow_id,
+        project_id: projectId,
+        scene_id: request.scene_id,
+        scene_version: request.scene_version,
+        keyframe_path: MediaAssetService.resolveSafePath(keyframe.url),
+        keyframe_url: keyframe.url,
+        character_references: references.filter(Boolean).map(asset => ({
+          character_id: asset!.character_id,
+          path: MediaAssetService.resolveSafePath(asset!.url),
+          url: asset!.url,
+        })),
+        prompt: spec.positive_prompt,
+        negative_prompt: spec.negative_prompt,
+        duration_seconds: 6,
+        requested_at: new Date().toISOString(),
+      }, null, 2), { flag: 'wx' });
+      await db.run("UPDATE generation_task SET stage = 'generating', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
+      await publisher('generating', { task_id: taskId, stage: 'generating', status: 'processing', message: 'Waiting for Grok Imagine browser generation', message_zh: '等待已登录 Chrome 中的 Grok Imagine 生成视频' });
+
+      const deadline = Date.now() + 60 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const current = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
+        if (current?.status !== 'processing') return;
+        if (fs.existsSync(resultPath)) {
+          const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+          if (result.error) throw new Error(String(result.error));
+          if (!fs.existsSync(videoPath)) throw new Error('Grok Imagine task result has no MP4 file');
+          const taskDir = path.join(getGeneratedVideosDirectory(), String(projectId), String(request.scene_id), taskId);
+          fs.mkdirSync(taskDir, { recursive: true });
+          const rawPath = path.join(taskDir, 'raw.mp4');
+          fs.copyFileSync(videoPath, rawPath);
+          await db.run("UPDATE generation_task SET stage = 'postprocessing', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
+          await this.resumePostprocessFromRaw(taskId, request, projectId, rawPath, taskDir, {
+            provider: 'grok_imagine_browser',
+            browser_result_url: result.source_url || null,
+          });
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      throw new Error('Grok Imagine browser job timed out; queue request was preserved');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const changed = await db.run("UPDATE generation_task SET status = 'failed', stage = 'failed', error = ?, updated_at = ? WHERE task_id = ? AND status = 'processing'", message, new Date().toISOString(), taskId);
+      if (changed.changes) await publisher('failed', { task_id: taskId, stage: 'failed', status: 'failed', error: message });
+    }
   }
 
   static async getTask(taskId: string): Promise<VideoTaskResponse | null> {
@@ -1002,6 +1108,12 @@ export class VideoGenerationService {
           continue;
         }
 
+        if (request?.workflow_id === 'grok_imagine_browser') {
+          void this.runBrowserTask(taskId, request);
+          recoveredCount++;
+          continue;
+        }
+
         if (stage === 'generating' && comfyPromptId && isComfyOnline && request) {
           const history = await comfyProvider.getHistory(comfyPromptId);
           if (history && history[comfyPromptId]?.outputs) {
@@ -1035,7 +1147,8 @@ export class VideoGenerationService {
     request: VideoGenerationRequest,
     projectId: number,
     rawVideoPath: string,
-    taskAssetDir: string
+    taskAssetDir: string,
+    provenance: Record<string, unknown> = { recovered: true }
   ): Promise<void> {
     const initialState = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
     if (initialState?.status !== 'processing') {
@@ -1081,7 +1194,7 @@ export class VideoGenerationService {
       rawVideoPath,
       outputDirectory: taskAssetDir,
       runLoopCloser: request.run_loop_closer,
-      metadata: { recovered: true, request }
+      metadata: { ...provenance, request }
     });
 
     const stateAfterProcess = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
@@ -1110,7 +1223,7 @@ export class VideoGenerationService {
         processRes.probe.frame_count,
         Math.round(processRes.probe.duration_s * 1000),
         MediaAssetService.computeSha256(processRes.finalVideoPath),
-        JSON.stringify({ qa_report: processRes.qaReport, raw_asset_id: rawAsset.id, recovered: true }),
+        JSON.stringify({ qa_report: processRes.qaReport, raw_asset_id: rawAsset.id, ...provenance }),
         existingFinalRow.id
       );
       const finalAsset = (await MediaAssetService.getAssetById(Number(existingFinalRow.id)))!;
@@ -1129,7 +1242,7 @@ export class VideoGenerationService {
         profile: request.profile,
         artifactId: taskId,
         processRes,
-        metadata: { recovered: true, task_id: taskId }
+        metadata: { ...provenance, task_id: taskId }
       });
     }
 

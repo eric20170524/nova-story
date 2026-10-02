@@ -65,6 +65,7 @@ const HUMAN_IDENTITY_NEGATIVE_RE =
   /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
 
 const VIDEO_WORKFLOW_IDS: VideoWorkflowId[] = [
+  'grok_imagine_browser',
   'minimax_h3_hongchao_a2a_12gb',
   'minimax_h3_ref2va_official_12gb',
   'minimax_h3_fl2va_official_12gb',

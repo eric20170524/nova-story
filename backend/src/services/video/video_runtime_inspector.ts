@@ -17,6 +17,34 @@ const isFeatureEnabled = () =>
 
 export class VideoRuntimeInspector {
   static async inspect(workflowId: VideoWorkflowId = DEFAULT_VIDEO_WORKFLOW_ID): Promise<VideoRuntimeInspection> {
+    if (workflowId === 'grok_imagine_browser') {
+      const [ffmpegOk, ffprobeOk] = await Promise.all([
+        VideoPostprocessService.isFfmpegAvailable(),
+        VideoPostprocessService.isFfprobeAvailable()
+      ]);
+      const missing: string[] = [];
+      if (!isFeatureEnabled()) missing.push('Video generation is disabled');
+      if (!ffmpegOk) missing.push('ffmpeg binary not available in PATH');
+      if (!ffprobeOk) missing.push('ffprobe binary not available in PATH');
+      if (process.env.NOVASTORY_GROK_BROWSER_READY !== 'true') missing.push('Grok Imagine Chrome session has not been verified for this server process');
+      return {
+        workflow_id: workflowId,
+        workflow_family: 'grok_imagine',
+        workflow_stability: 'browser_assisted',
+        upstream_reference: 'https://grok.com/imagine',
+        video_generation_enabled: missing.length === 0,
+        ffmpeg_available: ffmpegOk,
+        ffprobe_available: ffprobeOk,
+        comfyui_online: false,
+        h3_workflow_ready: false,
+        gpu_available: false,
+        gpu_name: null,
+        vram_free_bytes: null,
+        supported_presets: ['preview_480p_5s', 'standard_720p_5s'],
+        supported_profiles: ['narrative_clip', 'character_loop'],
+        missing_components: missing,
+      };
+    }
     const missingComponents: string[] = [];
     const featureEnabled = isFeatureEnabled();
 

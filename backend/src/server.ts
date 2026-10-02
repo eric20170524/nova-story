@@ -7,7 +7,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZodError } from 'zod';
-import { getStaticDirectory } from './core/paths';
+import { BACKEND_DIRECTORY, getStaticDirectory } from './core/paths';
 import { db } from './db/database';
 import { projectRoutes } from './routes/projects';
 import { projectImportRoutes } from './routes/project_import';
@@ -18,6 +18,7 @@ import { workflowRoutes } from './routes/workflows';
 import { characterRoutes } from './routes/characters';
 import { timelineRoutes } from './routes/timeline';
 import { assetRoutes } from './routes/assets';
+import { assetLibraryRoutes } from './routes/asset_library';
 import { chapterRoutes } from './routes/chapters';
 import { creativeRoutes } from './routes/creative';
 import { assistantRoutes } from './routes/assistant';
@@ -125,6 +126,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(characterRoutes, { prefix: '/api/characters' });
   await app.register(timelineRoutes, { prefix: '/api/timeline' });
   await app.register(assetRoutes, { prefix: '/api/assets' });
+  await app.register(assetLibraryRoutes, { prefix: '/api' });
   await app.register(creativeRoutes, { prefix: '/api/agent' });
   await app.register(assistantRoutes, { prefix: '/api/assistant' });
   await app.register(coverageRoutes, { prefix: '/api' });
@@ -141,12 +143,16 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
     await VideoStartupRecoveryService.reconcileActivePromptsOnStartup();
     await VideoGenerationService.markOrphanedTasks();
     await AssetTaskStore.markOrphanedProcessingInterrupted();
+    await db.run(`UPDATE library_asset SET
+      status = CASE WHEN (SELECT status FROM generation_task WHERE task_id = library_asset.task_id) = 'completed' THEN 'completed' ELSE 'failed' END,
+      image_url = COALESCE((SELECT image_url FROM generation_task WHERE task_id = library_asset.task_id), image_url)
+      WHERE status = 'generating' AND task_id IN (SELECT task_id FROM generation_task WHERE status <> 'processing')`);
   } catch {
     /* table may not exist in pure unit tests without full migrate */
   }
 
   // Serve Vite build in production
-  const frontendDist = path.join(__dirname, '../../dist');
+  const frontendDist = path.resolve(BACKEND_DIRECTORY, '../dist');
   if (process.env.NODE_ENV === 'production' && fs.existsSync(frontendDist)) {
     await app.register(fastifyStatic, {
       root: frontendDist,

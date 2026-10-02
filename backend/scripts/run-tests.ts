@@ -30,19 +30,18 @@ const main = async () => {
     throw new Error('No backend test files were found');
   }
 
-  const command = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
   // Default to serial execution — concurrent entry was flaky (170/171).
   const args = [
+    '--import', 'tsx',
     '--test',
     '--test-force-exit',
     ...(hasConcurrency ? [] : ['--test-concurrency=1']),
     ...passthrough,
     ...tests,
   ];
-  const child = spawn(command, args, {
+  const child = spawn(process.execPath, args, {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: ':memory:' },
-    shell: process.platform === 'win32',
   });
 
   const exitCode = await new Promise<number>((resolve, reject) => {

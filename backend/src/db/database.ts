@@ -650,6 +650,56 @@ const migrations: Migration[] = [
         `);
       }
     }
+  },
+  {
+    version: '016_asset_library',
+    up: async (database) => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS library_asset (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('location', 'prop')),
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          visual_prompt TEXT NOT NULL DEFAULT '',
+          image_url TEXT,
+          status TEXT NOT NULL DEFAULT 'idle',
+          task_id TEXT,
+          revision INTEGER NOT NULL DEFAULT 1,
+          source_chapter_ids TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, kind, name)
+        );
+        CREATE TABLE IF NOT EXISTS scene_asset_reference (
+          scene_id INTEGER NOT NULL REFERENCES scene(id) ON DELETE CASCADE,
+          asset_id INTEGER NOT NULL REFERENCES library_asset(id) ON DELETE RESTRICT,
+          asset_revision INTEGER NOT NULL,
+          PRIMARY KEY(scene_id, asset_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_library_asset_project ON library_asset(project_id, kind);
+        CREATE TABLE IF NOT EXISTS scene_asset_image_snapshot (
+          scene_id INTEGER NOT NULL REFERENCES scene(id) ON DELETE CASCADE,
+          image_url TEXT NOT NULL,
+          references_json TEXT NOT NULL DEFAULT '[]',
+          PRIMARY KEY(scene_id, image_url)
+        );
+      `);
+    }
+  },
+  {
+    version: '017_image_request_idempotency',
+    up: async (database) => {
+      await database.exec(`CREATE TABLE IF NOT EXISTS image_generation_request (
+        request_key TEXT PRIMARY KEY,
+        request_hash TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES generation_task(task_id)
+      );
+      CREATE TABLE IF NOT EXISTS video_generation_request (
+        request_key TEXT PRIMARY KEY,
+        request_hash TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES generation_task(task_id)
+      )`);
+    }
   }
 ];
 

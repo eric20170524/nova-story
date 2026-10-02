@@ -28,6 +28,7 @@ export const GenerationParamsSchema = z.object({
 ).optional().nullable();
 
 export const GenerateRequestSchema = z.object({
+  request_key: z.string().min(1).max(200).optional(),
   workflow: z.record(z.string(), z.any()),
   scene_id: z.number().int(),
   mode: z.string().default('standard'),

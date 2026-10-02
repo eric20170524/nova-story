@@ -9,8 +9,22 @@ import {
   compileComfyWorkflow,
   mergeSceneGenerationContext,
   selectSceneCharacterAppearance,
+  selectCodexReferenceUrls,
   shouldSuppressAppearanceForDetailShot
 } from './generation_service';
+
+test('Codex keyframes keep location, key prop and focal cast within five references', () => {
+  const selected = selectCodexReferenceUrls({
+    asset_references: [
+      { kind: 'location', image_url: '/room.png' },
+      { kind: 'prop', image_url: '/bell.png' },
+      { kind: 'prop', image_url: '/bowl.png' },
+    ],
+    character_ref_url: '/shen.png',
+    character_ref_urls: ['/shen.png', '/zhou.png', '/xu.png', '/lu.png'],
+  });
+  assert.deepEqual(selected, ['/room.png', '/bell.png', '/shen.png', '/zhou.png', '/xu.png']);
+});
 
 const ponyWorkflow = () => ({
   "3": {

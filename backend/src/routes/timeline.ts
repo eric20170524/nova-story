@@ -12,6 +12,10 @@ import {
 import { generateAndReplaceNarrativeTimeline } from '../services/timeline_generation_service';
 import { generateSceneNarrationForChapter } from '../services/scene_narration_service';
 import { regenerateSceneVisualPromptsForChapter } from '../services/scene_visual_prompt_service';
+import { ShotContractFieldsSchema } from '../schemas/shot_contract';
+import { buildCharacterLockRefsForChapter } from '../services/timeline_generation_service';
+import { compilePonyPrompt } from '../services/pony_prompt_compiler';
+import { compileNegativePrompt } from '../services/negative_prompt_compiler';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
   app.post('/prompts/regenerate', async (request, reply) => {
@@ -126,7 +130,8 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       shot_type: z.string().optional().nullable(),
       camera_movement: z.string().optional().nullable(),
       camera_angle: z.string().optional().nullable(),
-      negative_prompt: z.string().optional().nullable()
+      negative_prompt: z.string().optional().nullable(),
+      shot_spec: z.string().optional()
     });
 
     const data = bodySchema.parse(request.body);
@@ -134,6 +139,43 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
     const scene = await db.get('SELECT * FROM scene WHERE id = ?', scene_id);
     if (!scene) {
       return reply.status(404).send({ detail: 'Scene not found' });
+    }
+
+    if (data.shot_spec !== undefined) {
+      let incoming;
+      let previous;
+      try {
+        const parseContract = (value: string) => {
+          const raw = JSON.parse(value);
+          return ShotContractFieldsSchema.parse({ ...raw,
+            shot_intent: raw.shot_intent ?? undefined,
+            subject_scale: raw.subject_scale ?? undefined,
+          });
+        };
+        incoming = parseContract(data.shot_spec);
+        previous = parseContract(scene.shot_spec || '{}');
+      } catch {
+        return reply.status(400).send({ detail: 'Invalid shot contract' });
+      }
+      if (JSON.stringify(incoming.source) !== JSON.stringify(previous.source)) {
+        return reply.status(409).send({ detail: 'Script source references cannot be changed through scene editing' });
+      }
+      if (scene.asset_url || scene.task_id) {
+        return reply.status(409).send({ detail: 'Create a new scene version before changing a rendered shot contract' });
+      }
+      const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
+      const locks = await buildCharacterLockRefsForChapter(chapter.project_id, scene.chapter_id);
+      const compiled = compilePonyPrompt({ ...incoming, shot_type: data.shot_type || scene.shot_type }, locks);
+      data.visual_prompt = compiled.visual_prompt;
+      data.negative_prompt = compileNegativePrompt({
+        shot_type: data.shot_type || scene.shot_type,
+        shot_intent: compiled.shot_intent,
+        visual_prompt: compiled.visual_prompt,
+        location: incoming.location,
+        key_props: incoming.key_props,
+        character_lock: locks.map(ref => ref.lock).join(', '),
+        identity_mode: 'auto',
+      });
     }
 
     const updateFields = [];

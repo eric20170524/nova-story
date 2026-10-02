@@ -85,6 +85,12 @@ const WORKFLOWS: Array<{
   description: string;
 }> = [
   {
+    id: 'grok_imagine_browser',
+    label: 'Grok Imagine',
+    badge: '已登录 Chrome',
+    description: '从当前分镜图和人物参考图生成 6 秒视频；生成任务在已登录的 Chrome 中完成并回填系统。'
+  },
+  {
     id: 'minimax_h3_ref2va_official_12gb',
     label: 'Official Ref2VA',
     badge: '人物参考',

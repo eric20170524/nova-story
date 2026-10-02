@@ -289,6 +289,17 @@ export const SettingsPage: React.FC = () => {
     }));
   };
 
+  const applyCodexBuiltIn = () => {
+    setSettings((prev: any) => ({
+      ...prev,
+      llm_provider: 'codex',
+      llm_model: 'gpt-6.1-sol',
+      image_provider: 'codex',
+      llm: { ...(prev.llm || {}), provider: 'codex', model: 'gpt-6.1-sol', base_url: '' },
+      comfyui: { ...(prev.comfyui || {}), enabled: false },
+    }));
+  };
+
   const handleLLMChange = (key: string, value: any) => {
     setSettings((prev: any) => {
       const currentLLM = prev.llm || {};
@@ -537,6 +548,18 @@ export const SettingsPage: React.FC = () => {
                       模型提供方 (Provider)
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={applyCodexBuiltIn}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          (settings.llm?.provider || settings.llm_provider) === 'codex'
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">Codex 内置生成</div>
+                        <div className="text-xs opacity-75">文字由已登录的本机 Codex 运行；图片任务交给当前 Codex 会话并回填资产库。</div>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleLLMChange('provider', 'gemini')}

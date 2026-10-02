@@ -15,6 +15,13 @@ test('token Jaccard is 1 for byte-identical prompts', () => {
   assert.ok(tokenJaccard(CORRIDOR_CLONE, CORRIDOR_CLONE) >= 0.65);
 });
 
+test('Chinese action text contributes to adjacent-shot uniqueness', () => {
+  const first = 'establish, 沈砚扶住井栏查看黑水';
+  const second = 'establish, 沈砚跪地拾起暗红细线';
+  assert.ok(tokenJaccard(first, second) < 0.65);
+  assert.equal(tokenJaccard(first, first), 1);
+});
+
 test('chapter-2 six identical corridor prompts fail uniqueness gate', () => {
   const shots = Array.from({ length: 6 }, () => ({ visual_prompt: CORRIDOR_CLONE }));
   const result = assertChapterUniqueness(shots);

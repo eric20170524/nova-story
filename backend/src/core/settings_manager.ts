@@ -118,6 +118,12 @@ export class SettingsManager {
 
         applyKnownRemoteLlm(settings);
 
+        if (process.env.NOVASTORY_BUILTIN_AI === 'codex') {
+            settings.llm = { provider: 'codex', model: process.env.NOVASTORY_CODEX_MODEL || 'gpt-6.1-sol' };
+            settings.image_provider = 'codex';
+            settings.comfyui.enabled = false;
+        }
+
         if (settings.comfyui) {
             // The macOS launcher selects remote mode for this process without
             // changing the user's saved settings or backend/.env file.
@@ -156,7 +162,7 @@ export class SettingsManager {
         const rawKey = String(llm.api_key || publicSettings.gemini_api_key || '').trim();
         const provider = String(llm.provider || 'ollama').toLowerCase();
         const hasApiKey =
-            provider === 'ollama' || provider === 'local_llm'
+            provider === 'ollama' || provider === 'local_llm' || provider === 'codex'
                 ? true
                 : Boolean(rawKey && rawKey !== 'ollama');
 

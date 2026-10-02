@@ -1,0 +1,42 @@
+import '../test_setup';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import Fastify from 'fastify';
+import { db, initDb } from '../db/database';
+import { timelineRoutes } from './timeline';
+import { packShotSpec } from '../schemas/shot_contract';
+
+test('Director scene edit canonicalizes a shot contract without changing screenplay provenance', async () => {
+  await initDb();
+  const projectId = 89901;
+  const chapterId = 'contract-edit-chapter';
+  const sceneId = 89911;
+  const source = { type: 'script' as const, script_id: 9, script_revision: 2, script_scene_id: 'scene_1', block_ids: ['b_1'] };
+  await db.run('INSERT INTO project (id,title) VALUES (?,?)', projectId, 'Contract edit');
+  await db.run('INSERT INTO chapter (id,project_id,"index",title) VALUES (?,?,1,?)', chapterId, projectId, 'Chapter');
+  const oldSpec = packShotSpec({ location: '场景：石井台', primary_action: '主角走到井边', key_props: ['道具：旧铜铃'], source });
+  await db.run('INSERT INTO scene (id,chapter_id,"index",visual_prompt,shot_spec) VALUES (?,?,1,?,?)', sceneId, chapterId, 'old prompt', oldSpec);
+  const app = Fastify();
+  await app.register(timelineRoutes, { prefix: '/api/timeline' });
+  try {
+    const nextSpec = packShotSpec({ location: '石井台', primary_action: '主角走到井边', key_props: ['旧铜铃'], source });
+    const edited = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: nextSpec } });
+    assert.equal(edited.statusCode, 200);
+    const saved = JSON.parse(edited.body);
+    assert.equal(JSON.parse(saved.shot_spec).location, '石井台');
+    assert.match(saved.visual_prompt, /石井台/);
+    assert.doesNotMatch(saved.visual_prompt, /场景：/);
+
+    const wrongSource = packShotSpec({ location: '药屋', primary_action: '主角走到井边', source: { ...source, block_ids: ['b_2'] } });
+    const rejected = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: wrongSource } });
+    assert.equal(rejected.statusCode, 409);
+    await db.run("UPDATE scene SET asset_url='/static/rendered.png' WHERE id=?", sceneId);
+    const rendered = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: nextSpec } });
+    assert.equal(rendered.statusCode, 409);
+  } finally {
+    await app.close();
+    await db.run('DELETE FROM scene WHERE id=?', sceneId);
+    await db.run('DELETE FROM chapter WHERE id=?', chapterId);
+    await db.run('DELETE FROM project WHERE id=?', projectId);
+  }
+});

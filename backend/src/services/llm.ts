@@ -5,6 +5,7 @@ import { SettingsManager } from '../core/settings_manager';
 import type { AIProvider } from './ai/base';
 import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
+import { CodexProvider } from './ai/codex_provider';
 import { Prompts } from './prompts';
 import { isRemoteGemmaLlm } from './llm_presets';
 
@@ -42,6 +43,8 @@ export class LLMService {
         const providerType = (llmConfig.provider || 'ollama').toLowerCase();
         const baseUrl = llmConfig.base_url;
 
+        if (providerType === 'codex') return new CodexProvider();
+
         if (['openai', 'custom', 'ollama'].includes(providerType)) {
             const isOllama = providerType === 'ollama';
             const effectiveBaseUrl = baseUrl || (isOllama ? DEFAULT_OLLAMA_BASE_URL : undefined);
@@ -78,6 +81,7 @@ export class LLMService {
      * provider selected for other writing tasks. */
     static getLocalProvider(): AIProvider {
         const configured = SettingsManager.loadSettings().llm || {};
+        if (String(configured.provider || '').toLowerCase() === 'codex') return new CodexProvider();
         const configuredModel = String(configured.model || '');
         const configuredBase = String(configured.base_url || '');
         if (isRemoteGemmaLlm({ model: configuredModel, base_url: configuredBase })) {

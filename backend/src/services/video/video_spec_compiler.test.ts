@@ -2,6 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3 } from './video_spec_compiler';
 
+test('video identity uses stable cast appearance instead of later-chapter narrative status', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'grok_imagine_browser',
+      keyframe_asset_id: 10, character_reference_asset_ids: [1], preset: 'preview_480p_5s', run_loop_closer: false },
+    scene: { id: 64, visual_prompt: '沈砚在井台修锄头' },
+    character: { name: '沈砚', description: '第五章两根手指青紫不能弯曲',
+      visual_tags: { base_model: { tags: { hair: 'black low bun', clothing: 'gray linen work tunic' } } } },
+  });
+  assert.match(spec.subject_identity, /black low bun/);
+  assert.doesNotMatch(spec.positive_prompt, /青紫|第五章/);
+});
+
 test('cleanPromptForH3 removes Pony scores and cleans whitespace', () => {
   const dirty = 'score_9, score_8_up, masterpiece, 1girl, lu xueqi, best quality, ice sword';
   const cleaned = cleanPromptForH3(dirty);
@@ -79,6 +91,26 @@ test('Official Ref2VA reserves Picture 1 for the scene keyframe and starts ident
   assert.ok(spec.positive_prompt.includes('<Picture 1> is the scene/keyframe reference'));
   assert.ok(spec.positive_prompt.includes('<Picture 2>, <Picture 3>'));
   assert.ok(spec.positive_prompt.includes('<Video 1>'));
+});
+
+test('Grok browser prompt names the uploaded keyframe and portrait without H3 picture tags', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 3,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'grok_imagine_browser',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      preset: 'preview_480p_5s',
+      run_loop_closer: false,
+    },
+    scene: { id: 3, visual_prompt: 'walking across a wet stone courtyard' },
+    character: { id: 5, name: 'Shen Yan' },
+  });
+  assert.match(spec.positive_prompt, /uploaded storyboard keyframe as the first frame/);
+  assert.match(spec.positive_prompt, /additional uploaded portrait image.*Shen Yan/);
+  assert.doesNotMatch(spec.positive_prompt, /<Picture/);
 });
 
 test('Official FL2VA prompt uses keyframe boundary semantics instead of Ref2VA tags', () => {

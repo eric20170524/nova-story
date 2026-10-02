@@ -7,7 +7,7 @@ import { db } from '../db/database';
 import { LLMService } from './llm';
 import { SettingsManager } from '../core/settings_manager';
 import { parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
-import { formatVisualLockTokens } from './reference_generation_policy';
+import { flattenVisualTagMap, formatVisualLockTokens } from './reference_generation_policy';
 import {
   annotateSceneWithVersions,
   ensureSceneVersionBaseline,
@@ -49,7 +49,10 @@ export async function buildCharacterLockRefsForChapter(
   return characters
     .map((c: any) => {
       const tags = parseCharacterTags(c.visual_tags);
-      const lock = formatVisualLockTokens(tags, { chapterId });
+      const values = flattenVisualTagMap(tags, { chapterId });
+      const stableKeys = ['species', 'hair', 'face_features', 'distinguishing_mark', 'build', 'clothing', 'accessories'];
+      const compact = stableKeys.map(key => String(values[key] || '').trim().slice(0, 130)).filter(Boolean);
+      const lock = compact.length ? compact.join(', ') : formatVisualLockTokens(tags, { chapterId });
       if (!lock || /^\(none/i.test(lock)) return null;
       const aliases = Array.isArray(tags?.aliases)
         ? tags.aliases.map((a: unknown) => String(a || '').trim()).filter(Boolean)

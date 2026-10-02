@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Wand2, RefreshCw } from 'lucide-react';
+import { Plus, Wand2, RefreshCw, Sparkles } from 'lucide-react';
 import { api } from '../services/api';
-import { Character } from '../types';
+import { Character, Chapter } from '../types';
 import { API_BASE_URL, styleLoraRecipeLocaleKey } from '../constants';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -47,7 +47,12 @@ export const CharacterManager: React.FC = () => {
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState('');
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [chapterId, setChapterId] = useState('');
+  const [extracting, setExtracting] = useState(false);
   const stopBatchRef = React.useRef(false);
+  const projectRef = React.useRef(projectId);
+  projectRef.current = projectId;
   /** Expanded description / visual-tag sections on cards (long text after finalize). */
   const [expandedDescIds, setExpandedDescIds] = useState<Record<number, boolean>>({});
   const [expandedTagsIds, setExpandedTagsIds] = useState<Record<number, boolean>>({});
@@ -78,6 +83,7 @@ export const CharacterManager: React.FC = () => {
   useEffect(() => {
     if (projectId) {
       loadCharacters();
+      loadChapters();
       loadProjectSettings();
     }
   }, [projectId]);
@@ -147,12 +153,51 @@ export const CharacterManager: React.FC = () => {
 
   const loadCharacters = async () => {
     if (!projectId) return;
+    const requested = projectId;
     try {
       const data = await api.getCharacters(Number(projectId));
+      if (projectRef.current !== requested) return;
       if (Array.isArray(data)) setCharacters(data);
     } catch (e) {
+      if (projectRef.current !== requested) return;
       console.error(e);
       showToast(t("characters.failed_load", "Failed to load characters"), 'error');
+    }
+  };
+
+  const loadChapters = async () => {
+    if (!projectId) return;
+    const requested = projectId;
+    try {
+      const data = await api.getChapters(Number(projectId));
+      if (projectRef.current !== requested) return;
+      const list = Array.isArray(data) ? data : [];
+      setChapters(list);
+      setChapterId((prev) => (list.some((c) => c.id === prev) ? prev : list[0]?.id || ''));
+    } catch (e) {
+      if (projectRef.current !== requested) return;
+      console.error(e);
+    }
+  };
+
+  const selectedExtractChapter = chapters.find((c) => c.id === chapterId);
+  const extractReady = Boolean(selectedExtractChapter?.content?.trim());
+
+  const handleExtractCharacters = async () => {
+    if (!projectId || !chapterId || !extractReady || extracting) return;
+    const requested = projectId;
+    setExtracting(true);
+    try {
+      const saved = await api.extractCharacters(chapterId);
+      if (projectRef.current !== requested) return;
+      await loadCharacters();
+      const count = Array.isArray(saved) ? saved.length : 0;
+      showToast(count ? `已从正文提取 ${count} 个角色` : '已从正文提取角色', 'success');
+    } catch (e: any) {
+      if (projectRef.current !== requested) return;
+      showToast(e?.message || '提取角色失败', 'error');
+    } finally {
+      if (projectRef.current === requested) setExtracting(false);
     }
   };
 
@@ -629,7 +674,7 @@ export const CharacterManager: React.FC = () => {
     <div className="flex-1 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 p-4 sm:p-8 overflow-y-auto h-full w-full custom-scrollbar overscroll-contain transition-colors duration-200">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6 sm:mb-8 pb-4 border-b border-slate-200/80 dark:border-slate-800/80">
         <div>
-          <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white">{t('characters.title')}</h2>
+          <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white">角色 · 定妆照与三视图</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2">
             <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${effectiveNsfw ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-200 border-rose-200 dark:border-rose-800/60' : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800/60'}`}>
               {effectiveNsfw ? 'NSFW' : 'SFW'}
@@ -639,6 +684,28 @@ export const CharacterManager: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <select
+            aria-label="提取角色的章节"
+            value={chapterId}
+            onChange={(e) => setChapterId(e.target.value)}
+            disabled={!chapters.length || extracting}
+            className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm max-w-[14rem]"
+          >
+            {chapters.length === 0 && <option value="">暂无章节</option>}
+            {chapters.map((c) => (
+              <option value={c.id} key={c.id}>{c.title}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void handleExtractCharacters()}
+            disabled={!extractReady || extracting || batchRunning}
+            title={extractReady ? '从本章正文提取角色并写入角色库' : '请先完成本章正文'}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-md shadow-indigo-500/20"
+          >
+            <Sparkles size={16} className={extracting ? 'animate-pulse' : ''} />
+            {extracting ? '正在提取…' : '从正文提取'}
+          </button>
           {batchRunning ? (
             <button
               type="button"

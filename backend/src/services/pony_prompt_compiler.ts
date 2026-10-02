@@ -148,7 +148,7 @@ export const resolveCharacterLocksForShot = (
         const key = ref.lock.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        matched.push(ref.lock);
+        matched.push(ref.name ? `${ref.name} appearance: ${ref.lock}` : ref.lock);
       }
     }
     if (matched.length) return matched;
@@ -156,7 +156,7 @@ export const resolveCharacterLocksForShot = (
     return [];
   }
 
-  if (refs.length === 1) return [refs[0]!.lock];
+  if (refs.length === 1) return [refs[0]!.name ? `${refs[0]!.name} appearance: ${refs[0]!.lock}` : refs[0]!.lock];
   return [];
 };
 

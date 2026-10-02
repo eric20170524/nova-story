@@ -3,6 +3,8 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  BACKEND_DIRECTORY,
+  resolveBackendDirectory,
   getStaticDirectory,
   getGeneratedDirectory,
   getSceneAssetPath,
@@ -97,3 +99,10 @@ test('resolves legacy flat static path gracefully', () => {
 });
 
 
+
+test('source, standalone backend build and full-stack bundle share canonical backend paths', () => {
+  const root = path.dirname(BACKEND_DIRECTORY);
+  assert.equal(resolveBackendDirectory(path.join(BACKEND_DIRECTORY, 'src/core')), BACKEND_DIRECTORY);
+  assert.equal(resolveBackendDirectory(path.join(BACKEND_DIRECTORY, 'dist/src/core')), BACKEND_DIRECTORY);
+  assert.equal(resolveBackendDirectory(path.join(root, 'dist')), BACKEND_DIRECTORY);
+});

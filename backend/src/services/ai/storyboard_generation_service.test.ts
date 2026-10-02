@@ -153,10 +153,16 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
       expectedRevision: 2,
     });
     assert.equal(confirmed.status, 'confirmed');
+    await db.run(
+      `INSERT INTO library_asset (project_id, kind, name) VALUES (?, 'location', ?)`,
+      fixture.projId, '万仞孤峰断崖'
+    );
 
     // Mock Provider returning valid shots covering all scenes and audible blocks
+    let receivedPrompt = '';
     const mockProvider: AIProvider = {
-      async generateStructured<T>(_prompt: string, schema: z.ZodSchema<T>): Promise<T> {
+      async generateStructured<T>(prompt: string, schema: z.ZodSchema<T>): Promise<T> {
+        receivedPrompt = prompt;
         return schema.parse({
           shots: [
             // Shot 1: Scene 1 establish
@@ -237,8 +243,14 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
       scriptId: script.id,
       expectedRevision: 3,
       requestKey: 'req_s3_storyboard_1',
+      instructions: '每个内容块只分配一次，沿用资产库名称。',
       provider: mockProvider,
     });
+
+    assert.match(receivedPrompt, /导演补充要求：\n每个内容块只分配一次/);
+    assert.match(receivedPrompt, /场景名称：万仞孤峰断崖/);
+    assert.match(receivedPrompt, /地点名称: 万仞孤峰断崖/);
+    assert.match(receivedPrompt, /道具名称: 青锋古剑/);
 
     assert.equal(candidate.state, 'pending');
     assert.equal(candidate.kind, 'storyboard');

@@ -36,6 +36,15 @@ backend/scripts/**
 !backend/scripts/run_l40_benchmark.ts
 !backend/scripts/fixtures/
 !backend/scripts/fixtures/dreamcore_ac_fixture.json
+!/scripts/
+/scripts/*
+!/scripts/full-production.mjs
+!/scripts/full-production.test.mjs
+!/scripts/production-references.mjs
+!/scripts/codex-image-jobs.mjs
+!/scripts/grok-video-jobs.mjs
+backend/codex-image-jobs/
+backend/grok-video-jobs/
 *.bak
 backend/system_settings.json
 docs/短剧/qiongming.txt
@@ -53,4 +62,3 @@ backend/static/comics/
 backend/static/staging/
 *comfy_remote_session.json
 doc/
-

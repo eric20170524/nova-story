@@ -4,7 +4,23 @@ import path from 'node:path';
 /**
  * Backend package root (`backend/`), whether running from `src/` or compiled `dist/`.
  */
-export const BACKEND_DIRECTORY = path.resolve(__dirname, '../../');
+export const resolveBackendDirectory = (moduleDirectory: string): string => {
+  let directory = path.resolve(moduleDirectory);
+  while (true) {
+    const manifest = path.join(directory, 'package.json');
+    if (fs.existsSync(manifest)) {
+      try {
+        const { name } = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+        if (name === 'backend') return directory;
+        if (name === 'novastory' && fs.existsSync(path.join(directory, 'backend', 'package.json'))) return path.join(directory, 'backend');
+      } catch { /* Keep searching parent directories. */ }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error(`Cannot locate NovaStory backend from ${moduleDirectory}`);
+    directory = parent;
+  }
+};
+export const BACKEND_DIRECTORY = resolveBackendDirectory(__dirname);
 
 export const getConfigDirectory = () =>
   path.resolve(process.env.NOVASTORY_CONFIG_DIR || BACKEND_DIRECTORY);
@@ -144,6 +160,10 @@ export const getUploadAssetPath = (filename: string, subfolder: string = 'upload
   return { dir, filepath, url };
 };
 
+/** Reusable location / prop images live outside shot and character namespaces. */
+export const getLibraryAssetPath = (projectId: number, assetId: number, revision: number, filename: string): AssetPathResult =>
+  getUploadAssetPath(filename, `projects/${projectId}/assets/${assetId}/v${revision}`);
+
 /**
  * Resolves any static URL (or relative/absolute path) to its absolute on-disk filesystem path.
  * Supports both new structured URLs (/static/generated/projects/...) and legacy flat URLs.
@@ -185,4 +205,3 @@ export const resolveStaticAssetPath = (urlOrPath: string): string => {
   }
   return candidate;
 };
-

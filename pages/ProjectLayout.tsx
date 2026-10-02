@@ -52,7 +52,7 @@ export const ProjectLayout: React.FC = () => {
           <div className="flex items-center gap-1 sm:gap-2">
             <TabLink to={`/project/${id}/story`} icon={<BookOpen size={16} />} label={t('project_nav.story')} />
             <TabLink to={`/project/${id}/script`} icon={<Film size={16} />} label={t('project_nav.script')} />
-            <TabLink to={`/project/${id}/characters`} icon={<Users size={16} />} label={t('project_nav.characters')} />
+            <TabLink to={`/project/${id}/assets`} icon={<Users size={16} />} label="资产管理" />
             <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />
           </div>
           

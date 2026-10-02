@@ -9,14 +9,14 @@ const DEFAULT_JACCARD_THRESHOLD = 0.65;
 
 const normalize = (value: string): string => String(value || '').replace(/\s+/g, ' ').trim();
 
-/** Lowercase alphanumeric tokens from a comma/space separated visual_prompt. */
+/** Unicode letter/number tokens from a comma/space separated visual_prompt. */
 export const tokenizeVisualPrompt = (prompt: string): string[] => {
   const raw = normalize(prompt).toLowerCase();
   if (!raw) return [];
   const tokens = raw
     .split(/[,]+/)
     .flatMap((part) => part.trim().split(/\s+/))
-    .map((token) => token.replace(/^[^a-z0-9+(]+|[^a-z0-9+)]+$/gi, '').toLowerCase())
+    .map((token) => token.replace(/^[^\p{L}\p{N}+(]+|[^\p{L}\p{N}+)]+$/gu, '').toLowerCase())
     .filter((token) => token.length >= 2);
   return tokens;
 };

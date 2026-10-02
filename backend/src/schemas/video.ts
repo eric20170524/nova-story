@@ -7,6 +7,7 @@ export const VideoPresetSchema = z.enum(['preview_480p_5s', 'standard_720p_5s'])
 export type VideoPreset = z.infer<typeof VideoPresetSchema>;
 
 export const VideoWorkflowIdSchema = z.enum([
+  'grok_imagine_browser',
   'minimax_h3_hongchao_a2a_12gb',
   'minimax_h3_ref2va_official_12gb',
   'minimax_h3_fl2va_official_12gb',
@@ -78,6 +79,7 @@ export const MediaAssetSchema = z.object({
 export type MediaAsset = z.infer<typeof MediaAssetSchema>;
 
 const VideoRequestBaseSchema = z.object({
+  request_key: z.string().min(1).max(200).optional(),
   scene_id: z.number().int().positive(),
   scene_version: z.number().int().positive().default(1),
   profile: VideoProfileSchema.default('narrative_clip'),
@@ -95,6 +97,7 @@ const VideoRequestBaseSchema = z.object({
 });
 
 const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: z.RefinementCtx) => {
+  if (data.workflow_id === 'grok_imagine_browser') return;
   const isFl2va = data.workflow_id === 'minimax_h3_fl2va_official_12gb';
   const isRef2va = data.workflow_id === 'minimax_h3_ref2va_official_12gb';
   const isMultiframe = data.workflow_id === 'minimax_h3_multiframe_official_12gb';

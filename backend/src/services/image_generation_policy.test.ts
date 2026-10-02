@@ -686,3 +686,12 @@ test('RedCraft Krea2 buildCharacterPromptHeader generates natural language portr
   assert.doesNotMatch(turnaround.prefix, /score_9|source_anime/i);
 });
 
+test('male character headers do not contradict the requested identity', () => {
+  for (const model of ['pony', 'redcraft_krea2'] as const) {
+    const result = buildCharacterPromptHeader(model, false, 'portrait', 'male');
+    assert.match(result.prefix, /1boy, solo, adult East Asian man/);
+    assert.doesNotMatch(result.prefix, /1girl|female|woman/i);
+    assert.match(result.negative, /female|woman/);
+    assert.doesNotMatch(result.negative, /\bmale\b|\bman\b|\bboy\b/);
+  }
+});

@@ -12,6 +12,7 @@ import {
     getGeneratedDirectory,
     getSceneAssetPath,
     getCharacterAssetPath,
+    getLibraryAssetPath,
     resolveStaticAssetPath
 } from '../core/paths';
 import {
@@ -83,6 +84,19 @@ export const shouldSuppressAppearanceForDetailShot = (
         return false;
     }
     return /\b(paw|paws|paw pad|nose|whisker|ticket|cup|steam|machine|button|dispenser|floor|tile|light patch|object|prop)\b/i.test(text);
+};
+
+export const selectCodexReferenceUrls = (workflow: any): string[] => {
+    const assets = Array.isArray(workflow?.asset_references) ? workflow.asset_references : [];
+    const location = assets.filter((ref: any) => ref?.kind === 'location').map((ref: any) => ref.image_url);
+    const props = assets.filter((ref: any) => ref?.kind === 'prop').map((ref: any) => ref.image_url);
+    const portraits = Array.isArray(workflow?.character_ref_urls) ? workflow.character_ref_urls : [];
+    // Codex image generation accepts at most five references. Keep the physical
+    // set and the focal identity first, then fill remaining slots in cast order.
+    return [...new Set([
+        location[0], props[0], workflow?.character_ref_url,
+        ...portraits, ...location.slice(1), ...props.slice(1), workflow?.ref_image_url,
+    ].filter(Boolean).map(String))].slice(0, 5);
 };
 
 const parseSceneShotSpec = (raw: unknown): Record<string, unknown> | null => {
@@ -841,7 +855,7 @@ export class GenerationService {
             const { shouldUseTurnaroundComposite, generateTurnaroundComposite } = await import(
                 './turnaround_composite'
             );
-            if (shouldUseTurnaroundComposite(workflowData)) {
+            if (shouldUseTurnaroundComposite(workflowData) && SettingsManager.loadSettings().image_provider !== 'codex') {
                 const settings = SettingsManager.loadSettings();
                 if (!settings.comfyui?.enabled) {
                     throw new Error('Turnaround composite requires ComfyUI enabled');
@@ -994,7 +1008,29 @@ export class GenerationService {
                         if (chapterRow?.project_id) {
                             sceneProjectId = Number(chapterRow.project_id);
                         }
+                        const assetRefs = await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+                            JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ?`, sceneId);
+                        for (const ref of assetRefs) {
+                            if (ref.project_id !== sceneProjectId || ref.revision !== ref.asset_revision
+                                || ref.status !== 'completed' || !ref.image_url) {
+                                throw new Error(`Referenced asset ${ref.name} has changed or is unavailable; rebind before generating`);
+                            }
+                        }
+                        if (assetRefs.length) {
+                            effectiveWorkflowData.prompt = [effectiveWorkflowData.prompt || sceneRow.visual_prompt,
+                                ...assetRefs.map(ref => ref.visual_prompt)].filter(Boolean).join(', ');
+                            effectiveWorkflowData.asset_references = assetRefs.map(ref => ({
+                                id: ref.id, revision: ref.revision, kind: ref.kind, image_url: ref.image_url,
+                            }));
+                            const location = assetRefs.find(ref => ref.kind === 'location');
+                            if (location && !effectiveWorkflowData.composition_ref_url) {
+                                effectiveWorkflowData.composition_ref_url = location.image_url;
+                            }
+                        }
                     }
+                } else if (workflowData?.library_asset_id) {
+                    const libraryAsset = await db.get('SELECT project_id FROM library_asset WHERE id = ?', Number(workflowData.library_asset_id));
+                    sceneProjectId = libraryAsset?.project_id ?? null;
                 } else if (sceneId >= 900_000 || workflowData?.character_id) {
                     // Check if this is a character generation request
                     if (workflowData?.character_id) {
@@ -1077,7 +1113,10 @@ export class GenerationService {
                     if (s) appearanceSnippets.push(String(s));
                 }
             }
-            if (appearanceSnippets.length === 0 && sceneProjectId != null) {
+            // Script-backed storyboards already carry the chapter's character locks in
+            // their compiled visual prompt. Re-appending full database profiles here
+            // duplicates every visible character and can reintroduce later variants.
+            if (!workflowData?.library_asset_id && !effectiveWorkflowData?.shot_spec?.source?.type && appearanceSnippets.length === 0 && sceneProjectId != null) {
                 try {
                     if (shouldSuppressAppearanceForDetailShot(
                         effectiveWorkflowData?.shot_type,
@@ -1200,6 +1239,10 @@ export class GenerationService {
                     height: outputTarget.height,
                     aspectRatio: outputTarget.resolved_aspect_ratio,
                     imageSize: outputTarget.image_size,
+                    referenceImagePaths: settings.image_provider === 'codex'
+                        ? selectCodexReferenceUrls(effectiveWorkflowData).map(url => resolveStaticAssetPath(url))
+                        : undefined,
+                    resumeJobId: settings.image_provider === 'codex' ? effectiveWorkflowData.codex_resume_job_id : undefined,
                 }, userToken);
                 result = {
                     status: apiRes.error ? "failed" : "completed",
@@ -1227,7 +1270,10 @@ export class GenerationService {
                 if (imageData) {
                     const normalizedImage = await normalizeGeneratedImage(imageData, outputTarget);
                     let pathResult: { filepath: string; url: string };
-                    if (characterId != null) {
+                    if (workflowData?.library_asset_id) {
+                        const libraryAsset = await db.get('SELECT revision FROM library_asset WHERE id = ?', Number(workflowData.library_asset_id));
+                        pathResult = getLibraryAssetPath(sceneProjectId!, Number(workflowData.library_asset_id), Number(libraryAsset.revision), `${taskId}.png`);
+                    } else if (characterId != null) {
                         const genType = workflowData?.gen_type || 'character';
                         const filename = `${genType}_${characterId}_${taskId}.png`;
                         pathResult = getCharacterAssetPath({
@@ -1260,7 +1306,9 @@ export class GenerationService {
                     );
                 }
 
-                if (finalStatus === "completed" && sceneId < 90_000_000) {
+                if (finalStatus === "completed" && sceneChapterId != null) {
+                    await db.run(`INSERT OR REPLACE INTO scene_asset_image_snapshot (scene_id, image_url, references_json) VALUES (?, ?, ?)`,
+                        sceneId, assetUrl, JSON.stringify((effectiveWorkflowData.asset_references || []).map((ref: any) => ({ id: ref.id, revision: ref.revision }))));
                     await db.run('UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?', "completed", assetUrl, taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {

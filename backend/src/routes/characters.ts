@@ -343,10 +343,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const assets = tags?.assets || {};
     const refUrl = req.ref_image_url || assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url;
+    const codexImage = SettingsManager.loadSettings().image_provider === 'codex';
 
     const checkStr = `${desc} ${tagStr} ${dbChar.name || ''}`.toLowerCase();
-    const maleKeywords = ["male", "boy", "man", "1boy", "男", "少年", "青年", "公子", "老者", "男子", "皇帝", "国王"];
-    const isMale = maleKeywords.some(kw => checkStr.includes(kw));
+    const isMale = /\b(male|boy|man|1boy|gentleman)\b/i.test(checkStr)
+      || /男性|男子|男青年|少年|公子|老者|皇帝|国王/.test(checkStr);
     const genderTag = isMale ? "1boy, solo, male" : "1girl, solo, female";
 
     const project = await db.get('SELECT settings FROM project WHERE id = ?', dbChar.project_id);
@@ -359,7 +360,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const header = buildCharacterPromptHeader(
       effectiveModelType,
       nsfwEnabled,
-      req.gen_type
+      req.gen_type,
+      isMale ? 'male' : 'female'
     );
 
     let refHint = "";
@@ -372,10 +374,15 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     let negativePrompt = header.negative;
 
     if (req.gen_type === "turnaround") {
-      // Appearance base only — GenerationService runs 3 full-body panels + stitch
-      prompt = `${header.prefix}, ${genderTag}, full body, standing, character reference, ${turnaroundAppearance}`;
+      // ComfyUI composes three panels; the built-in image tool must draw the
+      // complete sheet in one generation while using the saved portrait reference.
+      prompt = codexImage
+        ? `Three-view character design sheet of the SAME ${isMale ? 'adult male' : 'adult female'} character, three equal full-body panels side by side: FRONT view, LEFT PROFILE view, BACK view. Identical face, hairstyle, body proportions, outfit, colors and accessories in every panel. Neutral standing pose, arms relaxed, feet fully visible, plain warm-white background, soft even studio light, realistic rural Chinese period-drama costume, no labels, no letters, no watermark. Stable design: ${turnaroundAppearance}. ${refUrl ? 'Match the supplied portrait exactly for identity and clothing.' : ''}`
+        : `${header.prefix}, ${genderTag}, full body, standing, character reference, ${turnaroundAppearance}`;
     } else {
-      prompt = `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
+      prompt = codexImage
+        ? `Photorealistic character casting portrait of one ${isMale ? 'adult East Asian man' : 'adult East Asian woman'} for a grounded ancient Chinese rural mystery drama. Waist-up, facing camera, neutral expression, both shoulders visible, consistent natural anatomy, plain warm-white studio background, soft even light. Everyday worn work clothes rather than immortal robes or fantasy armor. Stable identity and costume: ${req.custom_description || combinedDesc}. No writing, no watermark, no other people.`
+        : `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
     }
 
     return {
@@ -386,7 +393,9 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       nsfw_enabled: nsfwEnabled,
       ref_image_url: req.use_ref_portrait ? refUrl : null,
       // Document composite pipeline for clients
-      turnaround_pipeline: req.gen_type === 'turnaround' ? 'three_views_stitch' : undefined
+      turnaround_pipeline: req.gen_type === 'turnaround'
+        ? codexImage ? 'codex_single_sheet' : 'three_views_stitch'
+        : undefined
     };
   });
 

@@ -1241,8 +1241,20 @@ export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string =>
 export const buildCharacterPromptHeader = (
   modelFamily: ImageModelFamily,
   nsfwEnabled: boolean,
-  genType: string
+  genType: string,
+  gender: 'female' | 'male' = 'female'
 ): { prefix: string; negative: string } => {
+  if (gender === 'male') {
+    const anime = modelFamily === 'pony';
+    const base = anime
+      ? `score_9, score_8_up, score_7_up, source_anime, ${genType === 'turnaround' ? 'full body character design, consistent character identity' : 'portrait, upper body, front view, masterpiece, detailed face and eyes'}`
+      : `masterpiece quality, ${genType === 'turnaround' ? 'full body character design, consistent character identity' : 'portrait, upper body, front view, detailed face and eyes'}, clean studio background`;
+    const negative = 'female, woman, girl, 1girl, feminine face, child, low quality, bad anatomy, extra limbs, mismatched clothing, inconsistent face, watermark, text';
+    return {
+      prefix: `${base}, 1boy, solo, adult East Asian man, masculine facial structure`,
+      negative: nsfwEnabled ? negative : `${negative}, nsfw, nude`,
+    };
+  }
   if (modelFamily === 'pony') {
     // turnaround prompt is appearance base only — pipeline generates front/side/back panels then stitches
     const base =

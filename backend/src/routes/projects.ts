@@ -10,6 +10,7 @@ import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
 import { remapCopiedScriptChanges } from '../services/script_copy';
 import { StoryPlanDocumentSchema, newPlanEntryId } from '../schemas/story_plan';
+import { exportAssetLibrary, restoreAssetLibrary } from '../services/asset_library_backup';
 
 const exportStoryPlan = async (projectId: number) => {
   if (!(await tableExists('story_plan'))) return null;
@@ -249,6 +250,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       },
       glossary,
       story_plan: await exportStoryPlan(id),
+      asset_library: await exportAssetLibrary(id),
       summary: {
         chapters: chapters.length,
         characters: characters.length,
@@ -608,6 +610,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, [...scriptIdMap.values()]);
+      await restoreAssetLibrary(await exportAssetLibrary(id), newProjectId, chapterIdMap, sceneIdMap);
       await db.exec('COMMIT');
       return reply.status(201).send({
         project: await db.get('SELECT * FROM project WHERE id = ?', newProjectId),

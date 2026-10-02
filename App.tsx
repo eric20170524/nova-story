@@ -5,7 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 import { ProjectLayout } from './pages/ProjectLayout';
 import { StoryEditor } from './pages/StoryEditor';
 import { ScriptEditor } from './pages/ScriptEditor';
-import { CharacterManager } from './pages/CharacterManager';
+import { AssetManager } from './pages/AssetManager';
 import { DirectorMode } from './pages/DirectorMode';
 import { ProjectSettings } from './pages/ProjectSettings';
 import { SettingsPage } from './pages/Settings';
@@ -71,7 +71,8 @@ const App: React.FC = () => {
                     <Route index element={<Navigate to="story" replace />} />
                     <Route path="story" element={<StoryEditor />} />
                     <Route path="script" element={<ScriptEditor />} />
-                    <Route path="characters" element={<CharacterManager />} />
+                    <Route path="characters" element={<AssetManager />} />
+                    <Route path="assets" element={<AssetManager />} />
                     <Route path="director" element={<DirectorMode />} />
                     <Route path="settings" element={<ProjectSettings />} />
                     </Route>

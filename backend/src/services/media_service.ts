@@ -1,6 +1,7 @@
 import type { AIProvider } from './ai/base';
 import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
+import { CodexProvider } from './ai/codex_provider';
 import { settings as appSettings } from '../core/config';
 import { SettingsManager } from '../core/settings_manager';
 
@@ -13,6 +14,8 @@ export class MediaService {
       || 'gemini'
     ).toLowerCase();
     const llmSettings = systemSettings.llm || {};
+
+    if (providerName === 'codex') return new CodexProvider();
 
     if (providerName === 'openai') {
       return new OpenAIProvider(

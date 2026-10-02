@@ -11,7 +11,6 @@ import {
   Clapperboard,
   ArrowUp,
   ArrowDown,
-  Users,
   Sparkles,
   BookOpen,
   Undo2,
@@ -574,22 +573,6 @@ export const StoryEditor: React.FC = () => {
                     <div className="px-3 py-1.5 text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">
                       {t('story.ai_extraction_analysis', '分析与抽取')}
                     </div>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() =>
-                        handleTriggerAgentAction(
-                          t(
-                            'agent.prompt_extract_chars',
-                            '请提取并分析当前章节出现的所有角色与性格特征'
-                          )
-                        )
-                      }
-                      className="w-full px-3 py-2 text-left text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-600/20 hover:text-indigo-700 dark:hover:text-indigo-200 flex items-center gap-2"
-                    >
-                      <Users size={14} className="text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
-                      <span>{t('story.analyze_characters', '提取本章角色')}</span>
-                    </button>
                     <button
                       type="button"
                       role="menuitem"
