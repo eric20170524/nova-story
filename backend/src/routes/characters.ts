@@ -24,6 +24,7 @@ import {
   listCharacterVersions,
   syncActiveCharacterVersion
 } from '../services/character_versions';
+import { TtsService, formatVoiceLabel, TtsServiceError } from '../services/tts_service';
 
 // Dummy implementation of current_user auth
 const mockGetCurrentUser = (request: any) => ({
@@ -41,6 +42,8 @@ const serializeCharacter = (row: any) => {
     avatar_url: assets.avatar_url || null,
     turnaround_url: assets.turnaround_url || null,
     face_url: assets.face_url || null,
+    voice_id: row.voice_id || null,
+    voice_label: row.voice_label || null
   };
 };
 
@@ -216,15 +219,46 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const tagsStr = JSON.stringify(tags);
 
+    let voiceId: string | null = null;
+    let voiceLabel: string | null = null;
+
+    if (data.voice_id) {
+      try {
+        const catalog = await TtsService.getVoices();
+        const matched = catalog.find((v) => v.id === data.voice_id);
+        if (!matched) {
+          return reply.status(400).send({
+            detail: `Voice "${data.voice_id}" not found in current TTS catalog`,
+            code: 'VOICE_NOT_FOUND'
+          });
+        }
+        voiceId = matched.id;
+        voiceLabel = formatVoiceLabel(matched);
+      } catch (err: any) {
+        if (err instanceof TtsServiceError) {
+          return reply.status(err.status).send({
+            detail: err.message,
+            code: err.code
+          });
+        }
+        return reply.status(503).send({
+          detail: err.message || 'TTS service unavailable',
+          code: 'TTS_UNAVAILABLE'
+        });
+      }
+    }
+
     const result = await db.run(
       `INSERT INTO character
-        (project_id, name, role, description, visual_tags)
-       VALUES (?, ?, ?, ?, ?)`,
+        (project_id, name, role, description, visual_tags, voice_id, voice_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       data.project_id,
       data.name,
       data.role || null,
       data.description || null,
-      tagsStr
+      tagsStr,
+      voiceId,
+      voiceLabel
     );
 
     const newChar = await db.get('SELECT * FROM character WHERE id = ?', result.lastID);
@@ -262,6 +296,40 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (data.description !== undefined) {
       updateFields.push('description = ?');
       params.push(data.description);
+    }
+
+    // Voice field validation and handling
+    if (data.voice_id !== undefined) {
+      if (data.voice_id === null) {
+        updateFields.push('voice_id = ?', 'voice_label = ?');
+        params.push(null, null);
+      } else if (data.voice_id === char.voice_id) {
+        // Keep existing voice_id and voice_label without accessing TTS
+      } else {
+        try {
+          const catalog = await TtsService.getVoices();
+          const matched = catalog.find((v) => v.id === data.voice_id);
+          if (!matched) {
+            return reply.status(400).send({
+              detail: `Voice "${data.voice_id}" not found in current TTS catalog`,
+              code: 'VOICE_NOT_FOUND'
+            });
+          }
+          updateFields.push('voice_id = ?', 'voice_label = ?');
+          params.push(matched.id, formatVoiceLabel(matched));
+        } catch (err: any) {
+          if (err instanceof TtsServiceError) {
+            return reply.status(err.status).send({
+              detail: err.message,
+              code: err.code
+            });
+          }
+          return reply.status(503).send({
+            detail: err.message || 'TTS service unavailable',
+            code: 'TTS_UNAVAILABLE'
+          });
+        }
+      }
     }
 
     // Manage visual_tags and embedded properties

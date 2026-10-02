@@ -25,6 +25,7 @@ import { assistantRoutes } from './routes/assistant';
 import { coverageRoutes } from './routes/coverage';
 import { videoRoutes } from './routes/videos';
 import { scriptRoutes } from './routes/scripts';
+import { ttsRoutes } from './routes/tts';
 import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
 import { VideoStartupRecoveryService } from './services/video/video_startup_recovery';
@@ -132,6 +133,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(coverageRoutes, { prefix: '/api' });
   await app.register(videoRoutes, { prefix: '/api/videos' });
   await app.register(scriptRoutes, { prefix: '/api' });
+  await app.register(ttsRoutes, { prefix: '/api/tts' });
 
   // Recovery order is intentional:
   // 1) restore exclusive GPU ownership for any Comfy prompt that may have survived

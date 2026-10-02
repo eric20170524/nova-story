@@ -68,9 +68,12 @@ test('full application exposes parity routes and API documentation', async () =>
       ['get', '/api/workflows/'],
       ['get', '/api/workflows/{id}'],
       ['put', '/api/workflows/{id}'],
-      ['delete', '/api/workflows/{id}']
+      ['delete', '/api/workflows/{id}'],
+      ['get', '/api/tts/status'],
+      ['get', '/api/tts/voices'],
+      ['post', '/api/tts/preview']
     ];
-    assert.equal(mainBaselineOperations.length, 51);
+    assert.equal(mainBaselineOperations.length, 54);
     for (const [method, routePath] of mainBaselineOperations) {
       assert.ok(
         document.paths[routePath]?.[method],

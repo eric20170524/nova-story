@@ -23,7 +23,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 
 | 合同 | 路径 | 核心职责 |
 | --- | --- | --- |
-| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | Prompt 编译器、H3 生视频、RedCraft、小说故事创作与结构化剧本的唯一任务事实源 |
+| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | Prompt 编译器、H3 生视频、RedCraft、小说故事创作、结构化剧本与本机 TTS 角色音色的唯一任务事实源 |
 | **产品范围** | [1_PRD.md](./1_PRD.md) | MVP 业务边界与产品规范 |
 | **架构红线** | [2_ARCHITECTURE.md](./2_ARCHITECTURE.md) | 技术栈红线、目标管道约束（深入分层见 `architecture/`） |
 | **UI 规则** | [3_UI_RULES.md](./3_UI_RULES.md) | i18n 规范、Tailwind、Toast、可测试性属性规则 |
@@ -42,6 +42,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | 本地生图选型 Pony vs SD1.5、为何不用 FLUX | [local_image_generation_deployment_cn.md](./deployment/local_image_generation_deployment_cn.md) |
 | 角色参考 / IP-Adapter / ControlNet 何时生效与门禁 | [local_image_reference_policy_cn.md](./deployment/local_image_reference_policy_cn.md) |
 | 本地 LLM（Ollama Qwen 等）部署与显存互斥 | [local_language_model_deployment_cn.md](./deployment/local_language_model_deployment_cn.md) |
+| 本机中文 TTS、音色目录与角色绑音 | [local_chinese_tts_voice_cn.md](./deployment/local_chinese_tts_voice_cn.md) |
 | 系统整体分层架构与运行时数据流 | [architecture_cn.md](./architecture/architecture_cn.md) |
 | 后端已实现能力完整清单 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) |
 | Agent OS / 小说创作核心落地计划 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) |
@@ -61,6 +62,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [local_image_generation_deployment_cn.md](./deployment/local_image_generation_deployment_cn.md) | ✅ 现行 | 双轨生图策略（Pony XL 成片 + SD1.5 草稿），FLUX 退役说明 |
 | [local_image_reference_policy_cn.md](./deployment/local_image_reference_policy_cn.md) | ✅ 现行 | 档位 A/B、IP-Adapter 与 ControlNet 门禁策略（防构图崩坏） |
 | [local_language_model_deployment_cn.md](./deployment/local_language_model_deployment_cn.md) | ✅ 现行 | 本地 Ollama Qwen 写作模型配置与 GPU 显存互斥管理 |
+| [local_chinese_tts_voice_cn.md](./deployment/local_chinese_tts_voice_cn.md) | 📝 Track 6 方案 | 连接 local-chinese-tts：查询、试听，并在角色上保存音色 |
 
 ### 2. 系统架构与深度设计 (`docs/architecture/`)
 | 文档 | 状态 | 核心说明 |

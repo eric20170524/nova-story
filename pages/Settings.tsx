@@ -12,12 +12,16 @@ import {
   Sun,
   Moon,
   Palette,
-  Check
+  Check,
+  Volume2,
+  RefreshCw
 } from 'lucide-react';
 import { api } from '../services/api';
+import { TtsStatusResult } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
+import { TtsStatusCard } from '../components/settings/TtsStatusCard';
 import {
   ADVANCED_VISUAL_STYLES,
   isAdvancedStylesEnabled,
@@ -33,7 +37,11 @@ export const SettingsPage: React.FC = () => {
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<'general' | 'workflow' | 'advanced'>('general');
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
-    return localStorage.getItem('settings_advanced_unlocked') !== 'false';
+    try {
+      return typeof localStorage !== 'undefined' ? localStorage.getItem('settings_advanced_unlocked') !== 'false' : true;
+    } catch {
+      return true;
+    }
   });
   const [titleClicks, setTitleClicks] = useState(0);
 
@@ -67,6 +75,8 @@ export const SettingsPage: React.FC = () => {
   const [comfyVerifyResult, setComfyVerifyResult] = useState<{ status: 'success' | 'error'; message: string; details?: any } | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [advancedEnabled, setAdvancedEnabled] = useState(() => isAdvancedStylesEnabled());
+  const [ttsStatus, setTtsStatus] = useState<TtsStatusResult | null>(null);
+  const [loadingTts, setLoadingTts] = useState<boolean>(false);
   const secretClicksRef = useRef({ count: 0, lastAt: 0 });
 
   /** Hidden area: 5 consecutive clicks (within 1.5s gaps) toggles advanced styles */
@@ -98,7 +108,11 @@ export const SettingsPage: React.FC = () => {
     const newCount = titleClicks + 1;
     if (newCount >= 5) {
       setIsUnlocked(true);
-      localStorage.setItem('settings_advanced_unlocked', 'true');
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('settings_advanced_unlocked', 'true');
+        }
+      } catch {}
       setMessage({ type: 'success', text: '开发者选项已解锁！隐藏页面已开放。' });
       setTitleClicks(0);
     } else {
@@ -112,9 +126,15 @@ export const SettingsPage: React.FC = () => {
 
   const loadSettings = async () => {
     try {
-      const [settingsData, lorasData] = await Promise.all([
+      const [settingsData, lorasData, ttsStatusData] = await Promise.all([
         api.getSettings(),
-        api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] }))
+        api.getLoras().catch(() => ({ lora_directory: 'D:\\ComfyUI\\models\\loras', exists: false, loras: [] })),
+        api.getTtsStatus().catch(() => ({
+          ok: false,
+          enabled: false,
+          base_url: 'http://127.0.0.1:8765',
+          voice_count: 0,
+        })),
       ]);
 
       const rawComfy = settingsData.comfyui || {};
@@ -146,6 +166,7 @@ export const SettingsPage: React.FC = () => {
         comfyui: comfy,
         advanced: advanced
       });
+      setTtsStatus(ttsStatusData);
       if (lorasData?.loras) {
         setAvailableLoras(lorasData.loras);
         setLoraDirectoryInfo({ lora_directory: lorasData.lora_directory, exists: lorasData.exists });
@@ -154,6 +175,23 @@ export const SettingsPage: React.FC = () => {
       setMessage({ type: 'error', text: t('load_failed') + ': ' + (err.message || 'Unknown error') });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRefreshTts = async () => {
+    setLoadingTts(true);
+    try {
+      const res = await api.getTtsStatus();
+      setTtsStatus(res);
+    } catch (_) {
+      setTtsStatus({
+        ok: false,
+        enabled: false,
+        base_url: settings.tts?.base_url || 'http://127.0.0.1:8765',
+        voice_count: 0,
+      });
+    } finally {
+      setLoadingTts(false);
     }
   };
 
@@ -994,6 +1032,13 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Chinese Speech Synthesis (TTS) Service Card */}
+              <TtsStatusCard
+                ttsStatus={ttsStatus}
+                loadingTts={loadingTts}
+                onRefresh={handleRefreshTts}
+              />
             </>
           )}
 

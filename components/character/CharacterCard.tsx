@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, CheckCircle } from 'lucide-react';
+import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, CheckCircle, Volume2 } from 'lucide-react';
 import { Character } from '../../types';
 import { CHARACTER_ROLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
@@ -102,9 +102,25 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   </span>
                 )}
               </h3>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium inline-block mt-0.5 border border-slate-200 dark:border-slate-700">
-                {roleLabel}
-              </span>
+              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium inline-block border border-slate-200 dark:border-slate-700">
+                  {roleLabel}
+                </span>
+                <span
+                  data-testid="character-card-voice"
+                  className={`text-xs px-2.5 py-0.5 rounded-full font-medium inline-flex items-center gap-1 border ${
+                    char.voice_label
+                      ? 'bg-violet-50 dark:bg-violet-950/60 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800/70'
+                      : 'bg-slate-50 dark:bg-slate-900 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-800'
+                  }`}
+                  title={char.voice_label || t('characters.voice_unassigned', '未设定音色')}
+                >
+                  <Volume2 size={11} className="flex-shrink-0" />
+                  <span className="truncate max-w-[130px] sm:max-w-[180px]">
+                    {char.voice_label || t('characters.voice_unassigned', '未设定音色')}
+                  </span>
+                </span>
+              </div>
             </div>
           </div>
           <div className="flex gap-1">

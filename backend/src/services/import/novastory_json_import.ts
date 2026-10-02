@@ -116,13 +116,15 @@ export const restoreNovaStoryJsonProject = async (
       for (const character of importProject.characters) {
         const charRes = await db.run(
           `INSERT INTO character
-            (project_id, name, role, description, visual_tags)
-           VALUES (?, ?, ?, ?, ?)`,
+            (project_id, name, role, description, visual_tags, voice_id, voice_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           projectId,
           character.name,
-          character.role,
-          character.description,
-          withoutCharacterModel(character.visualTags)
+          character.role ?? null,
+          character.description ?? null,
+          withoutCharacterModel(character.visualTags),
+          character.voiceId ?? null,
+          character.voiceLabel ?? null
         );
         const newCharId = charRes.lastID;
         if (character.sourceId !== undefined && newCharId !== undefined) {

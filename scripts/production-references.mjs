@@ -63,6 +63,10 @@ export function resolveVisibleShotCharacters(shot, characters, limit = 4) {
   return selected;
 }
 
+export function resolveTimedOutCodexJobId(error) {
+  return String(error || '').match(/Codex image job ([0-9a-f-]{36}) timed out/i)?.[1] || null;
+}
+
 export function keyframeUsesBindings(shot, bound, snapshots) {
   const snapshot = snapshots.find(item => item.scene_id === shot.id && item.image_url === shot.asset_url);
   if (!snapshot) return false;

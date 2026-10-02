@@ -102,8 +102,16 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 017_image_request_idempotency
-    assert.equal(migrationCount.count, 17);
+    // 001_core through 018_character_voice
+    assert.equal(migrationCount.count, 18);
+
+    const characterColumns = new Set(
+      (await legacyDatabase.all('PRAGMA table_info("character")'))
+        .map((column: any) => column.name)
+    );
+    assert.ok(characterColumns.has('voice_id'), 'character should have voice_id');
+    assert.ok(characterColumns.has('voice_label'), 'character should have voice_label');
+
     for (const name of ['library_asset', 'scene_asset_reference', 'scene_asset_image_snapshot']) {
       assert.ok(await legacyDatabase.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name));
     }

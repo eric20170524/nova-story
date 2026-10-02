@@ -9,10 +9,12 @@ import { AssetManager } from './pages/AssetManager';
 import { DirectorMode } from './pages/DirectorMode';
 import { ProjectSettings } from './pages/ProjectSettings';
 import { SettingsPage } from './pages/Settings';
+import { CharactersEntry } from './pages/CharactersEntry';
 import { LanguageProvider } from './LanguageContext';
 import { ToastProvider } from './ToastContext';
 import { ThemeProvider } from './ThemeContext';
 import { AuthService } from './services/auth';
+import { api } from './services/api';
 
 // Authentication Guard Component
 const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -64,6 +66,7 @@ const App: React.FC = () => {
                 <Routes>
                 <Route path="/" element={<Layout />}>
                     <Route index element={<Dashboard />} />
+                    <Route path="characters" element={<CharactersEntry />} />
                     <Route path="settings" element={<SettingsPage />} />
                     
                     {/* Project Specific Routes */}

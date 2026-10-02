@@ -382,14 +382,16 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       for (const character of characters) {
         const charRes = await db.run(
           `INSERT INTO character
-            (project_id, name, role, description, visual_tags, active_version)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+            (project_id, name, role, description, visual_tags, active_version, voice_id, voice_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           newProjectId,
           character.name,
           character.role ?? null,
           character.description ?? null,
           character.visual_tags || '{}',
-          character.active_version || 1
+          character.active_version || 1,
+          character.voice_id ?? null,
+          character.voice_label ?? null
         );
         const newCharId = charRes.lastID;
         if (newCharId !== undefined) {
@@ -676,7 +678,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       params.push(user.id);
     }
 
-    sql += ' LIMIT ? OFFSET ?';
+    sql += ' ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?';
     params.push(limit, skip);
 
     const rows = await db.all(sql, ...params);

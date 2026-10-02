@@ -64,9 +64,41 @@ export interface Character {
   avatar_url?: string;
   turnaround_url?: string;
   face_url?: string;
+  voice_id?: string | null;
+  voice_label?: string | null;
   /** Active look/content version (1-based) */
   active_version?: number;
   versions?: CharacterVersionSummary[];
+  lora_ready?: boolean;
+}
+
+// Local Chinese TTS Types
+export type TtsVoiceTier = 'light' | 'quality' | 'clone' | 'online';
+
+export interface PublicTtsVoice {
+  id: string;
+  name: string;
+  gender: string;
+  style: string;
+  locale: string;
+  description: string;
+  tier: TtsVoiceTier;
+  offline: boolean;
+  provider: string;
+}
+
+export interface TtsStatusResult {
+  ok: boolean;
+  enabled: boolean;
+  base_url: string;
+  voice_count: number;
+  default_voice?: string;
+  local_models?: {
+    light: boolean;
+    quality: boolean;
+    clone: boolean;
+  };
+  error?: string;
 }
 
 // Chapters (Structure)

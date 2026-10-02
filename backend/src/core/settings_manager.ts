@@ -3,6 +3,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { getConfigDirectory } from './paths';
 import { applyKnownRemoteLlm } from '../services/llm_presets';
+export { validateTtsBaseUrl, type TtsUrlValidationResult } from '../services/tts_service';
 
 const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
@@ -54,6 +55,10 @@ const DEFAULT_SETTINGS = {
         api_key: 'ollama',
         base_url: 'http://127.0.0.1:11434/v1',
         model: 'novastory-qwen3:8b'
+    },
+    tts: {
+        base_url: 'http://127.0.0.1:8765',
+        enabled: true
     }
 };
 
@@ -146,6 +151,12 @@ export class SettingsManager {
                 settings.comfyui.base_url = settings.comfyui.remote_base_url || process.env.COMFYUI_REMOTE_URL || '';
             } else {
                 settings.comfyui.base_url = settings.comfyui.local_base_url || settings.comfyui.base_url || 'http://127.0.0.1:8188';
+            }
+        }
+
+        if (settings.tts) {
+            if (process.env.TTS_BASE_URL) {
+                settings.tts.base_url = process.env.TTS_BASE_URL;
             }
         }
 
@@ -306,6 +317,18 @@ export class SettingsManager {
             }
         }
 
+        if (newSettingsCopy.tts) {
+            const ttsEnvMappings = [
+                ['TTS_BASE_URL', newSettingsCopy.tts.base_url]
+            ] as const;
+
+            for (const [key, value] of ttsEnvMappings) {
+                if (value !== undefined) {
+                    envContent = upsertEnvValue(envContent, key, String(value));
+                }
+            }
+        }
+
         if (envContent !== originalEnvContent) {
             fs.writeFileSync(envPath, envContent);
         }
@@ -323,6 +346,12 @@ export class SettingsManager {
                 currentSettings.comfyui.base_url = currentSettings.comfyui.remote_base_url || process.env.COMFYUI_REMOTE_URL || '';
             } else {
                 currentSettings.comfyui.base_url = currentSettings.comfyui.local_base_url || currentSettings.comfyui.base_url || 'http://127.0.0.1:8188';
+            }
+        }
+
+        if (currentSettings.tts) {
+            if (process.env.TTS_BASE_URL) {
+                currentSettings.tts.base_url = process.env.TTS_BASE_URL;
             }
         }
 

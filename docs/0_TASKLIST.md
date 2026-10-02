@@ -13,6 +13,7 @@
 3. **Track 3**: RedCraft 赤佬 3.0 / Krea 2 INT4/INT8 双 Profile 接入（已有模型族、单工作流和隔离策略；双 Profile 与 3060 实机验收未完成，详见下方核验记录）。
 4. **Track 4**: 小说故事新书创建与 Agent OS 创作链路（5 万–10 万字目标、故事正文总量不超过 10 万字；A–E 按实际验收推进）。指定本 Track 时按下方依赖顺序执行，不改变 Track 1 的默认主干。
 5. **Track 5**: 独立短剧结构化剧本模块（参考 Toonflow；改编提纲→分场剧本→导演交接）。剧本文档、编辑页和 AI 候选已落地；导演交接（S3）与备份往返（S4）尚未实施。复用 Track 4 的已保存故事与现有角色/导演基础，不把短剧写回小说正文。
+6. **Track 6**: 本机中文 TTS 音色目录与角色绑音。连通 `local-chinese-tts`，查询、筛选、试听，并在资产管理的角色上保存音色。方案见 `docs/deployment/local_chinese_tts_voice_cn.md`。指定本 Track 时从第一个 `[ ]` 开始，不改分镜、不生成章节配音。
 
 ### ⚠️ AI 工作流要求
 
@@ -29,6 +30,7 @@
    - 生视频详细方案：`docs/video/`
    - Track 4 对齐证据、数据方案及 AC01–26：`docs/architecture/creation_alignment_review_2026-09-28.md`
    - Track 4/5 分层边界及剧本 SC01–13：`docs/architecture/structured_screenplay_module_2026-09-28.md`
+   - Track 6 本机 TTS 与角色音色：`docs/deployment/local_chinese_tts_voice_cn.md`
 
 ### 🐛 全局遗留问题与技术债 (Icebox)
 
@@ -532,3 +534,109 @@
 | 配置与显示 | Gemma 清理 Ollama 占位密钥；Vite 不注入后端密钥；角色模糊匹配优先最长名称且拒绝等长歧义；一节拍一场；提示显示场次序号 | `llm_presets.test.ts`、`script_review_regressions.test.ts`及类型/构建检查 |
 
 验证结果：全量后端测试 **374/374** 通过；前端及后端 `typecheck`、生产构建及 `git diff --check` 均通过。该轮使用模拟模型验证故障和状态边界，未调用真实远端模型服务。
+
+---
+
+## 📌 Track 6: 本机中文 TTS 音色与角色绑音
+
+> **方案（唯一契约）**：[local_chinese_tts_voice_cn.md](./deployment/local_chinese_tts_voice_cn.md)。实现时以该文的接口、字段和保存规则为准；本文只排任务顺序。
+>
+> **目标**：NovaStory 通过 Fastify 连接本机 `local-chinese-tts`（默认 `http://127.0.0.1:8765`）。作者能查询并试听音色，在资产管理的角色上保存音色编号。浏览器不直连 8765。
+>
+> **2026-10-02 实测**：`GET /api/health` 成功，`voices: 30`，`default_voice: QF1`；`GET /api/voices` 返回 32 条（light 4、quality 13、online 13、clone 2）。健康检查的计数不含克隆。克隆条目含本机绝对路径 `ref_audio`，代理响应必须去掉。
+>
+> **顺序**：T6.1 → T6.7。一次只做一块。默认测试不连接真实 TTS。T6.6 做浏览器验收。
+
+- [x] **T6.0 · 写下最佳实践方案。**
+  - **AC：** `docs/deployment/local_chinese_tts_voice_cn.md` 写明代理边界、公开音色结构、`voice_id` / `voice_label`、保存规则、试听上限，以及导出/复制/提取的不变量。`docs/README.md` 能索引到该文。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：音色是角色上的外部编号，写入新列 `character.voice_id` 与服务端生成的 `character.voice_label`。`visual_tags` 与 `character_version` 继续只描述形象。目录以 `GET /api/voices` 为活数据，不入库。试听走 `POST /v1/audio/speech` 的字节流，不保存 TTS `cache/` 里的 URL，也不调用 TTS 的 `POST /api/settings`。
+    - **改动文件**：`docs/deployment/local_chinese_tts_voice_cn.md`（新）、`docs/0_TASKLIST.md`、`docs/README.md`。
+    - **下游**：T6.1 起按该文实现。章节配音、视频混音、克隆上传、项目级旁白、Agent 自动挑音色留在方案第 13 节，不进入本 Track 的 `[ ]`。
+    - **边界**：本任务只交付文档。未改角色表、路由或界面。
+
+- [x] **T6.1 · TTS 根地址与回环守卫。**
+  - **实现：** `backend/src/core/settings_manager.ts` 增加 `tts.base_url` 与 `tts.enabled`。`TTS_BASE_URL` 覆盖已保存地址，示例写入 `backend/.env.example`。纯函数拒绝带用户名、密码、非空路径的 URL；主机不是 `127.0.0.1` / `localhost` / `::1` 时，除非 `TTS_ALLOW_REMOTE=1`，否则返回 `TTS_URL_REJECTED` 且不发起网络请求。
+  - **AC：** 单测覆盖默认地址、环境变量覆盖、非法 URL 不发请求、`TTS_ALLOW_REMOTE=1` 才允许非回环。`cd backend && npm test` 与根 `npm run typecheck` 通过。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：`SettingsManager` 接入 `tts` 配置项（默认 `http://127.0.0.1:8765`，`enabled: true`），支持 `TTS_BASE_URL` 环境变量覆盖与 `.env` 持久化同步。纯函数 `validateTtsBaseUrl` 严格校验协议、用户名密码、路径、查询参数/哈希，以及回环地址（`127.0.0.1`、`localhost`、`::1`、`[::1]`）；非回环地址仅在 `TTS_ALLOW_REMOTE=1` 时放行，其余情况拒绝并返回 `TTS_URL_REJECTED`，不发起任何网络请求。
+    - **改动文件**：`backend/src/core/settings_manager.ts`、`backend/src/services/tts_service.ts`（新）、`backend/src/services/tts_service.test.ts`（新）、`backend/.env.example`、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.2 状态探测与音色目录代理、T6.4 试听代理服务。
+    - **边界**：本任务仅建立根地址管理与回环安全守卫，尚未注册新路由，未修改数据库角色列。
+
+
+- [x] **T6.2 · 状态与音色目录代理。**
+  - **实现：** 新增音色目录归一与 `GET /api/tts/status`、`GET /api/tts/voices`，在 `backend/src/server.ts` 注册。状态在上游失败时仍返回 HTTP 200 且 `ok: false`。`voice_count` 等于目录长度。公开结构只含 `id, name, gender, style, locale, description, tier, offline, provider`，按 light → quality → clone → online 排序。
+  - **AC：** 用含 `ref_audio: /Users/...` 的夹具断言响应文本没有绝对路径，也没有 `instruct`、`model`、引擎字段 `voice`。上游不可达时 voices 为 503 `TTS_UNAVAILABLE`。`server.test.ts` 的路由基线加上本任务注册的 2 条路由。默认测试不访问 8765。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：创建 `TtsService.getStatus` 与 `TtsService.getVoices`，新增 `backend/src/routes/tts.ts` 并在 Fastify 注册 `/api/tts`。目录归一化彻底剥离上游绝对路径 `ref_audio`、`ref_text`、`instruct`、`model`、引擎字段 `voice` 与硬件占用等内部字段，仅透出标准 9 个公开字段，严格按 `light → quality → clone → online` 并在档内按 `id` 稳定排序。状态接口始终返回 HTTP 200，上游异常时置 `ok: false` 并将 `voice_count` 归零，成功时计数以活目录长度（如 32 条）为准。音色代理在上游不可达或被禁用时返回 503 `TTS_UNAVAILABLE`。
+    - **改动文件**：`backend/src/services/tts_service.ts`、`backend/src/routes/tts.ts`（新）、`backend/src/server.ts`、`backend/src/server.test.ts`、`backend/src/services/tts_service.test.ts`、`backend/src/services/fixtures/tts_voices_sample.json`（新）、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.3 角色保存校验音色存在性及生成 `voice_label`、T6.6 角色编辑弹窗音色选择器、T6.7 设置页连通状态展示。
+    - **边界**：本任务未修改数据库角色表（留待 T6.3），未接入试听音频流（留待 T6.4）。
+
+
+- [x] **T6.3 · 角色音色列与保存规则。**
+  - **实现：** `database.ts` 迁移 `018_character_voice`（`ensureColumns`：`voice_id`、`voice_label`）。扩展 `CharacterCreateSchema` / `CharacterUpdateSchema` 与 `PUT/POST`。省略字段保持原值；`null` 或空串清空且不访问 TTS；相同编号不访问 TTS；新编号必须存在于当场目录，由服务端写入 label；未知编号 400、上游不可达 503，并且本次不写任何列。客户端传入的 `voice_label` 丢弃。
+  - **AC：** 局部 `PUT { avatar_url }` 不改变 `voice_id`。失败用例里角色行与 `visual_tags` 保持调用前的值。`character_version` 仍只有 description 与 visual_tags。生图提示词组装结果不含 `voice_label`。未传 `voice_id` 的新角色两列为 NULL。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：应用数据库迁移 `018_character_voice` 为 `character` 表添加 `voice_id` 与 `voice_label` 列。Zod 增加 `VoiceIdSchema`，匹配 `^[A-Za-z][A-Za-z0-9_]{0,79}$`，空串与 null 归一化为 null。保存规则严格落实 Fail-Closed：局部更新（如 `{ avatar_url }`）或省略 `voice_id` 保持原值不碰 TTS；清除（`null` 或 `""`）在 TTS 离线时依然可保存；相同编号直接复用原值；新编号当场拉目录检验，未知报 400 `VOICE_NOT_FOUND`，TTS 不可达报 503 `TTS_UNAVAILABLE`，校验失败在执行 `UPDATE` 前拦截，整行数据及 `visual_tags` 原样保留。客户端传入的 `voice_label` 丢弃，由服务端按 `${id} · ${name} · ${style}` 格式生成并存库。`character_version` 保持仅快照形象（`description` 与 `visual_tags`），提示词编译完全不包含音色字段。
+    - **改动文件**：`backend/src/db/database.ts`、`backend/src/db/database.test.ts`、`backend/src/schemas/character.ts`、`backend/src/routes/characters.ts`、`backend/src/routes/character_voice.test.ts`（新）、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.5 导出/回导/复制/提取持久化保证、T6.6 角色编辑弹窗绑音与清除交互。
+    - **边界**：本任务未改动短句试听接口（留待 T6.4），未改动项目复制与 JSON 备份逻辑（留待 T6.5）。
+
+
+- [x] **T6.4 · 短句试听代理。**
+  - **实现：** `POST /api/tts/preview`。省略文本时使用「这是这个角色的声音。」；空白或超过 80 字返回 400，不截断。上游请求固定 `model=local-chinese-tts`、`speed=1`、`response_format=mp3`，`voice` 用公开 id。成功返回 `audio/mpeg`。超时 120 秒返回 504 `TTS_TIMEOUT`。响应体超过 8MiB 按上游失败。
+  - **AC：** 成功响应用于播放的内容类型是 audio/mpeg；未知音色 400；不新增 `media_asset` 行，不写 `scene.audio_prompt`。路由基线再加 1。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：实现 `TtsService.preview` 与 `POST /api/tts/preview` 试听代理。文本缺省默认使用「这是这个角色的声音。」，空白或超出 80 字符严格返回 400 `INVALID_PREVIEW_TEXT` 且不截断；校验 `voice_id` 必须存在于活目录，未知报 400 `VOICE_NOT_FOUND`；固定上游 `model="local-chinese-tts"`、`speed=1`、`response_format="mp3"` 发起请求，设置 120 秒超时守卫返回 504 `TTS_TIMEOUT`；设置 8MiB 响应上限（超限或上游故障返回 503 `TTS_UNAVAILABLE`）；成功返回 `Content-Type: audio/mpeg` 二进制 MP3 字节流。全程不写库，断言不向 `media_asset` 插入记录。OpenAPI 基线路由操作数由 53 增加至 54。
+    - **改动文件**：`backend/src/services/tts_service.ts`、`backend/src/routes/tts.ts`、`backend/src/server.test.ts`、`backend/src/services/tts_service.test.ts`、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.6 角色编辑弹窗中的试听按钮（`character-voice-preview`）。
+    - **边界**：试听只读内存处理，不写任何持久化记录；本任务未改动导出/回导/复制逻辑（留待 T6.5）。
+
+- [x] **T6.5 · 导出、回导、复制与提取保持音色。**
+  - **实现：** 导出 version 仍为 2，角色对象带可选 `voice_id`、`voice_label`。`novastory_json_model.ts`、`novastory_json_import.ts` 与 `projects.ts` 的角色复制插入这两列。编号不因角色 id 重映射而改变。`POST /api/characters/extract` 更新已有角色时不写这两列。文本草稿导入与规划/写作插入的新角色保持 NULL。
+  - **AC：** 复制后的角色音色编号与源项目相同。无音色字段的旧 JSON 导入为 NULL。对已绑音色的角色执行正文提取后，`voice_id` 与 label 不变。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：在 `backend/src/routes/projects.ts` 的项目副本复制逻辑中，插入 `character` 显式带上 `voice_id` 与 `voice_label`，外部编号不参与角色 ID 重映射；在 `novastory_json_model.ts` 规范化中为 `NovaStoryJsonImportCharacter` 补充可选的 `voiceId` 与 `voiceLabel`，并在 `novastory_json_import.ts` 中写入两列，旧版备份 JSON 缺省时自然回落为 NULL；`POST /api/characters/extract` 的更新操作严格只更新形象与文本字段，保证已绑音色绝不被正文提取冲刷覆盖；新建角色时两列保持 NULL。
+    - **改动文件**：`backend/src/routes/projects.ts`、`backend/src/services/import/novastory_json_model.ts`、`backend/src/services/import/novastory_json_import.ts`、`backend/src/routes/character_voice.test.ts`、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.6 前端角色编辑与资产管理展示。
+    - **边界**：本任务仅处理持久化流转（复制、导入、导出、提取），未修改前端界面组件（留待 T6.6）。
+
+- [x] **T6.6 · 资产管理角色可选、可听、可保存音色。**
+  - **实现：** `CharacterEditModal` 增加状态、分档选择、试听、清除；`CharacterCard` 显示 label 或「未设定音色」。`types.ts`、`services/api.ts`、`locales.ts` 的中英词典一起补。`data-testid`：`character-voice-status`、`character-voice-select`、`character-voice-preview`、`character-voice-clear`。保存请求携带 `voice_id`。目录中已消失的编号仍显示 label，并说明本机目录中已没有这个音色。
+  - **AC：** 浏览器打开资产管理 → 角色，以及 `/characters`。选中一个音色（服务可用时选克隆档并试听），保存后卡片显示 label，刷新后仍在。清除后再保存，卡片为未设定。TTS 不可达时，已保存 label 仍在，改选新音色失败且原编号不变，清除仍能保存。桌面与约 390px 宽都能滚动到选择器和按钮。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：
+      1. 在 `types.ts` 扩展 `Character` 接口补充可选的 `voice_id` 与 `voice_label`，并新增 `TtsVoiceTier`、`PublicTtsVoice`、`TtsStatusResult` 接口声明。
+      2. 在 `services/api.ts` 扩展 `getTtsStatus`、`getTtsVoices` 与 `previewTts`（返回 audio blob 二进制流，统一封装 `ApiError` 错误传递）。
+      3. 在 `locales.ts` 补齐中英双语的音色词典（包含状态、分档标签、在线/高质/克隆提示、试听中、清除、目录缺失警告等）。
+      4. 在 `components/character/CharacterCard.tsx` 增加 `data-testid="character-card-voice"` 徽标，有 `voice_label` 时展示 `${char.voice_label}`，缺省展示「未设定音色」。
+      5. 在 `components/character/CharacterEditModal.tsx` 构建角色音色完整功能区：`character-voice-status` 展示连通性与活目录总数（32 个）；`character-voice-select` 遵循 `light → quality → clone → online` 四档原生 `<optgroup>` 分组展示，并在目录已消失的已保存音色上标注「本机目录中已没有这个音色」；`character-voice-preview` 代理音频播放，播完/出错/弹窗关闭时自动注销释放 Blob URL 避免内存泄露；`character-voice-clear` 支持一键清空表单音色编号与展示名。
+      6. 在 `App.tsx` 补充 `/characters` 顶层路由重定向至首个项目的 `/project/:id/characters`，使资产管理页与 `/characters` 均无缝到达。
+      7. 浏览器自动化全流程核验通过：克隆音色试听合成（HTTP 200，21KB mp3）、绑音保存并持久化生效（刷新后保留）、清空保存恢复「未设定音色」、TTS 模拟不可达时保持原 label 且支持清空保存、390px 窄屏与桌面端均流畅滚动无裁切。新增 `CharacterVoiceUI.test.tsx` 单元测试。
+    - **改动文件**：`types.ts`、`services/api.ts`、`locales.ts`、`components/character/CharacterCard.tsx`、`components/character/CharacterEditModal.tsx`、`pages/CharacterManager.tsx`、`App.tsx`、`constants.ts`、`package.json`、`components/character/CharacterVoiceUI.test.tsx`（新）、`docs/0_TASKLIST.md`。
+    - **下游调用方**：T6.7 设置页展示 TTS 连通状态。
+    - **边界**：本任务未在设置页接入 TTS 详情（留待 T6.7），未涉及分镜对白实际语音合成（留待后续单独立项）。
+
+
+- [x] **T6.7 · 设置页显示 TTS 连通状态。**
+  - **实现：** `pages/Settings.tsx` 显示是否可达、音色数量、TTS 自身默认音色和当前根地址。不在设置页选择角色音色，不调用 TTS `POST /api/settings`。
+  - **AC：** 8765 可用时状态为已连通且数量与 `GET /api/tts/voices` 一致（实测目录为 32，而不是 health 的 30）。根地址不可达时页面显示未连通，角色页已保存的音色不被清空。
+  - **Decision & Audit（2026-10-02）**：
+    - **决策**：
+      1. 创建模块化组件 `components/settings/TtsStatusCard.tsx` 并在 `pages/Settings.tsx` 的常规设置页（`activeTab === 'general'`）底部接入。
+      2. 卡片仅呈现只读连通探测信息：连通徽标（`tts-status-badge`：已连通/未连通）、服务根地址（`tts-base-url`：默认 `http://127.0.0.1:8765`）、可用音色数量（`tts-voice-count`：连通时以活目录总数 32 为准，不可达时为 0）、TTS 自身默认音色（`tts-default-voice`：`QF1`）、本地神经网络模型就绪状态（`tts-models-status`：Light Edge 与 Quality/Clone CosyVoice），并提供一键刷新连通状态按钮（`tts-refresh-btn`）。
+      3. 严格遵守安全与业务边界：设置页不提供任何角色音色选择器下拉框，绝不调用上游 TTS 的 `POST /api/settings` 改写全局默认朗读音色。底部附有明确的使用说明 banner。
+      4. 浏览器实测验收通过：访问 `http://localhost:3000/settings` 状态即时展示「已连通」且音色数量精确为 32 个；点击刷新动态重新探测；模拟不可达时动态降级展示「未连通」且音色数为 0；返回角色资产页验证角色已保存音色未被清空或重置，持久化完好。
+      5. 单元测试与端到端测试全绿：新增 `TtsStatusCard` 连通与断连双状态断言；`npm run test:agent-ui`（29 项通过）、`cd backend && npm test`（441 项全部通过）、`npm run typecheck` 与 `npm run build` 均 0 错误。
+    - **改动文件**：`components/settings/TtsStatusCard.tsx`（新）、`pages/Settings.tsx`、`locales.ts`、`components/character/CharacterVoiceUI.test.tsx`、`docs/0_TASKLIST.md`。
+    - **下游调用方**：Track 6 全部任务至此闭环；后续章节对白配音、视频混音等留在后续单独立项。
+    - **边界**：本任务仅在设置页展示只读探测状态，未修改音色保存与试听代理逻辑。
+
+### Definition of Done
+
+- 作者能在资产管理的角色上查询、试听并保存音色；刷新、导出再导入、复制项目后编号还在。
+- 代理响应不含克隆参考音的本机绝对路径。
+- TTS 关闭时，清除音色和角色的其他字段仍能保存；把角色改绑到一个未验证的新编号会失败并保持原行。
+- 默认后端测试不依赖 8765。浏览器验收覆盖资产页与 `/characters`，以及桌面和窄屏。

@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { X, Plus, User, Image as ImageIcon, Upload } from 'lucide-react';
-import { Character } from '../../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Plus, User, Image as ImageIcon, Upload, Volume2, RotateCcw, Loader2 } from 'lucide-react';
+import { Character, PublicTtsVoice, TtsStatusResult, TtsVoiceTier } from '../../types';
 import { CHARACTER_ROLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
+import { useToast } from '../../ToastContext';
+import { api } from '../../services/api';
 import { PreviewableImage } from '../ImageLightbox';
 
 const VISUAL_TAG_META = new Set([
@@ -74,8 +76,105 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
   onUploadAsset,
 }) => {
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const [tagKey, setTagKey] = useState('');
   const [tagValue, setTagValue] = useState('');
+
+  const [ttsStatus, setTtsStatus] = useState<TtsStatusResult | null>(null);
+  const [voices, setVoices] = useState<PublicTtsVoice[]>([]);
+  const [isLoadingTts, setIsLoadingTts] = useState(false);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const previewEpochRef = useRef(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
+
+  const stopPreview = () => {
+    previewEpochRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setIsPlayingPreview(false);
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      stopPreview();
+      return;
+    }
+    let isCancelled = false;
+    setIsLoadingTts(true);
+
+    Promise.all([
+      api.getTtsStatus().catch(() => ({ ok: false, enabled: false, base_url: '', voice_count: 0 })),
+      api.getTtsVoices().catch(() => [] as PublicTtsVoice[]),
+    ]).then(([statusRes, voiceList]) => {
+      if (isCancelled) return;
+      setTtsStatus(statusRes);
+      setVoices(voiceList);
+    }).finally(() => {
+      if (!isCancelled) {
+        setIsLoadingTts(false);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+      stopPreview();
+    };
+  }, [isOpen]);
+
+  const handlePreviewVoice = async () => {
+    const voiceId = editingChar.voice_id;
+    if (!voiceId) return;
+
+    stopPreview();
+    const epoch = previewEpochRef.current;
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    setIsPlayingPreview(true);
+
+    try {
+      const blob = await api.previewTts(voiceId, undefined, controller.signal);
+      if (epoch !== previewEpochRef.current) return;
+      const url = URL.createObjectURL(blob);
+      if (epoch !== previewEpochRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        if (epoch === previewEpochRef.current) stopPreview();
+      };
+
+      audio.onerror = () => {
+        if (epoch !== previewEpochRef.current) return;
+        stopPreview();
+        showToast(t('characters.voice_preview_failed', '音色试听失败'), 'error');
+      };
+
+      await audio.play();
+      if (epoch !== previewEpochRef.current) {
+        audio.pause();
+      }
+    } catch (err: any) {
+      if (epoch !== previewEpochRef.current || controller.signal.aborted) return;
+      stopPreview();
+      showToast(err?.message || t('characters.voice_preview_failed', '音色试听失败'), 'error');
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -146,6 +245,159 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
               value={editingChar.description || ''}
               onChange={(e) => setEditingChar({ ...editingChar, description: e.target.value })}
             />
+          </div>
+
+          {/* Character Voice Section */}
+          <div className="bg-slate-50 dark:bg-slate-950/70 rounded-2xl p-4 border border-slate-200/80 dark:border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                {t('characters.voice_title', '角色音色')}
+              </label>
+              <div>
+                {isLoadingTts ? (
+                  <span
+                    data-testid="character-voice-status"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                  >
+                    <Loader2 size={12} className="animate-spin" />
+                    <span>加载中…</span>
+                  </span>
+                ) : ttsStatus?.ok ? (
+                  <span
+                    data-testid="character-voice-status"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>
+                      {t('characters.voice_status_connected', '已连通（共 {count} 个可用音色）', {
+                        count: voices.length || ttsStatus.voice_count,
+                      })}
+                    </span>
+                  </span>
+                ) : (
+                  <span
+                    data-testid="character-voice-status"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/80"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                    <span>
+                      {t('characters.voice_status_disconnected', 'TTS 服务未连通，暂时不能更换音色')}
+                    </span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <select
+                  data-testid="character-voice-select"
+                  disabled={!ttsStatus?.ok && voices.length === 0}
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition-all disabled:opacity-60"
+                  value={editingChar.voice_id || ''}
+                  onChange={(e) => {
+                    const nextId = e.target.value || null;
+                    const v = voices.find((item) => item.id === nextId);
+                    setEditingChar((prev) => ({
+                      ...prev,
+                      voice_id: nextId,
+                      voice_label: nextId && v ? `${v.id} · ${v.name} · ${v.style}` : (nextId ? prev.voice_label : null),
+                    }));
+                  }}
+                >
+                  <option value="">{t('characters.voice_none', '未设定音色（留空）')}</option>
+                  {Boolean(editingChar.voice_id && !voices.some((v) => v.id === editingChar.voice_id)) && (
+                    <option value={editingChar.voice_id!}>
+                      {editingChar.voice_label || editingChar.voice_id} ({t('characters.voice_missing', '本机目录中已没有这个音色')})
+                    </option>
+                  )}
+                  {(['light', 'quality', 'clone', 'online'] as TtsVoiceTier[]).map((tier) => {
+                    const tierVoices = voices.filter((v) => v.tier === tier);
+                    if (tierVoices.length === 0) return null;
+                    const tierLabels: Record<TtsVoiceTier, string> = {
+                      light: t('characters.voice_tier_light', '轻量内置'),
+                      quality: t('characters.voice_tier_quality', '高质模型'),
+                      clone: t('characters.voice_tier_clone', '克隆音色'),
+                      online: t('characters.voice_tier_online', '在线扩展'),
+                    };
+                    return (
+                      <optgroup key={tier} label={tierLabels[tier]}>
+                        {tierVoices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.id} · {v.name} · {v.style}
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  data-testid="character-voice-preview"
+                  onClick={handlePreviewVoice}
+                  disabled={!editingChar.voice_id || isPlayingPreview || (!voices.some((v) => v.id === editingChar.voice_id) && !ttsStatus?.ok)}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/80 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs"
+                >
+                  {isPlayingPreview ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>{t('characters.voice_previewing', '试听中…')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 size={14} />
+                      <span>{t('characters.voice_preview', '试听')}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="character-voice-clear"
+                  onClick={() => {
+                    stopPreview();
+                    setEditingChar((prev) => ({
+                      ...prev,
+                      voice_id: null,
+                      voice_label: null,
+                    }));
+                  }}
+                  disabled={!editingChar.voice_id}
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 hover:border-rose-300 dark:hover:border-rose-800/60 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs"
+                >
+                  <RotateCcw size={13} />
+                  <span>{t('characters.voice_clear', '清除音色')}</span>
+                </button>
+              </div>
+            </div>
+
+            {Boolean(editingChar.voice_id && !voices.some((v) => v.id === editingChar.voice_id)) && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                {t('characters.voice_missing', '本机目录中已没有这个音色')}
+              </p>
+            )}
+
+            {(() => {
+              const sel = voices.find((v) => v.id === editingChar.voice_id);
+              if (sel?.tier === 'online') {
+                return (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('characters.voice_hint_online', '在线档首次合成需要网络连接')}
+                  </p>
+                );
+              }
+              if (sel?.tier === 'quality' || sel?.tier === 'clone') {
+                return (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('characters.voice_hint_quality', '高质/克隆音色首次播放需要加载较大模型，可能稍慢')}
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Local Visual Assets Upload */}

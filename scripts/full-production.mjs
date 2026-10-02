@@ -9,14 +9,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const option = (name, fallback) => { const index = args.indexOf(`--${name}`); return index < 0 ? fallback : args[index + 1]; };
 const projectId = Number(option('project', '90713823'));
+const chapterLimit = Number(option('chapter-limit', '5'));
 const stage = option('stage', 'all');
 const base = option('base-url', 'http://127.0.0.1:3000').replace(/\/$/, '');
 const directory = path.resolve(root, option('output', `local/production/${projectId}`));
 const workflow = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || 'minimax_h3_ref2va_official_12gb');
 const retryFailed = args.includes('--retry-failed');
 const assetScopeArg = option('asset-scope', null);
-const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'videos', 'assemble', 'verify'];
-if (!Number.isSafeInteger(projectId) || projectId <= 0 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project or --stage');
+const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'video-preflight', 'videos', 'assemble', 'verify'];
+if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 5 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project, --chapter-limit or --stage');
 fs.mkdirSync(directory, { recursive: true });
 const lockFile = path.join(directory, '.production.lock');
 if (fs.existsSync(lockFile)) {
@@ -47,6 +48,8 @@ const write = (name, value) => {
   fs.renameSync(`${file}.tmp`, file);
 };
 const save = () => write('state.json', state);
+state.chapterLimit = chapterLimit;
+save();
 const hash = text => createHash('sha256').update(Buffer.isBuffer(text) ? text : String(text)).digest('hex');
 const key = name => `production:${projectId}:${name}`;
 async function request(url, method = 'GET', body) {
@@ -77,7 +80,7 @@ async function step(name, work) {
     state.steps[name] = { ...state.steps[name], status: 'failed', error: error.message }; save(); throw error;
   }
 }
-const chapters = () => request(`/chapters/?project_id=${projectId}`);
+const chapters = async () => (await request(`/chapters/?project_id=${projectId}`)).slice(0, chapterLimit);
 const plan = () => request(`/projects/${projectId}/story-plan`);
 const library = () => request(`/projects/${projectId}/asset-library`);
 const characters = () => request(`/characters/?project_id=${projectId}`);
@@ -170,7 +173,7 @@ async function text() {
   if (placeholders.length) await applyPlanCandidate('revise-placeholder', { kind: 'chapters', mode: 'revise', target_plan_ids: placeholders.map(e => e.id), message: `${brief} 将空白规划改为第一章开场，明确危机与转机。` });
   if (active.length < 5) await applyPlanCandidate('plan-five', { kind: 'chapters', mode: 'extend', batch_size: 5 - active.length, message: `${brief} 补齐共五章的规划。最后一章解决铜铃危机。` });
   write('02-story-plan.json', await plan());
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < chapterLimit; i++) {
     let currentChapters = await chapters();
     if (currentChapters.length <= i) await step(`chapter-${i + 1}:create`, async () => {
       const current = await plan();
@@ -229,14 +232,17 @@ async function assets() {
   for (const chapter of await chapters()) await step(`extract-assets:${chapter.id}:${hash(chapter.content).slice(0, 12)}`, () => request('/asset-library/extract', 'POST', { chapter_id: chapter.id }));
   const coreCharacterNames = new Set((await plan()).document.blueprint?.characters?.map(character => character.name) || []);
   if (!coreCharacterNames.size) throw new Error('Approve a story blueprint before generating character portraits');
-  for (let character of (await characters()).filter(character => coreCharacterNames.has(character.name))) {
+  const knownCharacters = await characters();
+  const primaryCharacterIds = new Set((await shots()).map(shot => resolveShotCharacter(shot, knownCharacters)?.id).filter(Boolean));
+  for (let character of knownCharacters.filter(character => coreCharacterNames.has(character.name) || primaryCharacterIds.has(character.id))) {
     for (const type of ['portrait', 'turnaround']) {
       const slot = type === 'portrait' ? 'avatar_url' : 'turnaround_url';
       if (character[slot]) continue;
       const visualDescription = character.visual_tags?.visual_bible?.portrait_description || character.description;
-      const prompt = await step(`character-${character.id}:${type}:prompt`, () => request(`/characters/${character.id}/build-prompt`, 'POST', { gen_type: type, custom_description: visualDescription, use_ref_portrait: type === 'turnaround', ref_image_url: character.avatar_url || undefined }));
+      const referenceUrl = type === 'portrait' ? character.visual_tags?.visual_bible?.reference_image_url : character.avatar_url;
+      const prompt = await step(`character-${character.id}:${type}:prompt`, () => request(`/characters/${character.id}/build-prompt`, 'POST', { gen_type: type, custom_description: visualDescription, use_ref_portrait: !!referenceUrl, ref_image_url: referenceUrl || undefined }));
       const task = await generateImage(`character-${character.id}:${type}`, requestKey => request('/assets/generate', 'POST', {
-        scene_id: 90_000_000 + character.id, request_key: requestKey, workflow: { ...prompt, character_id: character.id, gen_type: type, character_ref_url: character.avatar_url || undefined, ref_image_url: character.avatar_url || undefined, reference_tier: 'A' },
+        scene_id: 90_000_000 + character.id, request_key: requestKey, workflow: { ...prompt, character_id: character.id, gen_type: type, character_ref_url: referenceUrl || undefined, ref_image_url: referenceUrl || undefined, reference_tier: 'A' },
       }));
       character = await request(`/characters/${character.id}`, 'PUT', { [slot]: task.image_url });
     }
@@ -295,6 +301,22 @@ async function images() {
     }
   }
   write('08-rendered-storyboards.json', await shots());
+}
+async function videoPreflight() {
+  const known = await characters();
+  const results = [];
+  for (const shot of await shots()) {
+    const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+    const primary = resolveShotCharacter(shot, known);
+    const references = (media.assets || []).filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(0, 3).map(asset => asset.id);
+    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, workflow_id: workflow, profile: 'narrative_clip', preset: 'preview_480p_5s', character_reference_asset_ids: references, run_loop_closer: false };
+    const check = await request('/videos/preflight', 'POST', body);
+    const identityReady = !primary || references.length > 0;
+    results.push({ scene_id: shot.id, chapter_id: shot.chapter_id, keyframe_ready: shot.asset_status === 'completed' && !!shot.asset_url, character_id: primary?.id || null, reference_asset_ids: references, ...check, identity_ready: identityReady, ready: check.ready && identityReady });
+  }
+  write('09-video-preflight.json', { chapterLimit, workflow, results });
+  if (results.some(result => !result.keyframe_ready || !result.ready)) throw new Error('Some selected shots are not ready for video generation; see 09-video-preflight.json');
+  return results;
 }
 async function videos() {
   const pendingReview = [];
@@ -399,8 +421,9 @@ async function assemble() {
   }
   if (!chapterFiles.length) throw new Error('No chapters to assemble');
   const list = path.join(videoDirectory, 'full.concat.txt'); fs.writeFileSync(list, chapterFiles.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join('\n'));
-  const final = path.join(videoDirectory, 'full-story.mp4'); command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', final]);
-  write('10-video-delivery.json', { chapters: chapterFiles.map(file => ({ file, probe: probe(file) })), final: { file: final, probe: probe(final) } });
+  const final = path.join(videoDirectory, chapterLimit === 5 ? 'full-story.mp4' : `chapters-1-${chapterLimit}.mp4`);
+  command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', final]);
+  write('10-video-delivery.json', { chapterLimit, chapters: chapterFiles.map(file => ({ file, probe: probe(file) })), final: { file: final, probe: probe(final) } });
 }
 async function verify() {
   state.currentStep = 'verify'; save();
@@ -415,16 +438,21 @@ async function verify() {
   const requiredAssets = assets.filter(asset => requiredAssetIds.has(asset.id));
   const acceptance = [
     ['F01', '五章规划', ps.entries.filter(e => e.disposition === 'active').length === 5],
-    ['F02', '五章正文非空且定稿哈希一致', cs.length === 5 && cs.every(c => c.content?.trim() && c.status === 'completed' && c.finalized_content_hash === hash(c.content))],
-    ['F03', '章节字数达到规划的80%', cs.length === 5 && cs.every(c => (c.content?.match(/[\p{L}\p{N}]/gu) || []).length >= c.target_word_count * 0.8)],
-    ['F04', '五章剧本已确认且来源有效', screenplay.length === 5 && screenplay.every(s => s?.status === 'confirmed' && !s.freshness?.sourceChanged && s.document.scenes.length)],
+    ['F02', `前${chapterLimit}章正文非空且定稿哈希一致`, cs.length === chapterLimit && cs.every(c => c.content?.trim() && c.status === 'completed' && c.finalized_content_hash === hash(c.content))],
+    ['F03', '章节字数达到规划的80%', cs.length === chapterLimit && cs.every(c => (c.content?.match(/[\p{L}\p{N}]/gu) || []).length >= c.target_word_count * 0.8)],
+    ['F04', `前${chapterLimit}章剧本已确认且来源有效`, screenplay.length === chapterLimit && screenplay.every(s => s?.status === 'confirmed' && !s.freshness?.sourceChanged && s.document.scenes.length)],
     ['F05', '蓝图核心角色有定妆照和三视图', coreCharacters.length === coreCharacterNames.size && coreCharacters.every(c => c.avatar_url && c.turnaround_url)],
     ['F06', assetScope === 'referenced' ? '场景与道具独立且分镜引用素材全部已生成' : '场景与道具独立且全部已生成', requiredAssets.some(a => a.kind === 'location') && requiredAssets.some(a => a.kind === 'prop') && requiredAssets.every(a => a.status === 'completed' && a.image_url)],
-    ['F07', '五章分镜均生成图片', cs.length === 5 && cs.every(c => ss.some(s => s.chapter_id === c.id)) && ss.every(s => s.asset_status === 'completed' && s.asset_url)],
+    ['F07', `前${chapterLimit}章分镜均生成图片`, cs.length === chapterLimit && cs.every(c => ss.some(s => s.chapter_id === c.id)) && ss.every(s => s.asset_status === 'completed' && s.asset_url)],
     ['F08', '所有镜头有已验收视频', ss.length > 0 && media.every(r => r.assets.some(a => a.role === 'narrative_final' && a.status === 'ready'))],
-    ['F09', '五章合成和总片已输出', fs.existsSync(path.join(directory, '10-video-delivery.json'))],
+    ['F09', `前${chapterLimit}章合成和阶段总片已输出`, (() => {
+      const file = path.join(directory, '10-video-delivery.json');
+      if (!fs.existsSync(file)) return false;
+      const delivery = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return delivery.chapterLimit === chapterLimit && delivery.chapters?.length === chapterLimit && fs.existsSync(delivery.final?.file || '');
+    })()],
   ].map(([id, criterion, pass]) => ({ id, criterion, status: pass ? 'PASS' : 'FAIL' }));
-  const imageUrls = [...coreCharacters.flatMap(c => [c.avatar_url, c.turnaround_url]), ...assets.map(a => a.image_url), ...ss.map(s => s.asset_url)].filter(Boolean);
+  const imageUrls = [...coreCharacters.flatMap(c => [c.avatar_url, c.turnaround_url]), ...requiredAssets.map(a => a.image_url), ...ss.map(s => s.asset_url)].filter(Boolean);
   const imageEvidence = imageUrls.map(url => {
     try { const file = localMedia(url); const info = probe(file); const video = info.streams.find(s => s.codec_type === 'video'); return { url, valid: video?.width >= 256 && video?.height >= 256, width: video?.width, height: video?.height, sha256: hash(fs.readFileSync(file)) }; }
     catch (error) { return { url, valid: false, error: error.message }; }
@@ -436,31 +464,32 @@ async function verify() {
   acceptance.push({ id: 'F11', criterion: '镜头完整引用所需场景和道具且关键帧使用当前素材', status: ss.length > 0 && shotReferences.every(refs => refs.length) && bindingEvidence.every(e => !e.blockers.length && e.keyframe_current) ? 'PASS' : 'FAIL' });
   let deliveryEvidence;
   try {
-    const videos = Array.from({ length: 5 }, (_, i) => path.join(directory, 'videos', `chapter-${i + 1}.mp4`));
-    const final = path.join(directory, 'videos/full-story.mp4');
+    const videos = Array.from({ length: chapterLimit }, (_, i) => path.join(directory, 'videos', `chapter-${i + 1}.mp4`));
+    const final = path.join(directory, 'videos', chapterLimit === 5 ? 'full-story.mp4' : `chapters-1-${chapterLimit}.mp4`);
     deliveryEvidence = [...videos, final].map(file => ({ file, probe: probe(file), sha256: hash(fs.readFileSync(file)) }));
     const valid = deliveryEvidence.every(e => e.probe.streams.some(s => s.codec_type === 'video') && e.probe.streams.some(s => s.codec_type === 'audio') && Number(e.probe.format.duration) > 0);
-    const expected = deliveryEvidence.slice(0, 5).reduce((sum, e) => sum + Number(e.probe.format.duration), 0);
-    acceptance.push({ id: 'F12', criterion: '五章和总片均可解码、含音轨且总片时长完整', status: valid && Math.abs(Number(deliveryEvidence[5].probe.format.duration) - expected) < 1 ? 'PASS' : 'FAIL' });
-  } catch (error) { deliveryEvidence = { error: error.message }; acceptance.push({ id: 'F12', criterion: '五章和总片均可解码、含音轨且总片时长完整', status: 'FAIL' }); }
+    const expected = deliveryEvidence.slice(0, chapterLimit).reduce((sum, e) => sum + Number(e.probe.format.duration), 0);
+    acceptance.push({ id: 'F12', criterion: `前${chapterLimit}章和阶段总片均可解码、含音轨且总片时长完整`, status: valid && Math.abs(Number(deliveryEvidence[chapterLimit].probe.format.duration) - expected) < 1 ? 'PASS' : 'FAIL' });
+  } catch (error) { deliveryEvidence = { error: error.message }; acceptance.push({ id: 'F12', criterion: `前${chapterLimit}章和阶段总片均可解码、含音轨且总片时长完整`, status: 'FAIL' }); }
   const identityEvidence = ss.map((shot, index) => videoProvenance(shot, media[index].assets, chars));
   acceptance.push({ id: 'F13', criterion: '主角视频实际使用同一角色的有效定妆参考', status: identityEvidence.some(e => e.character_id != null) && identityEvidence.every(e => e.identity_current) ? 'PASS' : 'FAIL' });
   acceptance.push({ id: 'F14', criterion: '视频来源与当前关键帧及镜头版本一致', status: ss.length > 0 && identityEvidence.every(e => e.source_current) ? 'PASS' : 'FAIL' });
   write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, delivery: deliveryEvidence });
-  write('acceptance.json', { checkedAt: new Date().toISOString(), acceptance, counts: { chapters: cs.length, characters: chars.length, locations: assets.filter(a => a.kind === 'location').length, props: assets.filter(a => a.kind === 'prop').length, requiredAssets: requiredAssets.length, generatedAssets: assets.filter(a => a.status === 'completed' && a.image_url).length, shots: ss.length }, manualReview: ['五章因果和人物动机', '跨镜头脸型服装及道具形状一致性', '画面缺陷和声音对白同步'] });
+  write('acceptance.json', { checkedAt: new Date().toISOString(), chapterLimit, acceptance, counts: { chapters: cs.length, characters: chars.length, locations: assets.filter(a => a.kind === 'location').length, props: assets.filter(a => a.kind === 'prop').length, requiredAssets: requiredAssets.length, generatedAssets: assets.filter(a => a.status === 'completed' && a.image_url).length, shots: ss.length }, manualReview: [`前${chapterLimit}章因果和人物动机`, '跨镜头脸型服装及道具形状一致性', '画面缺陷和声音对白同步'] });
   write('project-backup.novastory.json', backup);
   if (acceptance.some(a => a.status !== 'PASS')) throw new Error('Acceptance has failing items; see acceptance.json');
 }
 function report(error) {
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const scopeLabel = chapterLimit === 5 ? '五章完整' : `前${chapterLimit}章阶段`;
   const acceptance = fs.existsSync(path.join(directory, 'acceptance.json')) ? JSON.parse(fs.readFileSync(path.join(directory, 'acceptance.json'), 'utf8')) : null;
   const engineeringFile = path.join(directory, 'engineering.json');
   const engineering = fs.existsSync(engineeringFile) ? JSON.parse(fs.readFileSync(engineeringFile, 'utf8')) : null;
-  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory 完整生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · 五章完整生成验收</h1><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。场景参考依赖 ControlNet 可用性；道具目前通过外观提示词和关键帧传递，不能据接口或单元测试宣称像素一致性通过。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
+  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景和道具参考通过系统的 Codex 图像任务传递；跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
 }
 let failure;
 try {
-  const handlers = { preflight, text, scripts, assets, storyboards, images, videos, assemble, verify };
+  const handlers = { preflight, text, scripts, assets, storyboards, images, 'video-preflight': videoPreflight, videos, assemble, verify };
   for (const name of stage === 'all' ? stages : [stage]) {
     // Runtime preflight is deliberately rechecked on every resume; it is never cached.
     if (name === 'preflight') await preflight(); else await handlers[name]();

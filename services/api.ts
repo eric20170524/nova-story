@@ -12,7 +12,9 @@ import type {
   VideoPreflightResponse,
   VideoGenerationRequest,
   VideoTaskState,
-  MediaAsset
+  MediaAsset,
+  PublicTtsVoice,
+  TtsStatusResult
 } from '../types';
 import { ApiError } from './api_error';
 import { unsupportedMockResponse } from './mock_fallback';
@@ -147,6 +149,13 @@ class ApiService {
           return resolve({ task_id: 'mock-task-999', status: 'processing' } as any);
         }
 
+        if (endpoint === '/tts/status') {
+          return resolve({ ok: true, enabled: true, base_url: 'http://127.0.0.1:8765', voice_count: 0 } as any);
+        }
+        if (endpoint === '/tts/voices') {
+          return resolve([] as any);
+        }
+
         resolve({} as T);
       }, 600);
     });
@@ -269,6 +278,40 @@ class ApiService {
     const formData = new FormData();
     formData.append('file', file);
     return this.requestFormData<{ url: string }>('/characters/upload-image', formData);
+  };
+
+  // TTS
+  getTtsStatus = () => this.request<TtsStatusResult>('/tts/status');
+  getTtsVoices = () => this.request<PublicTtsVoice[]>('/tts/voices');
+  previewTts = async (voiceId: string, text?: string, signal?: AbortSignal): Promise<Blob> => {
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const response = await fetch(`${API_BASE_URL}/tts/preview`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ voice_id: voiceId, text }),
+      signal,
+    });
+    if (!response.ok) {
+      let errDetail = `TTS Preview Error ${response.status}`;
+      let errCode: string | undefined;
+      try {
+        const errJson = await response.json();
+        errCode = typeof errJson.code === 'string' ? errJson.code : undefined;
+        if (errJson.detail) {
+          errDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        } else if (errJson.message) {
+          errDetail = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
+        }
+      } catch (_) {}
+      throw new ApiError(errDetail, response.status, errCode);
+    }
+    return await response.blob();
   };
 
   // Chapters

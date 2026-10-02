@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { resolveAssetBindings, keyframeUsesBindings, resolveVisibleShotCharacters } from './production-references.mjs';
+import { resolveAssetBindings, keyframeUsesBindings, resolveVisibleShotCharacters, resolveTimedOutCodexJobId } from './production-references.mjs';
 
 test('visible shot references prioritize the focal character and exclude uncast extras', () => {
   const shot = { shot_spec: { primary_subject: '陆青', visible_subjects: ['老葛', '陆青', '沈砚', '周槐'] } };
@@ -16,6 +16,11 @@ test('visible shot references prioritize the focal character and exclude uncast 
     { id: 30, name: '陆青', avatar_url: '/lu.png' },
   ];
   assert.deepEqual(resolveVisibleShotCharacters(shot, characters).map(character => character.id), [30, 27, 29]);
+});
+
+test('only a timed-out Codex image job is eligible for exact system recovery', () => {
+  assert.equal(resolveTimedOutCodexJobId('Codex image job 83f738da-e10f-4183-81a1-5e719caf9af7 timed out; request preserved'), '83f738da-e10f-4183-81a1-5e719caf9af7');
+  assert.equal(resolveTimedOutCodexJobId('Image provider denied request'), null);
 });
 
 async function fixture(handler) {
@@ -95,6 +100,55 @@ test('failed video tasks keep their identity until an explicit retry allocates a
     const retried = await f.run('videos', ['--retry-failed']);
     assert.equal(retried.code, 1); assert.match(retried.output, /visual review/); assert.equal(submissions, 2);
     assert.notEqual(requestKeys[0], requestKeys[1]);
+  } finally { await f.close(); }
+});
+
+test('chapter limit stops the original video workflow after the selected chapters', async () => {
+  const submissions = [];
+  const preflightScenes = [];
+  const f = await fixture((url, method, body) => {
+    if (url.startsWith('/api/chapters/')) return { body: [1, 2, 3].map(index => ({ id: `ch-${index}`, index })) };
+    if (url.startsWith('/api/timeline/ch-')) {
+      const index = Number(url.at(-1));
+      return { body: { timeline: [{ id: 60 + index, chapter_id: `ch-${index}`, active_version: 1, asset_status: 'completed', asset_url: `/static/shot-${index}.png` }] } };
+    }
+    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url.startsWith('/api/characters/')) return { body: [] };
+    if (url === '/api/videos/preflight') { preflightScenes.push(body.scene_id); return { body: { ready: true, blockers: [] } }; }
+    if (url === '/api/videos/generate') { submissions.push(body.scene_id); return { body: { task_id: `task-${body.scene_id}` } }; }
+    if (url.startsWith('/api/videos/tasks/')) return { body: { status: 'completed', stage: 'completed' } };
+    return { status: 500, body: { error: `unexpected endpoint ${url}` } };
+  });
+  try {
+    assert.equal((await f.run('video-preflight', ['--chapter-limit', '2'])).code, 0);
+    assert.deepEqual(preflightScenes, [61, 62]);
+    const evidence = JSON.parse(await readFile(path.join(f.directory, '09-video-preflight.json'), 'utf8'));
+    assert.equal(evidence.chapterLimit, 2);
+    assert.deepEqual(evidence.results.map(result => result.scene_id), [61, 62]);
+    const result = await f.run('videos', ['--chapter-limit', '2']);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /visual review/);
+    assert.deepEqual(submissions, [61, 62]);
+    const state = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
+    assert.equal(state.chapterLimit, 2);
+  } finally { await f.close(); }
+});
+
+test('video preflight requires a portrait reference for the primary character', async () => {
+  const f = await fixture(url => {
+    if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1', index: 1 }] };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 66, chapter_id: 'ch-1', active_version: 1, asset_status: 'completed', asset_url: '/static/66.png', shot_spec: { primary_subject: '老葛' } }] } };
+    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url.startsWith('/api/characters/')) return { body: [{ id: 31, name: '老葛' }] };
+    if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
+    return { status: 500, body: { error: `unexpected endpoint ${url}` } };
+  });
+  try {
+    const result = await f.run('video-preflight', ['--chapter-limit', '2']);
+    assert.equal(result.code, 1);
+    const evidence = JSON.parse(await readFile(path.join(f.directory, '09-video-preflight.json'), 'utf8'));
+    assert.equal(evidence.results[0].identity_ready, false);
+    assert.equal(evidence.results[0].ready, false);
   } finally { await f.close(); }
 });
 

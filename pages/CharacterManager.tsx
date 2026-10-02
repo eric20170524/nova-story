@@ -279,7 +279,9 @@ export const CharacterManager: React.FC = () => {
         name: '',
         role: 'protagonist',
         description: '',
-        visual_tags: {}
+        visual_tags: {},
+        voice_id: null,
+        voice_label: null
       });
     }
     setTagKey('');
@@ -330,8 +332,8 @@ export const CharacterManager: React.FC = () => {
       setShowModal(false);
       loadCharacters();
       showToast(t("characters.saved", "Character saved"), 'success');
-    } catch (e) {
-      showToast(t("characters.failed_save", "Failed to save character"), 'error');
+    } catch (e: any) {
+      showToast(e?.message || t("characters.failed_save", "Failed to save character"), 'error');
     }
   };
   

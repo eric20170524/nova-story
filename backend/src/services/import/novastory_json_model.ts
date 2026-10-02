@@ -18,6 +18,8 @@ export interface NovaStoryJsonImportCharacter {
   role: string | null;
   description: string | null;
   visualTags: string;
+  voiceId?: string | null;
+  voiceLabel?: string | null;
 }
 
 export interface NovaStoryJsonImportScriptChange {
@@ -373,6 +375,8 @@ export const normalizeNovaStoryJsonProject = (
       role: optionalText(raw.role),
       description: optionalText(raw.description),
       visualTags: jsonText(raw.visual_tags, '{}') || '{}',
+      voiceId: optionalText(raw.voice_id),
+      voiceLabel: optionalText(raw.voice_label),
     });
   }
 

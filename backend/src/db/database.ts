@@ -700,6 +700,15 @@ const migrations: Migration[] = [
         task_id TEXT NOT NULL REFERENCES generation_task(task_id)
       )`);
     }
+  },
+  {
+    version: '018_character_voice',
+    up: async (database) => {
+      await ensureColumns(database, 'character', {
+        voice_id: 'TEXT',
+        voice_label: 'TEXT'
+      });
+    }
   }
 ];
 

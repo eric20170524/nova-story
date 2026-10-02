@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm test --workspace backend && npm run test:agent-ui && npm run test:production",
     "test:production": "node --test scripts/full-production.test.mjs",
-    "test:agent-ui": "node --import tsx --test services/agent_execution.test.ts services/api.mock.test.ts components/agent/AgentExecutionResultCard.test.tsx components/story/storyPlanRequests.test.ts components/story/chapterEditorState.test.ts",
+    "test:agent-ui": "node --import tsx --test services/agent_execution.test.ts services/api.mock.test.ts services/characters_entry.test.ts components/agent/AgentExecutionResultCard.test.tsx components/story/storyPlanRequests.test.ts components/story/chapterEditorState.test.ts components/character/CharacterVoiceUI.test.tsx",
     "check": "npm run typecheck && npm run build"
   },
   "dependencies": {

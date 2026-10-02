@@ -4,6 +4,7 @@ import { BookOpen, Film, Users, Clapperboard, Settings, Sparkles, Sun, Moon } fr
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
 import { api } from '../services/api';
+import { rememberLastProjectId } from '../services/characters_entry';
 import {
   ProjectAgentProvider,
   useProjectAgent,
@@ -18,7 +19,11 @@ export const ProjectLayout: React.FC = () => {
 
   useEffect(() => {
     if (id) {
-      api.getProject(Number(id))
+      const projectId = Number(id);
+      if (Number.isInteger(projectId) && projectId > 0) {
+        rememberLastProjectId(projectId);
+      }
+      api.getProject(projectId)
         .then(project => {
           setProjectTitle(project.title);
         })

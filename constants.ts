@@ -1,3 +1,5 @@
+import { loadAdvancedStyleModules } from './advanced_style_modules';
+
 export const API_BASE_URL = '/api';
 
 export const CHARACTER_ROLES = [
@@ -347,14 +349,10 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
   },
 ];
 
-/**
- * Optional local advanced styles (gitignored file).
- * Copy from advanced_visual_styles.example.ts if missing.
- */
-const advancedStyleModules = import.meta.glob<{ ADVANCED_VISUAL_STYLES?: VisualStyleDef[] }>(
-  './local/advanced_visual_styles.ts',
-  { eager: true }
-);
+const advancedStyleModules = loadAdvancedStyleModules() as Record<
+  string,
+  { ADVANCED_VISUAL_STYLES?: VisualStyleDef[] }
+>;
 
 export const ADVANCED_VISUAL_STYLES: VisualStyleDef[] = Object.values(advancedStyleModules)
   .flatMap((mod) => mod?.ADVANCED_VISUAL_STYLES ?? [])
