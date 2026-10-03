@@ -15,6 +15,9 @@ export interface CompileVideoSpecOptions {
     camera_movement?: string | null;
     camera_angle?: string | null;
     shot_spec?: string | null;
+    dialogue?: string | null;
+    narration?: string | null;
+    audio_prompt?: string | null;
   };
   character?: {
     id?: number;
@@ -175,6 +178,12 @@ export const VideoSpecCompiler = {
       positiveParts.push('End at the exact boundary pose with near-zero velocity.');
     } else {
       positiveParts.push(`Action: ${primaryAction}.`);
+    }
+    if (!isLoop && request.workflow_id === 'grok_imagine_browser') {
+      if (scene.dialogue?.trim()) positiveParts.push(`Spoken dialogue in Mandarin Chinese, verbatim: ${JSON.stringify(scene.dialogue.trim())}. Keep speech synchronized with the speaking character.`);
+      if (scene.narration?.trim()) positiveParts.push(`Mandarin Chinese voiceover, verbatim: ${JSON.stringify(scene.narration.trim())}.`);
+      if (scene.audio_prompt?.trim()) positiveParts.push(`Sound: ${scene.audio_prompt.trim()}.`);
+      if (!scene.dialogue?.trim() && !scene.narration?.trim()) positiveParts.push('Natural ambient sound only; no invented dialogue or narration.');
     }
     if (request.prompt_override) positiveParts.push(cleanPromptForH3(request.prompt_override));
     positiveParts.push(environmentMotion);

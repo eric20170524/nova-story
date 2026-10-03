@@ -104,6 +104,7 @@ export class VideoPostprocessService {
       targetHeight?: number;
       targetFps?: number;
       targetFrames?: number;
+      preserveAudio?: boolean;
     } = {}
   ): Promise<{ outputPath: string; probe: VideoProbeInfo }> {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -119,7 +120,9 @@ export class VideoPostprocessService {
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',
-      '-an' // Strip audio
+      ...(options.preserveAudio
+        ? ['-map', '0:v:0', '-map', '0:a:0?', '-c:a', 'aac']
+        : ['-an'])
     ];
 
     if (options.targetWidth && options.targetHeight) {

@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3 } from './video_spec_compiler';
 
+test('Grok narrative prompts preserve the screenplay speech and sound', () => {
+  const request = { scene_id: 64, scene_version: 1, profile: 'narrative_clip' as const,
+    workflow_id: 'grok_imagine_browser' as const, keyframe_asset_id: 10, character_reference_asset_ids: [],
+    preset: 'preview_480p_5s' as const, run_loop_closer: false };
+  const spec = VideoSpecCompiler.compile({ request, scene: { id: 64,
+    dialogue: '别再抬。', narration: '铜铃尚未响。', audio_prompt: '木闸低沉的叩响' } });
+  assert.match(spec.positive_prompt, /Spoken dialogue in Mandarin Chinese, verbatim: "别再抬。"/);
+  assert.match(spec.positive_prompt, /voiceover, verbatim: "铜铃尚未响。"/);
+  assert.match(spec.positive_prompt, /Sound: 木闸低沉的叩响/);
+  const silent = VideoSpecCompiler.compile({ request, scene: { id: 64 } });
+  assert.match(silent.positive_prompt, /no invented dialogue or narration/);
+});
+
 test('video identity uses stable cast appearance instead of later-chapter narrative status', () => {
   const spec = VideoSpecCompiler.compile({
     request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'grok_imagine_browser',

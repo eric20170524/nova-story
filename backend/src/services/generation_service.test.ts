@@ -13,6 +13,19 @@ import {
   shouldSuppressAppearanceForDetailShot
 } from './generation_service';
 
+test('casting identity does not borrow another character mentioned in its backstory', () => {
+  const characters = [
+    { id: 35, name: '抱空筐的村民', visual_tags: { base_model: { tags: { hair: 'brown cloth cap', clothing: 'gray jacket' } } } },
+    { id: 29, name: '周槐', visual_tags: { base_model: { tags: { hair: 'gray topknot', clothing: 'dark long robe' } } } },
+  ];
+  const prompt = '抱空筐的村民听到周槐劝阻后放下筐';
+  const casting = selectSceneCharacterAppearance(characters, prompt, { characterId: 35 });
+  assert.match(casting.snippets.join(' '), /brown cloth cap/);
+  assert.doesNotMatch(casting.snippets.join(' '), /周槐|dark long robe/);
+  assert.deepEqual(selectSceneCharacterAppearance(characters, prompt, { characterId: 99 }).snippets, []);
+  assert.equal(selectSceneCharacterAppearance(characters, prompt).snippets.length, 2);
+});
+
 test('Codex keyframes keep location, key prop and focal cast within five references', () => {
   const selected = selectCodexReferenceUrls({
     asset_references: [

@@ -35,11 +35,18 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
         assert.match(prompt, /已有资产是名称和外观的准绳/);
         assert.match(prompt, /bronze bell, dark green patina/);
         assert.match(prompt, /old temple, stone steps/);
+        assert.match(prompt, /不同实体不能仅因/);
         return schema.parse({ assets: [
         { kind: 'location', name: '山庙', description: '模型想改成金殿', visual_prompt: 'golden palace' },
         { kind: 'prop', name: '铜铃', description: '模型想改成银铃', visual_prompt: 'silver bell' },
       ] }); };
-      await AssetLibraryService.extract('asset-ch'); await AssetLibraryService.extract('asset-ch');
+      await AssetLibraryService.extract('asset-ch');
+      const baseMock = LLMService.generateStructuredWithRetry;
+      LLMService.generateStructuredWithRetry = async (...args: any[]) => {
+        assert.match(args[0], /本次提取补充要求：铜铃和红绳分别提取/);
+        return (baseMock as any)(...args);
+      };
+      await AssetLibraryService.extract('asset-ch', '铜铃和红绳分别提取');
       const rows = await AssetLibraryService.list(81101);
       assert.equal(rows.length, 2); assert.equal(rows.find(r => r.id === prop.id)?.visual_prompt, 'bronze bell, dark green patina');
       assert.deepEqual(JSON.parse(rows[0]!.source_chapter_ids), ['asset-ch']);

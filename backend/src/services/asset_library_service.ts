@@ -57,7 +57,7 @@ export class AssetLibraryService {
       await db.run('DELETE FROM library_asset WHERE id = ?', id);
     });
   }
-  static async extract(chapterId: string) {
+  static async extract(chapterId: string, instructions?: string) {
     const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
     if (!chapter) throw new AssetLibraryError('Chapter not found', 404);
     if (!String(chapter.content || '').trim()) throw new AssetLibraryError('Chapter has no content', 400);
@@ -68,6 +68,8 @@ export class AssetLibraryService {
       `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
       `description 描述空间布局、材质、色彩及连续性；visual_prompt 用英文描述固定外观。` +
       `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind/name/外观，不为别称创建副本；只返回本章出现的资产。\n` +
+      `不同实体不能仅因材质、颜色或名称相近就合并；按原文分别管理各自的用途与位置。\n` +
+      (instructions?.trim() ? `本次提取补充要求：${instructions.trim()}\n` : '') +
       `已有资产：${JSON.stringify(canonical)}\n返回 JSON {assets:[{kind,name,description,visual_prompt}]}。\n本章正文：\n` + chapter.content,
       schema);
     if (!result) throw new AssetLibraryError('Model returned no assets', 502);

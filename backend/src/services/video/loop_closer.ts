@@ -138,7 +138,8 @@ export class LoopCloser {
 
     await VideoPostprocessService.standardizeVideo(rawVideoPath, standardizedTarget, {
       targetFps: DELIVERY_FPS,
-      targetFrames: DELIVERY_FRAMES
+      targetFrames: DELIVERY_FRAMES,
+      preserveAudio: profile === 'narrative_clip'
     });
 
     if (profile === 'character_loop' && runLoopCloser) {

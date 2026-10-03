@@ -189,25 +189,30 @@ const characterMentioned = (prompt: string, character: any): boolean => {
 export const selectSceneCharacterAppearance = (
     characters: any[],
     prompt: string,
-    options: { chapterId?: string | number | null; shotType?: string | null } = {}
+    options: { chapterId?: string | number | null; shotType?: string | null; characterId?: number | null } = {}
 ): { snippets: string[]; subjectType: 'nonhuman' | 'human' | 'mixed' | 'environment' | null } => {
     const normalized = (characters || []).map((character) => ({
         ...character,
         visual_tags: parseCharacterVisualTags(character?.visual_tags)
     }));
-    const mentioned = normalized.filter((character) => characterMentioned(prompt, character));
+    // A casting request owns one identity. Narrative descriptions may mention
+    // other people; those names must not change the character being cast.
+    const explicitIdentity = options.characterId != null;
+    const mentioned = normalized.filter((character) => explicitIdentity
+        ? Number(character.id) === options.characterId
+        : characterMentioned(prompt, character));
     let selected = mentioned;
 
-    if (selected.length === 0 && NONHUMAN_PROMPT_RE.test(prompt)) {
+    if (!explicitIdentity && selected.length === 0 && NONHUMAN_PROMPT_RE.test(prompt)) {
         const nonhuman = normalized.filter(characterLooksNonhuman);
         if (nonhuman.length === 1) selected = nonhuman;
     }
-    if (selected.length === 0 && HUMAN_PROMPT_RE.test(prompt)) {
+    if (!explicitIdentity && selected.length === 0 && HUMAN_PROMPT_RE.test(prompt)) {
         const human = normalized.filter((character) => !characterLooksNonhuman(character));
         if (human.length === 1) selected = human;
     }
     if (
-        selected.length === 0
+        !explicitIdentity && selected.length === 0
         && normalized.length === 1
         && /\b(protagonist|main character|the character|hero|heroine)\b/i.test(prompt)
     ) {
@@ -1132,7 +1137,8 @@ export class GenerationService {
                         );
                         const resolved = selectSceneCharacterAppearance(characters, finalPrompt, {
                             chapterId: sceneChapterId,
-                            shotType: effectiveWorkflowData?.shot_type
+                            shotType: effectiveWorkflowData?.shot_type,
+                            characterId
                         });
                         appearanceSnippets.push(...resolved.snippets);
                         if (!effectiveWorkflowData?.subject_type && resolved.subjectType) {
