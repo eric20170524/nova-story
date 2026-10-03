@@ -15,6 +15,7 @@ import {
   type ScriptOutline,
   type ScriptScene,
   type ScriptBlock,
+  type ScriptProp,
   type ScriptChangeRow,
   type ScriptSourceSnapshot,
 } from '../../schemas/script';
@@ -70,6 +71,10 @@ export const GeneratedSceneResponseSchema = z.object({
   interiorExterior: z.enum(['interior', 'exterior']).default('interior'),
   timeOfDay: z.string().default('day'),
   characterNames: z.array(z.string()).default([]),
+  props: z.array(z.object({
+    name: z.string().trim().min(1),
+    description: z.string().default(''),
+  })).optional(),
   coveredEventIds: z.array(z.string()).default([]),
   blocks: z.array(GeneratedSceneBlockResponseSchema).min(1, '分场必须包含至少一个内容块'),
   estimatedDurationSec: z.number().positive().default(30),
@@ -142,6 +147,25 @@ function allocateLocationId(locations: Array<{ id: string }>): string {
     id = `loc_${next}`;
   }
   return id;
+}
+
+function resolveSceneProps(rawProps: GeneratedSceneResponse['props'], props: ScriptProp[]): string[] {
+  const ids = new Set<string>();
+  const normalize = (name: string) => name.normalize('NFKC').trim().toLowerCase();
+  for (const raw of rawProps || []) {
+    const name = raw.name.trim();
+    if (!name) throw new ScriptGenerationError('分场道具名称不能为空', 502);
+    let prop = props.find(item => normalize(item.name) === normalize(name));
+    if (!prop) {
+      const used = new Set(props.map(item => item.id));
+      let index = Math.max(0, ...props.map(item => Number(/^prop_(\d+)$/.exec(item.id)?.[1] || 0))) + 1;
+      while (used.has(`prop_${index}`)) index++;
+      prop = { id: `prop_${index}`, name, description: (raw.description || '').trim() };
+      props.push(prop);
+    }
+    ids.add(prop.id);
+  }
+  return [...ids];
 }
 
 /** Match a character name against project characters */
@@ -454,6 +478,7 @@ export class ScriptGenerationService {
     }
     const generatedScenes: ScriptScene[] = [];
     const locations = [...(script.document.locations || [])];
+    const props = [...script.document.props];
 
     // Ensure all mustKeepEvents are allocated to beats so none are dropped
     const assignedEventIds = new Set(outline.beats.flatMap((b) => b.eventIds || []));
@@ -672,7 +697,7 @@ export class ScriptGenerationService {
         interiorExterior: rawScene.interiorExterior === 'exterior' ? 'exterior' : 'interior',
         timeOfDay: (rawScene.timeOfDay || 'day').trim(),
         characterIds: Array.from(sceneCharacterIds),
-        propIds: [],
+        propIds: resolveSceneProps(rawScene.props, props),
         blocks: sceneBlocks,
         estimatedDurationSec: rawScene.estimatedDurationSec || 30,
       };
@@ -687,7 +712,7 @@ export class ScriptGenerationService {
       targetDurationSec: params.targetDurationSec || script.document.targetDurationSec || 120,
       outline,
       locations,
-      props: script.document.props || [],
+      props,
       scenes: generatedScenes,
     };
 
@@ -788,6 +813,7 @@ export class ScriptGenerationService {
     const originalSceneSummary = [
       `分场ID: ${targetScene.id}`,
       `地点: ${locationName} (${targetScene.interiorExterior}, ${targetScene.timeOfDay})`,
+      `本场道具: ${targetScene.propIds.map(id => script.document.props.find(prop => prop.id === id)?.name || id).join('、') || '无'}`,
       '内容块:',
       ...targetScene.blocks.map(
         (b) => `[${b.type}] ${b.text}`
@@ -911,6 +937,10 @@ export class ScriptGenerationService {
       throw new ScriptGenerationError(`分场改写遗漏必保关键事件: ${missingEvents.map((event) => event.text).join('；')}。正式剧本未发生任何更改。`, 502);
     }
 
+    const props = [...script.document.props];
+    const propIds = rawScene.props === undefined
+      ? targetScene.propIds
+      : resolveSceneProps(rawScene.props, props);
     const rewrittenScene: ScriptScene = {
       id: targetScene.id,
       beatIds: targetScene.beatIds,
@@ -920,7 +950,7 @@ export class ScriptGenerationService {
       interiorExterior: rawScene.interiorExterior === 'exterior' ? 'exterior' : 'interior',
       timeOfDay: (rawScene.timeOfDay || targetScene.timeOfDay).trim(),
       characterIds: Array.from(sceneCharacterIds),
-      propIds: targetScene.propIds,
+      propIds,
       blocks: sceneBlocks,
       estimatedDurationSec: rawScene.estimatedDurationSec || targetScene.estimatedDurationSec,
     };
@@ -930,7 +960,7 @@ export class ScriptGenerationService {
       kind: 'scene',
       expectedRevision: params.expectedRevision,
       requestKey: params.requestKey,
-      afterJson: JSON.stringify(rewrittenScene),
+      afterJson: JSON.stringify({ ...rewrittenScene, props: props.filter(prop => !script.document.props.some(existing => existing.id === prop.id)) }),
       beforeJson: JSON.stringify(targetScene),
       sourceSnapshot,
       generationInfo: {

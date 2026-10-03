@@ -1767,6 +1767,35 @@ export const ScriptEditor: React.FC = () => {
                             })}
                           </div>
 
+                          <div className="mb-4 flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] text-slate-400 flex items-center gap-1 mr-1">
+                              <Package size={12} />
+                              {t('script_editor.props_title')}:
+                            </span>
+                            {document.props.map((prop) => (
+                              <button
+                                key={prop.id}
+                                type="button"
+                                aria-pressed={scene.propIds.includes(prop.id)}
+                                onClick={() => updateDoc(doc => ({
+                                  ...doc,
+                                  scenes: doc.scenes.map((item, index) => index === sIdx ? {
+                                    ...item,
+                                    propIds: item.propIds.includes(prop.id)
+                                      ? item.propIds.filter(id => id !== prop.id)
+                                      : [...item.propIds, prop.id],
+                                  } : item),
+                                }))}
+                                className={`text-[11px] px-2 py-0.5 rounded-full border ${scene.propIds.includes(prop.id)
+                                  ? 'bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                                  : 'text-slate-500 border-slate-200 dark:border-slate-800'}`}
+                              >
+                                {prop.name || prop.id}
+                              </button>
+                            ))}
+                            {!document.props.length && <span className="text-[11px] text-slate-400">请先在“场景地点与道具”中添加道具</span>}
+                          </div>
+
                           {/* Scene Blocks */}
                           <div className="space-y-3">
                             {scene.blocks.map((block, bIdx) => {
@@ -2245,7 +2274,10 @@ export const ScriptEditor: React.FC = () => {
                                   updateDoc((doc) => {
                                     const prs = [...doc.props];
                                     prs.splice(pIdx, 1);
-                                    return { ...doc, props: prs };
+                                    return {
+                                      ...doc, props: prs,
+                                      scenes: doc.scenes.map(scene => ({ ...scene, propIds: scene.propIds.filter(id => id !== pr.id) })),
+                                    };
                                   });
                                 }}
                                 className="p-1 text-red-400 hover:text-red-600"

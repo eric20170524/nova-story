@@ -92,6 +92,11 @@ export const ScriptSceneSchema = z.object({
   estimatedDurationSec: z.number().positive().optional(),
 });
 
+// A local rewrite may introduce props without replacing the rest of the script.
+export const ScriptSceneCandidateSchema = ScriptSceneSchema.extend({
+  props: z.array(ScriptPropSchema).optional(),
+});
+
 export const ScriptDocumentBaseSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   title: z.string().default('短剧剧本'),

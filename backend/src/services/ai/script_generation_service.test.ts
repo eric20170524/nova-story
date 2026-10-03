@@ -187,11 +187,15 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     const fullScriptProvider = createMockProvider({
       onScene: (_p, idx) => {
         sceneCalls++;
+        assert.match(_p, /props/);
         return {
           location: { name: `青云大殿第${idx}重`, description: '宏伟仙门大殿' },
           interiorExterior: 'interior' as const,
           timeOfDay: 'day',
           characterNames: ['林轩', '苏沐雪'],
+          props: idx < 3
+            ? [{ name: idx === 1 ? '铜灯' : ' 铜灯 ', description: '照明的铜灯' }, { name: '铜灯', description: '同一盏灯' }]
+            : [{ name: '灵石', description: '被一拳击碎的灵石' }],
           coveredEventIds: [`ev_${idx}`],
           blocks: [
             {
@@ -243,6 +247,10 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.equal(appliedScript.revision, 3);
     assert.equal(appliedScript.document.scenes.length, 3);
     assert.equal(appliedScript.document.scenes[0]?.blocks.length, 4);
+    assert.deepEqual(appliedScript.document.props.map(prop => prop.name), ['铜灯', '灵石']);
+    assert.deepEqual(appliedScript.document.scenes[0]?.propIds, [appliedScript.document.props[0]!.id]);
+    assert.deepEqual(appliedScript.document.scenes[1]?.propIds, appliedScript.document.scenes[0]?.propIds);
+    assert.deepEqual(appliedScript.document.scenes[2]?.propIds, [appliedScript.document.props[1]!.id]);
 
     // Check dialogue characterId mapped to project character
     const sc1Dialogue = appliedScript.document.scenes[0]?.blocks.find((b) => b.type === 'dialogue');

@@ -510,13 +510,15 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 1. 小说内向心理活动必须改编为可表演的外部动作 (action)、对白 (dialogue) 或画外音 (voiceover)。
 2. 严禁混入摄影机机位、景别或生成镜头英文 Prompt（视觉分镜由导演模式统一编译）。
 3. 严格使用已有角色名称，禁止凭空捏造未登场角色。
-4. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
+4. props 列出本场动作中出现或实际使用的关键实物道具，给出准确名称和简短外观/用途；同一道具跨场沿用名称，不能把不同实物合并。没有道具才填空数组；不得把人物、声音或心理活动当道具。
+5. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
 {
   "id": "scene_{{sceneIndex}}",
   "location": { "name": "地点名称", "description": "环境视觉特征" },
   "interiorExterior": "interior",
   "timeOfDay": "day",
   "characterNames": ["出场角色姓名"],
+  "props": [{ "name": "本场关键道具", "description": "原文支持的外观或用途" }],
   "blocks": [
     { "id": "b_1", "type": "action", "text": "可表演的人物动作与状态" },
     { "id": "b_2", "type": "dialogue", "characterName": "角色名", "text": "对白台词", "delivery": "潜台词或语调情绪（可选）" },
@@ -542,7 +544,8 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 2. 强化外部戏剧动作与对白潜台词，去除抽象小说叙述。
 3. 严禁混入摄影机机位或镜头参数。
 4. 若上面列出了本场必须保留的事件，改写后的正文仍要体现这些事件，不要把它们挪走或删掉。
-5. 输出合法的纯 JSON 对象。`,
+5. props 返回本场改写后仍出现或实际使用的关键道具，格式为 [{"name":"准确名称","description":"外观或用途"}]；沿用原稿道具名称，新增实物才新增名称，没有道具才填 []。
+6. 输出合法的纯 JSON 对象，结构与分场生成相同，包含 location、interiorExterior、timeOfDay、characterNames、props、blocks 和 estimatedDurationSec。`,
 
   script_storyboard_gen: `你是一位专业影视导演和分镜师。你需要将以下结构化剧本（Screenplay）转换为导演分镜契约列表（Shot Contracts）。
 

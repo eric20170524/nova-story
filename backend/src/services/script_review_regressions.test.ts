@@ -61,6 +61,50 @@ function providerFor(value: unknown): AIProvider {
     generateStructured: async <T>(_prompt: string, schema: z.ZodSchema<T>) => schema.parse(value) };
 }
 
+test('scene rewrite declares new props in the document and retains unrelated scenes', async () => {
+  const f = await fixture();
+  const candidate = await ScriptGenerationService.generateSceneRewriteCandidate({
+    scriptId: f.script.id, expectedRevision: f.script.revision, requestKey: crypto.randomUUID(), targetSceneId: 'sc_1',
+    provider: providerFor({ location: { name: '仓库' }, characterNames: ['林夏'], props: [{ name: '铜灯', description: '照明' }],
+      blocks: [{ type: 'action', text: '林夏提起铜灯。' }], estimatedDurationSec: 3 }),
+  });
+  assert.equal((await ScriptService.getScriptById(f.script.id)).document.props.length, 0);
+  const applied = await ScriptService.applyCandidate({ scriptId: f.script.id, changeId: candidate.id,
+    expectedRevision: f.script.revision, expectedCandidateRevision: candidate.candidate_revision });
+  assert.equal(applied.document.props[0]?.name, '铜灯');
+  assert.deepEqual(applied.document.scenes[0]?.propIds, [applied.document.props[0]!.id]);
+  assert.deepEqual(applied.document.scenes[1], f.doc.scenes[1]);
+});
+
+test('prop enrichment refreshes compatible shot sources without changing images', async t => {
+  for (const variant of ['props-only', 'action-changed', 'time-changed', 'busy-shot', 'force-refresh']) {
+    await t.test(variant, async () => {
+      const f = await fixture();
+      const spec = storyboard(f).shots[0]!.shot_spec;
+      const inserted = await db.run(`INSERT INTO scene (chapter_id, "index", visual_prompt, shot_spec, asset_status, asset_url)
+        VALUES (?, 1, '原关键帧提示词', ?, 'completed', '/original.png')`, f.chapterId, spec);
+      const shotId = Number(inserted.lastID);
+      if (variant === 'busy-shot') await db.run("UPDATE scene SET asset_status = 'generating' WHERE id = ?", shotId);
+      const before = await db.get('SELECT * FROM scene WHERE id = ?', shotId);
+      const doc = structuredClone(f.doc);
+      doc.props = [{ id: 'prop_1', name: '铜灯', description: '照明' }];
+      doc.scenes[0]!.propIds = ['prop_1'];
+      if (variant === 'action-changed') doc.scenes[0]!.blocks[0]!.text = '不同的对白';
+      if (variant === 'time-changed') doc.scenes[0]!.timeOfDay = 'night';
+      const saved = await ScriptService.saveManualScript({ scriptId: f.script.id, expectedRevision: f.script.revision, document: doc });
+      const confirmed = await ScriptService.confirmScript({ scriptId: f.script.id, expectedRevision: saved.revision, forceSourceRefresh: variant === 'force-refresh' });
+      const after = await db.get('SELECT * FROM scene WHERE id = ?', shotId);
+      const expected = variant === 'props-only' ? confirmed.revision : f.script.revision;
+      assert.equal(JSON.parse(after.shot_spec).source.script_revision, expected);
+      assert.deepEqual({ ...after, shot_spec: before.shot_spec }, before);
+      if (variant === 'props-only') {
+        const change = await db.get("SELECT generation_info_json FROM script_change WHERE script_id = ? AND kind = 'confirm' ORDER BY applied_revision DESC LIMIT 1", f.script.id);
+        assert.deepEqual(JSON.parse(change.generation_info_json).prop_enrichment_source_refresh.shot_ids, [shotId]);
+      }
+    });
+  }
+});
+
 test('SC04: simultaneous edits accept only one candidate version', async () => {
   const f = await fixture();
   const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'outline', expectedRevision: f.script.revision, requestKey: 'cas', afterJson: '{}' });

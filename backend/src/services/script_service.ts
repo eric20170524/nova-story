@@ -5,6 +5,7 @@ import {
   ScriptDocumentSchema,
   ScriptOutlineSchema,
   ScriptSceneSchema,
+  ScriptSceneCandidateSchema,
   StoryboardCandidatePayloadSchema,
   createEmptyScriptDocument,
   computeSourceContentHash,
@@ -39,6 +40,48 @@ function canonicalScriptDocumentJson(raw: string | null | undefined): string | n
 
 function candidateKeepsSourceSnapshot(kind: string): boolean {
   return kind === 'outline' || kind === 'scene';
+}
+
+// Only filling an entirely missing prop breakdown is compatible with existing
+// shots. Any change to dialogue, action, location, cast, timing or existing props
+// keeps the original revision and must go through normal storyboard review.
+async function refreshSourcesForPropEnrichment(row: ChapterScriptRow, revision: number): Promise<number[]> {
+  const previous = await db.get(`SELECT after_json, applied_revision, source_snapshot_json
+    FROM script_change WHERE script_id = ? AND kind = 'confirm' AND state = 'applied'
+    ORDER BY applied_revision DESC LIMIT 1`, row.id);
+  if (!previous) return [];
+  const beforeJson = canonicalScriptDocumentJson(previous.after_json);
+  const afterJson = canonicalScriptDocumentJson(row.document_json);
+  if (!beforeJson || !afterJson) return [];
+  const before: ScriptDocument = JSON.parse(beforeJson);
+  const after: ScriptDocument = JSON.parse(afterJson);
+  if (before.props.length || before.scenes.some(scene => scene.propIds.length)
+      || !after.props.length || !after.scenes.some(scene => scene.propIds.length)) return [];
+  let snapshot;
+  try { snapshot = JSON.parse(previous.source_snapshot_json || '{}'); } catch { return []; }
+  if (snapshot.contentHash !== row.source_content_hash || snapshot.contextHash !== row.source_context_hash) return [];
+  const withoutProps = (doc: ScriptDocument) => JSON.stringify({
+    ...doc, props: [], scenes: doc.scenes.map(scene => ({ ...scene, propIds: [] })),
+  });
+  if (withoutProps(before) !== withoutProps(after)) return [];
+  const shots = await db.all('SELECT id, shot_spec, asset_status FROM scene WHERE chapter_id = ?', row.chapter_id);
+  const refreshed: number[] = [];
+  for (const shot of shots) {
+    let spec: any;
+    try { spec = JSON.parse(shot.shot_spec || '{}'); } catch { continue; }
+    const source = spec.source;
+    if (source?.type !== 'script' || source.script_id !== row.id
+        || source.script_revision !== previous.applied_revision) continue;
+    const scene = before.scenes.find(item => item.id === source.script_scene_id);
+    if (!scene || !Array.isArray(source.block_ids)
+        || source.block_ids.some((id: string) => !scene.blocks.some(block => block.id === id))) continue;
+    if (shot.asset_status === 'generating' || await db.get(
+      "SELECT 1 FROM generation_task WHERE scene_id = ? AND status IN ('queued', 'processing') LIMIT 1", shot.id)) continue;
+    spec.source = { ...source, script_revision: revision };
+    await db.run('UPDATE scene SET shot_spec = ? WHERE id = ?', JSON.stringify(spec), shot.id);
+    refreshed.push(shot.id);
+  }
+  return refreshed;
 }
 
 function resolveSceneCandidateTargetId(change: ScriptChangeRow): string | null {
@@ -579,6 +622,9 @@ export class ScriptService {
         row.id
       );
 
+      const refreshedShotIds = params.forceSourceRefresh
+        ? [] : await refreshSourcesForPropEnrichment(row, newRevision);
+
       const changeId = crypto.randomUUID();
       const requestKey = params.requestKey || `confirm_${changeId}`;
 
@@ -586,8 +632,8 @@ export class ScriptService {
         `INSERT INTO script_change (
           id, script_id, kind, base_revision, candidate_revision,
           request_key, state, before_json, after_json, source_snapshot_json,
-          applied_revision, result_json
-        ) VALUES (?, ?, 'confirm', ?, ?, ?, 'applied', ?, ?, ?, ?, ?)`,
+          applied_revision, result_json, generation_info_json
+        ) VALUES (?, ?, 'confirm', ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?)`,
         changeId,
         row.id,
         params.expectedRevision,
@@ -597,7 +643,8 @@ export class ScriptService {
         row.document_json,
         snapshotJson,
         newRevision,
-        row.document_json
+        row.document_json,
+        refreshedShotIds.length ? JSON.stringify({ prop_enrichment_source_refresh: { shot_ids: refreshedShotIds } }) : null
       );
 
       await db.exec('COMMIT');
@@ -764,7 +811,7 @@ export class ScriptService {
         );
       }
     } else if (params.kind === 'scene') {
-      const sceneRes = ScriptSceneSchema.safeParse(parsedAfter);
+      const sceneRes = ScriptSceneCandidateSchema.safeParse(parsedAfter);
       if (!sceneRes.success) {
         throw new ScriptServiceError(
           `Invalid scene candidate payload: ${sceneRes.error.message}`,
@@ -888,7 +935,7 @@ export class ScriptService {
         throw new ScriptServiceError(`Invalid outline payload: ${res.error.message}`, 400);
       }
     } else if (change.kind === 'scene') {
-      const res = ScriptSceneSchema.safeParse(parsedAfter);
+      const res = ScriptSceneCandidateSchema.safeParse(parsedAfter);
       if (!res.success) {
         throw new ScriptServiceError(`Invalid scene payload: ${res.error.message}`, 400);
       }
@@ -1042,7 +1089,7 @@ export class ScriptService {
           outline,
         });
       } else if (change.kind === 'scene') {
-        const scenePayload = ScriptSceneSchema.parse(JSON.parse(change.after_json));
+        const { props: addedProps = [], ...scenePayload } = ScriptSceneCandidateSchema.parse(JSON.parse(change.after_json));
         const targetSceneId = resolveSceneCandidateTargetId(change);
         if (!targetSceneId) {
           throw new ScriptServiceError(
@@ -1067,6 +1114,13 @@ export class ScriptService {
         scenes[sIdx] = scenePayload;
         newDocument = ScriptDocumentSchema.parse({
           ...currentScript.document,
+          props: [...currentScript.document.props, ...addedProps.filter(prop => {
+            const existing = currentScript.document.props.find(item => item.id === prop.id);
+            if (existing && JSON.stringify(existing) !== JSON.stringify(prop)) {
+              throw new ScriptServiceError(`Scene candidate conflicts with existing prop "${prop.id}"`, 409);
+            }
+            return !existing;
+          })],
           scenes,
         });
       } else {
