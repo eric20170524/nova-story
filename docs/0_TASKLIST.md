@@ -14,6 +14,7 @@
 4. **Track 4**: 小说故事新书创建与 Agent OS 创作链路（5 万–10 万字目标、故事正文总量不超过 10 万字；A–E 按实际验收推进）。指定本 Track 时按下方依赖顺序执行，不改变 Track 1 的默认主干。
 5. **Track 5**: 独立短剧结构化剧本模块（参考 Toonflow；改编提纲→分场剧本→导演交接）。剧本文档、编辑页和 AI 候选已落地；导演交接（S3）与备份往返（S4）尚未实施。复用 Track 4 的已保存故事与现有角色/导演基础，不把短剧写回小说正文。
 6. **Track 6**: 本机中文 TTS 音色目录与角色绑音。连通 `local-chinese-tts`，查询、筛选、试听，并在资产管理的角色上保存音色。方案见 `docs/deployment/local_chinese_tts_voice_cn.md`。指定本 Track 时从第一个 `[ ]` 开始，不改分镜、不生成章节配音。
+7. **Track 7**: 统一 16:9 分镜画布与 H3 原生 24fps 视频生产契约。生图默认 16:9 并移除 3:4/4:3；生视频默认 720p/24fps，保留 480p；统一 Shot Master 与多参考素材职责。方案见 `docs/video/分镜生图与生视频生产最佳实践_20261003.md`。
 
 ### ⚠️ AI 工作流要求
 
@@ -31,6 +32,7 @@
    - Track 4 对齐证据、数据方案及 AC01–26：`docs/architecture/creation_alignment_review_2026-09-28.md`
    - Track 4/5 分层边界及剧本 SC01–13：`docs/architecture/structured_screenplay_module_2026-09-28.md`
    - Track 6 本机 TTS 与角色音色：`docs/deployment/local_chinese_tts_voice_cn.md`
+   - Track 7 统一媒体生产规范：`docs/video/分镜生图与生视频生产最佳实践_20261003.md`
 
 ### 🐛 全局遗留问题与技术债 (Icebox)
 
@@ -118,6 +120,7 @@
 > 使用范围：GoddessDaily 陆雪琪 Body Master；NovaStory 生视频管线  
 > 现行结论：**代码与工作流骨架已完成，尚未完成实机真实端到端生成。不得将静态关键帧的 FFmpeg 运镜降级产物标记为 H3/红潮生成成功。**  
 > 详见：`docs/video/红潮_Hybrid_H3_A2A_生视频最佳实践与TODO.md` 与 `docs/video/生视频最佳实践与TODO 分析报告.md`
+> **规范覆盖说明（2026-10-03）**：Track 2 保留 H3 bring-up / 实机验证历史；涉及产品默认画布、默认分辨率与参考素材策略时，以 Track 7 为准。Track 7 为产品层最新默认规范：生图 16:9，移除 3:4/4:3；H3 默认 720p / 24fps，480p 可选。
 
 ### 0. 当前核验快照
 - [x] `ComfyUI-VideoHelperSuite` 已安装，版本 `1.7.9`。
@@ -640,3 +643,145 @@
 - 代理响应不含克隆参考音的本机绝对路径。
 - TTS 关闭时，清除音色和角色的其他字段仍能保存；把角色改绑到一个未验证的新编号会失败并保持原行。
 - 默认后端测试不依赖 8765。浏览器验收覆盖资产页与 `/characters`，以及桌面和窄屏。
+
+
+---
+
+## 📌 Track 7: 统一 16:9 分镜画布与 H3 原生 24fps 视频生产契约
+
+> 方案事实源：`docs/video/分镜生图与生视频生产最佳实践_20261003.md`  
+> 本 Track 覆盖产品层媒体默认值；Track 2 继续保留 H3 模型部署、显存和黄金样片验证历史。  
+> **硬规则：MiniMax H3 必须保持原生 24fps，不提供 30/60fps 主链或 UI 选项。**
+
+### 🎯 目标
+
+统一 NovaStory 的视觉生产链为：
+
+```text
+镜头契约 → 16:9 Shot Master → H3 @ 24fps → 720p 成片
+                                      └→ 480p 预览
+```
+
+消除“漫画默认 3:4 / 视频另做 16:9”的双构图事实源；让场景、角色、道具先在 16:9 Shot Master 中收敛，再进入视频参考绑定。
+
+### P0 — 文档与合同冻结
+
+- [x] **T7-P0-01：建立统一媒体生产最佳实践。**
+  - 文档：`docs/video/分镜生图与生视频生产最佳实践_20261003.md`
+  - 决策：生图默认 16:9；移除 3:4 / 4:3；H3 默认 1280×720 / 24fps / 5.0s，保留 480p / 24fps。
+  - 决策：H3 模型侧保持 124 帧长度规则，交付固定 120 帧 / 5.0s。
+  - 决策：Shot Master 是视频最高优先级视觉真值；identity / guide / motion / last-frame 各司其职。
+  - **AC：** 文档不得出现“默认 30fps”；必须明确 H3 model/delivery/timeline/QA 均为 24fps。
+
+### P1 — 生图画布合同统一
+
+- [ ] **T7-P1-01：移除 3:4 / 4:3 新请求枚举。**
+  - 修改：`types.ts`、`backend/src/schemas/assets.ts`、`backend/src/services/image_output_spec.ts`。
+  - 新枚举只保留 `16:9 | 9:16 | 1:1 | auto`。
+  - **AC：** 新 API 请求中的 3:4 / 4:3 被拒绝；TS 不再把它们暴露为合法新值。
+
+- [ ] **T7-P1-02：生图默认值统一为 16:9。**
+  - 修改 `DEFAULT_IMAGE_OUTPUT_SPEC`、`pages/ProjectSettings.tsx`、`pages/DirectorMode.tsx`、`components/Director/DirectorRightPanel.tsx`。
+  - 新项目、新 Director 会话和无配置 fallback 都必须是 16:9。
+  - **AC：** 新项目打开设置页即显示 16:9；Director 生产配置卡不再 fallback 显示 3:4。
+
+- [ ] **T7-P1-03：重写 auto / auto_by_shot，禁止旧比例通过自动策略回流。**
+  - 普通 scene/storyboard/video_keyframe → 16:9。
+  - portrait 仍默认 16:9；只有显式用户选择才用 9:16。
+  - cinematic grid/contact sheet → 1:1。
+  - turnaround 不再用 4:3 作为对外资产契约；内部 panel/compositor 尺寸与最终资产比例解耦。
+  - **AC：** 全量 `resolveImageOutputTarget` 测试中不存在 resolved 3:4 / 4:3。
+
+- [ ] **T7-P1-04：旧项目 3:4 / 4:3 数据兼容迁移。**
+  - 读取旧值时归一为 16:9；项目再次保存后写回 16:9。
+  - 不修改历史已生成图片文件，只影响后续生成合同。
+  - **AC：** 旧项目可正常打开；无 Zod/TS 崩溃；保存后 settings 不再含 3:4 / 4:3。
+
+- [ ] **T7-P1-05：补齐画布回归测试。**
+  - 更新 `backend/src/services/image_output_spec.test.ts` 及前端相关测试。
+  - **AC：** 覆盖默认 16:9、显式 9:16、显式 1:1、auto、旧值迁移、turnaround、exact dimensions。
+
+### P2 — H3 默认 720p / 24fps，保留 480p
+
+- [ ] **T7-P2-01：Director 默认视频 preset 改为 `standard_720p_5s`。**
+  - 修改 `pages/DirectorMode.tsx` 与 `components/Director/DirectorRightPanel.tsx` 默认值。
+  - **AC：** 首次进入 Director 视频模式默认选中“720P 标准画质”。
+
+- [ ] **T7-P2-02：保留 `preview_480p_5s` 作为显式可选预览档。**
+  - 480p 用于 RTX 3060 smoke test、提示词/动作快速试错和批量预览。
+  - **AC：** 用户可在 720p / 480p 间切换；切换不得改变 fps、时长或参考图语义。
+
+- [ ] **T7-P2-03：把 24fps 固化为 H3 全链硬约束。**
+  - 保持/加强：`video_spec_compiler.ts`、`loop_closer.ts`、`video_postprocess_service.ts`、所有 H3 workflow manifest。
+  - UI 仅显示 24fps，不提供 30/60fps 选择器。
+  - **AC：** H3 model fps = delivery fps = timeline fps = QA fps = 24；测试不得出现默认 30fps。
+
+- [ ] **T7-P2-04：锁定 124 model frames → 120 delivery frames。**
+  - 5.0s × 24fps = 120 交付帧；H3 内部仍请求符合 `17k+5` 的 124 帧。
+  - **AC：** 720p final probe = 1280×720 / 24fps / 120f / 5.0s；480p final = 24fps / 120f / 5.0s。
+
+- [ ] **T7-P2-05：消除 Grok 6 秒请求与 5 秒产品合同的不一致。**
+  - 当前 browser job 写死 `duration_seconds: 6`，后处理又截为 5 秒。
+  - 方案：统一请求为 5 秒，或将 provider-specific 时长显式进入 spec/QA；禁止静默丢最后 1 秒。
+  - **AC：** 请求时长与最终交付时长差异必须可解释、可测试、可观测。
+
+- [ ] **T7-P2-06：章节合成增加 24fps readiness 门禁。**
+  - **AC：** H3 章节导出不得直接混入非 24fps final；遇到异常资产必须阻塞或显式标准化后再进入剪辑层。
+
+### P3 — Shot Master 与参考素材职责收敛
+
+- [ ] **T7-P3-01：把 16:9 Shot Master 设为视频生成前置事实源。**
+  - Location / Prop / Character Version 改动后旧 Shot Master 必须失效。
+  - **AC：** preflight 能阻止使用未反映当前绑定资产的旧关键帧。
+
+- [ ] **T7-P3-02：身份参考保持“同一角色 1–3 张”，默认推荐 1–2 张。**
+  - 保留 `VideoReferenceIdentityService` mixed-identity fail-closed。
+  - **AC：** 不同 `character_id` 不能伪装成多图身份参考；相同角色多视角可通过。
+
+- [ ] **T7-P3-03：按镜头类型选择官方工作流。**
+  - 普通单角色叙事：Official Ref2VA。
+  - 复杂关键姿态：Official Multi-Frame。
+  - 强首尾边界/loop：Official FL2VA。
+  - 红潮 Hybrid：保留 experimental / benchmark，不作为新产品默认。
+  - **AC：** UI/编排层能解释为什么选择某 workflow；不靠隐藏 fallback。
+
+- [ ] **T7-P3-04：Multi-Frame guide frame 按 24fps 时间轴展示。**
+  - frame 24≈1s、36≈1.5s、48≈2s、72≈3s、96≈4s。
+  - **AC：** UI 不只暴露 frame_idx 裸整数；同时展示对应秒数。
+
+### P4 — 多角色与多关键帧增强（P1–P3 稳定后）
+
+- [ ] **T7-P4-01：设计真正的 multi-subject reference contract。**
+  - 目标结构：`subject_references[{ character_id, asset_ids[] }]`。
+  - 在实现前继续禁止 mixed character refs。
+  - **AC：** 两个角色的身份图不会再被解释成“同一人物的三视图”。
+
+- [ ] **T7-P4-02：Multi-Frame 从单 guide 扩展为 `guide_frames[]`。**
+  - 目标：多个 `{ asset_id, frame_idx }` 关键姿态。
+  - **AC：** 编译器验证 frame_idx 不重复、范围合法、按 24fps 映射；工作流不支持时 fail closed。
+
+### P5 — E2E 验收
+
+- [ ] **T7-P5-01：生图合同 E2E。**
+  - 新项目 → 16:9 分镜 → 16:9 video keyframe。
+  - **AC：** 新链路没有 3:4 / 4:3 新写入。
+
+- [ ] **T7-P5-02：720p 默认视频 E2E。**
+  - 16:9 Shot Master → H3 → final。
+  - **AC：** 1280×720 / 24fps / 120f / 5.0s，刷新恢复、QA、promote 均正常。
+
+- [ ] **T7-P5-03：480p 预览 E2E。**
+  - **AC：** 480p 仍保持 24fps / 120f / 5.0s，并可无语义变化地升级为 720p 重生。
+
+### Definition of Done
+
+Track 7 完成必须同时满足：
+
+1. 新项目生图默认 16:9，3:4 / 4:3 不再作为新值暴露。
+2. 历史 3:4 / 4:3 项目可兼容打开并迁移，不破坏旧图片。
+3. Director 生视频默认 720p，480p 可选。
+4. MiniMax H3 全链固定原生 24fps，无默认 30/60fps 插帧主链。
+5. 5 秒合同精确为 120 个交付帧，H3 内部按 124 帧模型规则执行。
+6. Shot Master 是场景/角色/道具/构图的唯一视频视觉真值。
+7. 不同角色身份参考继续 fail closed，直到 multi-subject contract 正式落地。
+8. 普通 Ref2VA / 复杂 Multi-Frame / 边界 FL2VA 的职责清晰，Hybrid 不再承担产品默认。
