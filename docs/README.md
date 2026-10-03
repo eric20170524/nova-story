@@ -100,3 +100,8 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 ```
 
 详见 [local_image_reference_policy_cn.md](./deployment/local_image_reference_policy_cn.md)。
+
+
+## 媒体生产
+
+- [分镜生图与生视频生产最佳实践（2026-10-03）](./video/分镜生图与生视频生产最佳实践_20261003.md)：统一 16:9 生图画布、H3 默认 720p/24fps、480p 预览与 Shot Master/多参考素材职责。
