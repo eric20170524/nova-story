@@ -498,7 +498,7 @@ const migrations: Migration[] = [
             style: typeof legacy.default_style === 'string' && legacy.default_style.trim()
               ? legacy.default_style : DEFAULT_PROJECT_IMAGE_SETTINGS.style,
             output_spec: {
-              aspect_ratio: oldSpec.aspect_ratio === 'auto' ? '3:4' : oldSpec.aspect_ratio,
+              aspect_ratio: oldSpec.aspect_ratio === 'auto' ? '16:9' : oldSpec.aspect_ratio,
               resolution: oldSpec.resolution,
               orientation_policy: oldSpec.aspect_ratio === 'auto' ? 'auto_by_shot' : oldSpec.orientation_policy,
             },
@@ -707,6 +707,14 @@ const migrations: Migration[] = [
       await ensureColumns(database, 'character', {
         voice_id: 'TEXT',
         voice_label: 'TEXT'
+      });
+    }
+  },
+  {
+    version: '019_shot_master_character_versions',
+    up: async (database) => {
+      await ensureColumns(database, 'scene_asset_image_snapshot', {
+        character_versions_json: 'TEXT'
       });
     }
   }

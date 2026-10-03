@@ -218,6 +218,24 @@ test('initializes the complete schema and exposes the migrated parity routes', a
   assert.equal(promoteResponse.statusCode, 200, promoteResponse.body);
   assert.ok(promoteResponse.json().scene_id);
 
+  await db.run('UPDATE project SET settings = ? WHERE id = ?', JSON.stringify({
+    image_generation: {
+      model: 'pony', workflow_id: null, style: 'xianxia_immortal',
+      output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+      nsfw_mode: 'inherit',
+    },
+  }), project.lastID);
+  const legacyRead = await app.inject({ method: 'GET', url: `/api/projects/${project.lastID}` });
+  assert.equal(legacyRead.statusCode, 200, legacyRead.body);
+  assert.equal(JSON.parse(legacyRead.json().settings).image_generation.output_spec.aspect_ratio, '16:9');
+  const legacySave = await app.inject({
+    method: 'PUT', url: `/api/projects/${project.lastID}`,
+    payload: { settings: legacyRead.json().settings },
+  });
+  assert.equal(legacySave.statusCode, 200, legacySave.body);
+  const savedSettings = await db.get('SELECT settings FROM project WHERE id = ?', project.lastID);
+  assert.equal(JSON.parse(savedSettings.settings).image_generation.output_spec.aspect_ratio, '16:9');
+
   const deleteProjectResponse = await app.inject({
     method: 'DELETE',
     url: `/api/projects/${project.lastID}`

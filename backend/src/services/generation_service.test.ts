@@ -118,7 +118,7 @@ test('compiles prompts, safety defaults, dimensions, and actual LoRA wiring', as
   const loraWorkflow = await compileComfyWorkflow(
     { ...ponyWorkflow(), project_settings: { image_generation: {
       model: 'pony', workflow_id: null, style: 'western_comic',
-      output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+      output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
       nsfw_mode: 'inherit'
     } } },
     'Hero opens a door',
@@ -186,7 +186,7 @@ test('AutismMix narrative scene places model tags first and scopes anti-panel ne
     gen_type: 'scene',
     project_settings: { image_generation: {
       model: 'pony', workflow_id: null, style: 'autismmix_artist',
-      output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+      output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
       nsfw_mode: 'inherit'
     } }
   };
@@ -229,8 +229,8 @@ test('compiles the failed animal wide-shot case as landscape without female tags
     { advanced: { nsfw_enabled: false }, comfyui: {} }
   );
 
-  assert.equal(compiled['5'].inputs.width, 1024);
-  assert.equal(compiled['5'].inputs.height, 768);
+  assert.equal(compiled['5'].inputs.width, 1280);
+  assert.equal(compiled['5'].inputs.height, 704);
   assert.match(compiled['6'].inputs.text, /environment-dominant cinematic composition/i);
   assert.match(compiled['6'].inputs.text, /clearly visible small subject|15 to 20 percent/i);
   assert.match(compiled['7'].inputs.text, /close-up|face filling frame|oversized subject/i);
@@ -252,8 +252,8 @@ test('compiles overhead story scenes as landscape and narrative close-ups with c
     {},
     { advanced: { nsfw_enabled: false }, comfyui: {} }
   );
-  assert.equal(overhead['5'].inputs.width, 1024);
-  assert.equal(overhead['5'].inputs.height, 768);
+  assert.equal(overhead['5'].inputs.width, 1280);
+  assert.equal(overhead['5'].inputs.height, 704);
   assert.match(overhead['6'].inputs.text, /environment-dominant|animal far away/i);
 
   const closeup = await compileComfyWorkflow(
@@ -514,7 +514,7 @@ test('anime preset adds ExpressiveH only while NSFW is on', async () => {
         ...ponyWorkflow(),
         project_settings: { image_generation: {
           model: 'pony', workflow_id: null, style: 'anime',
-          output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+          output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
           nsfw_mode: 'inherit'
         } }
       },

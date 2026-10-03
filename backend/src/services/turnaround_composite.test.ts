@@ -146,5 +146,6 @@ test('stitchTurnaroundSheet produces labeled wide sheet', async () => {
   const meta = await sharp(sheet).metadata();
   assert.ok(meta.width && meta.width > 1400);
   assert.ok(meta.height && meta.height > 900);
+  assert.equal(meta.width! / meta.height!, 16 / 9);
   assert.equal(meta.format, 'png');
 });

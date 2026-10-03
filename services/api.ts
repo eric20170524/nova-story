@@ -526,6 +526,11 @@ class ApiService {
     this.request<MediaAsset>(`/videos/assets/${assetId}/promote`, { method: 'POST' });
   reprocessVideoAsset = (assetId: number, runLoopCloser = true) =>
     this.request<any>(`/videos/assets/${assetId}/reprocess`, { method: 'POST', body: { run_loop_closer: runLoopCloser } });
+  setGuideFrameIndex = (assetId: number, guideFrameIdx: number) =>
+    this.request<MediaAsset>(`/videos/assets/${assetId}/guide-frame`, {
+      method: 'POST',
+      body: { guide_frame_idx: guideFrameIdx }
+    });
   uploadVideoReference = async (formData: FormData): Promise<MediaAsset> => {
     const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = {};

@@ -148,6 +148,20 @@ test('Official FL2VA prompt uses keyframe boundary semantics instead of Ref2VA t
   assert.ok(spec.positive_prompt.includes('hard visual boundary anchors'));
 });
 
+test('last-frame-only Multi-Frame prompt anchors the delivered final frame', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 2, scene_version: 1, profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10, character_reference_asset_ids: [],
+      last_frame_asset_id: 11, preset: 'standard_720p_5s', run_loop_closer: false,
+    },
+    scene: { id: 2 }, character: null,
+  });
+  assert.match(spec.positive_prompt, /frame 119 \(4\.96s at 24fps\)/);
+  assert.doesNotMatch(spec.positive_prompt, /frame 120/);
+});
+
 test('VideoSpecCompiler compiles narrative_clip with camera movement', () => {
   const spec = VideoSpecCompiler.compile({
     request: {

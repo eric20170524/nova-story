@@ -202,8 +202,13 @@ export async function stitchTurnaroundSheet(
   const labelHeight = options.labelHeight ?? 40;
   const background = options.background ?? '#f5f5f5';
 
-  const canvasW = padding * 2 + panelWidth * 3 + gap * 2;
-  const canvasH = padding * 2 + labelHeight + panelHeight;
+  const contentW = padding * 2 + panelWidth * 3 + gap * 2;
+  const contentH = padding * 2 + labelHeight + panelHeight;
+  // Keep the panel layout independent from the delivered 16:9 asset canvas.
+  const canvasW = Math.ceil(Math.max(contentW, contentH * 16 / 9) / 64) * 64;
+  const canvasH = canvasW * 9 / 16;
+  const offsetX = Math.floor((canvasW - contentW) / 2);
+  const offsetY = Math.floor((canvasH - contentH) / 2);
 
   const composites: OverlayOptions[] = [];
 
@@ -212,9 +217,9 @@ export async function stitchTurnaroundSheet(
     if (!panel) {
       throw new Error(`stitchTurnaroundSheet missing panel at index ${i}`);
     }
-    const x = padding + i * (panelWidth + gap);
-    const yLabel = padding;
-    const yImg = padding + labelHeight;
+    const x = offsetX + padding + i * (panelWidth + gap);
+    const yLabel = offsetY + padding;
+    const yImg = offsetY + padding + labelHeight;
 
     const fitted = await sharp(panel.buffer)
       .resize(panelWidth, panelHeight, {

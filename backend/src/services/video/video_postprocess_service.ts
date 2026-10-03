@@ -117,6 +117,7 @@ export class VideoPostprocessService {
       '-i', inputPath,
       '-t', String(duration),
       '-r', String(targetFps),
+      '-frames:v', String(targetFrames),
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',

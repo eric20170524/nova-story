@@ -9,7 +9,7 @@ export type StructuredGenOptions = {
 export type ImageGenerationOptions = {
   width: number;
   height: number;
-  aspectRatio: '3:4' | '4:3' | '1:1' | '16:9' | '9:16';
+  aspectRatio: '16:9' | '9:16' | '1:1';
   imageSize: '512' | '1K' | '2K';
   /** Local files for providers that can preserve approved visual identity. */
   referenceImagePaths?: string[];

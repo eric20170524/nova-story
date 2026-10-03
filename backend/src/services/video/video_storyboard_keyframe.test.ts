@@ -5,6 +5,7 @@ import { MediaAssetService } from './media_asset_service';
 import { VideoGenerationService } from './video_generation_service';
 import { ScriptService } from '../script_service';
 import type { VideoGenerationRequest } from '../../schemas/video';
+import { recordShotMasterSnapshot } from './shot_master_snapshot';
 
 test('video preflight associates the current scene storyboard without reusing another scene asset', async () => {
   const projectId = 9932;
@@ -76,6 +77,61 @@ test('video preflight associates the current scene storyboard without reusing an
   } finally {
     await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
     await db.run('DELETE FROM scene WHERE id IN (?, ?)', sceneId, otherSceneId);
+    await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+    await db.run('DELETE FROM project WHERE id = ?', projectId);
+  }
+});
+
+test('video preflight blocks a Shot Master after its character version changes', async () => {
+  const projectId = 9933;
+  const chapterId = 'shot_master_version_chapter';
+  const sceneId = 99331;
+  const characterId = 99332;
+  const supportingCharacterId = 99333;
+  try {
+    await db.run('INSERT INTO project (id, title) VALUES (?, ?)', projectId, 'Version test');
+    await db.run('INSERT INTO chapter (id, project_id, "index", title) VALUES (?, ?, 1, ?)', chapterId, projectId, 'Chapter');
+    await db.run('INSERT INTO scene (id, chapter_id, "index", visual_prompt) VALUES (?, ?, 1, ?)', sceneId, chapterId, 'character');
+    await db.run('INSERT INTO character (id, project_id, name, active_version) VALUES (?, ?, ?, 1)', characterId, projectId, 'Hero');
+    await db.run('INSERT INTO character (id, project_id, name, active_version) VALUES (?, ?, ?, 1)', supportingCharacterId, projectId, 'Friend');
+    await db.run('UPDATE scene SET shot_spec = ? WHERE id = ?', JSON.stringify({ primary_subject: 'Hero' }), sceneId);
+    const keyframe = await MediaAssetService.createAsset({
+      project_id: projectId, scene_id: sceneId, scene_version: 1,
+      media_type: 'image', role: 'video_keyframe', status: 'ready', url: '/static/shot-master-version.png',
+    });
+    const identity = await MediaAssetService.createAsset({
+      project_id: projectId, character_id: characterId,
+      media_type: 'image', role: 'character_reference', status: 'ready', url: '/static/hero-version.png',
+    });
+    await recordShotMasterSnapshot({ sceneId, projectId, imageUrl: keyframe.url, characterIds: [characterId] });
+    const request: VideoGenerationRequest = {
+      scene_id: sceneId, scene_version: 1, profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: keyframe.id!,
+      character_reference_asset_ids: [identity.id!], preset: 'standard_720p_5s', run_loop_closer: false,
+    };
+    const before = await VideoGenerationService.preflight(request);
+    assert.ok(!before.blockers.some(item => item.includes('version changed')));
+    await db.run('UPDATE scene SET shot_spec = ? WHERE id = ?', JSON.stringify({ primary_subject: 'Hero', visible_subjects: ['Friend'] }), sceneId);
+    const newCast = await VideoGenerationService.preflight(request);
+    assert.ok(newCast.blockers.some(item => item.includes(`Character ${supportingCharacterId} is absent`)));
+    await recordShotMasterSnapshot({ sceneId, projectId, imageUrl: keyframe.url, characterIds: [characterId] });
+    const castCaptured = await VideoGenerationService.preflight(request);
+    assert.ok(!castCaptured.blockers.some(item => item.includes('absent from the Shot Master')));
+    await db.run('UPDATE character SET active_version = 2 WHERE id = ?', supportingCharacterId);
+    const supportingChanged = await VideoGenerationService.preflight(request);
+    assert.ok(supportingChanged.blockers.some(item => item.includes(`Character ${supportingCharacterId} version changed`)));
+    await db.run('UPDATE character SET active_version = 1 WHERE id = ?', supportingCharacterId);
+    await db.run('UPDATE media_asset SET width = 1024, height = 1024 WHERE id = ?', keyframe.id);
+    const square = await VideoGenerationService.preflight(request);
+    assert.ok(square.blockers.some(item => item.includes('must be 16:9')));
+    await db.run('UPDATE media_asset SET width = 1280, height = 720 WHERE id = ?', keyframe.id);
+    await db.run('UPDATE character SET active_version = 2 WHERE id = ?', characterId);
+    const after = await VideoGenerationService.preflight(request);
+    assert.ok(after.blockers.some(item => item.includes('version changed after Shot Master')));
+  } finally {
+    await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+    await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+    await db.run('DELETE FROM character WHERE id IN (?, ?)', characterId, supportingCharacterId);
     await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
     await db.run('DELETE FROM project WHERE id = ?', projectId);
   }

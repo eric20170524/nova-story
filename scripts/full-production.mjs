@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, keyframeUsesBindings } from './production-references.mjs';
+import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy } from './production-references.mjs';
+import { assertChapterClipReady } from './video-delivery-contract.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -13,7 +14,8 @@ const chapterLimit = Number(option('chapter-limit', '5'));
 const stage = option('stage', 'all');
 const base = option('base-url', 'http://127.0.0.1:3000').replace(/\/$/, '');
 const directory = path.resolve(root, option('output', `local/production/${projectId}`));
-const workflow = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || 'minimax_h3_ref2va_official_12gb');
+const workflowOverride = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || null);
+const workflow = workflowOverride || 'minimax_h3_ref2va_official_12gb';
 const retryFailed = args.includes('--retry-failed');
 const rebuildStoryboards = args.includes('--rebuild-storyboards');
 const assetScopeArg = option('asset-scope', null);
@@ -302,12 +304,15 @@ async function images() {
     if (binding.blockers.length) throw new Error(`Shot ${shot.id}: ${binding.blockers.join('; ')}; bind every required asset in Director and resume`);
     const refs = existing.length ? existing : await request(`/timeline/scenes/${shot.id}/asset-references`, 'PUT', { asset_ids: binding.asset_ids });
     if (refs.some(r => r.stale)) throw new Error(`Shot ${shot.id} has stale asset references`);
-    if (shot.asset_status !== 'completed' || !shot.asset_url || !keyframeUsesBindings(shot, refs, snapshots)) {
-      knownCharacters ||= await characters();
+    knownCharacters ||= await characters();
+    const visibleCharacters = resolveVisibleShotCharacters(shot, knownCharacters);
+    const visibleCast = resolveVisibleShotCast(shot, knownCharacters);
+    if (shot.asset_status !== 'completed' || !shot.asset_url
+      || !keyframeUsesBindings(shot, refs, snapshots)
+      || !keyframeUsesCharacterVersions(shot, knownCharacters, snapshots, visibleCast.map(character => character.id))) {
       const primary = resolveShotCharacter(shot, knownCharacters);
-      const visibleCharacters = resolveVisibleShotCharacters(shot, knownCharacters);
-      const signature = hash(JSON.stringify({ source: shot.asset_url, refs: refs.map(r => ({ id: r.id, revision: r.revision })), portraits: visibleCharacters.map(c => [c.id, c.avatar_url]) })).slice(0, 16);
-      await generateImage(`shot-${shot.id}:image:${signature}`, requestKey => request('/assets/generate', 'POST', { scene_id: shot.id, request_key: requestKey, workflow: { gen_type: 'scene', character_ref_url: primary?.avatar_url || undefined, character_ref_urls: visibleCharacters.map(c => c.avatar_url) } }));
+      const signature = hash(JSON.stringify({ source: shot.asset_url, refs: refs.map(r => ({ id: r.id, revision: r.revision })), cast: visibleCast.map(c => [c.id, c.active_version || 1, c.avatar_url]) })).slice(0, 16);
+      await generateImage(`shot-${shot.id}:image:${signature}`, requestKey => request('/assets/generate', 'POST', { scene_id: shot.id, request_key: requestKey, workflow: { gen_type: 'scene', character_ref_url: primary?.avatar_url || undefined, character_ref_urls: visibleCharacters.map(c => c.avatar_url), shot_master_character_ids: visibleCast.map(c => c.id) } }));
     }
   }
   write('08-rendered-storyboards.json', await shots());
@@ -318,11 +323,12 @@ async function videoPreflight() {
   for (const shot of await shots()) {
     const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
     const primary = resolveShotCharacter(shot, known);
-    const references = (media.assets || []).filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(0, 3).map(asset => asset.id);
-    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, workflow_id: workflow, profile: 'narrative_clip', preset: 'preview_480p_5s', character_reference_asset_ids: references, run_loop_closer: false };
+    const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride);
+    const references = (media.assets || []).filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(-2).map(asset => asset.id);
+    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, run_loop_closer: false };
     const check = await request('/videos/preflight', 'POST', body);
-    const identityReady = !primary || references.length > 0;
-    results.push({ scene_id: shot.id, chapter_id: shot.chapter_id, keyframe_ready: shot.asset_status === 'completed' && !!shot.asset_url, character_id: primary?.id || null, reference_asset_ids: references, ...check, identity_ready: identityReady, ready: check.ready && identityReady });
+    const identityReady = !primary || strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' || references.length > 0;
+    results.push({ scene_id: shot.id, chapter_id: shot.chapter_id, workflow_id: strategy.workflow_id, workflow_reason: strategy.reason, keyframe_ready: shot.asset_status === 'completed' && !!shot.asset_url, character_id: primary?.id || null, reference_asset_ids: references, ...check, identity_ready: identityReady, ready: check.ready && identityReady });
   }
   write('09-video-preflight.json', { chapterLimit, workflow, results });
   if (results.some(result => !result.keyframe_ready || !result.ready)) throw new Error('Some selected shots are not ready for video generation; see 09-video-preflight.json');
@@ -340,9 +346,10 @@ async function videos() {
     }
     const refs = (available.assets || []).filter(a => a.role === 'character_reference' && a.character_id != null && a.status === 'ready');
     const primary = resolveShotCharacter(shot, known);
-    const selectedRefs = primary ? refs.filter(a => a.character_id === primary.id).slice(0, 3).map(a => a.id) : [];
-    if (primary && !selectedRefs.length) throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
-    const signature = hash(JSON.stringify({ source: shot.asset_url, version: shot.active_version || 1, selectedRefs, workflow })).slice(0, 16);
+    const selectedRefs = primary ? refs.filter(a => a.character_id === primary.id).slice(-2).map(a => a.id) : [];
+    const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride);
+    if (primary && !selectedRefs.length && strategy.workflow_id !== 'minimax_h3_fl2va_official_12gb') throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
+    const signature = hash(JSON.stringify({ source: shot.asset_url, version: shot.active_version || 1, selectedRefs, strategy })).slice(0, 16);
     const name = `shot-${shot.id}:video:${signature}`;
     await step(name, async () => {
       const submittedKey = `${name}:submit`;
@@ -353,7 +360,7 @@ async function videos() {
           delete state.steps[submittedKey]; state.videoAttempts ||= {}; state.videoAttempts[shot.id] = (state.videoAttempts[shot.id] || 0) + 1; save();
         }
       }
-      const body = { scene_id: shot.id, scene_version: shot.active_version || 1, workflow_id: workflow, profile: 'narrative_clip', preset: 'preview_480p_5s', character_reference_asset_ids: selectedRefs, run_loop_closer: false,
+      const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false,
         request_key: key(`${name}-attempt-${state.videoAttempts?.[shot.id] || 0}`) };
       const flight = await request('/videos/preflight', 'POST', body); write(`preflight-shot-${shot.id}.json`, flight);
       if (!flight.ready) throw new Error(`Shot ${shot.id}: ${flight.blockers.join('; ')}`);
@@ -391,7 +398,8 @@ function videoProvenance(shot, assets, characters_) {
     const keyframe = assets.find(a => a.id === generation.keyframe_asset_id);
     return {
       scene_id: shot.id, character_id: primary?.id || null, reference_ids: referenceIds,
-      identity_current: !primary || (referenceIds.length > 0 && references.length === referenceIds.length && references.every(a => a.role === 'character_reference' && a.status === 'ready' && a.character_id === primary.id)),
+      identity_current: !primary || generation.workflow_id === 'minimax_h3_fl2va_official_12gb'
+        || (referenceIds.length > 0 && references.length === referenceIds.length && references.every(a => a.role === 'character_reference' && a.status === 'ready' && a.character_id === primary.id)),
       source_current: generation.scene_id === shot.id && generation.scene_version === (shot.active_version || 1) && keyframe?.url === shot.asset_url,
     };
   } catch (error) { return { scene_id: shot.id, character_id: primary?.id || null, identity_current: false, source_current: false, error: error.message }; }
@@ -414,13 +422,18 @@ async function assemble() {
       if (!final) throw new Error(`Shot ${shot.id} has no accepted final video`);
       const refs = await request(`/timeline/scenes/${shot.id}/asset-references`);
       const provenance = videoProvenance(shot, available.assets, known);
-      if (!provenance.source_current || !provenance.identity_current || !keyframeUsesBindings(shot, refs, backup.asset_library?.image_snapshots || []) || resolveAssetBindings(shot, assets, refs).blockers.length) throw new Error(`Shot ${shot.id} has stale or incomplete asset/video provenance; regenerate and review before assembly`);
+      if (!provenance.source_current || !provenance.identity_current
+        || !keyframeUsesBindings(shot, refs, backup.asset_library?.image_snapshots || [])
+        || !keyframeUsesCharacterVersions(shot, known, backup.asset_library?.image_snapshots || [], resolveVisibleShotCast(shot, known).map(character => character.id))
+        || resolveAssetBindings(shot, assets, refs).blockers.length) throw new Error(`Shot ${shot.id} has stale or incomplete asset/video provenance; regenerate and review before assembly`);
       const source = localMedia(final.url); const info = probe(source);
+      assertChapterClipReady(info, `Shot ${shot.id}`);
       const output = path.join(videoDirectory, `shot-${shot.id}.mp4`);
       const hasAudio = info.streams.some(s => s.codec_type === 'audio');
       command('ffmpeg', ['-y', '-i', source, ...(!hasAudio ? ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo'] : []),
-        '-map', '0:v:0', '-map', hasAudio ? '0:a:0' : '1:a:0', '-vf', 'scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,setsar=1',
-        '-r', '25', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-shortest', '-movflags', '+faststart', output]);
+        '-map', '0:v:0', '-map', hasAudio ? '0:a:0' : '1:a:0', '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
+        '-r', '24', '-frames:v', '120', '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-af', 'apad', '-shortest', '-movflags', '+faststart', output]);
+      assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`);
       clipFiles.push(output);
     }
     const list = path.join(videoDirectory, `chapter-${chapter.index}.concat.txt`);

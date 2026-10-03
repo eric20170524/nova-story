@@ -308,10 +308,12 @@ export interface VideoGenerationRequest {
   workflow_id?: VideoWorkflowId;
   keyframe_asset_id?: number;
   character_reference_asset_ids?: number[];
+  subject_references?: Array<{ character_id: number; asset_ids: number[] }>;
   motion_reference_asset_id?: number;
   last_frame_asset_id?: number;
   guide_frame_asset_id?: number;
   guide_frame_idx?: number;
+  guide_frames?: Array<{ asset_id: number; frame_idx: number }>;
   prompt_override?: string;
   preset?: VideoPreset;
   seed?: number;
@@ -389,7 +391,7 @@ export interface GenerationParams {
 }
 
 export interface ImageOutputSpec {
-  aspect_ratio?: '3:4' | '4:3' | '1:1' | '16:9' | '9:16' | 'auto';
+  aspect_ratio?: '16:9' | '9:16' | '1:1' | 'auto';
   resolution?: 'draft' | 'standard' | 'high';
   orientation_policy?: 'fixed' | 'auto_by_shot';
 }

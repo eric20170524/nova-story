@@ -13,6 +13,7 @@ import { VideoGenerationService } from '../services/video/video_generation_servi
 import { VideoRuntimeInspector } from '../services/video/video_runtime_inspector';
 import { MediaAssetService } from '../services/video/media_asset_service';
 import { VideoPostprocessService } from '../services/video/video_postprocess_service';
+import { recordShotMasterSnapshot } from '../services/video/shot_master_snapshot';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
 import { getGeneratedDirectory } from '../core/paths';
 
@@ -143,6 +144,14 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const targetPath = path.join(uploadDir, safeBase);
 
     const buffer = await data.toBuffer();
+    const isGuideRole = role === 'guide_frame_reference' || role === 'composition_reference';
+    const parsedGuideFrameIdx = Number(fields.guide_frame_idx?.value);
+    const guideFrameIdx = isGuideRole && Number.isInteger(parsedGuideFrameIdx) ? parsedGuideFrameIdx : null;
+    if (isGuideRole && (guideFrameIdx == null || guideFrameIdx < 1 || guideFrameIdx > 119)) {
+      return reply.status(400).send({
+        error: 'Guide frame upload requires guide_frame_idx within delivery frames 1..119 (24fps).'
+      });
+    }
     fs.writeFileSync(targetPath, buffer);
 
     const sha256 = MediaAssetService.computeBufferSha256(buffer);
@@ -181,10 +190,34 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       fps,
       duration_ms: durationMs,
       sha256,
-      metadata_json: probeInfo ? JSON.stringify({ probe: probeInfo }) : undefined
+      metadata_json: probeInfo || guideFrameIdx != null
+        ? JSON.stringify({
+          ...(probeInfo ? { probe: probeInfo } : {}),
+          ...(guideFrameIdx != null ? { guide_frame_idx: guideFrameIdx } : {}),
+        })
+        : undefined
     });
 
+    if (role === 'video_keyframe' && sceneId != null) {
+      await recordShotMasterSnapshot({ sceneId, projectId, imageUrl: asset.url });
+    }
+
     return asset;
+  });
+
+  // POST /api/videos/assets/:asset_id/guide-frame
+  fastify.post('/assets/:asset_id/guide-frame', async (request, reply) => {
+    const assetId = Number((request.params as { asset_id?: string }).asset_id);
+    const frameIdx = Number((request.body as { guide_frame_idx?: unknown } | null)?.guide_frame_idx);
+    if (!Number.isInteger(assetId) || assetId <= 0) {
+      return reply.status(400).send({ error: 'Invalid asset id' });
+    }
+    try {
+      return await MediaAssetService.setGuideFrameIdx(assetId, frameIdx);
+    } catch (err: any) {
+      const missing = /does not exist/.test(String(err?.message || err));
+      return reply.status(missing ? 404 : 400).send({ error: err?.message || String(err) });
+    }
   });
 
   // POST /api/videos/assets/register
@@ -206,6 +239,15 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
         error: `Role '${body.role}' requires media_type '${requiredMediaType}', received '${mediaType}'`
       });
     }
+    if (body.role === 'guide_frame_reference' || body.role === 'composition_reference') {
+      let guideFrameIdx: unknown;
+      try { guideFrameIdx = JSON.parse(body.metadata_json || '{}').guide_frame_idx; } catch { guideFrameIdx = null; }
+      if (!Number.isInteger(guideFrameIdx) || Number(guideFrameIdx) < 1 || Number(guideFrameIdx) > 119) {
+        return reply.status(400).send({
+          error: 'Guide frame registration requires metadata_json.guide_frame_idx within delivery frames 1..119 (24fps).'
+        });
+      }
+    }
 
     const asset = await MediaAssetService.createAsset({
       project_id: Number(body.project_id || 1),
@@ -226,6 +268,11 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       parent_asset_id: body.parent_asset_id,
       metadata_json: body.metadata_json
     });
+    if (body.role === 'video_keyframe' && body.scene_id != null) {
+      await recordShotMasterSnapshot({
+        sceneId: Number(body.scene_id), projectId: Number(body.project_id || 1), imageUrl: asset.url,
+      });
+    }
     return asset;
   });
 

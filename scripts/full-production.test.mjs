@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { resolveAssetBindings, keyframeUsesBindings, resolveVisibleShotCharacters, resolveTimedOutCodexJobId } from './production-references.mjs';
+import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId } from './production-references.mjs';
 
 test('visible shot references prioritize the focal character and exclude uncast extras', () => {
   const shot = { shot_spec: { primary_subject: '陆青', visible_subjects: ['老葛', '陆青', '沈砚', '周槐'] } };
@@ -16,6 +16,30 @@ test('visible shot references prioritize the focal character and exclude uncast 
     { id: 30, name: '陆青', avatar_url: '/lu.png' },
   ];
   assert.deepEqual(resolveVisibleShotCharacters(shot, characters).map(character => character.id), [30, 27, 29]);
+  assert.deepEqual(resolveVisibleShotCast(shot, characters).map(character => character.id), [30, 27, 29]);
+});
+
+test('chapter assembly rejects a Shot Master after a represented character changes', () => {
+  const shot = { id: 9, asset_url: '/shot.png' };
+  const snapshots = [{ scene_id: 9, image_url: '/shot.png', character_versions_json: JSON.stringify([{ id: 7, version: 2 }]) }];
+  assert.equal(keyframeUsesCharacterVersions(shot, [{ id: 7, active_version: 2 }], snapshots, [7]), true);
+  assert.equal(keyframeUsesCharacterVersions(shot, [{ id: 7, active_version: 3 }], snapshots, [7]), false);
+  assert.equal(keyframeUsesCharacterVersions(shot, [{ id: 7, active_version: 2 }], snapshots, [8]), false);
+});
+
+test('batch video strategy chooses official workflows from scene references', () => {
+  const ready = (id, role, metadata_json) => ({ id, role, status: 'ready', metadata_json });
+  assert.equal(chooseShotVideoStrategy([]).workflow_id, 'minimax_h3_ref2va_official_12gb');
+  const boundary = chooseShotVideoStrategy([ready(11, 'last_frame_reference')]);
+  assert.equal(boundary.workflow_id, 'minimax_h3_fl2va_official_12gb');
+  assert.equal(boundary.last_frame_asset_id, 11);
+  const complex = chooseShotVideoStrategy([ready(11, 'last_frame_reference'), ready(12, 'guide_frame_reference', '{"guide_frame_idx":72}')]);
+  assert.equal(complex.workflow_id, 'minimax_h3_multiframe_official_12gb');
+  assert.deepEqual(complex.guide_frames, [{ asset_id: 12, frame_idx: 72 }]);
+  assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference')]), /requires metadata_json.guide_frame_idx/);
+  assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference', '{"guide_frame_idx":120}')]), /within delivery frames 1..119/);
+  assert.equal(chooseShotVideoStrategy([{ ...ready(13, 'guide_frame_reference'), status: 'draft' }]).workflow_id, 'minimax_h3_ref2va_official_12gb');
+  assert.equal(chooseShotVideoStrategy([ready(12, 'guide_frame_reference')], 'minimax_h3_ref2va_official_12gb').workflow_id, 'minimax_h3_ref2va_official_12gb');
 });
 
 test('only a timed-out Codex image job is eligible for exact system recovery', () => {

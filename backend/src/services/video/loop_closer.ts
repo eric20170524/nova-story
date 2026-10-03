@@ -18,6 +18,8 @@ export interface ProcessVideoOptions {
   outputDirectory: string;
   runLoopCloser?: boolean;
   metadata?: Record<string, any>;
+  targetWidth?: number;
+  targetHeight?: number;
 }
 
 export interface ProcessVideoResult {
@@ -115,7 +117,7 @@ export class LoopCloser {
   }
 
   static async process(options: ProcessVideoOptions): Promise<ProcessVideoResult> {
-    const { taskId, profile, rawVideoPath, outputDirectory, runLoopCloser = true, metadata = {} } = options;
+    const { taskId, profile, rawVideoPath, outputDirectory, runLoopCloser = true, metadata = {}, targetWidth, targetHeight } = options;
     fs.mkdirSync(outputDirectory, { recursive: true });
 
     const finalVideoPath = path.join(outputDirectory, 'final.mp4');
@@ -139,6 +141,8 @@ export class LoopCloser {
     await VideoPostprocessService.standardizeVideo(rawVideoPath, standardizedTarget, {
       targetFps: DELIVERY_FPS,
       targetFrames: DELIVERY_FRAMES,
+      targetWidth,
+      targetHeight,
       preserveAudio: profile === 'narrative_clip'
     });
 

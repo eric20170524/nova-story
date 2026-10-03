@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
+import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
+import { defaultIdentityReferenceIds, recommendVideoWorkflow } from '../services/videoWorkflowPolicy';
 import {
   Chapter,
   Scene,
@@ -64,22 +66,6 @@ const isNonhumanCharacter = (char: any): boolean => {
 const HUMAN_IDENTITY_NEGATIVE_RE =
   /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
 
-const VIDEO_WORKFLOW_IDS: VideoWorkflowId[] = [
-  'grok_imagine_browser',
-  'minimax_h3_hongchao_a2a_12gb',
-  'minimax_h3_ref2va_official_12gb',
-  'minimax_h3_fl2va_official_12gb',
-  'minimax_h3_multiframe_official_12gb'
-];
-
-const getStoredVideoWorkflowId = (): VideoWorkflowId => {
-  try {
-    const saved = localStorage.getItem('director_videoWorkflowId') as VideoWorkflowId | null;
-    if (saved && VIDEO_WORKFLOW_IDS.includes(saved)) return saved;
-  } catch {}
-  return 'minimax_h3_hongchao_a2a_12gb';
-};
-
 const isTerminalVideoStatus = (status?: string) =>
   ['completed', 'review_required', 'rejected', 'failed', 'cancelled', 'interrupted'].includes(String(status || ''));
 
@@ -113,7 +99,7 @@ export const DirectorMode: React.FC = () => {
   const [mediaAssetsByScene, setMediaAssetsByScene] = useState<Record<number | string, MediaAsset[]>>({});
   const [videoTasksByScene, setVideoTasksByScene] = useState<Record<number | string, VideoTaskState>>({});
   const [videoProfile, setVideoProfile] = useState<VideoProfile>('narrative_clip');
-  const [videoPreset, setVideoPreset] = useState<VideoPreset>('preview_480p_5s');
+  const [videoPreset, setVideoPreset] = useState<VideoPreset>('standard_720p_5s');
   const [runLoopCloser, setRunLoopCloser] = useState<boolean>(true);
   const [videoMotionPrompt, setVideoMotionPrompt] = useState<string>('');
   const [isBatchGeneratingVideo, setIsBatchGeneratingVideo] = useState<boolean>(false);
@@ -132,7 +118,7 @@ export const DirectorMode: React.FC = () => {
   const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [projectWorkflowId, setProjectWorkflowId] = useState<number | null>(null);
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
-    aspect_ratio: '3:4',
+    aspect_ratio: '16:9',
     resolution: 'standard',
     orientation_policy: 'fixed',
   });
@@ -207,18 +193,7 @@ export const DirectorMode: React.FC = () => {
           setProjectModelType(imageSettings.model);
         }
         setProjectWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
-        const savedOutputSpec = imageSettings.output_spec || {};
-        setProjectOutputSpec({
-          aspect_ratio: ['3:4', '4:3', '1:1', '16:9', '9:16', 'auto'].includes(savedOutputSpec.aspect_ratio)
-            ? savedOutputSpec.aspect_ratio
-            : '3:4',
-          resolution: ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
-            ? savedOutputSpec.resolution
-            : 'standard',
-          orientation_policy: ['fixed', 'auto_by_shot'].includes(savedOutputSpec.orientation_policy)
-            ? savedOutputSpec.orientation_policy
-            : 'fixed',
-        });
+        setProjectOutputSpec(normalizeProjectOutputSpec(imageSettings.output_spec));
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
         if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') mode = imageSettings.nsfw_mode;
         setProjectNsfwMode(mode);
@@ -416,7 +391,7 @@ export const DirectorMode: React.FC = () => {
 
   const generateAsset = async (
     sceneId: number | string,
-    options: { newVersion?: boolean; preserveComposition?: boolean; canvasAspectRatio?: string } = {}
+    options: { newVersion?: boolean; preserveComposition?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio'] } = {}
   ) => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
@@ -546,7 +521,7 @@ export const DirectorMode: React.FC = () => {
       });
 
       const effectiveOutputSpec = options.canvasAspectRatio
-        ? { ...projectOutputSpec, aspect_ratio: options.canvasAspectRatio as any }
+        ? { ...projectOutputSpec, aspect_ratio: options.canvasAspectRatio, orientation_policy: 'fixed' as const }
         : projectOutputSpec;
 
       const payload: Record<string, unknown> = {
@@ -561,6 +536,7 @@ export const DirectorMode: React.FC = () => {
           subject_type: sceneSubjectType,
           ref_image_url: characterRefUrl,
           character_ref_url: characterRefUrl,
+          shot_master_character_ids: mentionedChars.map((char) => Number(char.id)),
           composition_ref_url: compositionRefUrl,
           character_appearance_prompt: appearanceSnippets.join(', '),
           character_appearance_snippets: appearanceSnippets,
@@ -921,6 +897,7 @@ export const DirectorMode: React.FC = () => {
       motionRefAssetId?: number;
       guideFrameAssetId?: number;
       guideFrameIdx?: number;
+      guideFrames?: Array<{ asset_id: number; frame_idx: number }>;
       batchRun?: boolean;
     } = {}
   ) => {
@@ -929,13 +906,13 @@ export const DirectorMode: React.FC = () => {
 
     const profile = options.profile || videoProfile;
     const preset = options.preset || videoPreset;
-    const workflowId = options.workflowId || getStoredVideoWorkflowId();
+    const sceneAssets = mediaAssetsByScene[sceneId] || [];
+    const workflowId = options.workflowId || recommendVideoWorkflow(sceneAssets).workflowId;
     const numericSceneId = Number(sceneId);
     const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
     const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
     const isMultiframe = workflowId === 'minimax_h3_multiframe_official_12gb';
 
-    const sceneAssets = mediaAssetsByScene[sceneId] || [];
     const existingKeyframe = [...sceneAssets]
       .filter((a) => a.role === 'video_keyframe')
       .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
@@ -959,10 +936,7 @@ export const DirectorMode: React.FC = () => {
 
     let characterRefIds = options.characterRefAssetIds;
     if (characterRefIds === undefined) {
-      characterRefIds = sceneAssets
-        .filter((a) => a.role === 'character_reference' && a.id)
-        .map((a) => a.id!)
-        .slice(-3);
+      characterRefIds = defaultIdentityReferenceIds(sceneAssets);
     }
     if (isFl2va) characterRefIds = [];
 
@@ -986,8 +960,9 @@ export const DirectorMode: React.FC = () => {
       preset,
       keyframe_asset_id: keyframeAssetId,
       last_frame_asset_id: lastFrameId,
-      guide_frame_asset_id: isMultiframe ? guideFrameId : undefined,
-      guide_frame_idx: isMultiframe ? options.guideFrameIdx : undefined,
+      guide_frame_asset_id: isMultiframe && !options.guideFrames ? guideFrameId : undefined,
+      guide_frame_idx: isMultiframe && !options.guideFrames ? options.guideFrameIdx : undefined,
+      guide_frames: isMultiframe ? options.guideFrames : undefined,
       character_reference_asset_ids: characterRefIds,
       motion_reference_asset_id: motionRefId,
       prompt_override: motionPromptText,

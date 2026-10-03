@@ -100,11 +100,18 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
     );
   }
 
-  if (isMultiframe && (request.guide_frame_asset_id || request.last_frame_asset_id)) {
-    const frameIdx = request.guide_frame_idx ?? (request.guide_frame_asset_id ? 60 : 120);
+  if (isMultiframe && request.guide_frames?.length) {
+    for (const guide of request.guide_frames) {
+      instructions.push(`Pin the guide reference at frame ${guide.frame_idx} (${(guide.frame_idx / 24).toFixed(2)}s at 24fps); preserve its pose and spatial composition.`);
+    }
+  } else if (isMultiframe && request.guide_frame_asset_id) {
+    const frameIdx = request.guide_frame_idx ?? 60;
     instructions.push(
-      `Pin and stabilize the critical action pose, hand gesture, and spatial composition at frame ${frameIdx} matching the guide reference.`
+      `Pin and stabilize the critical action pose, hand gesture, and spatial composition at frame ${frameIdx} (${(frameIdx / 24).toFixed(2)}s at 24fps) matching the guide reference.`
     );
+  }
+  if (isMultiframe && request.last_frame_asset_id) {
+    instructions.push('Anchor the last-frame reference at delivery frame 119 (4.96s at 24fps).');
   }
 
   return instructions;

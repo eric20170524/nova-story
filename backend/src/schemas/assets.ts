@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const ImageOutputSpecSchema = z.object({
-  aspect_ratio: z.enum(['3:4', '4:3', '1:1', '16:9', '9:16', 'auto']).optional(),
+  aspect_ratio: z.enum(['16:9', '9:16', '1:1', 'auto']).optional(),
   resolution: z.enum(['draft', 'standard', 'high']).optional(),
   orientation_policy: z.enum(['fixed', 'auto_by_shot']).optional(),
 }).optional();
@@ -22,9 +22,9 @@ export const GenerationParamsSchema = z.object({
   (value) => {
     if (value.width == null || value.height == null) return true;
     const ratio = value.width / value.height;
-    return [3 / 4, 4 / 3, 1, 16 / 9, 9 / 16].some((allowed) => Math.abs(ratio - allowed) <= 0.04);
+    return [1, 16 / 9, 9 / 16].some((allowed) => Math.abs(ratio - allowed) <= 0.04);
   },
-  { message: 'width and height must use a supported aspect ratio (3:4, 4:3, 1:1, 16:9, or 9:16)' }
+  { message: 'width and height must use a supported aspect ratio (16:9, 9:16, or 1:1)' }
 ).optional().nullable();
 
 export const GenerateRequestSchema = z.object({
@@ -35,6 +35,11 @@ export const GenerateRequestSchema = z.object({
   generation_params: GenerationParamsSchema,
   /** When true, fork a new scene version (copy text, clear image) then generate into it */
   new_version: z.boolean().optional().default(false)
+}).superRefine((value, context) => {
+  const ratio = value.workflow.output_spec?.aspect_ratio;
+  if (ratio != null && !['16:9', '9:16', '1:1', 'auto'].includes(ratio)) {
+    context.addIssue({ code: 'custom', path: ['workflow', 'output_spec', 'aspect_ratio'], message: 'Unsupported image aspect ratio' });
+  }
 });
 
 export type GenerateRequest = z.infer<typeof GenerateRequestSchema>;

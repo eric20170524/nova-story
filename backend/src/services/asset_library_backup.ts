@@ -8,7 +8,7 @@ const AssetBundleSchema = z.object({
     status: z.string(), revision: z.number().int().positive(), source_chapter_ids: z.string(),
   })),
   references: z.array(z.object({ scene_id: z.number().int().positive(), asset_id: z.number().int().positive(), asset_revision: z.number().int().positive() })),
-  image_snapshots: z.array(z.object({ scene_id: z.number().int().positive(), image_url: z.string(), references_json: z.string() })),
+  image_snapshots: z.array(z.object({ scene_id: z.number().int().positive(), image_url: z.string(), references_json: z.string(), character_versions_json: z.string().nullable().optional() })),
 });
 
 export async function exportAssetLibrary(projectId: number) {
@@ -43,7 +43,8 @@ export async function restoreAssetLibrary(raw: unknown, projectId: number, chapt
     const sceneId = scenes.get(String(snap.scene_id));
     if (!sceneId) throw new Error('Dangling image snapshot in backup');
     const refs = z.array(z.object({ id: z.number().int(), revision: z.number().int().positive() })).parse(JSON.parse(snap.references_json));
-    await db.run('INSERT INTO scene_asset_image_snapshot (scene_id, image_url, references_json) VALUES (?, ?, ?)', sceneId, snap.image_url,
-      JSON.stringify(refs.map(ref => ({ ...ref, id: assetIds.get(ref.id) ?? -1 }))));
+    // Character IDs are remapped by project import; old version evidence cannot be reused.
+    await db.run('INSERT INTO scene_asset_image_snapshot (scene_id, image_url, references_json, character_versions_json) VALUES (?, ?, ?, ?)', sceneId, snap.image_url,
+      JSON.stringify(refs.map(ref => ({ ...ref, id: assetIds.get(ref.id) ?? -1 }))), null);
   }
 }

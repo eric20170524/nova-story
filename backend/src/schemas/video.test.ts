@@ -5,18 +5,17 @@ import {
   MediaAssetSchema
 } from './video';
 
-test('VideoGenerationRequestSchema defaults to experimental Hybrid for compatibility', () => {
+test('VideoGenerationRequestSchema defaults to Official Ref2VA and 720p', () => {
   const parsed = VideoGenerationRequestSchema.parse({
     scene_id: 1,
     scene_version: 1,
     profile: 'narrative_clip',
     keyframe_asset_id: 10,
-    character_reference_asset_ids: [],
-    preset: 'preview_480p_5s'
+    character_reference_asset_ids: []
   });
   assert.equal(parsed.profile, 'narrative_clip');
-  assert.equal(parsed.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
-  assert.equal(parsed.preset, 'preview_480p_5s');
+  assert.equal(parsed.workflow_id, 'minimax_h3_ref2va_official_12gb');
+  assert.equal(parsed.preset, 'standard_720p_5s');
   assert.equal(parsed.run_loop_closer, true);
 });
 
@@ -73,8 +72,44 @@ test('Multi-Frame workflow accepts character references, guide frame, and frame 
   assert.deepEqual(parsed.character_reference_asset_ids, [101, 102]);
 });
 
-test('Multi-Frame workflow rejects guide frame indices outside the 124-frame clip', () => {
-  for (const guide_frame_idx of [0, 124, -1]) {
+test('multi-subject remains explicit and fail closed; guide_frames validate delivery timeline', () => {
+  const base = {
+    scene_id: 1,
+    workflow_id: 'minimax_h3_multiframe_official_12gb',
+    keyframe_asset_id: 10,
+    character_reference_asset_ids: [101, 102],
+  };
+  const parsed = VideoGenerationRequestSchema.parse({
+    ...base,
+    subject_references: [{ character_id: 5, asset_ids: [101, 102] }],
+    guide_frames: [{ asset_id: 201, frame_idx: 24 }, { asset_id: 202, frame_idx: 96 }],
+  });
+  assert.deepEqual(parsed.guide_frames?.map(frame => frame.frame_idx), [24, 96]);
+  assert.throws(() => VideoGenerationRequestSchema.parse({
+    ...base,
+    subject_references: [{ character_id: 5, asset_ids: [101] }, { character_id: 6, asset_ids: [102] }]
+  }), /Multi-subject identity is not supported/);
+  assert.throws(() => VideoGenerationRequestSchema.parse({
+    ...base,
+    guide_frames: [{ asset_id: 201, frame_idx: 24 }, { asset_id: 202, frame_idx: 24 }]
+  }), /must be unique/);
+  assert.throws(() => VideoGenerationRequestSchema.parse({
+    ...base,
+    guide_frames: [{ asset_id: 201, frame_idx: 120 }]
+  }), /too_big|guide_frames/);
+  assert.throws(() => VideoGenerationRequestSchema.parse({
+    ...base,
+    guide_frame_asset_id: 201,
+    guide_frames: [{ asset_id: 202, frame_idx: 48 }]
+  }), /not both/);
+  assert.throws(() => VideoGenerationRequestSchema.parse({
+    ...base, workflow_id: 'minimax_h3_ref2va_official_12gb',
+    guide_frames: [{ asset_id: 201, frame_idx: 48 }]
+  }), /requires Official Multi-Frame/);
+});
+
+test('Multi-Frame workflow rejects guide frame indices outside the 120-frame delivery clip', () => {
+  for (const guide_frame_idx of [0, 120, 124, -1]) {
     assert.throws(() => VideoGenerationRequestSchema.parse({
       scene_id: 1,
       workflow_id: 'minimax_h3_multiframe_official_12gb',

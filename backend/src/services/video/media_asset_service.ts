@@ -437,6 +437,25 @@ export class MediaAssetService {
     return (await this.getAssetById(assetId))!;
   }
 
+  static async setGuideFrameIdx(assetId: number, frameIdx: number): Promise<MediaAsset> {
+    if (!Number.isInteger(frameIdx) || frameIdx < 1 || frameIdx > 119) {
+      throw new Error('guide_frame_idx must be an integer within delivery frames 1..119 (24fps).');
+    }
+    const asset = await this.getAssetById(assetId);
+    if (!asset) throw new Error(`Asset ${assetId} does not exist`);
+    if (asset.role !== 'guide_frame_reference' && asset.role !== 'composition_reference') {
+      throw new Error(`guide_frame_idx can only be stored on a guide frame, not '${asset.role}'`);
+    }
+    let metadata: Record<string, unknown> = {};
+    try {
+      const parsed = asset.metadata_json ? JSON.parse(asset.metadata_json) : {};
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) metadata = parsed;
+    } catch { metadata = {}; }
+    metadata.guide_frame_idx = frameIdx;
+    await db.run('UPDATE media_asset SET metadata_json = ? WHERE id = ?', JSON.stringify(metadata), assetId);
+    return (await this.getAssetById(assetId))!;
+  }
+
   static async getAssetById(id: number): Promise<MediaAsset | null> {
     const row = await db.get('SELECT * FROM media_asset WHERE id = ?', id);
     if (!row) return null;

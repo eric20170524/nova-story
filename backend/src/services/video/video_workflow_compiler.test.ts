@@ -276,10 +276,59 @@ test('VideoWorkflowCompiler chains both guide_frame and last_frame when both are
   assert.equal(compiled.workflow['20'].inputs.image, 'scene-50-composition-reference.png');
   assert.equal(compiled.workflow['21'].inputs.frame_idx, 50);
   assert.equal(compiled.workflow['22'].inputs.image, 'last.png');
-  assert.equal(compiled.workflow['23'].inputs.frame_idx, 120);
+  assert.equal(compiled.workflow['23'].inputs.frame_idx, 119);
   // With last_frame, basic guider connects to node 23 which chains from node 21
   assert.deepEqual(compiled.workflow['14'].inputs.conditioning, ['23', 0]);
   assert.deepEqual(compiled.workflow['23'].inputs.positive, ['21', 0]);
+  assert.match(spec.positive_prompt, /delivery frame 119/);
+});
+
+test('Official Multi-Frame chains multiple 24fps guides before the last-frame boundary', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 51, scene_version: 1, profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10, character_reference_asset_ids: [],
+      guide_frames: [{ asset_id: 31, frame_idx: 24 }, { asset_id: 32, frame_idx: 72 }],
+      last_frame_asset_id: 33, preset: 'standard_720p_5s', run_loop_closer: false,
+    },
+    scene: { id: 51 }, character: null,
+  });
+  const compiled = VideoWorkflowCompiler.compile({
+    spec, stagedFiles: { firstFrameFilename: 'first.png', lastFrameFilename: 'last.png' },
+    guideFrames: [{ filename: 'pose1.png', frameIdx: 24 }, { filename: 'pose2.png', frameIdx: 72 }],
+  });
+  const extraGuide = Object.entries(compiled.workflow).find(([id, node]) => id !== '21' && id !== '23' && (node as any).class_type === 'MiniMaxH3AddGuide');
+  assert.ok(extraGuide);
+  assert.deepEqual((extraGuide[1] as any).inputs.positive, ['21', 0]);
+  assert.equal((extraGuide[1] as any).inputs.frame_idx, 72);
+  assert.deepEqual(compiled.workflow['23'].inputs.positive, [extraGuide[0], 0]);
+  assert.equal(compiled.workflow['23'].inputs.frame_idx, 119);
+  assert.deepEqual(compiled.appliedParams.guide_frames, [{ frame_idx: 24, seconds: 1 }, { frame_idx: 72, seconds: 3 }]);
+  assert.equal(compiled.appliedParams.width, 1280);
+  assert.equal(compiled.appliedParams.height, 720);
+  assert.throws(() => VideoWorkflowCompiler.compile({
+    spec, stagedFiles: { firstFrameFilename: 'first.png' },
+    guideFrames: [{ filename: 'pose1.png', frameIdx: 24 }, { filename: 'pose2.png', frameIdx: 24 }],
+  }), /distinct frame indices/);
+});
+
+test('last-frame-only Multi-Frame uses the delivered end frame without a phantom guide', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 52, scene_version: 1, profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10, character_reference_asset_ids: [],
+      last_frame_asset_id: 33, preset: 'standard_720p_5s', run_loop_closer: false,
+    },
+    scene: { id: 52 }, character: null,
+  });
+  const compiled = VideoWorkflowCompiler.compile({
+    spec, stagedFiles: { firstFrameFilename: 'first.png', lastFrameFilename: 'last.png' },
+  });
+  assert.deepEqual(compiled.workflow['23'].inputs.positive, ['10', 0]);
+  assert.equal(compiled.workflow['23'].inputs.frame_idx, 119);
+  assert.deepEqual(compiled.workflow['14'].inputs.conditioning, ['23', 0]);
 });
 
 test('VideoWorkflowCompiler validates official Multi-Frame against Comfy object_info', () => {

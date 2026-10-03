@@ -7,7 +7,7 @@ export interface ProjectImageSettings {
   workflow_id: number | null;
   style: string;
   output_spec: {
-    aspect_ratio: '3:4' | '4:3' | '1:1' | '16:9' | '9:16';
+    aspect_ratio: '16:9' | '9:16' | '1:1';
     resolution: 'draft' | 'standard' | 'high';
     orientation_policy: 'fixed' | 'auto_by_shot';
   };
@@ -39,7 +39,7 @@ export const DEFAULT_PROJECT_IMAGE_SETTINGS: ProjectImageSettings = {
   model: 'pony',
   workflow_id: null,
   style: 'xianxia_immortal',
-  output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+  output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
   nsfw_mode: 'inherit',
 };
 
@@ -65,9 +65,9 @@ export const getProjectImageSettings = (settings: ProjectSettings | null | undef
       ? Number(raw?.workflow_id) : null,
     style: typeof raw?.style === 'string' && raw.style.trim() ? raw.style : DEFAULT_PROJECT_IMAGE_SETTINGS.style,
     output_spec: {
-      aspect_ratio: output?.aspect_ratio === '4:3' || output?.aspect_ratio === '1:1'
+      aspect_ratio: output?.aspect_ratio === '1:1'
         || output?.aspect_ratio === '16:9' || output?.aspect_ratio === '9:16'
-        ? output.aspect_ratio : '3:4',
+        ? output.aspect_ratio : '16:9',
       resolution: output?.resolution === 'draft' || output?.resolution === 'high' ? output.resolution : 'standard',
       orientation_policy: output?.orientation_policy === 'auto_by_shot' ? 'auto_by_shot' : 'fixed',
     },

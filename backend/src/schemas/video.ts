@@ -14,7 +14,7 @@ export const VideoWorkflowIdSchema = z.enum([
   'minimax_h3_multiframe_official_12gb'
 ]);
 export type VideoWorkflowId = z.infer<typeof VideoWorkflowIdSchema>;
-export const DEFAULT_VIDEO_WORKFLOW_ID: VideoWorkflowId = 'minimax_h3_hongchao_a2a_12gb';
+export const DEFAULT_VIDEO_WORKFLOW_ID: VideoWorkflowId = 'minimax_h3_ref2va_official_12gb';
 
 export const VideoTaskStageSchema = z.enum([
   'queued',
@@ -86,17 +86,48 @@ const VideoRequestBaseSchema = z.object({
   workflow_id: VideoWorkflowIdSchema.default(DEFAULT_VIDEO_WORKFLOW_ID),
   keyframe_asset_id: z.number().int().nonnegative().optional().default(0),
   character_reference_asset_ids: z.array(z.number().int().positive()).max(3).optional().default([]),
+  /** Reserved multi-subject shape; current H3 workflows support one identity only. */
+  subject_references: z.array(z.object({
+    character_id: z.number().int().positive(),
+    asset_ids: z.array(z.number().int().positive()).min(1).max(3),
+  })).max(6).optional(),
   motion_reference_asset_id: z.number().int().positive().optional(),
   last_frame_asset_id: z.number().int().positive().optional(),
   guide_frame_asset_id: z.number().int().positive().optional(),
-  guide_frame_idx: z.number().int().min(1).max(123).optional(),
+  guide_frame_idx: z.number().int().min(1).max(119).optional(),
+  guide_frames: z.array(z.object({
+    asset_id: z.number().int().positive(),
+    frame_idx: z.number().int().min(1).max(119),
+  })).max(4).optional(),
   prompt_override: z.string().optional(),
-  preset: VideoPresetSchema.default('preview_480p_5s'),
+  preset: VideoPresetSchema.default('standard_720p_5s'),
   seed: z.number().int().optional(),
   run_loop_closer: z.boolean().default(true)
 });
 
 const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: z.RefinementCtx) => {
+  if (data.subject_references?.length) {
+    if (data.subject_references.length > 1) {
+      ctx.addIssue({ code: 'custom', path: ['subject_references'], message: 'Multi-subject identity is not supported by the current H3 workflows; mixed characters remain blocked.' });
+    } else {
+      const subject = data.subject_references[0]!;
+      const sameAssets = JSON.stringify([...subject.asset_ids].sort((a, b) => a - b))
+        === JSON.stringify([...data.character_reference_asset_ids].sort((a, b) => a - b));
+      if (!sameAssets) ctx.addIssue({ code: 'custom', path: ['subject_references'], message: 'Single subject asset_ids must match character_reference_asset_ids.' });
+    }
+  }
+  if (data.guide_frames?.length) {
+    if (data.workflow_id !== 'minimax_h3_multiframe_official_12gb') {
+      ctx.addIssue({ code: 'custom', path: ['guide_frames'], message: 'guide_frames requires Official Multi-Frame.' });
+    }
+    if (data.guide_frame_asset_id || data.guide_frame_idx != null) {
+      ctx.addIssue({ code: 'custom', path: ['guide_frames'], message: 'Use guide_frames or legacy guide_frame_asset_id, not both.' });
+    }
+    const frameIndices = data.guide_frames.map(guide => guide.frame_idx);
+    if (new Set(frameIndices).size !== frameIndices.length) {
+      ctx.addIssue({ code: 'custom', path: ['guide_frames'], message: 'guide_frames frame_idx values must be unique.' });
+    }
+  }
   if (data.workflow_id === 'grok_imagine_browser') return;
   const isFl2va = data.workflow_id === 'minimax_h3_fl2va_official_12gb';
   const isRef2va = data.workflow_id === 'minimax_h3_ref2va_official_12gb';

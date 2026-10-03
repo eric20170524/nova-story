@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Loader2, Trash2, AlertCircle, Palette, BookOpen, Library, SlidersHorizontal, FileText } from 'lucide-react';
 import { api } from '../services/api';
+import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
 import { ImageOutputSpec, Project } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -135,7 +136,7 @@ export const ProjectSettings: React.FC = () => {
   const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
   const [outputSpec, setOutputSpec] = useState<Required<ImageOutputSpec>>({
-    aspect_ratio: '3:4',
+    aspect_ratio: '16:9',
     resolution: 'standard',
     orientation_policy: 'fixed',
   });
@@ -211,21 +212,7 @@ export const ProjectSettings: React.FC = () => {
               setDefaultModelType(imageSettings.model);
           }
           setDefaultWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
-          const savedOutputSpec = imageSettings.output_spec || {};
-          const aspectRatio = ['3:4', '4:3', '1:1', '16:9', '9:16'].includes(savedOutputSpec.aspect_ratio)
-            ? savedOutputSpec.aspect_ratio
-            : '3:4';
-          const resolution = ['draft', 'standard', 'high'].includes(savedOutputSpec.resolution)
-            ? savedOutputSpec.resolution
-            : 'standard';
-          const orientationPolicy = ['fixed', 'auto_by_shot'].includes(savedOutputSpec.orientation_policy)
-            ? savedOutputSpec.orientation_policy
-            : 'fixed';
-          setOutputSpec({
-            aspect_ratio: aspectRatio,
-            resolution,
-            orientation_policy: orientationPolicy,
-          });
+          setOutputSpec(normalizeProjectOutputSpec(imageSettings.output_spec));
           setNsfwMode(imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off'
             ? imageSettings.nsfw_mode : 'inherit');
           setGenre(typeof settingsObj.genre === 'string' ? settingsObj.genre : '');
@@ -376,13 +363,13 @@ export const ProjectSettings: React.FC = () => {
     );
   }
 
-  const canvasValue: '3:4' | '4:3' | '1:1' | '16:9' | '9:16' | 'auto' =
+  const canvasValue: '1:1' | '16:9' | '9:16' | 'auto' =
     outputSpec.orientation_policy === 'auto_by_shot' || outputSpec.aspect_ratio === 'auto'
       ? 'auto'
-      : outputSpec.aspect_ratio === '4:3' || outputSpec.aspect_ratio === '1:1'
+      : outputSpec.aspect_ratio === '1:1'
         || outputSpec.aspect_ratio === '16:9' || outputSpec.aspect_ratio === '9:16'
         ? outputSpec.aspect_ratio
-        : '3:4';
+        : '16:9';
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'overview', label: t('project_settings.tab_overview'), icon: <Palette size={14} /> },
@@ -560,13 +547,11 @@ export const ProjectSettings: React.FC = () => {
                       onChange={(value) => {
                         setOutputSpec((current) => ({
                           ...current,
-                          aspect_ratio: value === 'auto' ? '3:4' : value,
+                          aspect_ratio: value === 'auto' ? '16:9' : value,
                           orientation_policy: value === 'auto' ? 'auto_by_shot' : 'fixed',
                         }));
                       }}
                       options={[
-                        { value: '3:4', label: t('project_settings.canvas_portrait_short'), title: t('project_settings.canvas_portrait') },
-                        { value: '4:3', label: t('project_settings.canvas_landscape_short'), title: t('project_settings.canvas_landscape') },
                         { value: '1:1', label: t('project_settings.canvas_square_short'), title: t('project_settings.canvas_square') },
                         { value: '16:9', label: t('project_settings.canvas_wide_short'), title: t('project_settings.canvas_wide') },
                         { value: '9:16', label: t('project_settings.canvas_tall_short'), title: t('project_settings.canvas_tall') },

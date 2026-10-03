@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { ProjectImportInputError } from '../services/import/import_file';
 import { commitProjectImportFile } from '../services/import/project_import';
-import { DEFAULT_PROJECT_IMAGE_SETTINGS, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS, canonicalProjectSettings, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
 import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
 import { remapCopiedScriptChanges } from '../services/script_copy';
@@ -701,7 +701,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ detail: 'Not authorized to access this project' });
     }
 
-    return project;
+    return { ...project, settings: JSON.stringify(canonicalProjectSettings(project.settings)) };
   });
 
   // --- Glossary (Agent OS / story bible) ---

@@ -127,6 +127,19 @@ test('H3 character references fail closed when one request spans multiple charac
     );
     assert.deepEqual(sameCharacter.blockers, []);
     assert.equal(sameCharacter.character_id, characterA);
+    const explicitSame = await VideoReferenceIdentityService.validate({
+      ...baseRequest(sceneId, [refA1.id!, refA2.id!]),
+      subject_references: [{ character_id: characterA, asset_ids: [refA1.id!, refA2.id!] }]
+    });
+    assert.deepEqual(explicitSame.blockers, []);
+    const internalMixed = await VideoGenerationService.preflight({
+      ...baseRequest(sceneId, [refA1.id!, refB.id!]),
+      subject_references: [
+        { character_id: characterA, asset_ids: [refA1.id!] },
+        { character_id: characterB, asset_ids: [refB.id!] },
+      ]
+    });
+    assert.ok(internalMixed.blockers.some(blocker => blocker.includes('Multiple subject_references')));
 
     const roleMismatch = await VideoReferenceIdentityService.validate(
       baseRequest(sceneId, [wrongRole.id!])

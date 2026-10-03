@@ -69,7 +69,7 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   outputSpec,
   videoProfile = 'narrative_clip',
   setVideoProfile,
-  videoPreset = 'preview_480p_5s',
+  videoPreset = 'standard_720p_5s',
   setVideoPreset,
   runLoopCloser = true,
   setRunLoopCloser,
@@ -386,8 +386,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                      <span className="text-slate-500 dark:text-slate-400 flex-shrink-0 font-medium">{t('director.canvas_label', 'Canvas')}</span>
                      <span className="text-sky-600 dark:text-sky-300 font-bold">
                        {outputSpec?.orientation_policy === 'auto_by_shot'
-                         ? t('director.canvas_auto', 'Auto by shot')
-                         : `${outputSpec?.aspect_ratio || '3:4'} · ${outputSpec?.resolution || 'standard'}`}
+                         ? t('director.canvas_auto', 'Automatic 16:9')
+                         : `${outputSpec?.aspect_ratio || '16:9'} · ${outputSpec?.resolution || 'standard'}`}
                      </span>
                    </div>
                  </div>

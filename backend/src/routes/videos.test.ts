@@ -96,7 +96,7 @@ test('Comprehensive /api/videos route verification', async () => {
   assert.equal(capRes.statusCode, 200);
   const caps = JSON.parse(capRes.body);
   assert.equal(caps.video_generation_enabled, true);
-  assert.equal(caps.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
+  assert.equal(caps.workflow_id, 'minimax_h3_ref2va_official_12gb');
 
   // 2. Reference upload contract.
   const validImgUpload = await multipartUpload('hero_ref.png', 'mock_hero_png', 'image/png', {
@@ -110,6 +110,39 @@ test('Comprehensive /api/videos route verification', async () => {
   const uploadedCharAsset = JSON.parse(upImgRes.body);
   assert.equal(uploadedCharAsset.role, 'character_reference');
   assert.equal(uploadedCharAsset.media_type, 'image');
+  assert.equal(uploadedCharAsset.metadata_json ?? null, null);
+
+  const missingGuideUpload = await multipartUpload('guide.png', 'mock_guide_png', 'image/png', {
+    project_id: '999', scene_id: '9991', role: 'guide_frame_reference'
+  });
+  const missingGuideRes = await app.inject({
+    method: 'POST', url: '/api/videos/references/upload',
+    headers: missingGuideUpload.headers, payload: missingGuideUpload.payload
+  });
+  assert.equal(missingGuideRes.statusCode, 400);
+  assert.match(JSON.parse(missingGuideRes.body).error, /guide_frame_idx/);
+
+  const guideUpload = await multipartUpload('guide.png', 'mock_guide_png', 'image/png', {
+    project_id: '999', scene_id: '9991', role: 'guide_frame_reference', guide_frame_idx: '72'
+  });
+  const guideRes = await app.inject({
+    method: 'POST', url: '/api/videos/references/upload',
+    headers: guideUpload.headers, payload: guideUpload.payload
+  });
+  assert.equal(guideRes.statusCode, 200);
+  const uploadedGuide = JSON.parse(guideRes.body);
+  assert.equal(JSON.parse(uploadedGuide.metadata_json).guide_frame_idx, 72);
+  const movedGuide = await app.inject({
+    method: 'POST', url: `/api/videos/assets/${uploadedGuide.id}/guide-frame`,
+    payload: { guide_frame_idx: 96 }
+  });
+  assert.equal(movedGuide.statusCode, 200);
+  assert.equal(JSON.parse(JSON.parse(movedGuide.body).metadata_json).guide_frame_idx, 96);
+  const illegalGuide = await app.inject({
+    method: 'POST', url: `/api/videos/assets/${uploadedGuide.id}/guide-frame`,
+    payload: { guide_frame_idx: 120 }
+  });
+  assert.equal(illegalGuide.statusCode, 400);
 
   const validLastUpload = await multipartUpload('last_frame.png', 'mock_last_png', 'image/png', {
     project_id: '999', scene_id: '9991', role: 'last_frame_reference'
@@ -180,6 +213,12 @@ test('Comprehensive /api/videos route verification', async () => {
     method: 'POST', url: '/api/videos/assets/register', payload: { project_id: 999 }
   });
   assert.equal(badRegisterRes.statusCode, 400);
+  const guideRegisterRes = await app.inject({
+    method: 'POST', url: '/api/videos/assets/register',
+    payload: { project_id: 999, scene_id: 9991, media_type: 'image', role: 'guide_frame_reference', url: '/static/generated/guide.png' }
+  });
+  assert.equal(guideRegisterRes.statusCode, 400);
+  assert.match(JSON.parse(guideRegisterRes.body).error, /guide_frame_idx/);
 
   const motionAsset = await MediaAssetService.createAsset({
     project_id: 999, media_type: 'video', role: 'motion_reference', status: 'ready',
@@ -199,6 +238,7 @@ test('Comprehensive /api/videos route verification', async () => {
     method: 'POST', url: '/api/videos/preflight',
     payload: {
       scene_id: 9991, scene_version: 1, profile: 'character_loop',
+      workflow_id: 'minimax_h3_hongchao_a2a_12gb',
       keyframe_asset_id: kfAsset.id, last_frame_asset_id: lastFrameAsset.id,
       character_reference_asset_ids: [uploadedCharAsset.id],
       motion_reference_asset_id: motionAsset.id, preset: 'preview_480p_5s'
@@ -279,6 +319,7 @@ test('Comprehensive /api/videos route verification', async () => {
     method: 'POST', url: '/api/videos/generate',
     payload: {
       scene_id: 9991, scene_version: 1, profile: 'character_loop',
+      workflow_id: 'minimax_h3_hongchao_a2a_12gb',
       keyframe_asset_id: kfAsset.id, last_frame_asset_id: lastFrameAsset.id,
       character_reference_asset_ids: [uploadedCharAsset.id],
       motion_reference_asset_id: motionAsset.id, preset: 'preview_480p_5s'

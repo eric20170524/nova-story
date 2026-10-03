@@ -57,6 +57,7 @@ export interface CompileWorkflowInputs {
     guideFrameFilename?: string;
   };
   guideFrameIdx?: number;
+  guideFrames?: Array<{ filename: string; frameIdx: number }>;
   seed?: number;
   outputPrefix?: string;
 }
@@ -104,6 +105,27 @@ export class VideoWorkflowCompiler {
     const slots = manifest.slots;
     const { spec, stagedFiles } = inputs;
     const contract = spec.output_contract;
+    const guideFrames = inputs.guideFrames || [];
+    if (guideFrames.length && workflowId !== 'minimax_h3_multiframe_official_12gb') {
+      throw new Error('guide_frames requires the Official Multi-Frame workflow.');
+    }
+    if (guideFrames.length > 4 || new Set(guideFrames.map(guide => guide.frameIdx)).size !== guideFrames.length
+        || guideFrames.some(guide => !Number.isInteger(guide.frameIdx) || guide.frameIdx < 1 || guide.frameIdx >= 120 || !guide.filename)) {
+      throw new Error('guide_frames must contain 1–4 distinct frame indices within delivery frames 1..119.');
+    }
+    if (workflowId.startsWith('minimax_h3_')) {
+      if (contract.fps !== 24 || contract.frames !== 124
+          || manifest.default_params?.fps !== 24
+          || manifest.default_params?.frames !== 124
+          || manifest.default_params?.delivery_frames !== 120) {
+        throw new Error('H3 workflow requires native 24fps, 124 model frames and 120 delivery frames.');
+      }
+      for (const [nodeId, node] of Object.entries(workflow) as Array<[string, any]>) {
+        if (node?.class_type === 'CreateVideo' && node.inputs?.fps !== 24) {
+          throw new Error(`H3 CreateVideo node ${nodeId} must use native 24fps.`);
+        }
+      }
+    }
 
     if (slots.positive_prompt) this.validateSlot(workflow, slots.positive_prompt, 'positive_prompt');
     if (slots.negative_prompt) this.validateSlot(workflow, slots.negative_prompt, 'negative_prompt');
@@ -136,19 +158,44 @@ export class VideoWorkflowCompiler {
 
     if (slots.guide_frame_idx) {
       let targetIdx: number;
-      if (inputs.guideFrameIdx != null && Number.isFinite(inputs.guideFrameIdx)) {
+      if (guideFrames.length) {
+        targetIdx = guideFrames[0]!.frameIdx;
+      } else if (inputs.guideFrameIdx != null && Number.isFinite(inputs.guideFrameIdx)) {
         targetIdx = Math.round(inputs.guideFrameIdx);
       } else if (stagedFiles.guideFrameFilename) {
         targetIdx = Math.round((contract.frames || 124) / 2);
       } else if (stagedFiles.lastFrameFilename) {
-        targetIdx = (contract.frames || 124) - 4;
+        targetIdx = 119;
       } else {
         targetIdx = 60;
       }
-      if (targetIdx < 1 || targetIdx >= contract.frames) {
-        throw new Error(`Guide frame index must be within 1..${contract.frames - 1}; received ${targetIdx}.`);
+      if (targetIdx < 1 || targetIdx >= 120) {
+        throw new Error(`Guide frame index must be within delivery frames 1..119; received ${targetIdx}.`);
       }
       workflow[slots.guide_frame_idx.node].inputs[slots.guide_frame_idx.input] = targetIdx;
+    }
+
+    let finalGuideNode = '21';
+    if (guideFrames.length) {
+      if (!slots.guide_frame || !slots.guide_frame_idx || !workflow['21']) {
+        throw new Error('Official Multi-Frame workflow has no guide frame slots.');
+      }
+      workflow[slots.guide_frame.node].inputs[slots.guide_frame.input] = guideFrames[0]!.filename;
+      workflow[slots.guide_frame_idx.node].inputs[slots.guide_frame_idx.input] = guideFrames[0]!.frameIdx;
+      let nextNodeId = Math.max(...Object.keys(workflow).map(Number)) + 1;
+      for (const guide of guideFrames.slice(1)) {
+        const imageNode = String(nextNodeId++);
+        const guideNode = String(nextNodeId++);
+        workflow[imageNode] = { class_type: 'LoadImage', inputs: { image: guide.filename } };
+        workflow[guideNode] = {
+          class_type: 'MiniMaxH3AddGuide',
+          inputs: {
+            positive: [finalGuideNode, 0], latent: ['10', 1], vae: ['3', 0],
+            image: [imageNode, 0], frame_idx: guide.frameIdx,
+          },
+        };
+        finalGuideNode = guideNode;
+      }
     }
 
     if (slots.last_frame) {
@@ -156,9 +203,12 @@ export class VideoWorkflowCompiler {
       workflow[slots.last_frame.node].inputs[slots.last_frame.input] = lastFrame;
       if (workflowId === 'minimax_h3_multiframe_official_12gb') {
         if (stagedFiles.lastFrameFilename && workflow['23']) {
+          workflow['23'].inputs.positive = guideFrames.length || stagedFiles.guideFrameFilename
+            ? [finalGuideNode, 0] : ['10', 0];
+          workflow['23'].inputs.frame_idx = 119;
           if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = ['23', 0];
         } else {
-          if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = ['21', 0];
+          if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = [finalGuideNode, 0];
         }
       }
     }
@@ -189,7 +239,7 @@ export class VideoWorkflowCompiler {
     // their Golden baseline step count. This keeps strategy selection from silently
     // changing established output behavior.
     let steps: number;
-    if (workflowId === DEFAULT_VIDEO_WORKFLOW_ID) {
+    if (workflowId === 'minimax_h3_hongchao_a2a_12gb') {
       steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
     } else {
       const manifestSteps = Number(manifest.default_params?.steps);
@@ -218,7 +268,8 @@ export class VideoWorkflowCompiler {
         steps,
         seed,
         prefix,
-        guide_frame_idx: slots.guide_frame_idx ? workflow[slots.guide_frame_idx.node]?.inputs?.[slots.guide_frame_idx.input] : undefined
+        guide_frame_idx: slots.guide_frame_idx ? workflow[slots.guide_frame_idx.node]?.inputs?.[slots.guide_frame_idx.input] : undefined,
+        guide_frames: guideFrames.map(guide => ({ frame_idx: guide.frameIdx, seconds: guide.frameIdx / 24 }))
       }
     };
   }

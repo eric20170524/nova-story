@@ -155,7 +155,7 @@ test('maps the logical portrait canvas to the image provider size', async () => 
         const result = await provider.generateImage('portrait', {
             width: 768,
             height: 1024,
-            aspectRatio: '3:4',
+            aspectRatio: '9:16',
             imageSize: '1K'
         });
 

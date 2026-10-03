@@ -675,92 +675,96 @@
 
 ### P1 — 生图画布合同统一
 
-- [ ] **T7-P1-01：移除 3:4 / 4:3 新请求枚举。**
+- [x] **T7-P1-01：移除 3:4 / 4:3 新请求枚举。**
   - 修改：`types.ts`、`backend/src/schemas/assets.ts`、`backend/src/services/image_output_spec.ts`。
   - 新枚举只保留 `16:9 | 9:16 | 1:1 | auto`。
   - **AC：** 新 API 请求中的 3:4 / 4:3 被拒绝；TS 不再把它们暴露为合法新值。
 
-- [ ] **T7-P1-02：生图默认值统一为 16:9。**
+- [x] **T7-P1-02：生图默认值统一为 16:9。**
   - 修改 `DEFAULT_IMAGE_OUTPUT_SPEC`、`pages/ProjectSettings.tsx`、`pages/DirectorMode.tsx`、`components/Director/DirectorRightPanel.tsx`。
   - 新项目、新 Director 会话和无配置 fallback 都必须是 16:9。
   - **AC：** 新项目打开设置页即显示 16:9；Director 生产配置卡不再 fallback 显示 3:4。
 
-- [ ] **T7-P1-03：重写 auto / auto_by_shot，禁止旧比例通过自动策略回流。**
+- [x] **T7-P1-03：重写 auto / auto_by_shot，禁止旧比例通过自动策略回流。**
   - 普通 scene/storyboard/video_keyframe → 16:9。
   - portrait 仍默认 16:9；只有显式用户选择才用 9:16。
   - cinematic grid/contact sheet → 1:1。
   - turnaround 不再用 4:3 作为对外资产契约；内部 panel/compositor 尺寸与最终资产比例解耦。
   - **AC：** 全量 `resolveImageOutputTarget` 测试中不存在 resolved 3:4 / 4:3。
 
-- [ ] **T7-P1-04：旧项目 3:4 / 4:3 数据兼容迁移。**
+- [x] **T7-P1-04：旧项目 3:4 / 4:3 数据兼容迁移。**
   - 读取旧值时归一为 16:9；项目再次保存后写回 16:9。
   - 不修改历史已生成图片文件，只影响后续生成合同。
   - **AC：** 旧项目可正常打开；无 Zod/TS 崩溃；保存后 settings 不再含 3:4 / 4:3。
 
-- [ ] **T7-P1-05：补齐画布回归测试。**
+- [x] **T7-P1-05：补齐画布回归测试。**
   - 更新 `backend/src/services/image_output_spec.test.ts` 及前端相关测试。
   - **AC：** 覆盖默认 16:9、显式 9:16、显式 1:1、auto、旧值迁移、turnaround、exact dimensions。
 
 ### P2 — H3 默认 720p / 24fps，保留 480p
 
-- [ ] **T7-P2-01：Director 默认视频 preset 改为 `standard_720p_5s`。**
+- [x] **T7-P2-01：Director 默认视频 preset 改为 `standard_720p_5s`。**
   - 修改 `pages/DirectorMode.tsx` 与 `components/Director/DirectorRightPanel.tsx` 默认值。
   - **AC：** 首次进入 Director 视频模式默认选中“720P 标准画质”。
 
-- [ ] **T7-P2-02：保留 `preview_480p_5s` 作为显式可选预览档。**
+- [x] **T7-P2-02：保留 `preview_480p_5s` 作为显式可选预览档。**
   - 480p 用于 RTX 3060 smoke test、提示词/动作快速试错和批量预览。
   - **AC：** 用户可在 720p / 480p 间切换；切换不得改变 fps、时长或参考图语义。
 
-- [ ] **T7-P2-03：把 24fps 固化为 H3 全链硬约束。**
+- [x] **T7-P2-03：把 24fps 固化为 H3 全链硬约束。**
   - 保持/加强：`video_spec_compiler.ts`、`loop_closer.ts`、`video_postprocess_service.ts`、所有 H3 workflow manifest。
   - UI 仅显示 24fps，不提供 30/60fps 选择器。
   - **AC：** H3 model fps = delivery fps = timeline fps = QA fps = 24；测试不得出现默认 30fps。
 
-- [ ] **T7-P2-04：锁定 124 model frames → 120 delivery frames。**
+- [x] **T7-P2-04：锁定 124 model frames → 120 delivery frames。**
   - 5.0s × 24fps = 120 交付帧；H3 内部仍请求符合 `17k+5` 的 124 帧。
   - **AC：** 720p final probe = 1280×720 / 24fps / 120f / 5.0s；480p final = 24fps / 120f / 5.0s。
 
-- [ ] **T7-P2-05：消除 Grok 6 秒请求与 5 秒产品合同的不一致。**
-  - 当前 browser job 写死 `duration_seconds: 6`，后处理又截为 5 秒。
+- [x] **T7-P2-05：消除 Grok 6 秒请求与 5 秒产品合同的不一致。**
+  - browser job 现在请求 5 秒并记录 source/delivery 时长；返回超出 5±0.25 秒时阻塞。
   - 方案：统一请求为 5 秒，或将 provider-specific 时长显式进入 spec/QA；禁止静默丢最后 1 秒。
   - **AC：** 请求时长与最终交付时长差异必须可解释、可测试、可观测。
 
-- [ ] **T7-P2-06：章节合成增加 24fps readiness 门禁。**
+- [x] **T7-P2-06：章节合成增加 24fps readiness 门禁。**
   - **AC：** H3 章节导出不得直接混入非 24fps final；遇到异常资产必须阻塞或显式标准化后再进入剪辑层。
 
 ### P3 — Shot Master 与参考素材职责收敛
 
-- [ ] **T7-P3-01：把 16:9 Shot Master 设为视频生成前置事实源。**
+- [x] **T7-P3-01：把 16:9 Shot Master 设为视频生成前置事实源。**
   - Location / Prop / Character Version 改动后旧 Shot Master 必须失效。
   - **AC：** preflight 能阻止使用未反映当前绑定资产的旧关键帧。
 
-- [ ] **T7-P3-02：身份参考保持“同一角色 1–3 张”，默认推荐 1–2 张。**
+- [x] **T7-P3-02：身份参考保持“同一角色 1–3 张”，默认推荐 1–2 张。**
   - 保留 `VideoReferenceIdentityService` mixed-identity fail-closed。
   - **AC：** 不同 `character_id` 不能伪装成多图身份参考；相同角色多视角可通过。
 
-- [ ] **T7-P3-03：按镜头类型选择官方工作流。**
+- [x] **T7-P3-03：按镜头类型选择官方工作流。**
   - 普通单角色叙事：Official Ref2VA。
   - 复杂关键姿态：Official Multi-Frame。
   - 强首尾边界/loop：Official FL2VA。
   - 红潮 Hybrid：保留 experimental / benchmark，不作为新产品默认。
   - **AC：** UI/编排层能解释为什么选择某 workflow；不靠隐藏 fallback。
 
-- [ ] **T7-P3-04：Multi-Frame guide frame 按 24fps 时间轴展示。**
+- [x] **T7-P3-04：Multi-Frame guide frame 按 24fps 时间轴展示。**
   - frame 24≈1s、36≈1.5s、48≈2s、72≈3s、96≈4s。
   - **AC：** UI 不只暴露 frame_idx 裸整数；同时展示对应秒数。
 
 ### P4 — 多角色与多关键帧增强（P1–P3 稳定后）
 
-- [ ] **T7-P4-01：设计真正的 multi-subject reference contract。**
+- [x] **T7-P4-01：设计真正的 multi-subject reference contract。**
   - 目标结构：`subject_references[{ character_id, asset_ids[] }]`。
   - 在实现前继续禁止 mixed character refs。
   - **AC：** 两个角色的身份图不会再被解释成“同一人物的三视图”。
 
-- [ ] **T7-P4-02：Multi-Frame 从单 guide 扩展为 `guide_frames[]`。**
+- [x] **T7-P4-02：Multi-Frame 从单 guide 扩展为 `guide_frames[]`。**
   - 目标：多个 `{ asset_id, frame_idx }` 关键姿态。
   - **AC：** 编译器验证 frame_idx 不重复、范围合法、按 24fps 映射；工作流不支持时 fail closed。
 
+评审修复：Multi-Frame 尾帧锚点落在交付帧 119；Comfy 生图 latent 独立按 64 对齐，最终图片仍归一为精确 16:9；视频 preflight 检查完整可见角色版本；批量 Guide 帧位非法时阻塞；同角色参考图连续上传可追加。
+
 ### P5 — E2E 验收
+
+代码级验收：前后端 typecheck、构建及仓库测试通过；FFmpeg 实测 124 输入帧标准化为 720p/480p 的 24fps、120 帧、5 秒候选。当前 ComfyUI/H3 离线且视频功能门禁关闭，以下真实端到端验收仍需在启用服务后执行，并保留未完成状态。
 
 - [ ] **T7-P5-01：生图合同 E2E。**
   - 新项目 → 16:9 分镜 → 16:9 video keyframe。

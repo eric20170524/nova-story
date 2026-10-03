@@ -22,6 +22,17 @@ export type VideoReferenceIdentityValidation = {
  */
 export class VideoReferenceIdentityService {
   static async validate(request: VideoGenerationRequest): Promise<VideoReferenceIdentityValidation> {
+    if ((request.subject_references?.length || 0) > 1) {
+      return { blockers: ['Multiple subject_references are not supported by the current H3 workflows.'], character_id: null };
+    }
+    const subject = request.subject_references?.[0];
+    if (subject) {
+      const expected = [...(request.character_reference_asset_ids || [])].sort((a, b) => a - b);
+      const supplied = [...subject.asset_ids].sort((a, b) => a - b);
+      if (JSON.stringify(expected) !== JSON.stringify(supplied)) {
+        return { blockers: ['subject_references asset_ids must match character_reference_asset_ids.'], character_id: null };
+      }
+    }
     if (
       request.workflow_id === 'minimax_h3_fl2va_official_12gb'
       || !request.character_reference_asset_ids?.length
@@ -67,6 +78,9 @@ export class VideoReferenceIdentityService {
         `Character references span multiple identities (${Array.from(boundCharacterIds).sort((a, b) => a - b).join(', ')}). `
         + 'Select 1–3 references for one character only.'
       );
+    }
+    if (subject && (boundCharacterIds.size !== 1 || !boundCharacterIds.has(subject.character_id))) {
+      blockers.push(`subject_references character_id ${subject.character_id} must match every bound identity reference.`);
     }
 
     return {

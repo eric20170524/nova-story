@@ -34,6 +34,7 @@ import { useToast } from '../../ToastContext';
 import { API_BASE_URL } from '../../constants';
 import { api } from '../../services/api';
 import { useImagePreview } from '../ImageLightbox';
+import { appendUploadedIdentityReference, defaultIdentityReferenceIds, recommendVideoWorkflow } from '../../services/videoWorkflowPolicy';
 
 interface SceneVideoPlayerProps {
   scene: Scene;
@@ -45,6 +46,19 @@ interface SceneVideoPlayerProps {
   onCancelTask?: (taskId: string) => void;
 }
 
+const readGuideFrameIdx = (metadataJson?: string | null): number | null => {
+  if (!metadataJson) return null;
+  try {
+    const value = Number(JSON.parse(metadataJson).guide_frame_idx);
+    return Number.isInteger(value) && value >= 1 && value <= 119 ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const isPersistedGuideRole = (role?: string) =>
+  role === 'guide_frame_reference' || role === 'composition_reference';
+
 type ReferenceUploadRole =
   | 'video_keyframe'
   | 'last_frame_reference'
@@ -52,31 +66,6 @@ type ReferenceUploadRole =
   | 'motion_reference'
   | 'guide_frame_reference'
   | 'composition_reference';
-
-const getSuggestedWorkflowForScene = (assets: MediaAsset[]): {
-  workflowId: VideoWorkflowId;
-  reason: string;
-} | null => {
-  const hasGuide = assets.some((asset) => asset.media_type === 'image' && (asset.role === 'guide_frame_reference' || asset.role === 'composition_reference'));
-  const hasLast = assets.some((asset) => asset.media_type === 'image' && asset.role === 'last_frame_reference');
-  const hasCharacter = assets.some((asset) => asset.media_type === 'image' && asset.role === 'character_reference');
-  if (hasGuide) {
-    return {
-      workflowId: 'minimax_h3_multiframe_official_12gb',
-      reason: '当前镜头有导引图，建议采用「多帧参考」，并指定该图在视频片段内的帧位置。'
-    };
-  }
-  if (hasLast && !hasCharacter) {
-    return {
-      workflowId: 'minimax_h3_fl2va_official_12gb',
-      reason: '当前镜头有尾帧图，建议采用「Official FL2VA」固定片段起止画面。'
-    };
-  }
-  return hasCharacter ? {
-    workflowId: 'minimax_h3_ref2va_official_12gb',
-    reason: '当前镜头有人物参考图，建议采用「Official Ref2VA」保持人物外观一致。'
-  } : null;
-};
 
 const WORKFLOWS: Array<{
   id: VideoWorkflowId;
@@ -88,7 +77,7 @@ const WORKFLOWS: Array<{
     id: 'grok_imagine_browser',
     label: 'Grok Imagine',
     badge: '已登录 Chrome',
-    description: '从当前分镜图和人物参考图生成 6 秒视频；生成任务在已登录的 Chrome 中完成并回填系统。'
+    description: '从当前分镜图和人物参考图生成 5 秒视频；生成任务在已登录的 Chrome 中完成并回填系统。'
   },
   {
     id: 'minimax_h3_ref2va_official_12gb',
@@ -115,8 +104,6 @@ const WORKFLOWS: Array<{
     description: '人物参考 + 动作参考，可选硬尾帧。'
   }
 ];
-
-const WORKFLOW_IDS = new Set(WORKFLOWS.map((workflow) => workflow.id));
 
 const isFinalVideo = (asset?: MediaAsset | null) =>
   Boolean(asset && (asset.role === 'loop_master' || asset.role === 'narrative_final'));
@@ -227,17 +214,14 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const [showReferenceManager, setShowReferenceManager] = useState(false);
   const [localReferenceAssets, setLocalReferenceAssets] = useState<MediaAsset[]>([]);
   const [uploadingRole, setUploadingRole] = useState<ReferenceUploadRole | null>(null);
-  const [workflowId, setWorkflowId] = useState<VideoWorkflowId>(() => {
-    try {
-      const saved = localStorage.getItem('director_videoWorkflowId') as VideoWorkflowId | null;
-      if (saved && WORKFLOW_IDS.has(saved)) return saved;
-    } catch {}
-    return 'minimax_h3_hongchao_a2a_12gb';
-  });
+  const [workflowId, setWorkflowId] = useState<VideoWorkflowId>('minimax_h3_ref2va_official_12gb');
+  const [workflowManuallySelected, setWorkflowManuallySelected] = useState(false);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<ImageChoiceValue | null>(null);
   const [selectedLastFrameId, setSelectedLastFrameId] = useState<number | null>(null);
   const [selectedGuideFrameId, setSelectedGuideFrameId] = useState<number | null>(null);
   const [guideFrameIdx, setGuideFrameIdx] = useState<number>(60);
+  const [additionalGuides, setAdditionalGuides] = useState<Array<{ assetId: number | null; frameIdx: number }>>([]);
+  const loadedGuideFrameAssetId = useRef<number | null>(null);
   const [selectedCharacterRefIds, setSelectedCharacterRefIds] = useState<number[]>([]);
   const [selectedMotionRefId, setSelectedMotionRefId] = useState<number | null>(null);
 
@@ -249,7 +233,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     return Array.from(byId.values());
   }, [mediaAssets, localReferenceAssets]);
 
-  const suggestedWorkflow = React.useMemo(() => getSuggestedWorkflowForScene(mergedAssets), [mergedAssets]);
+  const suggestedWorkflow = React.useMemo(() => recommendVideoWorkflow(mergedAssets), [mergedAssets]);
 
   const videoAssets = mergedAssets.filter((asset) => asset.media_type === 'video');
   const finalVideoAssets = videoAssets.filter((asset) => isFinalVideo(asset));
@@ -260,7 +244,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const guideReferenceAssets = mergedAssets.filter(
     (asset) =>
       (asset.role === 'guide_frame_reference' || asset.role === 'composition_reference') &&
-      asset.media_type === 'image'
+      asset.media_type === 'image' && asset.status === 'ready'
   );
   const lastFrameChoices = Array.from(
     new Map([...keyframeAssets, ...explicitLastFrameAssets].map((asset) => [asset.id, asset])).values()
@@ -310,10 +294,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   }, [selectedAssetId, preferredAsset?.id]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('director_videoWorkflowId', workflowId);
-    } catch {}
-  }, [workflowId]);
+    if (!workflowManuallySelected) setWorkflowId(suggestedWorkflow.workflowId);
+  }, [suggestedWorkflow.workflowId, workflowManuallySelected]);
 
   useEffect(() => {
     const validKeyframeIds = new Set(keyframeAssets.map((asset) => asset.id));
@@ -330,7 +312,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     setSelectedCharacterRefIds((current) => {
       const preserved = current.filter((id) => validCharIds.has(id)).slice(0, 3);
       if (preserved.length > 0) return preserved;
-      return characterReferenceAssets.slice(-3).map((asset) => asset.id);
+      return defaultIdentityReferenceIds(characterReferenceAssets);
     });
 
     const validMotionIds = new Set(motionReferenceAssets.map((asset) => asset.id));
@@ -350,6 +332,27 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     motionReferenceAssets.map((asset) => asset.id).join(','),
     guideFrameChoices.map((asset) => asset.id).join(',')
   ]);
+
+  const selectedGuideStoredIdx = readGuideFrameIdx(
+    mergedAssets.find((asset) => asset.id === selectedGuideFrameId)?.metadata_json
+  );
+  useEffect(() => {
+    if (selectedGuideFrameId == null || selectedGuideStoredIdx == null) return;
+    if (loadedGuideFrameAssetId.current === selectedGuideFrameId) return;
+    loadedGuideFrameAssetId.current = selectedGuideFrameId;
+    setGuideFrameIdx(selectedGuideStoredIdx);
+  }, [selectedGuideFrameId, selectedGuideStoredIdx]);
+
+  const rememberGuideFrame = (assetId: number | null, frameIdx: number) => {
+    if (assetId == null) return;
+    const asset = mergedAssets.find((item) => item.id === assetId);
+    if (!isPersistedGuideRole(asset?.role) || readGuideFrameIdx(asset?.metadata_json) === frameIdx) return;
+    void api.setGuideFrameIndex(assetId, frameIdx).then((updated) => {
+      setLocalReferenceAssets((current) => [...current.filter((item) => item.id !== updated.id), updated]);
+    }).catch((error: any) => {
+      showToast(error?.message || '导引帧位置保存失败', 'error');
+    });
+  };
 
   const handleTogglePlay = () => {
     if (!videoRef.current) return;
@@ -403,6 +406,12 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const toggleCharacterRef = (assetId: number) => {
     setSelectedCharacterRefIds((current) => {
       if (current.includes(assetId)) return current.filter((id) => id !== assetId);
+      const nextAsset = characterReferenceAssets.find(asset => asset.id === assetId);
+      const selectedAsset = characterReferenceAssets.find(asset => asset.id === current[0]);
+      if (selectedAsset && nextAsset?.character_id !== selectedAsset.character_id) {
+        showToast('人物参考须属于同一角色；多角色身份参考暂不可用', 'warning');
+        return current;
+      }
       if (current.length >= 3) {
         showToast('人物参考最多选择 3 张', 'warning');
         return current;
@@ -428,6 +437,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       formData.append('project_id', String(projectId));
       formData.append('scene_id', String(sceneId));
       formData.append('role', role);
+      if (isPersistedGuideRole(role)) formData.append('guide_frame_idx', String(guideFrameIdx));
       formData.append('file', file);
 
       const asset = await api.uploadVideoReference(formData);
@@ -441,7 +451,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       if (role === 'guide_frame_reference' || role === 'composition_reference') setSelectedGuideFrameId(asset.id);
       if (role === 'motion_reference') setSelectedMotionRefId(asset.id);
       if (role === 'character_reference') {
-        setSelectedCharacterRefIds((current) => [...current.filter((id) => id !== asset.id), asset.id].slice(-3));
+        setSelectedCharacterRefIds(current => appendUploadedIdentityReference(current, mergedAssets, asset));
       }
       showToast('参考素材已上传并绑定到当前 Scene', 'success');
     } catch (error: any) {
@@ -457,7 +467,22 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       showToast('请先选择或上传 First Frame', 'warning');
       return;
     }
+    if (isMultiframe && additionalGuides.some(guide => guide.assetId == null)) {
+      showToast('请为每个 Guide Frame 选择图片，或移除空白项', 'warning');
+      return;
+    }
 
+    const guideFrames = isMultiframe
+      ? [
+          ...(selectedGuideFrameId ? [{ asset_id: selectedGuideFrameId, frame_idx: guideFrameIdx }] : []),
+          ...additionalGuides.filter(guide => guide.assetId != null).map(guide => ({ asset_id: guide.assetId!, frame_idx: guide.frameIdx }))
+        ]
+      : [];
+    if (new Set(guideFrames.map(guide => guide.frame_idx)).size !== guideFrames.length) {
+      showToast('Guide Frame 的帧位置不能重复', 'warning');
+      return;
+    }
+    guideFrames.forEach((guide) => rememberGuideFrame(guide.asset_id, guide.frame_idx));
     onGenerateVideo({
       workflowId,
       // 0 asks backend preflight to register/reuse this Scene's current storyboard image.
@@ -465,8 +490,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       lastFrameAssetId: isRef2va ? undefined : (selectedLastFrameId || undefined),
       characterRefAssetIds: isFl2va ? [] : selectedCharacterRefIds,
       motionRefAssetId: isFl2va ? undefined : (selectedMotionRefId || undefined),
-      guideFrameAssetId: isMultiframe ? (selectedGuideFrameId || undefined) : undefined,
-      guideFrameIdx: isMultiframe ? guideFrameIdx : undefined
+      guideFrames: guideFrames.length ? guideFrames : undefined
     });
     setShowReferenceManager(false);
   };
@@ -529,7 +553,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
             {workflowId !== suggestedWorkflow.workflowId && (
               <button
                 type="button"
-                onClick={() => setWorkflowId(suggestedWorkflow.workflowId)}
+                onClick={() => { setWorkflowManuallySelected(false); setWorkflowId(suggestedWorkflow.workflowId); }}
                 className="shrink-0 text-[10px] px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors shadow-sm"
               >
                 采用建议
@@ -545,7 +569,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
               <button
                 key={workflow.id}
                 type="button"
-                onClick={() => setWorkflowId(workflow.id)}
+                onClick={() => { setWorkflowManuallySelected(true); setWorkflowId(workflow.id); }}
                 className={`p-2.5 rounded-xl border text-left transition-all ${
                   workflowId === workflow.id
                     ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-500 text-indigo-950 dark:text-white shadow-sm ring-1 ring-indigo-500/30'
@@ -610,31 +634,53 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={123}
+                  max={119}
                   value={guideFrameIdx}
-                  onChange={(e) => setGuideFrameIdx(Math.max(1, Math.min(123, Number(e.target.value) || 60)))}
+                  onChange={(e) => {
+                    const next = Math.max(1, Math.min(119, Number(e.target.value) || 60));
+                    setGuideFrameIdx(next);
+                    rememberGuideFrame(selectedGuideFrameId, next);
+                  }}
                   className="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-800 dark:text-slate-200 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500"
                 />
                 <div className="flex gap-1">
-                  {[30, 60, 90].map((idx) => (
+                  {[24, 36, 48, 72, 96].map((idx) => (
                     <button
                       key={idx}
                       type="button"
-                      onClick={() => setGuideFrameIdx(idx)}
+                      onClick={() => {
+                        setGuideFrameIdx(idx);
+                        rememberGuideFrame(selectedGuideFrameId, idx);
+                      }}
                       className={`text-[10px] px-2 py-0.5 rounded-lg border transition-all ${
                         guideFrameIdx === idx
                           ? 'bg-amber-100 dark:bg-amber-950/60 border-amber-400 dark:border-amber-600 text-amber-900 dark:text-amber-300 font-semibold'
                           : 'bg-slate-100 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                       }`}
                     >
-                      第 {idx} 帧
+                      {idx / 24}s
                     </button>
                   ))}
                 </div>
               </div>
               <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                帧位置属于当前视频片段，范围为 1–123；可直接输入精确帧号。
+                第 {guideFrameIdx} 帧 = {(guideFrameIdx / 24).toFixed(2)} 秒（24fps）；可输入 1–119 的精确帧号。
               </div>
+              {additionalGuides.map((guide, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  <div className="flex-1"><ReferenceImagePicker choices={guideImageChoices} value={guide.assetId} onChange={value => setAdditionalGuides(current => current.map((item, i) => i === index ? { ...item, assetId: typeof value === 'number' ? value : null } : item))} emptyLabel="选择额外 Guide Frame" /></div>
+                  <input type="number" min={1} max={119} value={guide.frameIdx} aria-label="Guide Frame 帧位置" onChange={event => {
+                    const next = Math.max(1, Math.min(119, Number(event.target.value) || 1));
+                    setAdditionalGuides(current => current.map((item, i) => i === index ? { ...item, frameIdx: next } : item));
+                    rememberGuideFrame(guide.assetId, next);
+                  }} className="w-16 rounded-lg border border-slate-200 bg-white px-1 py-2 text-xs dark:bg-slate-950 dark:border-slate-700" />
+                  <span className="pt-2 text-[10px] text-slate-500">{(guide.frameIdx / 24).toFixed(2)}s</span>
+                  <button type="button" onClick={() => setAdditionalGuides(current => current.filter((_, i) => i !== index))} aria-label="移除 Guide Frame"><X size={14} /></button>
+                </div>
+              ))}
+              {additionalGuides.length < (selectedGuideFrameId ? 3 : 4) && (
+                <button type="button" className="text-indigo-600 text-[10px]" onClick={() => setAdditionalGuides(current => [...current, { assetId: null, frameIdx: Math.min(119, 24 * (current.length + 2)) }])}>+ 添加 Guide Frame（最多 4 张）</button>
+              )}
             </div>
           )}
 

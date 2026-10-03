@@ -25,7 +25,7 @@ const lookup: ComfyWorkflowLookup = {
 };
 const image = (model: 'pony' | 'sd15' | 'redcraft_krea2', workflow_id: number | null = null) => ({
   image_generation: { model, workflow_id, style: 'xianxia_immortal',
-    output_spec: { aspect_ratio: '3:4', resolution: 'standard', orientation_policy: 'fixed' },
+    output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
     nsfw_mode: 'inherit' }
 });
 

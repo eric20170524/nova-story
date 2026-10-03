@@ -21,7 +21,7 @@ export class LoopAnalyzer {
       technicalPass = false;
       reasons.push('Invalid video resolution');
     }
-    if (Math.abs(probe.fps - 24) > 0.25) {
+    if (Math.abs(probe.fps - 24) > 0.01) {
       technicalPass = false;
       reasons.push(`FPS mismatch: expected 24, got ${probe.fps}`);
     }
@@ -29,7 +29,7 @@ export class LoopAnalyzer {
       technicalPass = false;
       reasons.push(`Duration mismatch: expected 5.0s, got ${probe.duration_s.toFixed(3)}s`);
     }
-    if (Math.abs(probe.frame_count - 120) > 1) {
+    if (probe.frame_count !== 120) {
       technicalPass = false;
       reasons.push(`Frame-count mismatch: expected 120, got ${probe.frame_count}`);
     }

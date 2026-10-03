@@ -41,6 +41,7 @@ import {
     type TierBCapability
 } from './tier_b_adapters';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
+import { captureShotMasterSnapshot, recordShotMasterSnapshot, type ShotMasterInputSnapshot } from './video/shot_master_snapshot';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
 import {
     createProgressPublisher,
@@ -48,6 +49,7 @@ import {
 } from './generation_progress';
 import {
     normalizeGeneratedImage,
+    resolveComfyLatentDimensions,
     resolveImageOutputTarget,
     type ImageOutputTarget,
 } from './image_output_spec';
@@ -644,9 +646,9 @@ export const compileComfyWorkflow = async (
         modelFamily,
         finalPrompt,
     });
-    const { width, height } = outputTarget;
+    const { width, height } = resolveComfyLatentDimensions(outputTarget);
     logger.info(
-        `Resolved image canvas ${width}x${height} ratio=${outputTarget.resolved_aspect_ratio} `
+        `Resolved image canvas ${outputTarget.width}x${outputTarget.height} (Comfy latent ${width}x${height}) ratio=${outputTarget.resolved_aspect_ratio} `
         + `resolution=${outputTarget.resolution} source=${outputTarget.source}`
     );
 
@@ -1178,6 +1180,18 @@ export class GenerationService {
                 + `source=${outputTarget.source}`
             );
 
+            const shotMasterCharacterIds = Array.isArray(effectiveWorkflowData.shot_master_character_ids)
+                ? effectiveWorkflowData.shot_master_character_ids.map(Number)
+                : undefined;
+            let shotMasterInputs: ShotMasterInputSnapshot | null = null;
+            if (sceneChapterId != null && sceneProjectId != null) {
+                shotMasterInputs = await captureShotMasterSnapshot({
+                    sceneId,
+                    projectId: sceneProjectId,
+                    characterIds: shotMasterCharacterIds,
+                });
+            }
+
             if (useComfy) {
                 logger.info(`[Task ${taskId}] Using ComfyUI`);
 
@@ -1313,8 +1327,19 @@ export class GenerationService {
                 }
 
                 if (finalStatus === "completed" && sceneChapterId != null) {
-                    await db.run(`INSERT OR REPLACE INTO scene_asset_image_snapshot (scene_id, image_url, references_json) VALUES (?, ?, ?)`,
-                        sceneId, assetUrl, JSON.stringify((effectiveWorkflowData.asset_references || []).map((ref: any) => ({ id: ref.id, revision: ref.revision }))));
+                    const recorded = await recordShotMasterSnapshot({
+                        sceneId,
+                        projectId: sceneProjectId!,
+                        imageUrl: assetUrl!,
+                        characterIds: shotMasterCharacterIds,
+                        captured: shotMasterInputs ?? undefined,
+                    });
+                    if (recorded.drifted) {
+                        logger.warn(
+                            `[Task ${taskId}] Location, prop, or character versions changed while this Shot Master was generating. `
+                            + `The snapshot keeps the inputs used for ${assetUrl}.`
+                        );
+                    }
                     await db.run('UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?', "completed", assetUrl, taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {

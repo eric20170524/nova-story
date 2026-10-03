@@ -56,9 +56,22 @@ export function resolveVisibleShotCharacters(shot, characters, limit = 4) {
   const names = [spec.primary_subject, ...(spec.visible_subjects || [])];
   const selected = [];
   for (const name of names) {
+    if (!normalized(name)) continue;
     const match = characters.find(character => normalized(character.name) === normalized(name));
     if (match?.avatar_url && !selected.some(character => character.id === match.id)) selected.push(match);
     if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+export function resolveVisibleShotCast(shot, characters) {
+  const spec = shotSpec(shot);
+  const names = [spec.primary_subject, ...(spec.visible_subjects || [])];
+  const selected = [];
+  for (const name of names) {
+    if (!normalized(name)) continue;
+    const match = characters.find(character => normalized(character.name) === normalized(name));
+    if (match && !selected.some(character => character.id === match.id)) selected.push(match);
   }
   return selected;
 }
@@ -74,4 +87,45 @@ export function keyframeUsesBindings(shot, bound, snapshots) {
     const order = list => list.map(item => ({ id: item.id, revision: item.revision })).sort((a, b) => a.id - b.id);
     return JSON.stringify(order(JSON.parse(snapshot.references_json))) === JSON.stringify(order(bound));
   } catch { return false; }
+}
+
+export function keyframeUsesCharacterVersions(shot, characters, snapshots, requiredIds = []) {
+  const snapshot = snapshots.find(item => item.scene_id === shot.id && item.image_url === shot.asset_url);
+  if (!snapshot?.character_versions_json) return characters.length === 0;
+  try {
+    const recorded = JSON.parse(snapshot.character_versions_json);
+    if (!Array.isArray(recorded)) return false;
+    const current = new Map(characters.map(character => [Number(character.id), Number(character.active_version || 1)]));
+    const captured = new Map(recorded.map(character => [Number(character.id), Number(character.version)]));
+    return recorded.every(character => current.get(Number(character.id)) === Number(character.version))
+      && requiredIds.every(id => captured.has(Number(id)));
+  } catch { return false; }
+}
+
+export function chooseShotVideoStrategy(assets, override = null) {
+  const available = assets.filter(asset => asset.status === 'ready');
+  const latest = role => available.filter(asset => asset.role === role).sort((a, b) => Number(b.id) - Number(a.id))[0];
+  const guide = latest('guide_frame_reference') || latest('composition_reference');
+  const last = latest('last_frame_reference');
+  const selected = override || (guide
+    ? 'minimax_h3_multiframe_official_12gb'
+    : last ? 'minimax_h3_fl2va_official_12gb' : 'minimax_h3_ref2va_official_12gb');
+  let guideFrameIdx;
+  if (selected === 'minimax_h3_multiframe_official_12gb' && guide) {
+    let proposed;
+    try { proposed = JSON.parse(guide.metadata_json || '{}').guide_frame_idx; } catch {}
+    if (!Number.isInteger(proposed) || proposed < 1 || proposed > 119) {
+      throw new Error(`Guide frame asset ${guide.id} requires metadata_json.guide_frame_idx within delivery frames 1..119 (24fps).`);
+    }
+    guideFrameIdx = proposed;
+  }
+  return {
+    workflow_id: selected,
+    reason: override ? 'Explicit workflow override' : guide ? 'Guide frame requires Official Multi-Frame'
+      : last ? 'Last-frame boundary requires Official FL2VA' : 'Ordinary shot uses Official Ref2VA',
+    ...(selected === 'minimax_h3_multiframe_official_12gb' && guide
+      ? { guide_frames: [{ asset_id: guide.id, frame_idx: guideFrameIdx }] } : {}),
+    ...(['minimax_h3_fl2va_official_12gb', 'minimax_h3_multiframe_official_12gb', 'minimax_h3_hongchao_a2a_12gb'].includes(selected) && last
+      ? { last_frame_asset_id: last.id } : {}),
+  };
 }

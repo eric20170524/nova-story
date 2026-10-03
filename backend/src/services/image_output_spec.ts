@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 
-export type ImageAspectRatio = '3:4' | '4:3' | '1:1' | '16:9' | '9:16' | 'auto';
+export type ImageAspectRatio = '16:9' | '9:16' | '1:1' | 'auto';
 export type ImageResolution = 'draft' | 'standard' | 'high';
 export type ImageOrientationPolicy = 'fixed' | 'auto_by_shot';
 
@@ -19,12 +19,12 @@ export interface ImageOutputTarget extends ImageOutputSpec {
 }
 
 export const DEFAULT_IMAGE_OUTPUT_SPEC: ImageOutputSpec = {
-  aspect_ratio: '3:4',
+  aspect_ratio: '16:9',
   resolution: 'standard',
   orientation_policy: 'fixed',
 };
 
-const ASPECT_RATIOS = new Set<ImageAspectRatio>(['3:4', '4:3', '1:1', '16:9', '9:16', 'auto']);
+const ASPECT_RATIOS = new Set<ImageAspectRatio>(['16:9', '9:16', '1:1', 'auto']);
 const RESOLUTIONS = new Set<ImageResolution>(['draft', 'standard', 'high']);
 const ORIENTATION_POLICIES = new Set<ImageOrientationPolicy>(['fixed', 'auto_by_shot']);
 
@@ -49,13 +49,19 @@ export const normalizeImageOutputSpec = (raw: unknown): ImageOutputSpec => ({
   ...parsePartialSpec(raw),
 });
 
-export const isLandscapeShot = (shotType?: unknown, prompt?: unknown): boolean =>
-  /wide|long shot|extreme long|establishing|panoramic|landscape|overview|overhead|aerial|bird'?s[- ]eye/i.test(
-    `${shotType || ''} ${prompt || ''}`
-  );
+const CANVAS_MIN = 256;
+const CANVAS_MAX = 4096;
+/** Same tolerance as Shot Master video preflight (`width / height` vs 16:9). */
+const DELIVERY_ASPECT_TOLERANCE = 0.005;
 
 const alignDimension = (value: number) =>
-  Math.max(256, Math.min(4096, Math.round(value / 64) * 64));
+  Math.max(CANVAS_MIN, Math.min(CANVAS_MAX, Math.round(value / 64) * 64));
+
+/** Comfy UNet canvas. The delivered file keeps the requested aspect ratio. */
+export const resolveComfyLatentDimensions = (target: Pick<ImageOutputTarget, 'width' | 'height'>) => ({
+  width: alignDimension(target.width),
+  height: alignDimension(target.height),
+});
 
 const explicitDimensions = (generationParams: any): { width: number; height: number } | null => {
   const width = Number(generationParams?.width);
@@ -63,7 +69,32 @@ const explicitDimensions = (generationParams: any): { width: number; height: num
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
-  return { width: alignDimension(width), height: alignDimension(height) };
+  return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
+};
+
+const matchesDeliveryRatio = (width: number, height: number, ratio: number) =>
+  height > 0 && Math.abs(width / height - ratio) <= DELIVERY_ASPECT_TOLERANCE;
+
+const clampCanvas = (value: number) => Math.max(CANVAS_MIN, Math.min(CANVAS_MAX, Math.round(value)));
+
+/** Keep an explicit request on its labeled ratio. 64-alignment belongs only on the Comfy latent. */
+const deliveryDimensions = (width: number, height: number, ratio: number) => {
+  if (
+    width >= CANVAS_MIN && width <= CANVAS_MAX
+    && height >= CANVAS_MIN && height <= CANVAS_MAX
+    && matchesDeliveryRatio(width, height, ratio)
+  ) {
+    return { width, height };
+  }
+  const side = clampCanvas(Math.max(width, height));
+  if (Math.abs(ratio - 1) <= DELIVERY_ASPECT_TOLERANCE) return { width: side, height: side };
+  const landscape = width >= height;
+  const other = clampCanvas(landscape ? side / ratio : side * ratio);
+  const delivered = landscape ? { width: side, height: other } : { width: other, height: side };
+  if (matchesDeliveryRatio(delivered.width, delivered.height, ratio)) return delivered;
+  return landscape
+    ? { width: clampCanvas(other * ratio), height: other }
+    : { width: other, height: clampCanvas(other / ratio) };
 };
 
 const dimensionsFor = (
@@ -74,29 +105,18 @@ const dimensionsFor = (
   const isSd15 = modelFamily === 'sd15';
   if (aspectRatio === '16:9') {
     return isSd15
-      ? (resolution === 'draft' ? { width: 640, height: 384 } : resolution === 'high' ? { width: 1024, height: 576 } : { width: 768, height: 448 })
-      : (resolution === 'draft' ? { width: 896, height: 512 } : resolution === 'high' ? { width: 1536, height: 864 } : { width: 1344, height: 768 });
+      ? (resolution === 'draft' ? { width: 640, height: 360 } : resolution === 'high' ? { width: 1024, height: 576 } : { width: 768, height: 432 })
+      : (resolution === 'draft' ? { width: 896, height: 504 } : resolution === 'high' ? { width: 1536, height: 864 } : { width: 1280, height: 720 });
   }
   if (aspectRatio === '9:16') {
     return isSd15
-      ? (resolution === 'draft' ? { width: 384, height: 640 } : resolution === 'high' ? { width: 576, height: 1024 } : { width: 448, height: 768 })
-      : (resolution === 'draft' ? { width: 512, height: 896 } : resolution === 'high' ? { width: 864, height: 1536 } : { width: 768, height: 1344 });
+      ? (resolution === 'draft' ? { width: 360, height: 640 } : resolution === 'high' ? { width: 576, height: 1024 } : { width: 432, height: 768 })
+      : (resolution === 'draft' ? { width: 504, height: 896 } : resolution === 'high' ? { width: 864, height: 1536 } : { width: 720, height: 1280 });
   }
-  const portraitByResolution: Record<ImageResolution, [number, number]> = isSd15
-    ? {
-        draft: [384, 512],
-        standard: [576, 768],
-        high: [768, 1024],
-      }
-    : {
-        draft: [576, 768],
-        standard: [768, 1024],
-        high: [1152, 1536],
-      };
-  const [portraitWidth, portraitHeight] = portraitByResolution[resolution];
-  if (aspectRatio === '4:3') return { width: portraitHeight, height: portraitWidth };
-  if (aspectRatio === '1:1') return { width: portraitHeight, height: portraitHeight };
-  return { width: portraitWidth, height: portraitHeight };
+  const squareSize = isSd15
+    ? { draft: 512, standard: 768, high: 1024 }[resolution]
+    : { draft: 768, standard: 1024, high: 1536 }[resolution];
+  return { width: squareSize, height: squareSize };
 };
 
 const imageSizeFor = (resolution: ImageResolution): ImageOutputTarget['image_size'] =>
@@ -135,13 +155,16 @@ export const resolveImageOutputTarget = (options: {
 
   const directDimensions = explicitDimensions(generationParams);
   if (directDimensions) {
-    const ratio = directDimensions.width === directDimensions.height
+    const requestedRatio = directDimensions.width / directDimensions.height;
+    const ratio = Math.abs(requestedRatio - 1) <= 0.04
       ? '1:1'
-      : directDimensions.width > directDimensions.height ? '4:3' : '3:4';
+      : directDimensions.width > directDimensions.height ? '16:9' : '9:16';
+    const ratioValue = ratio === '1:1' ? 1 : ratio === '16:9' ? 16 / 9 : 9 / 16;
     const spec = normalizeImageOutputSpec(requestRaw || projectRaw);
     return {
       ...spec,
-      ...directDimensions,
+      aspect_ratio: ratio,
+      ...deliveryDimensions(directDimensions.width, directDimensions.height, ratioValue),
       resolved_aspect_ratio: ratio,
       image_size: imageSizeFor(spec.resolution),
       source: 'request_dimensions',
@@ -150,13 +173,11 @@ export const resolveImageOutputTarget = (options: {
 
   // A turnaround sheet is assembled from three panels by its compositor.
   if (genType === 'turnaround' && !requestHasSpec) {
-    const dimensions = modelFamily === 'sd15'
-      ? { width: 768, height: 512 }
-      : { width: 1152, height: 768 };
+    const dimensions = dimensionsFor(modelFamily, 'standard', '16:9');
     return {
       ...DEFAULT_IMAGE_OUTPUT_SPEC,
-      aspect_ratio: '4:3',
-      resolved_aspect_ratio: '4:3',
+      aspect_ratio: '16:9',
+      resolved_aspect_ratio: '16:9',
       ...dimensions,
       image_size: '1K',
       source: 'generation_type',
@@ -170,9 +191,11 @@ export const resolveImageOutputTarget = (options: {
     ...requestSpec,
   };
   const resolvedAspectRatio: Exclude<ImageAspectRatio, 'auto'> =
-    spec.aspect_ratio === 'auto' || spec.orientation_policy === 'auto_by_shot'
-    ? (isLandscapeShot(workflowData.shot_type, options.finalPrompt) ? '4:3' : '3:4')
-    : spec.aspect_ratio;
+    requestSpec.aspect_ratio && requestSpec.aspect_ratio !== 'auto'
+      ? requestSpec.aspect_ratio
+      : spec.aspect_ratio === 'auto' || spec.orientation_policy === 'auto_by_shot'
+        ? '16:9'
+        : spec.aspect_ratio;
   const dimensions = dimensionsFor(modelFamily, spec.resolution, resolvedAspectRatio);
 
   return {

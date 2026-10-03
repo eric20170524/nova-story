@@ -169,7 +169,7 @@ export class OpenAIProvider implements AIProvider {
         try {
             const size = !options || options.aspectRatio === '1:1'
                 ? '1024x1024'
-                : options.aspectRatio === '4:3' ? '1792x1024' : '1024x1792';
+                : options.aspectRatio === '16:9' ? '1792x1024' : '1024x1792';
             const response = await this.openai.images.generate({
                 model: this.imageModel,
                 prompt,

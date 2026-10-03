@@ -17,7 +17,7 @@ import {
   Crop,
   Video
 } from 'lucide-react';
-import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState } from '../../types';
+import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
@@ -35,7 +35,7 @@ interface DirectorTimelineProps {
   generatingNarration: boolean;
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
-  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean; canvasAspectRatio?: string }) => void;
+  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio'] }) => void;
   onGenerateKeyframe?: (sceneId: number | string) => void;
   onUpdateScene: (id: number | string, field: keyof Scene, value: any) => void;
   onRefreshTimeline?: () => void;

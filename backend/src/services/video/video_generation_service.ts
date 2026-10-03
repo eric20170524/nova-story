@@ -15,10 +15,11 @@ import {
   VideoTaskResponse,
   VideoTaskStage
 } from '../../schemas/video';
-import { VideoSpecCompiler } from './video_spec_compiler';
+import { VideoSpecCompiler, resolvePresetDimensions } from './video_spec_compiler';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
 import { VideoReferenceIdentityService } from './video_reference_identity_service';
+import { getShotVisibleCharacterIds, validateShotMasterCharacters } from './shot_master_snapshot';
 import { GpuLeaseCancelledError, GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
@@ -26,6 +27,7 @@ import { LoopCloser, type ProcessVideoResult } from './loop_closer';
 import { createProgressPublisher, ProgressPublisher } from '../generation_progress';
 import { VramService } from '../vram_service';
 import { ScriptService } from '../script_service';
+import sharp from 'sharp';
 
 type QaDisposition = {
   assetStatus: MediaAssetStatus;
@@ -325,6 +327,21 @@ export class VideoGenerationService {
       if (keyframeAsset.scene_id != null && Number(keyframeAsset.scene_id) !== Number(request.scene_id)) {
         blockers.push(`Keyframe asset ID ${request.keyframe_asset_id} belongs to a different scene.`);
       }
+      let width = Number(keyframeAsset.width || 0);
+      let height = Number(keyframeAsset.height || 0);
+      if ((!width || !height) && keyframeAsset.url.startsWith('/static/')) {
+        try {
+          const file = MediaAssetService.resolveSafePath(keyframeAsset.url);
+          if (fs.existsSync(file)) {
+            const metadata = await sharp(file).metadata();
+            width = Number(metadata.width || 0);
+            height = Number(metadata.height || 0);
+          }
+        } catch { /* Missing source is reported by the staging gate. */ }
+      }
+      if (width > 0 && height > 0 && Math.abs(width / height - 16 / 9) > 0.005) {
+        blockers.push(`Shot Master keyframe must be 16:9; asset ${keyframeAsset.id} is ${width}×${height}.`);
+      }
     }
 
     if (request.last_frame_asset_id) {
@@ -343,14 +360,14 @@ export class VideoGenerationService {
       }
     }
 
-    if (request.guide_frame_asset_id) {
-      const guideAsset = await MediaAssetService.getAssetById(request.guide_frame_asset_id);
+    for (const guideId of [request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id)].filter((id): id is number => id != null)) {
+      const guideAsset = await MediaAssetService.getAssetById(guideId);
       if (!guideAsset) {
-        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} does not exist.`);
+        blockers.push(`Guide-frame asset ID ${guideId} does not exist.`);
       } else if (guideAsset.media_type !== 'image') {
-        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} must be an image.`);
+        blockers.push(`Guide-frame asset ID ${guideId} must be an image.`);
       } else if (projectId && guideAsset.project_id !== projectId) {
-        blockers.push(`Guide-frame asset ID ${request.guide_frame_asset_id} belongs to a different project.`);
+        blockers.push(`Guide-frame asset ID ${guideId} belongs to a different project.`);
       }
     }
 
@@ -386,6 +403,16 @@ export class VideoGenerationService {
     // behavior as /api/videos/preflight and /api/videos/generate.
     const identityValidation = await VideoReferenceIdentityService.validate(request);
     blockers.push(...identityValidation.blockers);
+    if (scene && projectId && keyframeAsset?.url) {
+      const requiredCharacterIds = await getShotVisibleCharacterIds(Number(scene.id), projectId);
+      if (identityValidation.character_id != null) requiredCharacterIds.push(identityValidation.character_id);
+      blockers.push(...await validateShotMasterCharacters({
+        sceneId: Number(scene.id),
+        projectId,
+        imageUrl: keyframeAsset.url,
+        requiredCharacterIds: [...new Set(requiredCharacterIds)],
+      }));
+    }
 
     const character = projectId
       ? await this.resolveCharacterForRequest(request, projectId)
@@ -499,7 +526,8 @@ export class VideoGenerationService {
         })),
         prompt: spec.positive_prompt,
         negative_prompt: spec.negative_prompt,
-        duration_seconds: 6,
+        duration_seconds: 5,
+        delivery_contract: { duration_seconds: 5, fps: 24, frame_count: 120 },
         requested_at: new Date().toISOString(),
       }, null, 2), { flag: 'wx' });
       await db.run("UPDATE generation_task SET stage = 'generating', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
@@ -517,10 +545,17 @@ export class VideoGenerationService {
           fs.mkdirSync(taskDir, { recursive: true });
           const rawPath = path.join(taskDir, 'raw.mp4');
           fs.copyFileSync(videoPath, rawPath);
+          const sourceDurationSeconds = (await VideoPostprocessService.probeVideo(rawPath)).duration_s;
+          if (!Number.isFinite(sourceDurationSeconds) || Math.abs(sourceDurationSeconds - 5) > 0.25) {
+            throw new Error(`Grok returned ${sourceDurationSeconds}s for a 5s request; manual review is required before delivery.`);
+          }
           await db.run("UPDATE generation_task SET stage = 'postprocessing', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
           await this.resumePostprocessFromRaw(taskId, request, projectId, rawPath, taskDir, {
             provider: 'grok_imagine_browser',
             browser_result_url: result.source_url || null,
+            requested_duration_seconds: 5,
+            source_duration_seconds: sourceDurationSeconds,
+            delivery_duration_seconds: 5,
           });
           return;
         }
@@ -841,6 +876,13 @@ export class VideoGenerationService {
           stagedGuideFilename = staged.stagedFilename;
         }
       }
+      const stagedGuideFrames: Array<{ filename: string; frameIdx: number }> = [];
+      for (const guide of request.guide_frames || []) {
+        const asset = await MediaAssetService.getAssetById(guide.asset_id);
+        if (!asset) throw new Error(`Guide-frame asset ID ${guide.asset_id} is missing after preflight.`);
+        const staged = await MediaAssetService.stageAssetForComfy(asset);
+        stagedGuideFrames.push({ filename: staged.stagedFilename, frameIdx: guide.frame_idx });
+      }
 
       if (await isCancelled()) {
         stopLeaseHeartbeat();
@@ -859,6 +901,7 @@ export class VideoGenerationService {
           guideFrameFilename: stagedGuideFilename
         },
         guideFrameIdx: request.guide_frame_idx,
+        guideFrames: stagedGuideFrames,
         seed: request.seed,
         outputPrefix: `H3_${projectId}_${request.scene_id}_${taskId.slice(-6)}`
       });
@@ -977,6 +1020,8 @@ export class VideoGenerationService {
         rawVideoPath,
         outputDirectory: taskAssetDir,
         runLoopCloser: request.run_loop_closer,
+        targetWidth: spec.output_contract.width,
+        targetHeight: spec.output_contract.height,
         metadata: {
           spec,
           request,
@@ -1209,6 +1254,8 @@ export class VideoGenerationService {
       rawVideoPath,
       outputDirectory: taskAssetDir,
       runLoopCloser: request.run_loop_closer,
+      targetWidth: resolvePresetDimensions(request.preset).width,
+      targetHeight: resolvePresetDimensions(request.preset).height,
       metadata: { ...provenance, request }
     });
 
