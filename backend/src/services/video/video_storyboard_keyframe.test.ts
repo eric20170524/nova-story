@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { db } from '../../db/database';
 import { MediaAssetService } from './media_asset_service';
 import { VideoGenerationService } from './video_generation_service';
+import { ScriptService } from '../script_service';
 import type { VideoGenerationRequest } from '../../schemas/video';
 
 test('video preflight associates the current scene storyboard without reusing another scene asset', async () => {
@@ -53,6 +54,25 @@ test('video preflight associates the current scene storyboard without reusing an
     const repeatRequest = { ...request, keyframe_asset_id: 0 };
     await VideoGenerationService.preflight(repeatRequest);
     assert.equal(repeatRequest.keyframe_asset_id, request.keyframe_asset_id);
+
+    const originalScript = ScriptService.getScriptById;
+    const script: any = { id: 5, chapterId, revision: 2, status: 'confirmed', freshness: { sourceChanged: false }, document: { scenes: [{ id: 'sc-1', blocks: [{ id: 'b-1' }] }] } };
+    const source = { type: 'script', script_id: 5, script_revision: 1, script_scene_id: 'sc-1', block_ids: ['b-1'] };
+    try {
+      ScriptService.getScriptById = async () => script;
+      const updateSource = () => db.run('UPDATE scene SET shot_spec=? WHERE id=?', JSON.stringify({ source }), sceneId);
+      await updateSource();
+      assert.ok((await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source is stale')));
+      source.script_revision = 2;
+      await updateSource();
+      assert.ok(!(await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source')));
+      script.status = 'draft';
+      assert.ok((await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source is stale')));
+      script.status = 'confirmed';
+      source.block_ids = ['removed-block'];
+      await updateSource();
+      assert.ok((await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source is stale')));
+    } finally { ScriptService.getScriptById = originalScript; }
   } finally {
     await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
     await db.run('DELETE FROM scene WHERE id IN (?, ?)', sceneId, otherSceneId);

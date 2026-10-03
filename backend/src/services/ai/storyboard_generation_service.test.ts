@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { db } from '../../db/database';
 import { ScriptService } from '../script_service';
+import { ensureSceneVersionBaseline } from '../scene_versions';
 import {
   StoryboardGenerationService,
   StoryboardGenerationError,
@@ -684,5 +685,41 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
       fixture.chapterId
     );
     assert.equal(Number(totalScenes.n), 1);
+
+    const replacement = {
+      scriptId: script.id, changeId: candidate.id, expectedRevision: 3,
+      replaceExisting: true, expectedSceneIds: [Number(existingSceneId)],
+    };
+    await assert.rejects(
+      StoryboardGenerationService.applyStoryboardCandidate({ ...replacement, expectedSceneIds: [Number(existingSceneId) + 1] }),
+      /Timeline changed/
+    );
+    await db.run("INSERT INTO generation_task(task_id, scene_id, kind, status) VALUES('replace_busy', ?, 'image', 'processing')", existingSceneId);
+    await assert.rejects(StoryboardGenerationService.applyStoryboardCandidate(replacement), /正在执行/);
+    await db.run("DELETE FROM generation_task WHERE task_id='replace_busy'");
+    const final = await db.run("INSERT INTO media_asset(project_id,scene_id,media_type,role,status,url) VALUES(?,?,'video','narrative_final','ready','/static/accepted.mp4')", fixture.projId, existingSceneId);
+    await assert.rejects(StoryboardGenerationService.applyStoryboardCandidate(replacement), /已验收的视频/);
+    await db.run('DELETE FROM media_asset WHERE id=?', final.lastID);
+    await ensureSceneVersionBaseline(Number(existingSceneId));
+    const library = await db.run("INSERT INTO library_asset(project_id,kind,name,description) VALUES(?,'location','旧分镜场景','保留旧引用')", fixture.projId);
+    await db.run('INSERT INTO scene_asset_reference(scene_id,asset_id,asset_revision) VALUES(?,?,1)', existingSceneId, library.lastID);
+    await db.run("INSERT INTO scene_asset_image_snapshot(scene_id,image_url,references_json) VALUES(?,'http://storage.local/existing_shot.png','[]')", existingSceneId);
+    const keyframe = await db.run("INSERT INTO media_asset(project_id,scene_id,media_type,role,status,url) VALUES(?,?,'image','storyboard_keyframe','ready','http://storage.local/existing_shot.png')", fixture.projId, existingSceneId);
+
+    const replaced = await StoryboardGenerationService.applyStoryboardCandidate(replacement);
+    assert.deepEqual(replaced.replaced_scene_ids, [Number(existingSceneId)]);
+    assert.equal(replaced.scene_ids.length, 2);
+    assert.ok(replaced.scene_ids.every(id => id > Number(existingSceneId)), 'old media scene IDs must never identify new shots');
+    const history = JSON.parse((await db.get('SELECT result_json FROM script_change WHERE id=?', candidate.id)).result_json);
+    assert.equal(history.previous_timeline.scenes[0].asset_url, 'http://storage.local/existing_shot.png');
+    assert.equal(history.previous_timeline.versions.length, 1);
+    assert.equal(history.previous_timeline.references[0].asset_id, library.lastID);
+    assert.equal(history.previous_timeline.image_snapshots.length, 1);
+    assert.equal(history.previous_timeline.media_assets[0].id, keyframe.lastID);
+    assert.ok(await db.get('SELECT id FROM media_asset WHERE id=?', keyframe.lastID));
+    const replay = await StoryboardGenerationService.applyStoryboardCandidate(replacement);
+    assert.equal(replay.already_applied, true);
+    assert.deepEqual(replay.scene_ids, replaced.scene_ids);
+    assert.equal(Number((await db.get('SELECT COUNT(*) AS n FROM scene WHERE chapter_id=?', fixture.chapterId)).n), 2);
   });
 });

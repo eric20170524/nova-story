@@ -284,8 +284,8 @@ export class TtsService {
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const [healthRes, voicesRes] = await Promise.all([
-                    fetcher(`${validation.url}/api/health`, { signal: controller.signal }),
-                    fetcher(`${validation.url}/api/voices`, { signal: controller.signal })
+                    fetcher(`${validation.url}/api/health`, { signal: controller.signal, redirect: 'error' }),
+                    fetcher(`${validation.url}/api/voices`, { signal: controller.signal, redirect: 'error' })
                 ]);
 
                 if (!healthRes.ok || !voicesRes.ok) {
@@ -349,7 +349,7 @@ export class TtsService {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const res = await fetcher(`${validatedUrl}/api/voices`, { signal: controller.signal });
+                const res = await fetcher(`${validatedUrl}/api/voices`, { signal: controller.signal, redirect: 'error' });
                 if (!res.ok) {
                     throw new TtsServiceError('TTS_UNAVAILABLE', `TTS service responded with status ${res.status}`, 503);
                 }
@@ -420,9 +420,14 @@ export class TtsService {
             timedOut = true;
             controller.abort();
         }, timeoutMs);
+        let response: Response | undefined;
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        let completed = false;
 
         try {
             const res = await fetcher(`${validatedUrl}/v1/audio/speech`, {
+                // The validated base URL is the only permitted destination.
+                redirect: 'error',
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -436,6 +441,7 @@ export class TtsService {
                 }),
                 signal: controller.signal
             });
+            response = res;
 
             if (timedOut) {
                 throw new TtsServiceError('TTS_TIMEOUT', 'TTS preview request timed out', 504);
@@ -453,14 +459,27 @@ export class TtsService {
                 }
             }
 
-            const ab = await res.arrayBuffer();
+            if (!res.body) {
+                throw new TtsServiceError('TTS_UNAVAILABLE', 'TTS preview returned no audio body', 503);
+            }
+            reader = res.body.getReader();
+            const chunks: Buffer[] = [];
+            let totalBytes = 0;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                totalBytes += value.byteLength;
+                // Check before retaining the chunk; Content-Length may be absent or inaccurate.
+                if (totalBytes > maxBytes) {
+                    throw new TtsServiceError('TTS_UNAVAILABLE', 'TTS preview audio exceeds 8MiB limit', 503);
+                }
+                chunks.push(Buffer.from(value));
+            }
             if (timedOut) {
                 throw new TtsServiceError('TTS_TIMEOUT', 'TTS preview request timed out', 504);
             }
-            const buffer = Buffer.from(ab);
-            if (buffer.byteLength > maxBytes) {
-                throw new TtsServiceError('TTS_UNAVAILABLE', 'TTS preview audio exceeds 8MiB limit', 503);
-            }
+            const buffer = Buffer.concat(chunks, totalBytes);
+            completed = true;
 
             return {
                 buffer,
@@ -474,6 +493,13 @@ export class TtsService {
             throw new TtsServiceError('TTS_UNAVAILABLE', err.message || 'TTS service unreachable', 503);
         } finally {
             clearTimeout(timer);
+            if (!completed) {
+                controller.abort();
+                // Cancel both oversized declared bodies and partially read streams.
+                if (reader) await reader.cancel().catch(() => {});
+                else await response?.body?.cancel().catch(() => {});
+            }
+            reader?.releaseLock();
         }
     }
 }

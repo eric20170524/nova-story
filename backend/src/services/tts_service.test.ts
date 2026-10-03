@@ -407,12 +407,7 @@ test('TtsService.preview verifies voice in catalog, sends correct payload, enfor
         }
         if (urlStr.endsWith('/v1/audio/speech')) {
             speechPayloadSent = JSON.parse(init.body);
-            return {
-                ok: true,
-                status: 200,
-                headers: new Headers({ 'content-type': 'audio/mpeg' }),
-                arrayBuffer: async () => fakeMp3Buffer.buffer.slice(fakeMp3Buffer.byteOffset, fakeMp3Buffer.byteOffset + fakeMp3Buffer.byteLength)
-            };
+            return new Response(fakeMp3Buffer, { headers: { 'content-type': 'audio/mpeg' } });
         }
         throw new Error(`Unexpected url ${urlStr}`);
     };
@@ -492,12 +487,7 @@ test('TtsService.preview verifies voice in catalog, sends correct payload, enfor
             return { ok: true, status: 200, json: async () => rawFixture };
         }
         if (urlStr.endsWith('/v1/audio/speech')) {
-            return {
-                ok: true,
-                status: 200,
-                headers: new Headers({ 'content-length': '100' }),
-                arrayBuffer: async () => hugeBuffer.buffer
-            };
+            return new Response(hugeBuffer, { headers: { 'content-length': '100' } });
         }
         throw new Error(`Unexpected url ${urlStr}`);
     };
@@ -554,12 +544,7 @@ test('POST /api/tts/preview route integration, validation and media_asset isolat
                 };
             }
             if (urlStr.endsWith('/v1/audio/speech')) {
-                return {
-                    ok: true,
-                    status: 200,
-                    headers: new Headers({ 'content-type': 'audio/mpeg' }),
-                    arrayBuffer: async () => fakeMp3.buffer.slice(fakeMp3.byteOffset, fakeMp3.byteOffset + fakeMp3.byteLength)
-                };
+                return new Response(fakeMp3, { headers: { 'content-type': 'audio/mpeg' } });
             }
             throw new Error(`Unexpected url: ${urlStr}`);
         };
@@ -660,6 +645,5 @@ test('rejected TTS base URL is TTS_URL_REJECTED and status omits credentials and
 
     assert.equal(fetchCalled, false);
 });
-
 
 

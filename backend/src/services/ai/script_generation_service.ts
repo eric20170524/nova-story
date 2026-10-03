@@ -266,7 +266,7 @@ export class ScriptGenerationService {
 
     const prompt = formatPrompt(getPrompt('script_outline_gen'), {
       chapterTitle: chapter.title || '第1章',
-      content: chapterContent,
+      content: paragraphs.map(paragraph => `[${paragraph.id}] ${paragraph.text}`).join('\n\n'),
       targetDurationSec: params.targetDurationSec || script.document.targetDurationSec || 120,
       instructions: params.instructions || '基于小说正文提取戏剧性核心事件与节拍，突出冲突和反转。',
       creativeConstraints: bibleSummary,
@@ -533,7 +533,7 @@ export class ScriptGenerationService {
         outlineSummary: `一句话梗概: ${outline.logline}\n结尾钩子: ${outline.endingHook}`,
         sceneIndex: sIdx + 1,
         totalScenes,
-        sceneEvents: eventsSummary,
+        sceneEvents: `本场节拍（含地点、时间和调度）：${beat.purpose}\n本场必保事件：${eventsSummary}`,
         sourceParagraphs: sceneParagraphsText || '无对应段落',
         characters: charactersPrompt,
         previousSceneSummary,

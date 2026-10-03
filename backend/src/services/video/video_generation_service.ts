@@ -25,6 +25,7 @@ import { VideoPostprocessService } from './video_postprocess_service';
 import { LoopCloser, type ProcessVideoResult } from './loop_closer';
 import { createProgressPublisher, ProgressPublisher } from '../generation_progress';
 import { VramService } from '../vram_service';
+import { ScriptService } from '../script_service';
 
 type QaDisposition = {
   assetStatus: MediaAssetStatus;
@@ -252,6 +253,20 @@ export class VideoGenerationService {
       );
       if (!versionRow && targetVersion !== (scene.active_version || 1)) {
         blockers.push(`Scene version ${targetVersion} does not exist for scene ${request.scene_id}`);
+      }
+      let source;
+      try { source = JSON.parse(versionRow?.shot_spec || scene.shot_spec || '{}').source; } catch {}
+      if (source?.type === 'script') {
+        try {
+          const script = await ScriptService.getScriptById(source.script_id);
+          const scriptScene = script.document.scenes.find(item => item.id === source.script_scene_id);
+          if (script.chapterId !== scene.chapter_id || script.status !== 'confirmed' || script.freshness.sourceChanged || script.revision !== source.script_revision || !scriptScene ||
+              !(source.block_ids || []).every((id: string) => scriptScene.blocks.some(block => block.id === id))) {
+            blockers.push('Screenplay source is stale or unconfirmed; rebuild the storyboard from the current confirmed revision');
+          }
+        } catch {
+          blockers.push('Screenplay source is unavailable; review the storyboard source before generating video');
+        }
       }
     }
 

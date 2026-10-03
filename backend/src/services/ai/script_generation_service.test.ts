@@ -761,14 +761,18 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
 
     // Model returns hallucinated p_999
     const provider = createMockProvider({
-      onOutline: () => ({
+      onOutline: (prompt) => {
+        assert.ok(prompt.includes('[p_1] 第一段小说正文。'));
+        assert.ok(prompt.includes('[p_2] 第二段小说正文。'));
+        return {
         logline: '核心梗概',
         mustKeepEvents: [
           { id: 'ev_1', text: '第一段事件', sourceParagraphIds: ['p_999'] },
         ],
         beats: [{ id: 'b_1', purpose: '第一段节拍', eventIds: ['ev_1'] }],
         endingHook: '结尾钩子',
-      }),
+        };
+      },
     });
 
     const outlineCand = await ScriptGenerationService.generateOutlineCandidate({
@@ -799,7 +803,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
         ],
         beats: [
           { id: 'b_1', purpose: '入殿', eventIds: ['ev_1'] },
-          { id: 'b_2', purpose: '打脸', eventIds: ['ev_2'] },
+          { id: 'b_2', purpose: '药屋夜间的对质，禁止移到大殿或日间', eventIds: ['ev_2'] },
         ],
         endingHook: '钩子',
       }),
@@ -836,6 +840,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     // Verify prompt included the source paragraph content
     assert.ok(receivedScenePrompt.includes('--- 对应小说原文段落 ---'));
     assert.ok(receivedScenePrompt.includes('[p_1] 第一段正文。') || receivedScenePrompt.includes('[p_2] 第二段正文。'));
+    assert.ok(receivedScenePrompt.includes('药屋夜间的对质，禁止移到大殿或日间'));
 
     // 2. Model outputs genuine coverage for both ev_1 and ev_2 -> succeeds!
     const passingProvider = createMockProvider({

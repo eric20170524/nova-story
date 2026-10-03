@@ -602,7 +602,8 @@ ${blocksDesc}`;
    * - Must verify script exists, confirmed, revision matches
    * - Must verify freshness (!sourceChanged)
    * - Must verify candidate state is pending and base_revision matches
-   * - Must verify Timeline is EMPTY (scene count = 0)
+   * - Existing timelines require an explicit replacement and exact scene list
+   * - Preserve old timeline snapshots and refuse accepted videos or active tasks
    * - Must verify no in-flight tasks
    * - Atomic transaction: inserts scenes + scene_version baselines + updates candidate to applied
    */
@@ -612,11 +613,14 @@ ${blocksDesc}`;
     expectedRevision: number;
     expectedCandidateRevision?: number;
     requestKey?: string;
+    replaceExisting?: boolean;
+    expectedSceneIds?: number[];
   }): Promise<{
     success: boolean;
     count: number;
     scene_ids: number[];
     already_applied?: boolean;
+    replaced_scene_ids?: number[];
   }> {
     // 1. Fetch script and verify
     const script = await ScriptService.getScriptById(params.scriptId);
@@ -702,18 +706,22 @@ ${blocksDesc}`;
       );
     }
 
-    // 3. Empty Timeline check (SC09, SC10): first phase only permits applying to empty timeline!
-    const existingSceneRow = (await db.get(
-      'SELECT COUNT(*) as count FROM scene WHERE chapter_id = ?',
+    // 3. Default protection remains; reviewed replacements require the exact current IDs.
+    const existingScenes = await db.all(
+      'SELECT * FROM scene WHERE chapter_id = ? ORDER BY "index", id',
       script.chapterId
-    )) as { count: number } | undefined;
+    );
+    const verifyReplacement = (scenes: any[]) => {
+      if (!scenes.length) return;
+      if (!params.replaceExisting) {
+        throw new StoryboardGenerationError('当前章节已有分镜镜头，为保护制作资产，需核对镜头列表并显式选择带快照替换。', 409);
+      }
+      if (JSON.stringify(scenes.map(scene => scene.id)) !== JSON.stringify(params.expectedSceneIds)) {
+        throw new StoryboardGenerationError('Timeline changed; review the current scene IDs before replacing it', 409);
+      }
+    };
+    verifyReplacement(existingScenes);
 
-    if (existingSceneRow && Number(existingSceneRow.count) > 0) {
-      throw new StoryboardGenerationError(
-        '当前章节已有分镜镜头，为保护现有制作资产，首期仅允许向空时间线提交。',
-        409
-      );
-    }
 
     // 4. In-flight task check
     const inFlightRow = (await db.get(
@@ -755,17 +763,32 @@ ${blocksDesc}`;
         throw new StoryboardGenerationError('Revision conflict: script or candidate changed before submission', 409);
       }
       this.validatePayload(payload, lockedScript);
-      // Re-verify empty timeline inside transaction for concurrent safety
-      const innerSceneRow = (await db.get(
-        'SELECT COUNT(*) as count FROM scene WHERE chapter_id = ?',
+      // Recheck the timeline and production gates after acquiring the write lock.
+      const lockedScenes = await db.all(
+        'SELECT * FROM scene WHERE chapter_id = ? ORDER BY "index", id',
         script.chapterId
-      )) as { count: number } | undefined;
-
-      if (innerSceneRow && Number(innerSceneRow.count) > 0) {
-        throw new StoryboardGenerationError(
-          '当前章节已有分镜镜头，为保护现有制作资产，首期仅允许向空时间线提交。',
-          409
-        );
+      );
+      const idFloor = await db.get('SELECT MAX(value) AS maximum FROM (SELECT COALESCE(MAX(id),0) AS value FROM scene UNION ALL SELECT COALESCE(MAX(scene_id),0) AS value FROM media_asset)');
+      let nextSceneId = Number(idFloor?.maximum || 0) + 1;
+      verifyReplacement(lockedScenes);
+      const lockedTasks = await db.get(`SELECT COUNT(*) AS count FROM generation_task gt INNER JOIN scene s ON s.id=gt.scene_id WHERE s.chapter_id=? AND gt.status='processing'`, script.chapterId);
+      if (Number(lockedTasks?.count)) throw new StoryboardGenerationError('当前章节存在正在执行的制作任务，无法提交分镜', 409);
+      const accepted = await db.get(`SELECT COUNT(*) AS count FROM media_asset m INNER JOIN scene s ON s.id=m.scene_id WHERE s.chapter_id=? AND m.role='narrative_final' AND m.status='ready'`, script.chapterId);
+      if (lockedScenes.length && Number(accepted?.count)) throw new StoryboardGenerationError('已验收的视频禁止由分镜替换覆盖，请先保留制作版本', 409);
+      let previousTimeline;
+      if (lockedScenes.length) {
+        // Retain a portable snapshot in the candidate history. Generated files,
+        // media records and completed tasks remain available under their old IDs.
+        const related = (table: string) => db.all(`SELECT * FROM ${table} WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)`, script.chapterId);
+        const coverageGroups = await db.all('SELECT * FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        const coverageShots = await db.all('SELECT * FROM coverage_shot WHERE coverage_group_id IN (SELECT id FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?))', script.chapterId);
+        previousTimeline = { scenes: lockedScenes, versions: await related('scene_version'), references: await related('scene_asset_reference'), image_snapshots: await related('scene_asset_image_snapshot'), media_assets: await related('media_asset'), coverage_groups: coverageGroups, coverage_shots: coverageShots };
+        await db.run('DELETE FROM coverage_shot WHERE coverage_group_id IN (SELECT id FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?))', script.chapterId);
+        await db.run('DELETE FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM scene_version WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM scene_asset_reference WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM scene_asset_image_snapshot WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM scene WHERE chapter_id=?', script.chapterId);
       }
 
       const insertedSceneIds: number[] = [];
@@ -774,9 +797,10 @@ ${blocksDesc}`;
         const shot = payload.shots[i]!;
         const result = await db.run(
           `INSERT INTO scene (
-             chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration, duration,
+             id, chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration, duration,
              shot_type, camera_movement, camera_angle, negative_prompt, shot_spec, asset_status, active_version
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', 1)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', 1)`,
+          nextSceneId++,
           script.chapterId,
           i + 1,
           shot.visual_prompt || '',
@@ -810,7 +834,7 @@ ${blocksDesc}`;
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         script.revision,
-        JSON.stringify({ scene_ids: insertedSceneIds }),
+        JSON.stringify({ scene_ids: insertedSceneIds, ...(previousTimeline ? { previous_timeline: previousTimeline } : {}) }),
         candidate.id
       );
 
@@ -820,6 +844,7 @@ ${blocksDesc}`;
         success: true,
         count: insertedSceneIds.length,
         scene_ids: insertedSceneIds,
+        ...(previousTimeline ? { replaced_scene_ids: lockedScenes.map(scene => scene.id) } : {}),
       };
     } catch (error) {
       await db.exec('ROLLBACK');

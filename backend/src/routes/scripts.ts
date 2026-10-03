@@ -471,7 +471,7 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * POST /api/scripts/:scriptId/storyboard-candidates/:changeId/apply
-   * Atomically apply a storyboard candidate to the chapter timeline (empty timeline only).
+   * Atomically apply a storyboard candidate, with an explicit snapshot-backed replacement option.
    */
   app.post<{
     Params: { scriptId: string; changeId: string };
@@ -497,6 +497,8 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
         expectedRevision: parsed.data.expected_revision,
         expectedCandidateRevision: parsed.data.expected_candidate_revision,
         requestKey: parsed.data.request_key,
+        replaceExisting: parsed.data.replace_existing,
+        expectedSceneIds: parsed.data.expected_scene_ids,
       });
 
       return reply.status(200).send(result);

@@ -133,6 +133,10 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    stopPreview();
+  }, [editingChar.id, editingChar.voice_id]);
+
   const handlePreviewVoice = async () => {
     const voiceId = editingChar.voice_id;
     if (!voiceId) return;
@@ -296,6 +300,7 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
                   className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition-all disabled:opacity-60"
                   value={editingChar.voice_id || ''}
                   onChange={(e) => {
+                    stopPreview();
                     const nextId = e.target.value || null;
                     const v = voices.find((item) => item.id === nextId);
                     setEditingChar((prev) => ({

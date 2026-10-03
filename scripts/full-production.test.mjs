@@ -222,13 +222,14 @@ test('a named character without identity references stops before video inference
 
 test('identity acceptance checks the actual generated manifest instead of merely counting portrait files', async () => {
   const scene = { id: 51, chapter_id: 'ch-1', active_version: 1, asset_url: '/static/frame.png', shot_spec: { primary_subject: '阿风' } };
+  const script = { id: 10, revision: 2, status: 'confirmed', document: { scenes: [{ id: 'sc-1', blocks: [{ id: 'b-1' }] }] } };
   const f = await fixture(url => {
     if (url.startsWith('/api/chapters/?')) return { body: [{ id: 'ch-1', target_word_count: 1600 }] };
     if (url.endsWith('/story-plan')) return { body: { document: { blueprint: { characters: [] } }, entries: [] } };
     if (url.startsWith('/api/characters/')) return { body: [{ id: 2, name: '阿风' }] };
     if (url.includes('/asset-library')) return { body: [] };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [scene] } };
-    if (url.endsWith('/script')) return { body: { script: null } };
+    if (url.endsWith('/script')) return { body: { script } };
     if (url.endsWith('/asset-references')) return { body: [] };
     if (url.endsWith('/export')) return { body: {} };
     if (url.includes('/media?')) return { body: { assets: [
@@ -257,6 +258,18 @@ test('identity acceptance checks the actual generated manifest instead of merely
     await manifest([82], 84); await f.run('verify', [], { NOVASTORY_STATIC_DIR: f.directory });
     acceptance = JSON.parse(await readFile(path.join(f.directory, 'acceptance.json'), 'utf8')).acceptance;
     assert.equal(acceptance.find(a => a.id === 'F14').status, 'FAIL');
+    scene.shot_spec.source = { type: 'script', script_id: 10, script_revision: 1, script_scene_id: 'sc-1', block_ids: ['b-1'] };
+    await f.run('verify', [], { NOVASTORY_STATIC_DIR: f.directory });
+    acceptance = JSON.parse(await readFile(path.join(f.directory, 'acceptance.json'), 'utf8')).acceptance;
+    assert.equal(acceptance.find(a => a.id === 'F15').status, 'FAIL');
+    scene.shot_spec.source.script_revision = 2;
+    await f.run('verify', [], { NOVASTORY_STATIC_DIR: f.directory });
+    acceptance = JSON.parse(await readFile(path.join(f.directory, 'acceptance.json'), 'utf8')).acceptance;
+    assert.equal(acceptance.find(a => a.id === 'F15').status, 'PASS');
+    scene.shot_spec.source.block_ids = ['removed-block'];
+    await f.run('verify', [], { NOVASTORY_STATIC_DIR: f.directory });
+    acceptance = JSON.parse(await readFile(path.join(f.directory, 'acceptance.json'), 'utf8')).acceptance;
+    assert.equal(acceptance.find(a => a.id === 'F15').status, 'FAIL');
   } finally { await f.close(); }
 });
 

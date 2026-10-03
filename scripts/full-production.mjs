@@ -15,6 +15,7 @@ const base = option('base-url', 'http://127.0.0.1:3000').replace(/\/$/, '');
 const directory = path.resolve(root, option('output', `local/production/${projectId}`));
 const workflow = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || 'minimax_h3_ref2va_official_12gb');
 const retryFailed = args.includes('--retry-failed');
+const rebuildStoryboards = args.includes('--rebuild-storyboards');
 const assetScopeArg = option('asset-scope', null);
 const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'video-preflight', 'videos', 'assemble', 'verify'];
 if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 5 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project, --chapter-limit or --stage');
@@ -270,14 +271,23 @@ async function assets() {
 async function storyboards() {
   for (const chapter of await chapters()) {
     const existing = await request(`/timeline/${chapter.id}`);
-    if (existing.timeline.length) continue;
     const script = (await request(`/chapters/${chapter.id}/script`)).script;
     if (script.status !== 'confirmed' || script.freshness?.sourceChanged) throw new Error(`Script ${script.id} must be confirmed and current`);
-    const candidate = await step(`storyboard-${script.id}:candidate`, () => request(`/scripts/${script.id}/storyboard-candidates`, 'POST', {
-      expected_revision: script.revision, request_key: key(`storyboard-${script.id}`), instructions: '生成8至12镜，每镜5秒。覆盖每场及全部台词和旁白块，每块只分配一次，保持时序。至少含20%的建立/远景镜头和一个道具插入镜头。location和key_props名称与正文和资产库完全一致，场景结构明确。',
+    if (existing.timeline.length) {
+      const current = existing.timeline.every(shot => {
+        const source = (typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec) : shot.shot_spec)?.source;
+        return source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision;
+      });
+      if (current) continue;
+      if (!rebuildStoryboards) throw new Error(`Script ${script.id}: existing storyboard uses an older or unverified source; review and run --rebuild-storyboards to retain a snapshot and replace it`);
+    }
+    const name = `storyboard-${script.id}:revision-${script.revision}`;
+    const candidate = await step(`${name}:candidate`, () => request(`/scripts/${script.id}/storyboard-candidates`, 'POST', {
+      expected_revision: script.revision, request_key: key(name), instructions: '生成12镜，每镜5秒。覆盖每场及全部台词和旁白块，每块只分配一次，保持时序。至少含20%的建立/远景镜头和一个道具插入镜头。location和key_props名称与正文和资产库完全一致，每镜只能有一个地点与一个连续动作，不合并药屋、村口、废祠。严格保留剧本的夜间、人物站位和安全石板外沿；老葛只在药屋和高地。镜头不得加入下渠涉水动作。',
     }).then(result => result.candidate));
-    await step(`storyboard-${script.id}:apply`, () => request(`/scripts/${script.id}/storyboard-candidates/${candidate.id}/apply`, 'POST', {
+    await step(`${name}:apply`, () => request(`/scripts/${script.id}/storyboard-candidates/${candidate.id}/apply`, 'POST', {
       expected_revision: candidate.base_revision, expected_candidate_revision: candidate.candidate_revision, request_key: key(`apply-${candidate.id}`),
+      ...(existing.timeline.length ? { replace_existing: true, expected_scene_ids: existing.timeline.map(shot => shot.id) } : {}),
     }));
   }
   write('07-storyboards.json', await shots());
@@ -474,7 +484,16 @@ async function verify() {
   const identityEvidence = ss.map((shot, index) => videoProvenance(shot, media[index].assets, chars));
   acceptance.push({ id: 'F13', criterion: '主角视频实际使用同一角色的有效定妆参考', status: identityEvidence.some(e => e.character_id != null) && identityEvidence.every(e => e.identity_current) ? 'PASS' : 'FAIL' });
   acceptance.push({ id: 'F14', criterion: '视频来源与当前关键帧及镜头版本一致', status: ss.length > 0 && identityEvidence.every(e => e.source_current) ? 'PASS' : 'FAIL' });
-  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, delivery: deliveryEvidence });
+  const scriptEvidence = ss.map(shot => {
+    const script = screenplay[cs.findIndex(chapter => chapter.id === shot.chapter_id)];
+    let source;
+    try { source = (typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec) : shot.shot_spec)?.source; } catch {}
+    const scene = script?.document?.scenes?.find(scene => scene.id === source?.script_scene_id);
+    const current = script?.status === 'confirmed' && !script.freshness?.sourceChanged && source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision && !!scene && (source.block_ids || []).every(id => scene.blocks.some(block => block.id === id));
+    return { scene_id: shot.id, script_id: script?.id || null, script_revision: script?.revision || null, source: source || null, current: !!current };
+  });
+  acceptance.push({ id: 'F15', criterion: '分镜来源与已确认剧本修订及原声文本块一致', status: scriptEvidence.length > 0 && scriptEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
+  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, scripts: scriptEvidence, delivery: deliveryEvidence });
   write('acceptance.json', { checkedAt: new Date().toISOString(), chapterLimit, acceptance, counts: { chapters: cs.length, characters: chars.length, locations: assets.filter(a => a.kind === 'location').length, props: assets.filter(a => a.kind === 'prop').length, requiredAssets: requiredAssets.length, generatedAssets: assets.filter(a => a.status === 'completed' && a.image_url).length, shots: ss.length }, manualReview: [`前${chapterLimit}章因果和人物动机`, '跨镜头脸型服装及道具形状一致性', '画面缺陷和声音对白同步'] });
   write('project-backup.novastory.json', backup);
   if (acceptance.some(a => a.status !== 'PASS')) throw new Error('Acceptance has failing items; see acceptance.json');
@@ -485,7 +504,9 @@ function report(error) {
   const acceptance = fs.existsSync(path.join(directory, 'acceptance.json')) ? JSON.parse(fs.readFileSync(path.join(directory, 'acceptance.json'), 'utf8')) : null;
   const engineeringFile = path.join(directory, 'engineering.json');
   const engineering = fs.existsSync(engineeringFile) ? JSON.parse(fs.readFileSync(engineeringFile, 'utf8')) : null;
-  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景和道具参考通过系统的 Codex 图像任务传递；跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
+  const manualFile = path.join(directory, 'manual-review.json');
+  const manualReview = fs.existsSync(manualFile) ? JSON.parse(fs.readFileSync(manualFile, 'utf8')) : null;
+  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景和道具参考通过系统的 Codex 图像任务传递；跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
 }
 let failure;
 try {
