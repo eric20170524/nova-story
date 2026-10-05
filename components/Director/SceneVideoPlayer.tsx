@@ -34,10 +34,11 @@ import { useToast } from '../../ToastContext';
 import { API_BASE_URL } from '../../constants';
 import { api } from '../../services/api';
 import { useImagePreview } from '../ImageLightbox';
-import { appendUploadedIdentityReference, defaultIdentityReferenceIds, recommendVideoWorkflow } from '../../services/videoWorkflowPolicy';
+import { appendUploadedIdentityReference, defaultIdentityReferenceIds, resolveProjectVideoWorkflow } from '../../services/videoWorkflowPolicy';
 
 interface SceneVideoPlayerProps {
   scene: Scene;
+  projectVideoWorkflowId?: VideoWorkflowId | null;
   mediaAssets?: MediaAsset[];
   taskState?: VideoTaskState;
   onGenerateVideo?: (options?: any) => void;
@@ -194,6 +195,7 @@ const ReferenceImagePicker: React.FC<{
 
 export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   scene,
+  projectVideoWorkflowId = null,
   mediaAssets = [],
   taskState,
   onGenerateVideo,
@@ -233,7 +235,10 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     return Array.from(byId.values());
   }, [mediaAssets, localReferenceAssets]);
 
-  const suggestedWorkflow = React.useMemo(() => recommendVideoWorkflow(mergedAssets), [mergedAssets]);
+  const suggestedWorkflow = React.useMemo(
+    () => resolveProjectVideoWorkflow(mergedAssets, projectVideoWorkflowId),
+    [mergedAssets, projectVideoWorkflowId]
+  );
 
   const videoAssets = mergedAssets.filter((asset) => asset.media_type === 'video');
   const finalVideoAssets = videoAssets.filter((asset) => isFinalVideo(asset));

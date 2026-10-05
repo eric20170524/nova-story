@@ -43,6 +43,7 @@ import {
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { captureShotMasterSnapshot, recordShotMasterSnapshot, type ShotMasterInputSnapshot } from './video/shot_master_snapshot';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
+import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
 import {
     createProgressPublisher,
     runVramHandoffForImageGen,
@@ -903,7 +904,7 @@ export class GenerationService {
                     });
 
                     const assetUrl = result.sheetUrl;
-                    if (sceneId < 900_000 && !workflowData?.character_id) {
+                    if (shouldPersistSceneAsset(sceneId) && !workflowData?.character_id) {
                         await db.run(
                             'UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?',
                             'completed',
@@ -929,7 +930,7 @@ export class GenerationService {
                 } catch (error: any) {
                     logger.error(`[Task ${taskId}] Turnaround composite failed: ${error?.message || error}`);
                     await AssetTaskStore.failed(taskId, sceneId, error?.message || String(error));
-                    if (sceneId < 900_000 && !workflowData?.character_id) {
+                    if (shouldPersistSceneAsset(sceneId) && !workflowData?.character_id) {
                         try {
                             await db.run(
                                 'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
@@ -1038,18 +1039,10 @@ export class GenerationService {
                 } else if (workflowData?.library_asset_id) {
                     const libraryAsset = await db.get('SELECT project_id FROM library_asset WHERE id = ?', Number(workflowData.library_asset_id));
                     sceneProjectId = libraryAsset?.project_id ?? null;
-                } else if (sceneId >= 900_000 || workflowData?.character_id) {
-                    // Check if this is a character generation request
-                    if (workflowData?.character_id) {
-                        characterId = Number(workflowData.character_id);
-                    } else {
-                        for (const offset of [999990, 999991, 999992, 90000000]) {
-                            if (sceneId > offset && sceneId < offset + 100000) {
-                                characterId = sceneId - offset;
-                                break;
-                            }
-                        }
-                    }
+                } else if (isSyntheticCharacterSceneId(sceneId) || workflowData?.character_id) {
+                    characterId = workflowData?.character_id
+                        ? Number(workflowData.character_id)
+                        : syntheticCharacterId(sceneId);
                     if (characterId) {
                         const charRow = await db.get('SELECT id, project_id, active_version FROM character WHERE id = ?', characterId);
                         if (charRow) {
@@ -1199,7 +1192,7 @@ export class GenerationService {
                 // the exact lease identity until the pipeline fully unwinds.
                 gpuLease = await GpuLeaseService.acquireLease(taskId, 'image');
 
-                // Plan 1: auto VRAM handoff — unload Ollama before Pony/SDXL claims GPU
+                // Plan 1: auto VRAM handoff — unload local LLM before Pony/SDXL claims GPU
                 await runVramHandoffForImageGen(progressHandler);
 
                 const comfyService = ComfyUIService.fromSettings(comfySettings);
@@ -1363,7 +1356,7 @@ export class GenerationService {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
                 await AssetTaskStore.failed(taskId, sceneId, errMsg);
-                if (sceneId < 90_000_000) {
+                if (shouldPersistSceneAsset(sceneId)) {
                     await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {
@@ -1381,7 +1374,7 @@ export class GenerationService {
             logger.error(`[Task ${taskId}] Unexpected error in async service: ${error.message}`);
             await AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
-                if (sceneId < 90_000_000) {
+                if (shouldPersistSceneAsset(sceneId)) {
                     await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {

@@ -358,6 +358,7 @@ export interface Workflow {
   description: string;
   content: Record<string, any>; // ComfyUI JSON
   is_active: boolean;
+  model_family?: string;
 }
 
 // Asset Generation

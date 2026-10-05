@@ -17,7 +17,7 @@ import {
   Crop,
   Video
 } from 'lucide-react';
-import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec } from '../../types';
+import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec, VideoWorkflowId } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES, OPENPOSE_PRESETS } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
@@ -43,6 +43,7 @@ interface DirectorTimelineProps {
   onCreateVersion?: (sceneId: number | string, clearAsset?: boolean) => void;
   mediaAssetsByScene?: Record<number | string, MediaAsset[]>;
   videoTasksByScene?: Record<number | string, VideoTaskState>;
+  projectVideoWorkflowId?: VideoWorkflowId | null;
   onGenerateVideo?: (sceneId: number | string, options?: any) => void;
   onPromoteVideoAsset?: (assetId: number) => void;
   onReprocessVideoAsset?: (assetId: number) => void;
@@ -68,6 +69,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   onCreateVersion,
   mediaAssetsByScene = {},
   videoTasksByScene = {},
+  projectVideoWorkflowId = null,
   onGenerateVideo,
   onPromoteVideoAsset,
   onReprocessVideoAsset,
@@ -391,6 +393,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                         {currentTab === 'video' ? (
                           <SceneVideoPlayer
                             scene={scene}
+                            projectVideoWorkflowId={projectVideoWorkflowId}
                             mediaAssets={sceneMedia}
                             taskState={sceneTask}
                             onGenerateVideo={(opts) => onGenerateVideo?.(scene.id, opts)}

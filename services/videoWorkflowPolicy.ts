@@ -1,5 +1,22 @@
 import type { MediaAsset, VideoWorkflowId } from '../types';
 
+export const PROJECT_VIDEO_WORKFLOW_IDS = [
+  'grok_imagine_browser',
+  'minimax_h3_ref2va_official_12gb',
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb',
+  'minimax_h3_hongchao_a2a_12gb',
+] as const satisfies readonly VideoWorkflowId[];
+
+export const readProjectVideoWorkflow = (settings: unknown): VideoWorkflowId | null => {
+  const raw = settings && typeof settings === 'object'
+    ? (settings as { video_generation?: { workflow_id?: unknown } }).video_generation?.workflow_id
+    : null;
+  return typeof raw === 'string' && (PROJECT_VIDEO_WORKFLOW_IDS as readonly string[]).includes(raw)
+    ? raw as VideoWorkflowId
+    : null;
+};
+
 /** The scene's reference roles choose the official H3 workflow. */
 export const recommendVideoWorkflow = (assets: MediaAsset[]): { workflowId: VideoWorkflowId; reason: string } => {
   const has = (role: MediaAsset['role']) => assets.some(asset => asset.role === role && asset.status === 'ready');
@@ -14,6 +31,24 @@ export const recommendVideoWorkflow = (assets: MediaAsset[]): { workflowId: Vide
     reason: has('character_reference')
       ? '人物身份参考与 Shot Master 一起进入 Official Ref2VA。'
       : '普通叙事镜头以 Shot Master 为首帧，使用 Official Ref2VA。',
+  };
+};
+
+/**
+ * A project default replaces only the ordinary-shot fallback.
+ * Guide frames and last frames still select Multi-Frame or FL2VA.
+ */
+export const resolveProjectVideoWorkflow = (
+  assets: MediaAsset[],
+  projectDefault: VideoWorkflowId | null | undefined,
+): { workflowId: VideoWorkflowId; reason: string } => {
+  const recommended = recommendVideoWorkflow(assets);
+  const structural = recommended.workflowId === 'minimax_h3_fl2va_official_12gb'
+    || recommended.workflowId === 'minimax_h3_multiframe_official_12gb';
+  if (structural || !projectDefault || projectDefault === recommended.workflowId) return recommended;
+  return {
+    workflowId: projectDefault,
+    reason: '使用项目默认生视频工作流。有尾帧或引导帧的镜头仍按镜头参考选择。',
   };
 };
 

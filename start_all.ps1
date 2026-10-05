@@ -142,26 +142,10 @@ function Start-ComfyUI {
         return $false
     }
 
-    $ollamaCandidates = @(
-        'D:\Program Files\Ollama\ollama.exe',
-        (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe')
-    )
-    $ollamaCommand = Get-Command ollama.exe -ErrorAction SilentlyContinue
-    if ($ollamaCommand) {
-        $ollamaCandidates += $ollamaCommand.Source
-    }
-    $ollamaExe = $ollamaCandidates |
-        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
-        Select-Object -First 1
-    if ($ollamaExe) {
+    $stopLlm = Join-Path $RootDir 'stop_local_llm.ps1'
+    if (Test-Path -LiteralPath $stopLlm -PathType Leaf) {
         Write-Host '  Releasing local LLM VRAM before starting ComfyUI...' -ForegroundColor DarkGray
-        # Ollama writes terminal control sequences to stderr even when the
-        # command succeeds. Windows PowerShell turns that stderr output into a
-        # terminating NativeCommandError because this script uses
-        # $ErrorActionPreference = 'Stop'. Run it through cmd so both native
-        # streams are suppressed before PowerShell can reinterpret them.
-        $ollamaStopCommand = "`"$ollamaExe`" stop novastory-qwen3:8b >nul 2>&1"
-        & $env:ComSpec /d /c $ollamaStopCommand
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopLlm
     }
 
     # Pinned model weights can consume more than 6 GB of system RAM on this

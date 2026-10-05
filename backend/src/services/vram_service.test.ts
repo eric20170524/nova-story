@@ -106,7 +106,7 @@ test('buildVramStatus marks dual-resident high load as warning/critical with tip
       online: true,
       base_url: 'http://127.0.0.1:11434',
       used_bytes: ollamaBytes,
-      models: [{ name: 'novastory-qwen3:8b', size: ollamaBytes, size_vram: ollamaBytes }],
+      models: [{ name: 'novastory-qwen3.5:9b', size: ollamaBytes, size_vram: ollamaBytes, processor: 'llamacpp' }],
     },
     comfyui: {
       online: true,
@@ -118,9 +118,9 @@ test('buildVramStatus marks dual-resident high load as warning/critical with tip
   });
 
   assert.ok(status.level === 'warning' || status.level === 'critical');
-  assert.ok(status.processes.some((p) => p.name === 'Ollama'));
+  assert.ok(status.processes.some((p) => p.name === 'llama.cpp'));
   assert.ok(status.processes.some((p) => p.name === 'ComfyUI'));
-  assert.match(status.tip_zh, /Ollama/);
+  assert.match(status.tip_zh, /llama\.cpp/);
   assert.match(status.tip_zh, /ComfyUI/);
 });
 
@@ -135,7 +135,7 @@ test('buildVramStatus critical at 92% usage', () => {
       used_bytes: Math.round(5.1 * 1024 ** 3),
       models: [
         {
-          name: 'novastory-qwen3:8b',
+          name: 'novastory-qwen3.5:9b',
           size: Math.round(5.1 * 1024 ** 3),
           size_vram: Math.round(5.1 * 1024 ** 3),
         },

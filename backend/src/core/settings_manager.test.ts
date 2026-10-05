@@ -29,7 +29,7 @@ test('saving a non-Ollama provider removes a placeholder LLM_API_KEY', () => {
             'LLM_PROVIDER=ollama',
             'LLM_API_KEY=ollama',
             'LLM_BASE_URL=http://127.0.0.1:11434/v1',
-            'LLM_MODEL=novastory-qwen3:8b',
+            'LLM_MODEL=novastory-qwen3.5:9b',
             '',
         ].join('\n'));
 

@@ -287,7 +287,7 @@ DRAFT/Skill 返回内容字段（可写回章节或仅预览，由 execute 参�
 
 ## 8. 本地 LLM 约束（实现时必须遵守）
 
-- 默认走 `LLM_PROVIDER=ollama` / `novastory-qwen3:8b`，不新增云依赖
+- 默认走 `LLM_PROVIDER=ollama` / `novastory-qwen3.5:9b`（llama.cpp），不新增云依赖
 - Agent 决策 prompt 控制在结构树 + 摘要级，避免整书正文
 - 结构化任务用低 temperature + JSON schema（现有 OpenAIProvider isOllama 路径）
 - 长写作：**首版同步阻塞**；本地 8B 写 1000–1500 字常见 20–45s loading（流式见 §15.1）

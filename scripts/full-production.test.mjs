@@ -8,6 +8,16 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId } from './production-references.mjs';
 
+test('production requires an explicit project id', async () => {
+  const child = spawn(process.execPath, ['scripts/full-production.mjs', '--stage', 'preflight'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { output += chunk; });
+  const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', resolve); });
+  assert.equal(code, 1);
+  assert.match(output, /Invalid --project/);
+});
+
 test('visible shot references prioritize the focal character and exclude uncast extras', () => {
   const shot = { shot_spec: { primary_subject: '陆青', visible_subjects: ['老葛', '陆青', '沈砚', '周槐'] } };
   const characters = [
@@ -40,6 +50,8 @@ test('batch video strategy chooses official workflows from scene references', ()
   assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference', '{"guide_frame_idx":120}')]), /within delivery frames 1..119/);
   assert.equal(chooseShotVideoStrategy([{ ...ready(13, 'guide_frame_reference'), status: 'draft' }]).workflow_id, 'minimax_h3_ref2va_official_12gb');
   assert.equal(chooseShotVideoStrategy([ready(12, 'guide_frame_reference')], 'minimax_h3_ref2va_official_12gb').workflow_id, 'minimax_h3_ref2va_official_12gb');
+  assert.equal(chooseShotVideoStrategy([], null, 'grok_imagine_browser').workflow_id, 'grok_imagine_browser');
+  assert.equal(chooseShotVideoStrategy([ready(11, 'last_frame_reference')], null, 'grok_imagine_browser').workflow_id, 'minimax_h3_fl2va_official_12gb');
 });
 
 test('only a timed-out Codex image job is eligible for exact system recovery', () => {
@@ -59,7 +71,7 @@ async function fixture(handler) {
   return {
     directory,
     async run(stage, extra = [], env = {}) {
-      const child = spawn(process.execPath, ['scripts/full-production.mjs', '--stage', stage, '--base-url', base, '--output', directory, ...extra], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+      const child = spawn(process.execPath, ['scripts/full-production.mjs', '--project', '90713823', '--stage', stage, '--base-url', base, '--output', directory, ...extra], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
       let output = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
       const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', resolve); }); return { code, output };
     },
@@ -185,6 +197,8 @@ test('every named asset is bound by kind, with explicit alias bindings reserved 
   ];
   const shot = { shot_spec: { location: '山庙', key_props: ['铜铃', '红绳'] } };
   assert.deepEqual(resolveAssetBindings(shot, assets).asset_ids, [1, 2, 3]);
+  assert.deepEqual(resolveAssetBindings({ shot_spec: {} }, assets).blockers, []);
+  assert.deepEqual(resolveAssetBindings({ shot_spec: {} }, assets).asset_ids, []);
   assert.match(resolveAssetBindings(shot, assets, [assets[0]]).blockers.join(';'), /铜铃.*红绳/);
   const alias = { shot_spec: { location: '旧庙', key_props: ['系铃绳', '铜铃'] } };
   assert.equal(resolveAssetBindings(alias, assets, assets.slice(0, 3)).blockers.length, 0);
@@ -235,6 +249,7 @@ test('a named character without identity references stops before video inference
   let submissions = 0;
   const f = await fixture(url => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: '{}' } };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, shot_spec: { primary_subject: '阿风' } }] } };
     if (url.includes('/media?')) return { body: { assets: [] } };
     if (url.startsWith('/api/characters/')) return { body: [{ id: 2, name: '阿风' }] };
@@ -294,6 +309,57 @@ test('identity acceptance checks the actual generated manifest instead of merely
     await f.run('verify', [], { NOVASTORY_STATIC_DIR: f.directory });
     acceptance = JSON.parse(await readFile(path.join(f.directory, 'acceptance.json'), 'utf8')).acceptance;
     assert.equal(acceptance.find(a => a.id === 'F15').status, 'FAIL');
+  } finally { await f.close(); }
+});
+
+test('full run does not start the next chapter until the current chapter video is accepted', async () => {
+  const content = '山风吹过石阶，铜铃仍在掌心。';
+  const contentHash = createHash('sha256').update(content).digest('hex');
+  const calls = [];
+  const script = {
+    id: 10, revision: 2, status: 'confirmed', freshness: { sourceChanged: false },
+    document: { scenes: [{ id: 'sc-1', blocks: [] }], outline: { beats: [{ id: 'beat-1' }] } },
+  };
+  const shotFor = (index, name) => ({
+    id: 70 + index, chapter_id: `ch-${index}`, index, active_version: 1,
+    asset_status: 'completed', asset_url: `/static/shot-${index}.png`,
+    shot_spec: { primary_subject: name, source: { type: 'script', script_id: 10, script_revision: 2, script_scene_id: 'sc-1', block_ids: [] } },
+  });
+  const f = await fixture((url, method, body) => {
+    calls.push(`${method} ${url}${body?.scene_id ? ` scene:${body.scene_id}` : ''}${body?.character_id ? ` character:${body.character_id}` : ''}`);
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui' } };
+    if (url.includes('/settings/verify')) return { body: { status: 'success' } };
+    if (url.includes('/videos/capabilities')) return { body: { video_generation_enabled: true, missing_components: [] } };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, title: '测试', description: '' } };
+    if (url.endsWith('/story-plan')) return { body: { revision: 1, document: { blueprint: { characters: [{ name: '阿风' }] } }, entries: [1, 2].map(index => ({ id: `p-${index}`, disposition: 'active', summary: '已有', title: `第${index}章` })) } };
+    if (url === '/api/assistant/chat') return { body: { response: '构思' } };
+    if (url.startsWith('/api/chapters/?')) return { body: [1, 2].map(index => ({ id: `ch-${index}`, index, title: `第${index}章`, summary: '已有', content, status: 'completed', finalized_content_hash: contentHash, target_word_count: 10 })) };
+    if (url === '/api/agent/consistency') return { body: { issues: [] } };
+    if (url === '/api/chapters/ch-1/script') return { body: { script } };
+    if (url === '/api/scripts/10/export') return { body: { markdown: '剧本' } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [shotFor(1, '阿风')] } };
+    if (url === '/api/timeline/ch-2') return { body: { timeline: [shotFor(2, '阿宁')] } };
+    if (url === '/api/asset-library/extract') return { body: [] };
+    if (url.startsWith('/api/characters/')) return { body: [
+      { id: 2, name: '阿风', avatar_url: '/a.png', turnaround_url: '/t.png', active_version: 1 },
+      { id: 3, name: '阿宁' },
+    ] };
+    if (url.includes('/asset-library')) return { body: [] };
+    if (url.endsWith('/export')) return { body: { asset_library: { image_snapshots: [{ scene_id: 71, image_url: '/static/shot-1.png', references_json: '[]', character_versions_json: JSON.stringify([{ id: 2, version: 1 }]) }] } } };
+    if (url.endsWith('/asset-references')) return { body: [] };
+    if (url.includes('/media?')) return { body: { assets: [{ id: 82, character_id: 2, role: 'character_reference', status: 'ready' }] } };
+    if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
+    if (url === '/api/videos/generate') return { body: { task_id: `task-${body.scene_id}` } };
+    if (url.startsWith('/api/videos/tasks/')) return { body: { status: 'completed', stage: 'completed' } };
+    return { status: 500, body: { error: `unexpected ${method} ${url}` } };
+  });
+  try {
+    const result = await f.run('all', ['--chapter-limit', '2']);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /visual review/);
+    assert.equal(calls.some(call => call.includes('/chapters/ch-2/script')), false);
+    assert.equal(calls.some(call => call.includes('scene:72') || call.includes('/characters/3/')), false);
+    assert.equal(calls.some(call => call.includes('/videos/generate') && call.includes('scene:71')), true);
   } finally { await f.close(); }
 });
 

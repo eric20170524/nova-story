@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
-import { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from './llm';
+import { DEFAULT_LOCAL_LLM_BASE_URL, DEFAULT_LOCAL_LLM_MODEL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from './llm';
 import { ComfyUIService } from './ai/comfyui_service';
 
 const execFileAsync = promisify(execFile);
@@ -77,9 +77,61 @@ function formatGiB(bytes: number): string {
 }
 
 function ollamaNativeBaseUrl(openaiCompatUrl?: string | null): string {
-  const raw = (openaiCompatUrl || DEFAULT_OLLAMA_BASE_URL).replace(/\/$/, '');
+  const raw = (openaiCompatUrl || DEFAULT_LOCAL_LLM_BASE_URL || DEFAULT_OLLAMA_BASE_URL).replace(/\/$/, '');
   // OpenAI-compat is typically http://host:11434/v1 → native API is host root
   return raw.replace(/\/v1$/i, '') || 'http://127.0.0.1:11434';
+}
+
+function localLlmPort(baseUrl: string): number {
+  try {
+    const parsed = new URL(baseUrl.includes('://') ? baseUrl : `http://${baseUrl}`);
+    const port = Number(parsed.port);
+    if (Number.isFinite(port) && port > 0) return port;
+    return parsed.protocol === 'https:' ? 443 : 80;
+  } catch {
+    return 11434;
+  }
+}
+
+async function findWindowsListenerPid(port: number): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], {
+      timeout: 4000,
+      windowsHide: true,
+    });
+    const needle = new RegExp(`^TCP\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)$`, 'i');
+    for (const line of stdout.split(/\r?\n/)) {
+      const match = line.trim().match(needle);
+      if (match) {
+        const pid = Number(match[1]);
+        if (Number.isFinite(pid) && pid > 0) return pid;
+      }
+    }
+  } catch (err) {
+    logger.debug({ err, port }, 'netstat listener lookup failed');
+  }
+  return null;
+}
+
+async function queryProcessVramBytes(pid: number | null): Promise<number> {
+  if (!pid) return 0;
+  try {
+    const { stdout } = await execFileAsync(
+      'nvidia-smi',
+      ['--query-compute-apps=pid,used_gpu_memory', '--format=csv,noheader,nounits'],
+      { timeout: 4000, windowsHide: true }
+    );
+    for (const line of stdout.split(/\r?\n/)) {
+      const parts = line.split(',').map((p) => p.trim());
+      if (parts.length < 2) continue;
+      if (Number(parts[0]) !== pid) continue;
+      const miB = Number(parts[1]);
+      if (Number.isFinite(miB) && miB > 0) return Math.round(miB * 1024 * 1024);
+    }
+  } catch (err) {
+    logger.debug({ err, pid }, 'nvidia-smi compute-apps query failed');
+  }
+  return 0;
 }
 
 function classifyLevel(percent: number | null): VramLevel {
@@ -171,7 +223,7 @@ async function queryNvidiaSmi(): Promise<{
       .map((l) => l.trim())
       .find(Boolean);
     if (!line) return null;
-    // e.g. "NVIDIA GeForce RTX 4060 Laptop GPU, 8188, 1234, 6800"
+    // e.g. "NVIDIA GeForce RTX 3060, 12288, 6241, 6047"
     const parts = line.split(',').map((p) => p.trim());
     if (parts.length < 4) return null;
     const name = parts[0] || 'GPU';
@@ -192,7 +244,51 @@ async function queryNvidiaSmi(): Promise<{
   }
 }
 
+const FALLBACK_LLAMACPP_VRAM_BYTES = Math.round(5.7 * 1024 ** 3);
+
+async function queryLlamaCpp(baseUrl: string): Promise<VramStatus['ollama'] | null> {
+  const result: VramStatus['ollama'] = {
+    online: false,
+    base_url: baseUrl,
+    used_bytes: 0,
+    models: [],
+  };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${baseUrl}/v1/models`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    result.online = true;
+    let modelName = DEFAULT_LOCAL_LLM_MODEL;
+    try {
+      const payload = (await res.json()) as { data?: Array<{ id?: string }> };
+      const id = payload.data?.[0]?.id;
+      if (id) modelName = String(id);
+    } catch (err) {
+      logger.debug({ err }, 'llama.cpp /v1/models parse failed');
+    }
+    const pid = await findWindowsListenerPid(localLlmPort(baseUrl));
+    let used = await queryProcessVramBytes(pid);
+    if (used <= 0) used = FALLBACK_LLAMACPP_VRAM_BYTES;
+    result.models = [{
+      name: modelName,
+      size: used,
+      size_vram: used,
+      processor: 'llamacpp',
+    }];
+    result.used_bytes = used;
+    return result;
+  } catch (err) {
+    logger.debug({ err }, 'llama.cpp /v1/models failed');
+    return null;
+  }
+}
+
 async function queryOllama(baseUrl: string): Promise<VramStatus['ollama']> {
+  const llama = await queryLlamaCpp(baseUrl);
+  if (llama) return llama;
+
   const result: VramStatus['ollama'] = {
     online: false,
     base_url: baseUrl,
@@ -224,7 +320,7 @@ async function queryOllama(baseUrl: string): Promise<VramStatus['ollama']> {
         name: String(m.name || m.model || 'unknown'),
         size,
         size_vram: sizeVram,
-        processor: m.processor,
+        processor: m.processor || 'ollama',
       };
     });
     result.used_bytes = result.models.reduce((sum, m) => sum + (m.size_vram || 0), 0);
@@ -295,9 +391,10 @@ export function buildVramStatus(parts: {
   const comfyCpuOnly = parts.comfyui.online && parts.comfyui.compute_mode === 'cpu';
   const processes: VramProcessInfo[] = [];
   if (parts.ollama.used_bytes > 0) {
-    const modelNames = parts.ollama.models.map((m) => m.name).join(', ') || 'Ollama';
+    const modelNames = parts.ollama.models.map((m) => m.name).join(', ') || 'llama.cpp';
+    const engine = parts.ollama.models.some((m) => m.processor === 'ollama') ? 'Ollama' : 'llama.cpp';
     processes.push({
-      name: 'Ollama',
+      name: engine,
       bytes: parts.ollama.used_bytes,
       detail: modelNames,
     });
@@ -455,8 +552,8 @@ export class VramService {
           ok: true,
           skipped: true,
           phase: 'vram_ready',
-          message: 'Ollama offline — VRAM handoff skipped.',
-          message_zh: 'Ollama 未在线，跳过显存交接。',
+          message: 'Local LLM offline — VRAM handoff skipped.',
+          message_zh: '本地 LLM 未在线，跳过显存交接。',
           released_bytes: 0,
           details: [`base_url=${ollamaBase}`],
         };
@@ -475,7 +572,7 @@ export class VramService {
       }
 
       logger.info(
-        `VRAM auto-scheduler: unloading ${before.models.length} Ollama model(s) `
+        `VRAM auto-scheduler: unloading ${before.models.length} local LLM model(s) `
         + `(~${formatGiB(before.used_bytes)}) before image generation`
       );
 
@@ -508,12 +605,12 @@ export class VramService {
     }
   }
 
-  /** Unload resident Ollama models (keep_alive: 0). Manual UI + auto scheduler. */
+  /** Unload the resident local LLM (stop llama.cpp, or Ollama keep_alive: 0). */
   static async releaseLlm(options: ReleaseLlmOptions = {}): Promise<VramActionResult> {
     const includeConfiguredModel = options.includeConfiguredModel !== false;
     const settings = SettingsManager.loadSettings();
     const ollamaBase = ollamaNativeBaseUrl(settings.llm?.base_url);
-    const configuredModel = String(settings.llm?.model || DEFAULT_OLLAMA_MODEL);
+    const configuredModel = String(settings.llm?.model || DEFAULT_LOCAL_LLM_MODEL || DEFAULT_OLLAMA_MODEL);
     const details: string[] = [];
     let released = 0;
 
@@ -521,10 +618,45 @@ export class VramService {
     if (!before.online) {
       return {
         ok: false,
-        message: 'Ollama is offline; nothing to release.',
-        message_zh: 'Ollama 未在线，无需释放。',
+        message: 'Local LLM is offline; nothing to release.',
+        message_zh: '本地 LLM 未在线，无需释放。',
         details: [`base_url=${ollamaBase}`],
         status: await this.getStatus(),
+      };
+    }
+
+    const isLlamaCpp = before.models.some((m) => m.processor === 'llamacpp');
+    if (isLlamaCpp) {
+      const pid = await findWindowsListenerPid(localLlmPort(ollamaBase));
+      details.push(pid ? `llama.cpp pid=${pid}` : 'llama.cpp pid not found');
+      if (pid) {
+        try {
+          await execFileAsync('taskkill', ['/PID', String(pid), '/F'], {
+            timeout: 8000,
+            windowsHide: true,
+          });
+          released = before.used_bytes;
+          details.push(`taskkill ${pid} ok`);
+        } catch (err: any) {
+          details.push(`taskkill error: ${err?.message || String(err)}`);
+          logger.warn({ err, pid }, 'Failed to stop llama.cpp server');
+        }
+      }
+      await new Promise((r) => setTimeout(r, 800));
+      const status = await this.getStatus();
+      const stillLoaded = status.ollama.online && status.ollama.models.length > 0;
+      const ok = !stillLoaded;
+      return {
+        ok,
+        message: ok
+          ? `Released LLM VRAM (${formatGiB(released || before.used_bytes)}). Ready for ComfyUI / Pony.`
+          : `Attempted unload; llama.cpp still resident.`,
+        message_zh: ok
+          ? `已释放 LLM 显存（约 ${formatGiB(released || before.used_bytes)}），可留给 ComfyUI / Pony。`
+          : '已尝试卸载，llama.cpp 仍在驻留。',
+        released_bytes: released || before.used_bytes,
+        details,
+        status,
       };
     }
 
@@ -542,8 +674,8 @@ export class VramService {
       return {
         ok: true,
         skipped: true,
-        message: 'No Ollama models were loaded in VRAM.',
-        message_zh: '当前没有驻留在显存中的 Ollama 模型。',
+        message: 'No local LLM models were loaded in VRAM.',
+        message_zh: '当前没有驻留在显存中的本地 LLM 模型。',
         released_bytes: 0,
         details,
         status: await this.getStatus(),
@@ -554,7 +686,6 @@ export class VramService {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20_000);
-        // keep_alive: 0 immediately unloads the model from VRAM
         const res = await fetch(`${ollamaBase}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -569,11 +700,10 @@ export class VramService {
         }
       } catch (err: any) {
         details.push(`unload ${model} error: ${err?.message || String(err)}`);
-        logger.warn({ err, model }, 'Failed to unload Ollama model');
+        logger.warn({ err, model }, 'Failed to unload local LLM model');
       }
     }
 
-    // Brief settle so nvidia-smi /api/ps reflect the unload
     await new Promise((r) => setTimeout(r, 600));
     const status = await this.getStatus();
     const stillLoaded = status.ollama.models.length;

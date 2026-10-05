@@ -5,83 +5,91 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$RootDir = $PSScriptRoot
-$OllamaDir = 'D:\Program Files\Ollama'
-$OllamaExe = Join-Path $OllamaDir 'ollama.exe'
-$ModelDir = 'D:\ProgramData\Ollama\models'
-$ModelName = 'novastory-qwen3:8b'
-$BaseModel = 'huihui_ai/qwen3-abliterated:8b-v2-q4_K_M'
-$Modelfile = Join-Path $RootDir 'local-llm\Modelfile'
-$LogDir = Join-Path $RootDir 'logs'
+. (Join-Path $PSScriptRoot 'local-llm\runtime.ps1')
 
-if (-not (Test-Path -LiteralPath $OllamaExe -PathType Leaf)) {
-    $command = Get-Command ollama.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        $OllamaExe = $command.Source
-    }
-    else {
-        throw "Ollama was not found at '$OllamaExe' or on PATH."
+$TmpDir = 'D:\ProgramData\NovaStory\tmp'
+$LogDir = Join-Path $PSScriptRoot 'logs'
+New-Item -ItemType Directory -Path $script:LlamaDir, $script:ModelDir, $TmpDir, $LogDir -Force | Out-Null
+
+function Get-FileSizeBytes {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 0 }
+    return [int64](Get-Item -LiteralPath $Path).Length
+}
+
+function Invoke-Download {
+    param(
+        [string]$Url,
+        [string]$OutFile
+    )
+    Write-Host "Downloading $Url" -ForegroundColor Yellow
+    & curl.exe -L --retry 5 --retry-delay 2 --fail -o $OutFile $Url
+    if ($LASTEXITCODE -ne 0) {
+        throw "Download failed ($LASTEXITCODE): $Url"
     }
 }
 
-if (-not (Test-Path -LiteralPath $Modelfile -PathType Leaf)) {
-    throw "Modelfile was not found at '$Modelfile'."
+$serverPath = Get-LlamaServerPath
+if (-not $serverPath) {
+    $rel = $script:LlamaRelease
+    $base = "https://github.com/ggml-org/llama.cpp/releases/download/$rel"
+    $zip = Join-Path $TmpDir "llama-$rel-bin-win-cuda-12.4-x64.zip"
+    $cudart = Join-Path $TmpDir "cudart-llama-bin-win-cuda-12.4-x64.zip"
+    if ((Get-FileSizeBytes $zip) -lt 10MB) {
+        Invoke-Download -Url "$base/llama-$rel-bin-win-cuda-12.4-x64.zip" -OutFile $zip
+    }
+    Write-Host "Extracting llama.cpp $rel into $($script:LlamaDir)..." -ForegroundColor Yellow
+    Expand-Archive -LiteralPath $zip -DestinationPath $script:LlamaDir -Force
+    $cudaToolkitBin = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin'
+    $copiedFromToolkit = $false
+    if (Test-Path -LiteralPath $cudaToolkitBin) {
+        foreach ($dll in @('cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll')) {
+            $src = Join-Path $cudaToolkitBin $dll
+            if (Test-Path -LiteralPath $src -PathType Leaf) {
+                Copy-Item -LiteralPath $src -Destination (Join-Path $script:LlamaDir $dll) -Force
+                $copiedFromToolkit = $true
+            }
+        }
+    }
+    if (-not $copiedFromToolkit) {
+        if ((Get-FileSizeBytes $cudart) -lt 1MB) {
+            Invoke-Download -Url "$base/cudart-llama-bin-win-cuda-12.4-x64.zip" -OutFile $cudart
+        }
+        Expand-Archive -LiteralPath $cudart -DestinationPath $script:LlamaDir -Force
+    }
+    $serverPath = Get-LlamaServerPath
 }
 
-New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null
-New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-
-$env:OLLAMA_MODELS = $ModelDir
-$env:OLLAMA_FLASH_ATTENTION = '1'
-$env:OLLAMA_KV_CACHE_TYPE = 'q8_0'
-$env:OLLAMA_CONTEXT_LENGTH = '8192'
-$env:OLLAMA_NUM_PARALLEL = '1'
-$env:OLLAMA_MAX_LOADED_MODELS = '1'
-$env:OLLAMA_KEEP_ALIVE = '2m'
-$env:OLLAMA_HOST = '127.0.0.1:11434'
-$env:OLLAMA_NO_CLOUD = '1'
-
-function Test-OllamaApi {
-    try {
-        Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 2 | Out-Null
-        return $true
-    }
-    catch {
-        return $false
-    }
+if (-not $serverPath) {
+    throw "llama-server.exe was not found under '$($script:LlamaDir)'."
 }
 
-if (-not (Test-OllamaApi)) {
-    $stdoutLog = Join-Path $LogDir 'ollama-serve.stdout.log'
-    $stderrLog = Join-Path $LogDir 'ollama-serve.stderr.log'
-    Start-Process -FilePath $OllamaExe -ArgumentList @('serve') -WindowStyle Hidden `
-        -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog | Out-Null
+$script:LlamaServer = $serverPath
+Write-Host "llama-server: $serverPath" -ForegroundColor Green
 
-    $ready = $false
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        Start-Sleep -Seconds 1
-        if (Test-OllamaApi) {
-            $ready = $true
+if (-not (Test-Path -LiteralPath $script:ModelFile -PathType Leaf) -or ((Get-FileSizeBytes $script:ModelFile) -lt 4GB)) {
+    $urls = @(
+        "https://huggingface.co/$($script:HfRepo)/resolve/main/$($script:ModelFileName)",
+        "https://hf-mirror.com/$($script:HfRepo)/resolve/main/$($script:ModelFileName)"
+    )
+    $downloaded = $false
+    foreach ($url in $urls) {
+        Write-Host "Downloading $url" -ForegroundColor Yellow
+        & curl.exe -L --retry 8 --retry-delay 3 -C - --fail -o $script:ModelFile $url
+        if ($LASTEXITCODE -eq 0 -and ((Get-FileSizeBytes $script:ModelFile) -gt 4GB)) {
+            $downloaded = $true
             break
         }
     }
-
-    if (-not $ready) {
-        throw "Ollama did not become ready. Check '$stderrLog'."
+    if (-not $downloaded) {
+        throw "Failed to download $($script:ModelFileName)."
     }
 }
 
-Write-Host "Pulling $BaseModel into $ModelDir..." -ForegroundColor Yellow
-& $OllamaExe pull $BaseModel
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to pull $BaseModel."
+$modelSize = Get-FileSizeBytes $script:ModelFile
+if ($modelSize -lt 4GB) {
+    throw "Model file looks incomplete ($modelSize bytes): $($script:ModelFile)"
 }
 
-Write-Host "Creating the pinned NovaStory model profile $ModelName..." -ForegroundColor Yellow
-& $OllamaExe create $ModelName -f $Modelfile
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to create $ModelName."
-}
-
-Write-Host 'Local language model setup completed.' -ForegroundColor Green
-& $OllamaExe list
+Write-Host ("Local llama.cpp setup completed. Model {0:N1} GB at {1}" -f ($modelSize / 1GB), $script:ModelFile) -ForegroundColor Green
+Write-Host "Start it with start_local_llm.ps1 (OpenAI-compatible http://$($script:LlmHost):$($script:LlmPort)/v1, alias $($script:ModelAlias))."

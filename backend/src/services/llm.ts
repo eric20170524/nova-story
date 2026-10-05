@@ -16,8 +16,11 @@ import {
     ContentAnalysisSchema
 } from '../schemas/llm';
 
-export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1';
-export const DEFAULT_OLLAMA_MODEL = 'novastory-qwen3:8b';
+export const DEFAULT_LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
+export const DEFAULT_LOCAL_LLM_MODEL = 'novastory-qwen3.5:9b';
+export const DEFAULT_OLLAMA_BASE_URL = DEFAULT_LOCAL_LLM_BASE_URL;
+export const DEFAULT_OLLAMA_MODEL = DEFAULT_LOCAL_LLM_MODEL;
+const LOCAL_LLM_PROVIDERS = new Set(['ollama', 'local_llm']);
 
 export type LLMProviderConfig = {
     provider?: string;
@@ -27,9 +30,9 @@ export type LLMProviderConfig = {
 };
 
 export function resolveLlmApiKey(llmConfig: LLMProviderConfig, providerType: string): string {
-    const isOllama = providerType === 'ollama';
+    const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
     const configuredKey = String(llmConfig.api_key || '').trim();
-    if (isOllama) return 'ollama';
+    if (isLocalLlm) return 'ollama';
     if (isRemoteGemmaLlm(llmConfig)) {
         return configuredKey && configuredKey !== 'ollama' ? configuredKey : '';
     }
@@ -45,10 +48,10 @@ export class LLMService {
 
         if (providerType === 'codex') return new CodexProvider();
 
-        if (['openai', 'custom', 'ollama'].includes(providerType)) {
-            const isOllama = providerType === 'ollama';
-            const effectiveBaseUrl = baseUrl || (isOllama ? DEFAULT_OLLAMA_BASE_URL : undefined);
-            const effectiveModel = llmConfig.model || (isOllama ? DEFAULT_OLLAMA_MODEL : 'gpt-4o');
+        if (['openai', 'custom', 'ollama', 'local_llm'].includes(providerType)) {
+            const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
+            const effectiveBaseUrl = baseUrl || (isLocalLlm ? DEFAULT_LOCAL_LLM_BASE_URL : undefined);
+            const effectiveModel = llmConfig.model || (isLocalLlm ? DEFAULT_LOCAL_LLM_MODEL : 'gpt-4o');
             const remoteGemma = isRemoteGemmaLlm({
                 model: effectiveModel,
                 base_url: effectiveBaseUrl,
@@ -58,7 +61,7 @@ export class LLMService {
                 providerType
             );
             return new OpenAIProvider(effectiveApiKey, effectiveModel, effectiveBaseUrl, {
-                isOllama,
+                isOllama: isLocalLlm,
                 timeoutMs: remoteGemma ? 300_000 : undefined,
             });
         }
@@ -77,7 +80,7 @@ export class LLMService {
         );
     }
 
-    /** Always use the local Ollama-compatible endpoint, regardless of any cloud
+    /** Always use the local llama.cpp OpenAI-compatible endpoint, regardless of any cloud
      * provider selected for other writing tasks. */
     static getLocalProvider(): AIProvider {
         const configured = SettingsManager.loadSettings().llm || {};
@@ -88,11 +91,11 @@ export class LLMService {
             return LLMService.getProvider();
         }
         const configuredProvider = String(configured.provider || '').toLowerCase();
-        const isConfiguredLocal = ['ollama', 'local_llm'].includes(configuredProvider);
+        const isConfiguredLocal = LOCAL_LLM_PROVIDERS.has(configuredProvider);
         return new OpenAIProvider(
             'ollama',
-            isConfiguredLocal && configured.model ? configured.model : DEFAULT_OLLAMA_MODEL,
-            isConfiguredLocal && configured.base_url ? configured.base_url : DEFAULT_OLLAMA_BASE_URL,
+            isConfiguredLocal && configured.model ? configured.model : DEFAULT_LOCAL_LLM_MODEL,
+            isConfiguredLocal && configured.base_url ? configured.base_url : DEFAULT_LOCAL_LLM_BASE_URL,
             { isOllama: true }
         );
     }

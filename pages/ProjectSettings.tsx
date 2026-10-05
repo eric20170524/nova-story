@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Loader2, Trash2, AlertCircle, Palette, BookOpen, Library, SlidersHorizontal, FileText } from 'lucide-react';
 import { api } from '../services/api';
 import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
-import { ImageOutputSpec, Project } from '../types';
+import { ImageOutputSpec, Project, VideoWorkflowId } from '../types';
+import { PROJECT_VIDEO_WORKFLOW_IDS, readProjectVideoWorkflow } from '../services/videoWorkflowPolicy';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import {
@@ -135,6 +136,7 @@ export const ProjectSettings: React.FC = () => {
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
   const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
+  const [videoWorkflowId, setVideoWorkflowId] = useState<VideoWorkflowId | null>(null);
   const [outputSpec, setOutputSpec] = useState<Required<ImageOutputSpec>>({
     aspect_ratio: '16:9',
     resolution: 'standard',
@@ -212,6 +214,7 @@ export const ProjectSettings: React.FC = () => {
               setDefaultModelType(imageSettings.model);
           }
           setDefaultWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
+          setVideoWorkflowId(readProjectVideoWorkflow(settingsObj));
           setOutputSpec(normalizeProjectOutputSpec(imageSettings.output_spec));
           setNsfwMode(imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off'
             ? imageSettings.nsfw_mode : 'inherit');
@@ -298,6 +301,9 @@ export const ProjectSettings: React.FC = () => {
               style: defaultStyle,
               output_spec: outputSpec,
               nsfw_mode: nsfwMode,
+            },
+            video_generation: {
+              workflow_id: videoWorkflowId,
             },
             genre,
             style: storyStyle,
@@ -508,7 +514,8 @@ export const ProjectSettings: React.FC = () => {
                   </select>
                 </Field>
 
-                <Field label={t('project_settings.project_model', '项目模型')}>
+                <Field label={t('project_settings.project_model', '项目出图模型')}
+                  hint={t('project_settings.project_model_desc', '只选择底模家族。下面列出全部已注册的生图工作流。')}>
                   <select
                     data-testid="project-settings-model"
                     className={fieldClass}
@@ -524,17 +531,56 @@ export const ProjectSettings: React.FC = () => {
                   </select>
                 </Field>
 
-                <Field label={t('project_settings.project_workflow', '项目工作流')}
-                  hint={t('project_settings.project_workflow_desc', '可选；只显示与项目模型匹配的工作流。')}>
+                <Field label={t('project_settings.project_workflow', '项目生图工作流')}
+                  hint={t('project_settings.project_workflow_desc', '列出全部已注册的生图工作流，按底模分组。选择其他底模的工作流会同时切换项目出图模型。视频工作流不在这里。')}>
                   <select data-testid="project-settings-workflow" className={fieldClass}
                     value={defaultWorkflowId ?? ''}
-                    onChange={(e) => setDefaultWorkflowId(e.target.value ? Number(e.target.value) : null)}>
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (!value) {
+                        setDefaultWorkflowId(null);
+                        return;
+                      }
+                      const workflow = workflows.find((item) => String(item.id) === value);
+                      const family = workflow?.model_family;
+                      if (family === 'pony' || family === 'sd15' || family === 'redcraft_krea2') {
+                        setDefaultModelType(family);
+                        setDefaultWorkflowId(Number(value));
+                      }
+                    }}>
                     <option value="">{t('project_settings.workflow_auto', '自动匹配')}</option>
-                    {defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId && wf.model_family === defaultModelType) && (
+                    {defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId) && (
                       <option value={defaultWorkflowId}>{t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}</option>
                     )}
-                    {workflows.filter((wf) => wf.model_family === defaultModelType).map((wf) => (
-                      <option key={wf.id} value={wf.id}>{wf.name}</option>
+                    {(['pony', 'redcraft_krea2', 'sd15'] as const).map((family) => {
+                      const familyWorkflows = workflows.filter((wf) => wf.model_family === family);
+                      if (!familyWorkflows.length) return null;
+                      return (
+                        <optgroup key={family} label={t(`project_settings.model_${family === 'redcraft_krea2' ? 'redcraft' : family}`)}>
+                          {familyWorkflows.map((wf) => (
+                            <option key={wf.id} value={wf.id}>{wf.name}</option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                    {workflows.some((wf) => wf.model_family === 'flux') && (
+                      <optgroup label={t('project_settings.workflow_retired', '已退役')}>
+                        {workflows.filter((wf) => wf.model_family === 'flux').map((wf) => (
+                          <option key={wf.id} value={wf.id} disabled>{wf.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </Field>
+
+                <Field label={t('project_settings.video_workflow', '默认生视频工作流')}
+                  hint={t('project_settings.video_workflow_desc', '普通镜头使用这里的默认。镜头已有尾帧时仍用 FL2VA，已有引导帧时仍用 Multi-Frame。单个镜头可以临时改。')}>
+                  <select data-testid="project-settings-video-workflow" className={fieldClass}
+                    value={videoWorkflowId ?? ''}
+                    onChange={(e) => setVideoWorkflowId((e.target.value || null) as VideoWorkflowId | null)}>
+                    <option value="">{t('project_settings.video_workflow_auto', '按镜头参考自动选择')}</option>
+                    {PROJECT_VIDEO_WORKFLOW_IDS.map((id) => (
+                      <option key={id} value={id}>{t(`project_settings.video_${id}`)}</option>
                     ))}
                   </select>
                 </Field>

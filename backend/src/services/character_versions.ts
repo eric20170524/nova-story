@@ -105,6 +105,53 @@ export async function activateCharacterVersion(
   return db.get('SELECT * FROM character WHERE id = ?', characterId);
 }
 
+const appearanceUrls = (raw: unknown) => {
+  const summary = assetSummary(raw);
+  return {
+    avatar_url: summary.avatar_url,
+    turnaround_url: summary.turnaround_url,
+    face_url: summary.face_url,
+  };
+};
+
+const sameAppearance = (left: unknown, right: unknown) => {
+  const a = appearanceUrls(left);
+  const b = appearanceUrls(right);
+  return a.avatar_url === b.avatar_url
+    && a.turnaround_url === b.turnaround_url
+    && a.face_url === b.face_url;
+};
+
+/**
+ * Text edits stay on the active version. A changed portrait, turnaround, or face
+ * URL opens a new version so existing keyframes and videos stop matching.
+ * Call ensureCharacterVersionBaseline before writing the new URLs.
+ */
+export async function commitCharacterEdits(characterId: number, previousVisualTags: unknown): Promise<void> {
+  await ensureCharacterVersionBaseline(characterId);
+  const char = await db.get('SELECT * FROM character WHERE id = ?', characterId);
+  if (!char) return;
+  if (sameAppearance(previousVisualTags, char.visual_tags)) {
+    await syncActiveCharacterVersion(characterId);
+    return;
+  }
+  const maxRow = await db.get(
+    'SELECT MAX(version) AS m FROM character_version WHERE character_id = ?',
+    characterId
+  );
+  const nextVersion = Number((maxRow as { m?: number } | undefined)?.m || 0) + 1;
+  await db.run(
+    `INSERT INTO character_version (character_id, version, label, description, visual_tags)
+     VALUES (?, ?, ?, ?, ?)`,
+    characterId,
+    nextVersion,
+    `v${nextVersion}`,
+    char.description ?? null,
+    tagsToString(char.visual_tags)
+  );
+  await db.run('UPDATE character SET active_version = ? WHERE id = ?', nextVersion, characterId);
+}
+
 /** Mirror character row into active version after edits / asset uploads */
 export async function syncActiveCharacterVersion(characterId: number): Promise<void> {
   await ensureCharacterVersionBaseline(characterId);

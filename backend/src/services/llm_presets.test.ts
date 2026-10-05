@@ -11,7 +11,7 @@ import {
 
 test('gemma-4-31b replaces a leftover Ollama endpoint', () => {
     const settings = applyKnownRemoteLlm({
-        llm_model: 'novastory-qwen3:8b',
+        llm_model: 'novastory-qwen3.5:9b',
         llm: {
             provider: 'ollama',
             api_key: 'ollama',
@@ -45,7 +45,7 @@ test('other model names stay on their configured endpoint', () => {
         llm: {
             provider: 'ollama',
             base_url: 'http://127.0.0.1:11434/v1',
-            model: 'novastory-qwen3:8b',
+            model: 'novastory-qwen3.5:9b',
         },
     });
 
@@ -62,7 +62,7 @@ test('a Gemma endpoint drops a placeholder key during verify and does not borrow
         const merged = mergeVerifyLlmConfig(
             {
                 provider: 'ollama',
-                model: 'novastory-qwen3:8b',
+                model: 'novastory-qwen3.5:9b',
                 base_url: 'http://127.0.0.1:11434/v1',
                 api_key: 'ollama',
             },

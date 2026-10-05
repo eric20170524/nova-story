@@ -14,6 +14,7 @@ import { GpuLeaseService } from '../services/gpu_lease_service';
 import { createSceneVersion, ensureSceneVersionBaseline, syncActiveVersionAssets } from '../services/scene_versions';
 import { subscribeTaskProgress } from '../services/task_progress_bus';
 import { getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
+import { isSyntheticCharacterSceneId, syntheticCharacterId } from '../services/synthetic_scene_id';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -60,10 +61,13 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         || req.workflow?.new_version
         || req.workflow?.create_new_version
       );
-      const isCharacterScene = req.scene_id >= 900000 || Boolean(req.workflow?.character_id);
+      const isCharacterScene = isSyntheticCharacterSceneId(req.scene_id);
+      const characterId = req.workflow?.character_id
+        ? Number(req.workflow.character_id)
+        : syntheticCharacterId(req.scene_id);
       const projectLink = isCharacterScene
-        ? req.workflow?.character_id
-          ? await db.get('SELECT project_id FROM character WHERE id = ?', Number(req.workflow.character_id))
+        ? characterId
+          ? await db.get('SELECT project_id FROM character WHERE id = ?', characterId)
           : null
         : await db.get(
             'SELECT chapter.project_id FROM scene INNER JOIN chapter ON chapter.id = scene.chapter_id WHERE scene.id = ?',

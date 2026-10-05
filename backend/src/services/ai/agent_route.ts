@@ -151,7 +151,7 @@ export async function freeTextAnswerFallback(
     return {
       thought: 'free_text_fallback_error',
       response:
-        '本地模型未能生成有效操作计划。请换更短指令，或检查 Ollama。',
+        '本地模型未能生成有效操作计划。请换更短指令，或检查 llama.cpp 服务。',
       actions: [
         {
           op: 'ANSWER_QUESTION',

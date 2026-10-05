@@ -556,7 +556,7 @@ class ApiService {
   verifyLLMConnection = (config: any) => this.request<any>('/settings/verify-llm', { method: 'POST', body: config });
   verifyComfyConnection = (config?: any) => this.request<any>('/settings/verify-comfy', { method: 'POST', body: config || {} });
 
-  /** GPU / Ollama / ComfyUI VRAM health for the top status badge */
+  /** GPU / llama.cpp / ComfyUI VRAM health for the top status badge */
   getVramStatus = () =>
     this.request<{
       level: 'good' | 'warning' | 'critical' | 'unknown';
@@ -587,7 +587,7 @@ class ApiService {
       polled_at: string;
     }>('/settings/vram-status');
 
-  /** One-click unload Ollama models from VRAM */
+  /** One-click unload the local LLM from VRAM */
   releaseLlmVram = () =>
     this.request<{
       ok: boolean;

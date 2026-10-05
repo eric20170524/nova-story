@@ -20,7 +20,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return VramService.getStatus();
   });
 
-  /** One-click unload Ollama models to free VRAM for ComfyUI / Pony */
+  /** One-click unload the local LLM to free VRAM for ComfyUI / Pony */
   app.post('/vram/release-llm', async () => {
     return VramService.releaseLlm();
   });

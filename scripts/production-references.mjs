@@ -17,7 +17,7 @@ export function resolveAssetBindings(shot, assets, bound = []) {
   const manual = bound.filter(asset => !canonicalIds.has(asset.id));
   const blockers = [];
   const selected = [];
-  if (!required.length && !bound.length) blockers.push('No reusable location or prop is specified or explicitly bound');
+  if (!required.length && !bound.length) return { asset_ids: [], required, blockers: [] };
   required.forEach((item, index) => {
     const exact = matches[index];
     if (exact.length > 1) {
@@ -102,14 +102,29 @@ export function keyframeUsesCharacterVersions(shot, characters, snapshots, requi
   } catch { return false; }
 }
 
-export function chooseShotVideoStrategy(assets, override = null) {
+const PROJECT_VIDEO_WORKFLOW_IDS = new Set([
+  'grok_imagine_browser',
+  'minimax_h3_ref2va_official_12gb',
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb',
+  'minimax_h3_hongchao_a2a_12gb',
+]);
+
+export function readProjectVideoWorkflow(settings) {
+  const raw = settings?.video_generation?.workflow_id;
+  return PROJECT_VIDEO_WORKFLOW_IDS.has(raw) ? raw : null;
+}
+
+export function chooseShotVideoStrategy(assets, override = null, projectDefault = null) {
   const available = assets.filter(asset => asset.status === 'ready');
   const latest = role => available.filter(asset => asset.role === role).sort((a, b) => Number(b.id) - Number(a.id))[0];
   const guide = latest('guide_frame_reference') || latest('composition_reference');
   const last = latest('last_frame_reference');
-  const selected = override || (guide
+  const structural = guide
     ? 'minimax_h3_multiframe_official_12gb'
-    : last ? 'minimax_h3_fl2va_official_12gb' : 'minimax_h3_ref2va_official_12gb');
+    : last ? 'minimax_h3_fl2va_official_12gb' : null;
+  const fallback = PROJECT_VIDEO_WORKFLOW_IDS.has(projectDefault) ? projectDefault : 'minimax_h3_ref2va_official_12gb';
+  const selected = override || structural || fallback;
   let guideFrameIdx;
   if (selected === 'minimax_h3_multiframe_official_12gb' && guide) {
     let proposed;
@@ -122,7 +137,10 @@ export function chooseShotVideoStrategy(assets, override = null) {
   return {
     workflow_id: selected,
     reason: override ? 'Explicit workflow override' : guide ? 'Guide frame requires Official Multi-Frame'
-      : last ? 'Last-frame boundary requires Official FL2VA' : 'Ordinary shot uses Official Ref2VA',
+      : last ? 'Last-frame boundary requires Official FL2VA'
+      : projectDefault && selected === projectDefault && projectDefault !== 'minimax_h3_ref2va_official_12gb'
+        ? 'Project default video workflow'
+        : 'Ordinary shot uses Official Ref2VA',
     ...(selected === 'minimax_h3_multiframe_official_12gb' && guide
       ? { guide_frames: [{ asset_id: guide.id, frame_idx: guideFrameIdx }] } : {}),
     ...(['minimax_h3_fl2va_official_12gb', 'minimax_h3_multiframe_official_12gb', 'minimax_h3_hongchao_a2a_12gb'].includes(selected) && last

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
-import { defaultIdentityReferenceIds, recommendVideoWorkflow } from '../services/videoWorkflowPolicy';
+import { defaultIdentityReferenceIds, readProjectVideoWorkflow, resolveProjectVideoWorkflow } from '../services/videoWorkflowPolicy';
 import {
   Chapter,
   Scene,
@@ -117,6 +117,7 @@ export const DirectorMode: React.FC = () => {
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
   const [projectWorkflowId, setProjectWorkflowId] = useState<number | null>(null);
+  const [projectVideoWorkflowId, setProjectVideoWorkflowId] = useState<VideoWorkflowId | null>(null);
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
     aspect_ratio: '16:9',
     resolution: 'standard',
@@ -193,6 +194,7 @@ export const DirectorMode: React.FC = () => {
           setProjectModelType(imageSettings.model);
         }
         setProjectWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
+        setProjectVideoWorkflowId(readProjectVideoWorkflow(settingsObj));
         setProjectOutputSpec(normalizeProjectOutputSpec(imageSettings.output_spec));
         let mode: 'inherit' | 'on' | 'off' = 'inherit';
         if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') mode = imageSettings.nsfw_mode;
@@ -907,7 +909,7 @@ export const DirectorMode: React.FC = () => {
     const profile = options.profile || videoProfile;
     const preset = options.preset || videoPreset;
     const sceneAssets = mediaAssetsByScene[sceneId] || [];
-    const workflowId = options.workflowId || recommendVideoWorkflow(sceneAssets).workflowId;
+    const workflowId = options.workflowId || resolveProjectVideoWorkflow(sceneAssets, projectVideoWorkflowId).workflowId;
     const numericSceneId = Number(sceneId);
     const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
     const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
@@ -1250,6 +1252,7 @@ export const DirectorMode: React.FC = () => {
         onCreateVersion={handleCreateVersion}
         mediaAssetsByScene={mediaAssetsByScene}
         videoTasksByScene={videoTasksByScene}
+        projectVideoWorkflowId={projectVideoWorkflowId}
         onGenerateVideo={handleGenerateVideo}
         onPromoteVideoAsset={handlePromoteVideoAsset}
         onReprocessVideoAsset={handleReprocessVideoAsset}
@@ -1274,6 +1277,9 @@ export const DirectorMode: React.FC = () => {
           ? t('project_settings.workflow_auto', '自动匹配')
           : workflows.find((workflow) => workflow.id === projectWorkflowId)?.name
             || t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}
+        projectVideoWorkflowName={projectVideoWorkflowId
+          ? t(`project_settings.video_${projectVideoWorkflowId}`)
+          : t('project_settings.video_workflow_auto', '按镜头参考自动选择')}
         effectiveNsfw={effectiveNsfw}
         outputSpec={projectOutputSpec}
         videoProfile={videoProfile}

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { ProjectImportInputError } from '../services/import/import_file';
 import { commitProjectImportFile } from '../services/import/project_import';
-import { DEFAULT_PROJECT_IMAGE_SETTINGS, canonicalProjectSettings, getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS, PROJECT_VIDEO_WORKFLOW_IDS, canonicalProjectSettings, getProjectImageSettings, getProjectVideoSettings, parseProjectSettings } from '../services/project_settings';
 import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
 import { remapCopiedScriptChanges } from '../services/script_copy';
@@ -83,7 +83,25 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
         return null;
       }
     }
-    return JSON.stringify({ ...settings, image_generation: getProjectImageSettings(parseProjectSettings(settings)) });
+    const video = settings.video_generation;
+    if (video != null) {
+      if (typeof video !== 'object' || Array.isArray(video)) {
+        reply.status(400).send({ detail: 'video_generation must be an object' });
+        return null;
+      }
+      const workflowId = (video as { workflow_id?: unknown }).workflow_id;
+      if (workflowId != null && workflowId !== ''
+        && !(PROJECT_VIDEO_WORKFLOW_IDS as readonly string[]).includes(String(workflowId))) {
+        reply.status(400).send({ detail: 'Invalid project video workflow' });
+        return null;
+      }
+    }
+    const parsed = parseProjectSettings(settings);
+    return JSON.stringify({
+      ...settings,
+      image_generation: getProjectImageSettings(parsed),
+      video_generation: getProjectVideoSettings(parsed),
+    });
   };
   app.get('/:id/export', async (request, reply) => {
     const { id } = z.object({

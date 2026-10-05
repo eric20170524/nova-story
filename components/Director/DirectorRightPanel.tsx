@@ -34,6 +34,7 @@ interface DirectorRightPanelProps {
   onStopBatchGenerate?: () => void;
   projectModelType?: string;
   projectWorkflowName?: string;
+  projectVideoWorkflowName?: string;
   effectiveNsfw?: boolean;
   outputSpec?: ImageOutputSpec;
   // Video Generation Controls
@@ -65,6 +66,7 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   isBatchGenerating,
   projectModelType = 'pony',
   projectWorkflowName = '',
+  projectVideoWorkflowName = '',
   effectiveNsfw = false,
   outputSpec,
   videoProfile = 'narrative_clip',
@@ -378,8 +380,13 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                    </div>
 
                    <div className="flex justify-between items-center bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800/80 gap-2">
-                     <span className="text-slate-500 dark:text-slate-400 flex-shrink-0 font-medium">{t('project_settings.project_workflow', '项目工作流')}</span>
+                     <span className="text-slate-500 dark:text-slate-400 flex-shrink-0 font-medium">{t('project_settings.project_workflow', '项目生图工作流')}</span>
                      <span className="text-slate-900 dark:text-slate-200 font-bold truncate max-w-[150px]" title={projectWorkflowName}>{projectWorkflowName}</span>
+                   </div>
+
+                   <div className="flex justify-between items-center bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800/80 gap-2">
+                     <span className="text-slate-500 dark:text-slate-400 flex-shrink-0 font-medium">{t('project_settings.video_workflow', '默认生视频工作流')}</span>
+                     <span className="text-slate-900 dark:text-slate-200 font-bold truncate max-w-[150px]" title={projectVideoWorkflowName}>{projectVideoWorkflowName}</span>
                    </div>
 
                    <div className="flex justify-between items-center bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800/80 gap-2">

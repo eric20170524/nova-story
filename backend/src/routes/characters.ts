@@ -22,7 +22,7 @@ import {
   createCharacterVersion,
   ensureCharacterVersionBaseline,
   listCharacterVersions,
-  syncActiveCharacterVersion
+  commitCharacterEdits
 } from '../services/character_versions';
 import { TtsService, formatVoiceLabel, TtsServiceError } from '../services/tts_service';
 
@@ -276,6 +276,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (!char) {
       return reply.status(404).send({ detail: 'Character not found' });
     }
+    await ensureCharacterVersionBaseline(id);
+    const previousVisualTags = char.visual_tags;
 
     const data = CharacterUpdateSchema.parse(request.body);
     const updateFields = [];
@@ -355,7 +357,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (updateFields.length > 0) {
       params.push(id);
       await db.run(`UPDATE character SET ${updateFields.join(', ')} WHERE id = ?`, ...params);
-      await syncActiveCharacterVersion(id);
+      await commitCharacterEdits(id, previousVisualTags);
     }
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
@@ -623,6 +625,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     });
     await fs.promises.writeFile(pathResult.filepath, buffer);
 
+    await ensureCharacterVersionBaseline(id);
+    const previousVisualTags = dbChar.visual_tags;
     const assetUrl = pathResult.url;
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
     const assets = tags.assets || {};
@@ -637,7 +641,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     tags.assets = assets;
     await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
-    await syncActiveCharacterVersion(id);
+    await commitCharacterEdits(id, previousVisualTags);
 
     const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
     return annotateCharacterWithVersions(updatedChar, serializeCharacter);

@@ -430,7 +430,7 @@ export const VramHealthBadge: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2 pt-1">
               <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 px-2.5 py-2">
-                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Ollama</div>
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">llama.cpp</div>
                 <div className="text-xs text-slate-800 dark:text-slate-200 mt-0.5 truncate font-semibold" title={ollamaLabel}>
                   {status?.ollama.online ? (
                     <span className="inline-flex items-center gap-1">

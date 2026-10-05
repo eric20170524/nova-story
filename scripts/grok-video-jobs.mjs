@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { localQueueDir } from './local-queue.mjs';
 
-const queue = path.resolve(process.env.NOVASTORY_GROK_VIDEO_QUEUE_DIR || 'backend/grok-video-jobs');
+const queue = localQueueDir('NOVASTORY_GROK_VIDEO_QUEUE_DIR', 'grok-video-jobs');
 const [action = 'list', id, input, sourceUrl] = process.argv.slice(2);
 const validId = value => /^vtask_[0-9a-f]{16}$/.test(String(value || ''));
 const jobFile = (jobId, suffix) => path.join(queue, `${jobId}.${suffix}`);

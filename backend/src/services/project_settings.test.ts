@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  canonicalProjectSettings,
   getProjectImageSettings,
+  getProjectVideoSettings,
   parseProjectSettings,
   resolveEffectiveNsfw
 } from './project_settings';
@@ -24,6 +26,18 @@ test('old saved image ratios are read as 16:9 and canonicalized on save', () => 
     }));
     assert.equal(getProjectImageSettings(settings).output_spec.aspect_ratio, '16:9');
   }
+});
+
+test('project video workflow keeps a known id and drops anything else', () => {
+  const saved = canonicalProjectSettings({
+    image_generation: { model: 'redcraft_krea2' },
+    video_generation: { workflow_id: 'minimax_h3_hongchao_a2a_12gb' },
+    genre: '仙侠',
+  });
+  assert.equal(getProjectVideoSettings(saved).workflow_id, 'minimax_h3_hongchao_a2a_12gb');
+  assert.equal(saved.genre, '仙侠');
+  assert.equal(getProjectVideoSettings({ video_generation: { workflow_id: 'ltx-2k' } as any }).workflow_id, null);
+  assert.equal(getProjectVideoSettings({}).workflow_id, null);
 });
 
 test('resolveEffectiveNsfw uses project policy then system', () => {

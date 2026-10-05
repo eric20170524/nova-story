@@ -7,128 +7,119 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$RootDir = $PSScriptRoot
-$OllamaExe = 'D:\Program Files\Ollama\ollama.exe'
-$ModelDir = 'D:\ProgramData\Ollama\models'
-$ModelName = 'novastory-qwen3:8b'
-$LogDir = Join-Path $RootDir 'logs'
+. (Join-Path $PSScriptRoot 'local-llm\runtime.ps1')
 
-if (-not (Test-Path -LiteralPath $OllamaExe -PathType Leaf)) {
-    $command = Get-Command ollama.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        $OllamaExe = $command.Source
+$LogDir = Join-Path $PSScriptRoot 'logs'
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+$PidFile = Join-Path $LogDir 'llama-server.pid'
+$StdoutLog = Join-Path $LogDir 'llama-server.stdout.log'
+$StderrLog = Join-Path $LogDir 'llama-server.stderr.log'
+
+$serverPath = Get-LlamaServerPath
+if (-not $serverPath) {
+    throw 'llama-server.exe was not found. Run setup_local_llm.ps1 first.'
+}
+if (-not (Test-Path -LiteralPath $script:ModelFile -PathType Leaf)) {
+    throw "Model was not found at '$($script:ModelFile)'. Run setup_local_llm.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $script:ChatTemplateKwargs -PathType Leaf)) {
+    throw "Chat template kwargs were not found at '$($script:ChatTemplateKwargs)'."
+}
+
+Stop-ComfyUiForLlm
+
+if (Test-LocalLlmApi) {
+    Write-Host "llama.cpp already serving $(Get-LocalLlmBaseUrl)/v1 ($($script:ModelAlias))" -ForegroundColor Green
+}
+else {
+    Stop-LocalLlmServer
+    Start-Sleep -Milliseconds 400
+
+    $kwargs = (Get-Content -LiteralPath $script:ChatTemplateKwargs -Raw -Encoding UTF8).Trim()
+    # Start-Process re-quotes ArgumentList on Windows and strips JSON quotes.
+    $env:LLAMA_ARG_CHAT_TEMPLATE_KWARGS = $kwargs
+    $serverDir = Split-Path -Parent $serverPath
+    $cudaToolkitBin = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin'
+    if (Test-Path -LiteralPath $cudaToolkitBin) {
+        $env:PATH = "$serverDir;$cudaToolkitBin;$env:PATH"
     }
     else {
-        throw 'Ollama was not found. Run setup_local_llm.ps1 first.'
+        $env:PATH = "$serverDir;$env:PATH"
     }
-}
-
-$env:OLLAMA_MODELS = $ModelDir
-$env:OLLAMA_FLASH_ATTENTION = '1'
-$env:OLLAMA_KV_CACHE_TYPE = 'q8_0'
-$env:OLLAMA_CONTEXT_LENGTH = '8192'
-$env:OLLAMA_NUM_PARALLEL = '1'
-$env:OLLAMA_MAX_LOADED_MODELS = '1'
-$env:OLLAMA_KEEP_ALIVE = '2m'
-$env:OLLAMA_HOST = '127.0.0.1:11434'
-$env:OLLAMA_NO_CLOUD = '1'
-
-function Test-OllamaApi {
-    try {
-        Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 2 | Out-Null
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-function Test-ComfyUIApi {
-    try {
-        Invoke-RestMethod -Uri 'http://127.0.0.1:8188/system_stats' -TimeoutSec 2 | Out-Null
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-$comfyWasRunning = Test-ComfyUIApi
-$comfyPids = @(
-    Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty OwningProcess -Unique
-)
-if ($comfyWasRunning -and $comfyPids.Count -eq 0) {
-    $comfyPids = @(
-        netstat.exe -ano -p TCP |
-            ForEach-Object {
-                if ($_ -match '^\s*TCP\s+\S+:8188\s+\S+\s+LISTENING\s+(\d+)\s*$') {
-                    [int]$matches[1]
-                }
-            } |
-            Select-Object -Unique
+    $arguments = @(
+        '-m', $script:ModelFile
+        '--alias', $script:ModelAlias
+        '--host', $script:LlmHost
+        '--port', "$($script:LlmPort)"
+        '-c', "$($script:CtxSize)"
+        '-ngl', '99'
+        '-np', '1'
+        '--flash-attn', 'on'
+        '--cache-type-k', 'q8_0'
+        '--cache-type-v', 'q8_0'
+        '--jinja'
+        '--reasoning', 'off'
+        '--temp', '0.85'
+        '--top-p', '0.92'
+        '--top-k', '40'
+        '--min-p', '0.05'
+        '--repeat-penalty', '1.08'
+        '--no-webui'
+        '--log-file', $StderrLog
     )
-}
 
-if ($comfyWasRunning -and $comfyPids.Count -eq 0) {
-    throw 'ComfyUI is running on port 8188, but its process could not be identified. Stop ComfyUI before starting the local LLM.'
-}
-
-foreach ($processId in $comfyPids) {
-    if ($processId -and $processId -ne 0 -and $processId -ne $PID) {
-        Write-Host "Stopping ComfyUI PID $processId to release VRAM..." -ForegroundColor Yellow
-        Stop-Process -Id $processId -Force -ErrorAction Stop
+    Write-Host "Starting llama-server ($($script:ModelAlias), ctx $($script:CtxSize), GPU layers 99)..." -ForegroundColor Yellow
+    $quotedArgs = (
+        $arguments | ForEach-Object {
+            if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+        }
+    ) -join ' '
+    $cmdLine = "`"$serverPath`" $quotedArgs"
+    # Win32_Process.Create starts outside the parent job, so the server stays up
+    # after this launcher (or an agent shell job) exits.
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = $cmdLine
+        CurrentDirectory = $serverDir
     }
-}
-
-if ($comfyWasRunning) {
-    for ($attempt = 0; $attempt -lt 10 -and (Test-ComfyUIApi); $attempt++) {
-        Start-Sleep -Seconds 1
+    if (-not $created -or [int]$created.ReturnValue -ne 0 -or -not $created.ProcessId) {
+        throw "Failed to create llama-server process (WMI return $($created.ReturnValue))."
     }
-    if (Test-ComfyUIApi) {
-        throw 'ComfyUI did not stop cleanly; refusing to load a second GPU model.'
-    }
-}
-
-if (-not (Test-OllamaApi)) {
-    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-    $stdoutLog = Join-Path $LogDir 'ollama-serve.stdout.log'
-    $stderrLog = Join-Path $LogDir 'ollama-serve.stderr.log'
-    Start-Process -FilePath $OllamaExe -ArgumentList @('serve') -WindowStyle Hidden `
-        -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog | Out-Null
+    Set-Content -LiteralPath $PidFile -Value $created.ProcessId -Encoding ASCII
 
     $ready = $false
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    for ($attempt = 0; $attempt -lt 90; $attempt++) {
         Start-Sleep -Seconds 1
-        if (Test-OllamaApi) {
+        $alive = Get-Process -Id $created.ProcessId -ErrorAction SilentlyContinue
+        if (-not $alive) {
+            throw "llama-server exited early. Check '$StderrLog'."
+        }
+        if (Test-LocalLlmApi) {
             $ready = $true
             break
         }
     }
-
     if (-not $ready) {
-        throw "Ollama did not become ready. Check '$stderrLog'."
+        throw "llama.cpp did not become ready. Check '$StderrLog'."
     }
 }
 
-$installedModelText = (& $OllamaExe list) -join [Environment]::NewLine
-if ($installedModelText -notmatch [regex]::Escape($ModelName)) {
-    throw "Model '$ModelName' is not installed. Run setup_local_llm.ps1 first."
-}
-
 if (-not $NoWarmup) {
-    Write-Host "Loading $ModelName into GPU memory..." -ForegroundColor Yellow
+    Write-Host "Warming $($script:ModelAlias)..." -ForegroundColor Yellow
     $body = @{
-        model = $ModelName
+        model = $script:ModelAlias
         messages = @(@{ role = 'user'; content = '只回复：就绪' })
-        stream = $false
-        think = $false
-        keep_alive = '2m'
-        options = @{ num_predict = 8 }
+        max_tokens = 8
+        chat_template_kwargs = @{ enable_thinking = $false }
+        temperature = 0.1
     } | ConvertTo-Json -Depth 5
-    Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:11434/api/chat' `
-        -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 120 | Out-Null
+    Invoke-RestMethod -Method Post -Uri "$(Get-LocalLlmBaseUrl)/v1/chat/completions" `
+        -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 180 | Out-Null
 }
 
-Write-Host "Local LLM ready: http://127.0.0.1:11434/v1 ($ModelName)" -ForegroundColor Green
-& $OllamaExe ps
+Write-Host "Local LLM ready: $(Get-LocalLlmBaseUrl)/v1 ($($script:ModelAlias))" -ForegroundColor Green
+try {
+    Invoke-RestMethod -Uri "$(Get-LocalLlmBaseUrl)/v1/models" -TimeoutSec 5 | ConvertTo-Json -Depth 5
+}
+catch {
+    Write-Host 'Models endpoint probe skipped.' -ForegroundColor DarkGray
+}

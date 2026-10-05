@@ -1,6 +1,14 @@
 /** Project-owned image generation defaults. Legacy keys are migrated once in the database. */
 export type ProjectImageModel = 'pony' | 'sd15' | 'redcraft_krea2';
 export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
+export const PROJECT_VIDEO_WORKFLOW_IDS = [
+  'grok_imagine_browser',
+  'minimax_h3_ref2va_official_12gb',
+  'minimax_h3_fl2va_official_12gb',
+  'minimax_h3_multiframe_official_12gb',
+  'minimax_h3_hongchao_a2a_12gb',
+] as const;
+export type ProjectVideoWorkflowId = typeof PROJECT_VIDEO_WORKFLOW_IDS[number];
 
 export interface ProjectImageSettings {
   model: ProjectImageModel;
@@ -14,8 +22,14 @@ export interface ProjectImageSettings {
   nsfw_mode: ProjectNsfwMode;
 }
 
+export interface ProjectVideoSettings {
+  /** Null means the shot's references choose Ref2VA, FL2VA, or Multi-Frame. */
+  workflow_id: ProjectVideoWorkflowId | null;
+}
+
 export interface ProjectSettings {
   image_generation?: ProjectImageSettings;
+  video_generation?: ProjectVideoSettings;
   storyboard_by?: string;
   genre?: string;
   style?: string;
@@ -75,9 +89,21 @@ export const getProjectImageSettings = (settings: ProjectSettings | null | undef
   };
 };
 
+export const getProjectVideoSettings = (settings: ProjectSettings | null | undefined): ProjectVideoSettings => {
+  const raw = settings?.video_generation?.workflow_id;
+  const workflow_id = typeof raw === 'string' && (PROJECT_VIDEO_WORKFLOW_IDS as readonly string[]).includes(raw)
+    ? raw as ProjectVideoWorkflowId
+    : null;
+  return { workflow_id };
+};
+
 export const canonicalProjectSettings = (raw: unknown): ProjectSettings => {
   const settings = parseProjectSettings(raw);
-  const canonical: ProjectSettings = { ...settings, image_generation: getProjectImageSettings(settings) };
+  const canonical: ProjectSettings = {
+    ...settings,
+    image_generation: getProjectImageSettings(settings),
+    video_generation: getProjectVideoSettings(settings),
+  };
   for (const key of ['default_style', 'default_model_type', 'default_workflow_id', 'output_spec', 'nsfw_mode', 'nsfw_enabled']) {
     delete canonical[key];
   }

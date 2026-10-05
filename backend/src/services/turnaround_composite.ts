@@ -29,6 +29,7 @@ import {
 } from './image_generation_policy';
 import { GpuLeaseService } from './gpu_lease_service';
 import { getProjectImageSettings, parseProjectSettings } from './project_settings';
+import { isSyntheticCharacterSceneId, syntheticCharacterId } from './synthetic_scene_id';
 
 export type TurnaroundViewId = 'front' | 'side' | 'back';
 
@@ -331,17 +332,10 @@ export async function generateTurnaroundComposite(
         projectId = Number(chapterRow.project_id);
       }
     }
-  } else if (input.sceneId >= 900_000 || input.workflowData.character_id) {
-    if (input.workflowData?.character_id) {
-      characterId = Number(input.workflowData.character_id);
-    } else {
-      for (const offset of [999990, 999991, 999992, 90000000]) {
-        if (input.sceneId > offset && input.sceneId < offset + 100000) {
-          characterId = input.sceneId - offset;
-          break;
-        }
-      }
-    }
+  } else if (isSyntheticCharacterSceneId(input.sceneId) || input.workflowData.character_id) {
+    characterId = input.workflowData?.character_id
+      ? Number(input.workflowData.character_id)
+      : syntheticCharacterId(input.sceneId);
     if (characterId) {
       const charRow = await db.get(
         'SELECT id, project_id, active_version FROM character WHERE id = ?',

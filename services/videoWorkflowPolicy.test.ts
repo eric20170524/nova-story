@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appendUploadedIdentityReference, defaultIdentityReferenceIds, recommendVideoWorkflow } from './videoWorkflowPolicy';
+import { appendUploadedIdentityReference, defaultIdentityReferenceIds, readProjectVideoWorkflow, recommendVideoWorkflow, resolveProjectVideoWorkflow } from './videoWorkflowPolicy';
 import type { MediaAsset } from '../types';
 
 const asset = (role: MediaAsset['role']): MediaAsset => ({
@@ -36,4 +36,12 @@ test('official workflow recommendation follows guide, boundary, and ordinary sho
   assert.equal(recommendVideoWorkflow([asset('last_frame_reference'), asset('character_reference')]).workflowId, 'minimax_h3_fl2va_official_12gb');
   assert.equal(recommendVideoWorkflow([asset('guide_frame_reference'), asset('last_frame_reference')]).workflowId, 'minimax_h3_multiframe_official_12gb');
   assert.equal(recommendVideoWorkflow([{ ...asset('guide_frame_reference'), status: 'draft' }]).workflowId, 'minimax_h3_ref2va_official_12gb');
+});
+
+test('project video default replaces ordinary shots and yields to frame boundaries', () => {
+  assert.equal(readProjectVideoWorkflow({ video_generation: { workflow_id: 'grok_imagine_browser' } }), 'grok_imagine_browser');
+  assert.equal(readProjectVideoWorkflow({ video_generation: { workflow_id: 'not-a-workflow' } }), null);
+  assert.equal(resolveProjectVideoWorkflow([], 'minimax_h3_hongchao_a2a_12gb').workflowId, 'minimax_h3_hongchao_a2a_12gb');
+  assert.equal(resolveProjectVideoWorkflow([asset('last_frame_reference')], 'grok_imagine_browser').workflowId, 'minimax_h3_fl2va_official_12gb');
+  assert.equal(resolveProjectVideoWorkflow([asset('guide_frame_reference')], 'minimax_h3_hongchao_a2a_12gb').workflowId, 'minimax_h3_multiframe_official_12gb');
 });

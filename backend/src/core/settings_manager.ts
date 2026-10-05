@@ -9,7 +9,7 @@ const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
 
 const DEFAULT_SETTINGS = {
-    llm_model: 'novastory-qwen3:8b',
+    llm_model: 'novastory-qwen3.5:9b',
     image_model: 'gemini-2.5-flash-image',
     comfyui: {
         mode: 'local', // 'local' | 'remote'
@@ -49,12 +49,12 @@ const DEFAULT_SETTINGS = {
         redcraft_krea2_nsfw_lora: null,
         nsfw_lora_strength: 0.55
     },
-    // Local-first default (Ollama OpenAI-compatible). Cloud providers still work via settings/.env.
+    // Local-first default (llama.cpp OpenAI-compatible). Cloud providers still work via settings/.env.
     llm: {
         provider: 'ollama',
         api_key: 'ollama',
         base_url: 'http://127.0.0.1:11434/v1',
-        model: 'novastory-qwen3:8b'
+        model: 'novastory-qwen3.5:9b'
     },
     tts: {
         base_url: 'http://127.0.0.1:8765',
@@ -106,7 +106,8 @@ export class SettingsManager {
         const llmApiKeyEnv = process.env.LLM_API_KEY;
         if (llmApiKeyEnv) {
             settings.llm = settings.llm || {};
-            settings.llm.api_key = settings.llm.provider === 'ollama' ? 'ollama' : llmApiKeyEnv;
+            const localProviders = settings.llm.provider === 'ollama' || settings.llm.provider === 'local_llm';
+            settings.llm.api_key = localProviders ? 'ollama' : llmApiKeyEnv;
         }
 
         const llmBaseUrlEnv = process.env.LLM_BASE_URL;

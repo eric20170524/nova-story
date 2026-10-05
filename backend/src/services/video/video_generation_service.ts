@@ -23,6 +23,7 @@ import { getShotVisibleCharacterIds, validateShotMasterCharacters } from './shot
 import { GpuLeaseCancelledError, GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
 import { VideoPostprocessService } from './video_postprocess_service';
+import { classifyGrokSourceDuration } from '../grok_source_duration';
 import { LoopCloser, type ProcessVideoResult } from './loop_closer';
 import { createProgressPublisher, ProgressPublisher } from '../generation_progress';
 import { VramService } from '../vram_service';
@@ -546,9 +547,8 @@ export class VideoGenerationService {
           const rawPath = path.join(taskDir, 'raw.mp4');
           fs.copyFileSync(videoPath, rawPath);
           const sourceDurationSeconds = (await VideoPostprocessService.probeVideo(rawPath)).duration_s;
-          if (!Number.isFinite(sourceDurationSeconds) || Math.abs(sourceDurationSeconds - 5) > 0.25) {
-            throw new Error(`Grok returned ${sourceDurationSeconds}s for a 5s request; manual review is required before delivery.`);
-          }
+          const durationDecision = classifyGrokSourceDuration(sourceDurationSeconds);
+          if (durationDecision.action === 'reject') throw new Error(durationDecision.reason);
           await db.run("UPDATE generation_task SET stage = 'postprocessing', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
           await this.resumePostprocessFromRaw(taskId, request, projectId, rawPath, taskDir, {
             provider: 'grok_imagine_browser',
@@ -556,6 +556,7 @@ export class VideoGenerationService {
             requested_duration_seconds: 5,
             source_duration_seconds: sourceDurationSeconds,
             delivery_duration_seconds: 5,
+            ...(durationDecision.action === 'review' ? { duration_review: durationDecision.reason } : {}),
           });
           return;
         }
@@ -1258,6 +1259,15 @@ export class VideoGenerationService {
       targetHeight: resolvePresetDimensions(request.preset).height,
       metadata: { ...provenance, request }
     });
+    const durationReview = typeof provenance.duration_review === 'string' ? provenance.duration_review : '';
+    if (durationReview && processRes.qaReport.quality_grade !== 'reject') {
+      processRes.qaReport = {
+        ...processRes.qaReport,
+        quality_grade: 'manual_review',
+        reasons: [...processRes.qaReport.reasons, durationReview],
+      };
+      fs.writeFileSync(processRes.qaPath, JSON.stringify(processRes.qaReport, null, 2));
+    }
 
     const stateAfterProcess = await db.get('SELECT status FROM generation_task WHERE task_id = ?', taskId);
     if (stateAfterProcess?.status !== 'processing') {

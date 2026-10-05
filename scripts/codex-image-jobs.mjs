@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { localQueueDir } from './local-queue.mjs';
 
-const queue = path.resolve(process.env.NOVASTORY_CODEX_IMAGE_QUEUE_DIR || 'backend/codex-image-jobs');
+const queue = localQueueDir('NOVASTORY_CODEX_IMAGE_QUEUE_DIR', 'codex-image-jobs');
 const [action = 'list', id, input] = process.argv.slice(2);
 const validId = value => /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value || ''));
 const jobFile = (jobId, suffix) => path.join(queue, `${jobId}.${suffix}`);

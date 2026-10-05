@@ -28,9 +28,11 @@ import {
   setAdvancedStylesEnabled,
 } from '../constants';
 
-const LOCAL_OLLAMA_MODEL = 'novastory-qwen3:8b';
+const LOCAL_LLM_MODEL = 'novastory-qwen3.5:9b';
+const LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
 const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
+const LOCAL_LLM_PROVIDERS = new Set(['ollama', 'local_llm']);
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
@@ -309,6 +311,23 @@ export const SettingsPage: React.FC = () => {
     });
   };
 
+  const applyLocalLlm = () => {
+    setSettings((prev: any) => ({
+      ...prev,
+      llm_provider: 'ollama',
+      llm_model: LOCAL_LLM_MODEL,
+      openai_base_url: LOCAL_LLM_BASE_URL,
+      llm: {
+        ...(prev.llm || {}),
+        provider: 'ollama',
+        model: LOCAL_LLM_MODEL,
+        base_url: LOCAL_LLM_BASE_URL,
+        api_key: 'ollama',
+        has_api_key: true,
+      },
+    }));
+  };
+
   const applyGemmaRemote = () => {
     setSettings((prev: any) => ({
       ...prev,
@@ -426,7 +445,7 @@ export const SettingsPage: React.FC = () => {
             }`}
           >
             <Cloud className="w-4 h-4 flex-shrink-0" />
-            API & 服务配置
+            {t('settings_tab_services')}
           </button>
           <button
             onClick={() => setActiveTab('workflow')}
@@ -437,7 +456,7 @@ export const SettingsPage: React.FC = () => {
             }`}
           >
             <WorkflowIcon className="w-4 h-4 flex-shrink-0" />
-            工作流预设 (Workflows)
+            {t('settings_tab_workflows')}
           </button>
 
           <button
@@ -550,7 +569,7 @@ export const SettingsPage: React.FC = () => {
                     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
                       (settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
                         ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
-                        : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                        : LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '')
                         ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'
                         : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
                         ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
@@ -558,8 +577,8 @@ export const SettingsPage: React.FC = () => {
                     }`}>
                       {(settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
                         ? 'GEMMA 4 31B'
-                        : ((settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm')
-                        ? '离线模式'
+                        : LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '')
+                        ? 'llama.cpp'
                         : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
                     </span>
                     <button
@@ -640,15 +659,15 @@ export const SettingsPage: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={() => handleLLMChange('provider', 'local_llm')}
+                        onClick={applyLocalLlm}
                         className={`p-3.5 rounded-xl border text-left transition-all ${
-                          (settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm'
+                          LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '')
                             ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
                             : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
                         }`}
                       >
-                        <div className="text-sm font-bold mb-0.5">本地部署 (Ollama)</div>
-                        <div className="text-xs opacity-75">完全本地运行，0 API 费用，配合一键启动脚本</div>
+                        <div className="text-sm font-bold mb-0.5">本地部署 (llama.cpp)</div>
+                        <div className="text-xs opacity-75">无审查 Qwen3.5-9B，本机 GPU，0 API 费用，配合一键启动脚本</div>
                       </button>
                     </div>
                   </div>
@@ -745,17 +764,17 @@ export const SettingsPage: React.FC = () => {
                   )}
 
                   {/* Local LLM Settings */}
-                  {(settings.llm?.provider || settings.llm_provider || 'gemini') === 'local_llm' && (
+                  {LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '') && (
                     <div className="space-y-4 pt-2 border-t border-slate-200/80 dark:border-slate-800/60">
                       <div>
                         <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          Ollama 服务端地址
+                          llama.cpp 服务端地址
                         </label>
                         <input
                           type="text"
-                          value={settings.llm?.base_url || 'http://127.0.0.1:11434/v1'}
+                          value={settings.llm?.base_url || LOCAL_LLM_BASE_URL}
                           onChange={(e) => handleLLMChange('base_url', e.target.value)}
-                          placeholder="http://127.0.0.1:11434/v1"
+                          placeholder={LOCAL_LLM_BASE_URL}
                           className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -765,9 +784,9 @@ export const SettingsPage: React.FC = () => {
                         </label>
                         <input
                           type="text"
-                          value={settings.llm?.model || LOCAL_OLLAMA_MODEL}
+                          value={settings.llm?.model || LOCAL_LLM_MODEL}
                           onChange={(e) => handleLLMChange('model', e.target.value)}
-                          placeholder={LOCAL_OLLAMA_MODEL}
+                          placeholder={LOCAL_LLM_MODEL}
                           className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                         />
                       </div>
