@@ -77,8 +77,8 @@ export interface LoraResolveInput {
   styleLora?: string | null;
   styleLoraStrength?: number;
   /**
-   * Ignored. Adult look files come from the style preset, not this slot.
-   * Kept so older callers can still pass the retired settings fields.
+   * RedCraft / Krea2 only. A set filename wins when it is on disk.
+   * Null discovers a Krea2 NSFW LoRA. Pony and Flux ignore this field.
    */
   nsfwLora?: string | null;
   nsfwLoraStrength?: number;
@@ -103,7 +103,7 @@ export const DEFAULT_STRENGTHS = {
   flux_style: 0.75,
   flux_nsfw: 0.75,
   redcraft_krea2_style: 0.8,
-  redcraft_krea2_nsfw: 0.7,
+  redcraft_krea2_nsfw: 0.8,
   character: 0.8
 } as const;
 
@@ -114,7 +114,7 @@ export const RECOMMENDED_LORA_NAMES = {
   flux_style: 'XLabs_Flux_Realism.safetensors',
   flux_nsfw: 'aidmaNSFWunlock.safetensors',
   redcraft_krea2_style: 'RedCraft_Style_v1.safetensors',
-  redcraft_krea2_nsfw: 'RedCraft_NSFW_v1.safetensors'
+  redcraft_krea2_nsfw: 'Krea2_NSFW_V4.1.safetensors'
 } as const;
 
 const PONY_STYLE_PATTERNS: RegExp[] = [
@@ -725,6 +725,23 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
     });
   }
 
+  // RedCraft NSFW is a Krea2 LoRA on the diffusion model, not a Pony look file.
+  // SFW compiles leave it off. Empty frames drop it later with the style slot.
+  if (input.modelFamily === 'redcraft_krea2' && input.nsfwEnabled) {
+    const nsfwName = resolveNsfwLora(input.modelFamily, {
+      installPath: input.installPath,
+      nsfwLora: input.nsfwLora,
+      allowRemoteUnverified: input.allowRemoteUnverified
+    });
+    if (nsfwName) {
+      push({
+        role: 'nsfw',
+        name: nsfwName,
+        strength: Number(input.nsfwLoraStrength ?? DEFAULT_STRENGTHS.redcraft_krea2_nsfw)
+      });
+    }
+  }
+
   if (input.modelFamily === 'pony') {
     const presetKey = String(input.stylePreset || '').toLowerCase();
     const looks = PONY_PRESET_LOOKS[presetKey] ?? [];
@@ -1006,8 +1023,11 @@ export const buildPromptEnhancement = (options: {
       /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
         existingPrompt
       );
+    const castImage = /portrait|turnaround|face/i.test(String(genType || ''));
     if (nsfwEnabled) {
-      if (intimateCue) {
+      // Cast sheets and prompts that already name an intimate beat get the unlock.
+      // Empty scenery stays free of forced nudity.
+      if (intimateCue || castImage) {
         suffixParts.push('natural uncensored details, erotic sensual atmosphere, soft skin texture');
       } else {
         suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
@@ -1173,6 +1193,12 @@ export const resolveGenerationPlan = (options: {
     characterLoraStrength: workflowData?.lora_strength,
     styleLora,
     styleLoraStrength: styleStrength,
+    nsfwLora: modelFamily === 'redcraft_krea2'
+      ? runtimeSettings?.advanced?.redcraft_krea2_nsfw_lora ?? null
+      : null,
+    nsfwLoraStrength: modelFamily === 'redcraft_krea2'
+      ? DEFAULT_STRENGTHS.redcraft_krea2_nsfw
+      : undefined,
     stylePreset,
     allowRemoteUnverified: Boolean(comfy.mode === 'remote' || !comfy.install_path)
   });
@@ -1185,9 +1211,9 @@ export const resolveGenerationPlan = (options: {
     : resolvedLoras;
   // Empty frames and insert shots need spatial fidelity more than texture amplification.
   // establish / overhead-map count even when the prompt never says "wide".
-  // Skip detail and look LoRAs; character LoRAs remain available.
+  // Skip detail, look, and RedCraft NSFW LoRAs; character LoRAs remain available.
   const loras = shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot
-    ? strengthCapped.filter((slot) => slot.role !== 'style')
+    ? strengthCapped.filter((slot) => slot.role === 'character')
     : strengthCapped;
 
   const enhancement = buildPromptEnhancement({

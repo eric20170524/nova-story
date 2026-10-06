@@ -171,6 +171,26 @@ test('SFW prompt enhancement blocks NSFW; NSFW unlocks without forcing nude on l
   assert.match(applied, /source_anime/);
 });
 
+test('RedCraft NSFW unlocks cast sheets without forcing a landscape nude', () => {
+  const landscape = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    existingPrompt: 'cloud sea under pink dawn',
+    genType: 'scene',
+  });
+  assert.match(landscape.suffix, /detailed skin texture/);
+  assert.doesNotMatch(landscape.suffix, /erotic sensual/);
+
+  const portrait = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    existingPrompt: 'silver-white hair, moon-white crane gown',
+    genType: 'portrait',
+  });
+  assert.match(portrait.suffix, /natural uncensored details/);
+  assert.match(portrait.suffix, /erotic sensual atmosphere/);
+});
+
 test('style preset injects guofeng boosters for xianxia stories', () => {
   const enh = buildPromptEnhancement({
     modelFamily: 'pony',
@@ -638,10 +658,69 @@ test('RedCraft Krea2 isolates LoRAs from Pony and discovers RedCraft LoRAs', () 
       styleLora: 'redcraft_krea2_style.safetensors',
       styleLoraStrength: 0.8,
       nsfwLora: 'krea2_nsfw_detail.safetensors',
-      nsfwLoraStrength: 0.7
+      nsfwLoraStrength: 0.8
     });
-    assert.deepEqual(validStack.map((slot) => slot.name), ['redcraft_krea2_style.safetensors']);
+    assert.deepEqual(validStack.map((slot) => slot.name), [
+      'redcraft_krea2_style.safetensors',
+      'krea2_nsfw_detail.safetensors'
+    ]);
     assert.equal(validStack[0]?.strength, 0.8);
+    assert.equal(validStack[1]?.role, 'nsfw');
+    assert.equal(validStack[1]?.strength, 0.8);
+
+    const sfwStack = resolveLoraStack({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: false,
+      installPath,
+      styleLora: 'redcraft_krea2_style.safetensors',
+      nsfwLora: 'krea2_nsfw_detail.safetensors'
+    });
+    assert.deepEqual(sfwStack.map((slot) => slot.name), ['redcraft_krea2_style.safetensors']);
+  } finally {
+    fs.rmSync(installPath, { recursive: true, force: true });
+  }
+});
+
+test('RedCraft NSFW plan loads the local Krea2 LoRA and skips it on empty frames', () => {
+  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-redcraft-nsfw-plan-'));
+  const loraDir = path.join(installPath, 'models', 'loras');
+  fs.mkdirSync(loraDir, { recursive: true });
+  fs.writeFileSync(path.join(loraDir, 'Krea2_NSFW_V4.1.safetensors'), '');
+  fs.writeFileSync(path.join(loraDir, 'Pony_DetailV2.0.safetensors'), '');
+  const runtimeSettings = {
+    comfyui: { mode: 'local', install_path: installPath },
+    advanced: { nsfw_enabled: true, redcraft_krea2_nsfw_lora: null }
+  };
+
+  try {
+    const portrait = resolveGenerationPlan({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      runtimeSettings,
+      workflowData: { gen_type: 'portrait' },
+      basePrompt: 'adult woman in a silk robe'
+    });
+    assert.deepEqual(portrait.loras.map((slot) => ({ name: slot.name, role: slot.role, strength: slot.strength })), [
+      { name: 'Krea2_NSFW_V4.1.safetensors', role: 'nsfw', strength: 0.8 }
+    ]);
+
+    const establish = resolveGenerationPlan({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      runtimeSettings,
+      workflowData: { gen_type: 'scene', shot_intent: 'establish' },
+      basePrompt: 'a quiet courtyard at dawn'
+    });
+    assert.deepEqual(establish.loras, []);
+
+    const sfw = resolveGenerationPlan({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: false,
+      runtimeSettings,
+      workflowData: { gen_type: 'portrait' },
+      basePrompt: 'adult woman in a silk robe'
+    });
+    assert.deepEqual(sfw.loras, []);
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
