@@ -6,8 +6,10 @@ import {
   type VramStatus,
 } from './vram_service';
 
-const { classifyLevel, formatGiB, ollamaNativeBaseUrl, WARNING_THRESHOLD, CRITICAL_THRESHOLD } =
-  __vramTestables;
+const {
+  classifyLevel, formatGiB, ollamaNativeBaseUrl, classifyLlmProbe, isLoopbackBaseUrl,
+  isLlamaServerProcessImage, WARNING_THRESHOLD, CRITICAL_THRESHOLD,
+} = __vramTestables;
 
 test('classifyLevel maps percent to good / warning / critical', () => {
   assert.equal(classifyLevel(null), 'unknown');
@@ -24,6 +26,18 @@ test('formatGiB formats bytes as GiB labels', () => {
   assert.equal(formatGiB(0), '0G');
   assert.match(formatGiB(5.1 * 1024 ** 3), /5\.1G/);
   assert.match(formatGiB(2.5 * 1024 ** 3), /2\.5G/);
+});
+
+test('OpenAI /v1/models alone is not llama.cpp, and only a local llama-server can be stopped', () => {
+  assert.equal(classifyLlmProbe({ ollamaPsOk: true, llamaHealthOk: false }), 'ollama');
+  assert.equal(classifyLlmProbe({ ollamaPsOk: true, llamaHealthOk: true }), 'ollama');
+  assert.equal(classifyLlmProbe({ ollamaPsOk: false, llamaHealthOk: true }), 'llamacpp');
+  assert.equal(classifyLlmProbe({ ollamaPsOk: false, llamaHealthOk: false }), 'unknown');
+  assert.equal(isLoopbackBaseUrl('http://127.0.0.1:11434/v1'), true);
+  assert.equal(isLoopbackBaseUrl('http://llm.example.com:11434/v1'), false);
+  assert.equal(isLlamaServerProcessImage('llama-server.exe'), true);
+  assert.equal(isLlamaServerProcessImage('C:\\tools\\llama-server.exe'), true);
+  assert.equal(isLlamaServerProcessImage('ollama.exe'), false);
 });
 
 test('ollamaNativeBaseUrl strips OpenAI-compat /v1 suffix', () => {

@@ -24,7 +24,8 @@ export class OpenAIProvider implements AIProvider {
         this.openai = new OpenAI({
             apiKey,
             baseURL: baseUrl,
-            timeout: options.timeoutMs ?? (options.isOllama ? 120_000 : 60_000),
+            timeout: options.timeoutMs ?? (options.isOllama ? 600_000 : 60_000),
+            maxRetries: options.isOllama ? 0 : 2,
         });
         this.model = model;
         this.imageModel = 'dall-e-3';

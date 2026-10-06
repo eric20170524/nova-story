@@ -9,6 +9,7 @@ import {
   GeneratedOutlineResponseSchema,
   GeneratedSceneResponseSchema,
   matchProjectCharacter,
+  isNarratorLabel,
 } from './script_generation_service';
 import { AgentExecutor } from './agent_executor';
 import type { AIProvider } from './base';
@@ -333,8 +334,8 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
         ],
         endingHook: '钩子',
       }),
-      onScene: (_p, count) => {
-        if (count === 2) {
+      onScene: (prompt) => {
+        if (prompt.includes('第 2 场')) {
           throw new Error('LLM connection timeout on scene 2');
         }
         return {
@@ -376,6 +377,43 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
       script.id
     );
     assert.equal(leftover.length, 0);
+
+    const narratorFix = await createFixture();
+    const narratorScript = await ScriptService.createOrGetScript(narratorFix.chapterId);
+    const narratorProvider = createMockProvider({
+      onOutline: () => ({
+        logline: '梗概',
+        mustKeepEvents: [{ id: 'e1', text: '林轩踏入大殿' }],
+        beats: [{ id: 'b1', purpose: '开场', eventIds: ['e1'] }],
+        endingHook: '钩子',
+      }),
+      onScene: (_prompt, count) => count === 1
+        ? {
+          location: { name: '正厅' },
+          blocks: [
+            { type: 'action', text: '只写了气氛' },
+            { type: 'dialogue', characterName: '画外音', text: '风声过阶。' },
+          ],
+        }
+        : {
+          location: { name: '正厅' },
+          blocks: [
+            { type: 'action', text: '林轩踏入大殿' },
+            { type: 'dialogue', characterName: '旁白', text: '门在他身后合上。' },
+            { type: 'voiceover', characterName: '画外音', text: '没人看见他停步。' },
+          ],
+        },
+    });
+    const narratorCand = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: narratorScript.id,
+      expectedRevision: 1,
+      requestKey: 'req_narrator_retry',
+      provider: narratorProvider,
+    });
+    const narratorDoc = JSON.parse(narratorCand.after_json);
+    assert.deepEqual(narratorDoc.scenes[0].blocks.filter((block: { type: string }) => block.type === 'voiceover').map((block: { characterId: number | null }) => block.characterId), [null, null]);
+    assert.equal(narratorDoc.scenes[0].eventIds.includes('e1'), true);
+    assert.equal(isNarratorLabel('画外音'), true);
 
     // 4. Over-budget novel chapter (>30,000 words) rejected
     const hugeProse = '超长小说正文。'.repeat(5000); // 35,000 chars > 30,000
@@ -801,7 +839,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
     let receivedScenePrompt = '';
-    // 1. Model omits coveredEventIds and outputs scene blocks unrelated to ev_2 -> must reject with 502
+    // 1. Model output that misses a beat event is retried, then the event sentence is kept in that beat's scene.
     const failingProvider = createMockProvider({
       onOutline: () => ({
         logline: '核心梗概',
@@ -828,22 +866,18 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
       },
     });
 
-    await assert.rejects(
-      () =>
-        ScriptGenerationService.generateFullScriptCandidate({
-          scriptId: script.id,
-          expectedRevision: 1,
-          requestKey: 'req_missing_ev2',
-          provider: failingProvider,
-        }),
-      (err: any) => {
-        assert.ok(err instanceof ScriptGenerationError);
-        assert.equal(err.statusCode, 502);
-        assert.match(err.message, /未能覆盖提纲中的必保关键事件/);
-        assert.match(err.message, /长老质疑与碎石打脸/);
-        return true;
-      }
-    );
+    const anchored = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_missing_ev2',
+      provider: failingProvider,
+    });
+    const anchoredDoc = JSON.parse(anchored.after_json);
+    assert.match(anchoredDoc.scenes[1].blocks.map((block: { text: string }) => block.text).join('\n'), /林轩悠闲品茶/);
+    assert.match(anchoredDoc.scenes[1].blocks.map((block: { text: string }) => block.text).join('\n'), /长老质疑与碎石打脸/);
+    assert.equal(anchoredDoc.scenes[1].eventIds.includes('ev_2'), true);
+    assert.equal(anchoredDoc.scenes[0].eventIds.includes('ev_2'), false);
+    assert.deepEqual(JSON.parse(anchored.generation_info_json).anchoredEventIds, ['ev_1', 'ev_2']);
 
     // Verify prompt included the source paragraph content
     assert.ok(receivedScenePrompt.includes('--- 对应小说原文段落 ---'));

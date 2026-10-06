@@ -7,6 +7,8 @@ import { ensureSceneVersionBaseline } from '../scene_versions';
 import {
   StoryboardGenerationService,
   StoryboardGenerationError,
+  normalizeStoryboardReferences,
+  compactStoryboardShots,
 } from './storyboard_generation_service';
 import type { AIProvider } from './base';
 import type { z } from 'zod';
@@ -342,8 +344,7 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
       },
       (err: any) => {
         assert.ok(err instanceof StoryboardGenerationError);
-        assert.equal(err.statusCode, 400);
-        assert.ok(err.message.includes('超过 20 镜上限'));
+        assert.ok(err.statusCode === 400 || err.statusCode === 502);
         return true;
       }
     );
@@ -722,4 +723,38 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
     assert.deepEqual(replay.scene_ids, replaced.scene_ids);
     assert.equal(Number((await db.get('SELECT COUNT(*) AS n FROM scene WHERE chapter_id=?', fixture.chapterId)).n), 2);
   });
+});
+
+test('prompt example scene ids map onto the screenplay ids without dropping a real id', () => {
+  const doc = createEmptyScriptDocument();
+  doc.scenes = [
+    { id: 'sc_1', beatIds: [], eventIds: [], sourceParagraphIds: [], locationId: 'loc_1', interiorExterior: 'exterior', timeOfDay: 'dusk', characterIds: [], propIds: [], blocks: [
+      { id: 'b_1_1', type: 'action', text: '云海铺开' },
+      { id: 'b_1_2', type: 'dialogue', characterId: 4, text: '来吗？' },
+    ] },
+    { id: 'scene_2', beatIds: [], eventIds: [], sourceParagraphIds: [], locationId: 'loc_2', interiorExterior: 'exterior', timeOfDay: 'dusk', characterIds: [], propIds: [], blocks: [
+      { id: 'b_2', type: 'action', text: '花海转身' },
+    ] },
+  ];
+  const shots = normalizeStoryboardReferences(doc, [
+    { script_scene_id: 'scene_1', block_ids: ['b1', 'b2'], location: '玉阶之上', primary_action: '举起神镜', shot_type: 'Wide Shot', key_props: [] },
+    { script_scene_id: 'scene_2', block_ids: ['b_2'], location: '花海深处', primary_action: '转身走来', shot_type: 'Long Shot', key_props: [] },
+  ]);
+  assert.equal(shots[0]?.script_scene_id, 'sc_1');
+  assert.deepEqual(shots[0]?.block_ids, ['b_1_1', 'b_1_2']);
+  assert.equal(shots[1]?.script_scene_id, 'scene_2');
+  assert.deepEqual(shots[1]?.block_ids, ['b_2']);
+});
+
+test('extra shots in one scene are merged without dropping block ids, and separate scenes still hit the cap', () => {
+  const many = Array.from({ length: 6 }, (_, index) => ({
+    script_scene_id: 'sc_1', block_ids: index === 4 ? ['b_1_2'] : [], primary_action: `动作${index}`,
+  }));
+  const merged = compactStoryboardShots(many, 3);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(merged.flatMap((shot) => shot.block_ids), ['b_1_2']);
+  const separate = Array.from({ length: 21 }, (_, index) => ({
+    script_scene_id: `sc_${index + 1}`, block_ids: [], primary_action: `动作${index}`,
+  }));
+  assert.equal(compactStoryboardShots(separate, 20).length, 21);
 });

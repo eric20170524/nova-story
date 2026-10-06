@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
+import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
 import { ScriptService, ScriptServiceError, type ScriptWithDetails } from '../script_service';
@@ -37,6 +38,7 @@ import {
 } from '../visual_prompt_uniqueness';
 import {
   assertChapterShotQuota,
+  findChapterShotQuotaViolation,
   formatShotQuotaFailure,
 } from '../shot_intent_quota';
 import { ensureSceneVersionBaseline } from '../scene_versions';
@@ -86,6 +88,187 @@ export type RawStoryboardShot = z.infer<typeof RawStoryboardShotSchema>;
 export type RawStoryboardResponse = z.infer<typeof RawStoryboardResponseSchema>;
 
 const stripAssetLabel = (value: string): string => value.replace(/^(?:场景|地点|道具|物品)\s*[：:]\s*/u, '').trim();
+
+function configuredLlmModel(provider?: AIProvider): string | undefined {
+  if (provider) return undefined;
+  const model = String(SettingsManager.loadSettings().llm?.model || '').trim();
+  return model || undefined;
+}
+
+function audibleOrderBroken(
+  doc: ScriptDocument,
+  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
+): boolean {
+  for (const scene of doc.scenes) {
+    let lastIndex = -1;
+    for (const shot of shots.filter((item) => item.script_scene_id === scene.id)) {
+      for (const blockId of shot.block_ids) {
+        const index = scene.blocks.findIndex((block) => block.id === blockId);
+        const block = scene.blocks[index];
+        if (!block || (block.type !== 'dialogue' && block.type !== 'voiceover')) continue;
+        if (index < lastIndex) return true;
+        lastIndex = index;
+      }
+    }
+  }
+  return false;
+}
+
+export function repairAudibleOrder(
+  doc: ScriptDocument,
+  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
+): void {
+  const counts = new Map<string, number>();
+  for (const shot of shots) {
+    for (const blockId of shot.block_ids) counts.set(blockId, (counts.get(blockId) || 0) + 1);
+  }
+  if ([...counts.values()].some((count) => count > 1) || !audibleOrderBroken(doc, shots)) return;
+  for (const scene of doc.scenes) {
+    const sceneShots = shots.filter((shot) => shot.script_scene_id === scene.id);
+    if (!sceneShots.length) continue;
+    const audible = scene.blocks.filter((block) => block.type === 'dialogue' || block.type === 'voiceover').map((block) => block.id);
+    const audibleSet = new Set(audible);
+    for (const shot of sceneShots) shot.block_ids = shot.block_ids.filter((blockId) => !audibleSet.has(blockId));
+    const buckets = sceneShots.map(() => [] as string[]);
+    audible.forEach((blockId, index) => {
+      const slot = Math.min(sceneShots.length - 1, Math.floor((index * sceneShots.length) / audible.length));
+      buckets[slot]!.push(blockId);
+    });
+    sceneShots.forEach((shot, index) => shot.block_ids.push(...buckets[index]!));
+  }
+}
+
+export function attachMissingAudibleBlocks(
+  doc: ScriptDocument,
+  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
+): void {
+  const allocated = new Set(shots.flatMap((shot) => shot.block_ids));
+  for (const scene of doc.scenes) {
+    const sceneShots = shots.filter((shot) => shot.script_scene_id === scene.id);
+    if (!sceneShots.length) continue;
+    scene.blocks.forEach((block, blockIndex) => {
+      if ((block.type !== 'dialogue' && block.type !== 'voiceover') || allocated.has(block.id)) return;
+      let target = sceneShots[0]!;
+      let insertAt = 0;
+      for (const shot of sceneShots) {
+        shot.block_ids.forEach((blockId, index) => {
+          const existingIndex = scene.blocks.findIndex((item) => item.id === blockId);
+          if (existingIndex >= 0 && existingIndex < blockIndex) {
+            target = shot;
+            insertAt = index + 1;
+          }
+        });
+      }
+      target.block_ids.splice(insertAt, 0, block.id);
+      allocated.add(block.id);
+    });
+  }
+}
+
+const intentShotType: Record<string, string> = {
+  establish: 'Extreme Long Shot',
+  'wide-action': 'Wide Shot',
+  'medium-action': 'Medium Shot',
+  insert: 'Insert Shot',
+  payoff: 'Long Shot',
+};
+
+export function balanceShotQuota<T extends { shot_intent?: string | null; shot_type?: string | null; key_props?: string[] }>(
+  shots: T[],
+  hasKeyProps: boolean,
+): void {
+  if (findChapterShotQuotaViolation(shots, { hasKeyProps })) {
+    const total = shots.length;
+    const wideNeeded = Math.ceil(total * 0.35);
+    const insertIndex = hasKeyProps
+      ? Math.max(0, shots.findIndex((shot) => (shot.key_props || []).length > 0))
+      : -1;
+    const wideIndexes = new Set<number>();
+    for (let index = 0; index < total && wideIndexes.size < wideNeeded; index++) {
+      if (index !== insertIndex) wideIndexes.add(index);
+    }
+    shots.forEach((shot, index) => {
+      const intent = index === insertIndex
+        ? 'insert'
+        : wideIndexes.has(index)
+          ? (wideIndexes.values().next().value === index ? 'establish' : 'wide-action')
+          : 'medium-action';
+      shot.shot_intent = intent;
+      shot.shot_type = intentShotType[intent];
+    });
+    let seenEstablish = false;
+    for (const index of wideIndexes) {
+      const shot = shots[index]!;
+      shot.shot_intent = seenEstablish ? 'wide-action' : 'establish';
+      shot.shot_type = intentShotType[shot.shot_intent];
+      seenEstablish = true;
+    }
+  }
+}
+
+/** Merge adjacent shots in the same scene until the list fits the cap. Shots are not dropped, and block ids are kept. */
+export function compactStoryboardShots<T extends { script_scene_id: string; block_ids: string[]; primary_action: string }>(
+  shots: T[],
+  limit = 20,
+): T[] {
+  const next = shots.map((shot) => ({ ...shot, block_ids: [...shot.block_ids] }));
+  while (next.length > limit) {
+    const counts = new Map<string, number>();
+    for (const shot of next) counts.set(shot.script_scene_id, (counts.get(shot.script_scene_id) || 0) + 1);
+    let best = -1;
+    let bestCount = 1;
+    for (let index = 0; index < next.length - 1; index++) {
+      if (next[index]!.script_scene_id !== next[index + 1]!.script_scene_id) continue;
+      const count = counts.get(next[index]!.script_scene_id) || 0;
+      if (count > bestCount) {
+        best = index;
+        bestCount = count;
+      }
+    }
+    if (best < 0) break;
+    const current = next[best]!;
+    const following = next[best + 1]!;
+    current.block_ids = [...new Set([...current.block_ids, ...following.block_ids])];
+    if (following.primary_action && !current.primary_action.includes(following.primary_action)) {
+      current.primary_action = `${current.primary_action}；${following.primary_action}`.slice(0, 240);
+    }
+    next.splice(best + 1, 1);
+  }
+  return next;
+}
+
+/** Map prompt-example ids such as scene_1 / b_1 onto the screenplay's real ids when that mapping is unique. */
+export function normalizeStoryboardReferences<T extends { script_scene_id: string; block_ids: string[] }>(
+  doc: ScriptDocument,
+  shots: T[],
+): T[] {
+  const sceneIds = doc.scenes.map((scene) => scene.id);
+  const sceneIdSet = new Set(sceneIds);
+  const blocksByScene = new Map(doc.scenes.map((scene) => [scene.id, scene.blocks.map((block) => block.id)]));
+  const allBlockIds = new Set([...blocksByScene.values()].flat());
+  const resolveScene = (raw: string): string => {
+    const id = raw.trim();
+    if (sceneIdSet.has(id)) return id;
+    const normalized = id.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+    const numeric = /^(?:分场|场景|scene|sc)[_-]?(\d+)$|^(\d+)$/.exec(normalized);
+    const number = numeric?.[1] || numeric?.[2];
+    if (!number) return id;
+    const matches = sceneIds.filter((sceneId) => /(?:^|[_-])(\d+)$/.exec(sceneId)?.[1] === String(Number(number)));
+    return matches.length === 1 ? matches[0]! : id;
+  };
+  return shots.map((shot) => {
+    const script_scene_id = resolveScene(shot.script_scene_id);
+    const sceneBlocks = blocksByScene.get(script_scene_id) || [];
+    const block_ids = shot.block_ids.map((raw) => {
+      const id = raw.trim();
+      if (allBlockIds.has(id)) return id;
+      const numeric = /^(?:内容块|block|b)[_-]?(\d+)$/i.exec(id.normalize('NFKC').toLowerCase());
+      const index = numeric ? Number(numeric[1]) - 1 : -1;
+      return index >= 0 && sceneBlocks[index] ? sceneBlocks[index]! : id;
+    });
+    return { ...shot, script_scene_id, block_ids };
+  });
+}
 
 function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>) {
     // 8. Coverage and validation gates
@@ -360,35 +543,44 @@ ${blocksDesc}`;
       scriptContent: scriptScenesSummary,
     });
 
-    // 6. Call Provider / LLM
+    // 6. Call Provider / LLM. One rewrite is allowed when the model exceeds the shot cap.
+    // The cap still fails closed: shots are never sliced.
     const provider = params.provider || LLMService.getProvider(params.token);
-    let rawResult: RawStoryboardResponse | null = null;
-    try {
-      rawResult = await provider.generateStructured(
-        prompt,
-        RawStoryboardResponseSchema,
-        '你是一位专业影视导演和分镜师，请严格按要求输出 JSON 格式分镜镜头列表。'
-      );
-    } catch (err: any) {
-      logger.error(`Failed to generate storyboard: ${err}`);
-      throw new StoryboardGenerationError(
-        `模型生成分镜候选失败: ${err.message || String(err)}。正式时间线未发生任何更改。`,
-        502
-      );
+    let attemptPrompt = prompt;
+    let rawShots: RawStoryboardShot[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let rawResult: RawStoryboardResponse | null = null;
+      try {
+        rawResult = await provider.generateStructured(
+          attemptPrompt,
+          RawStoryboardResponseSchema,
+          '你是一位专业影视导演和分镜师，请严格按要求输出 JSON 格式分镜镜头列表。'
+        );
+      } catch (err: any) {
+        logger.error(`Failed to generate storyboard: ${err}`);
+        throw new StoryboardGenerationError(
+          `模型生成分镜候选失败: ${err.message || String(err)}。正式时间线未发生任何更改。`,
+          502
+        );
+      }
+      if (!rawResult || !rawResult.shots || rawResult.shots.length === 0) {
+        throw new StoryboardGenerationError(
+          '模型返回空结果，未能生成有效分镜镜头契约。',
+          502
+        );
+      }
+      rawShots = compactStoryboardShots(normalizeStoryboardReferences(doc, rawResult.shots.map(shot => ({
+        ...shot,
+        location: stripAssetLabel(shot.location).slice(0, 240),
+        primary_action: shot.primary_action.slice(0, 240),
+        key_props: (shot.key_props || []).map(stripAssetLabel),
+      }))), 20);
+      if (rawShots.length > 20 && attempt === 0) {
+        attemptPrompt = `${prompt}\n\n上次输出了 ${rawShots.length} 个镜头，超过 20 镜上限，不能截断。请重写为不超过 12 镜：每个分场最多 2 镜，每条对白和画外音仍只分配一次。不要把同一个动作拆成多镜。`;
+        continue;
+      }
+      break;
     }
-
-    if (!rawResult || !rawResult.shots || rawResult.shots.length === 0) {
-      throw new StoryboardGenerationError(
-        '模型返回空结果，未能生成有效分镜镜头契约。',
-        502
-      );
-    }
-
-    const rawShots = rawResult.shots.map(shot => ({
-      ...shot,
-      location: stripAssetLabel(shot.location),
-      key_props: shot.key_props.map(stripAssetLabel),
-    }));
 
     // 7. Hard cap gate: Max 20 shots budget (fail closed, do NOT slice)
     if (rawShots.length > 20) {
@@ -398,6 +590,10 @@ ${blocksDesc}`;
       );
     }
 
+    attachMissingAudibleBlocks(doc, rawShots);
+    repairAudibleOrder(doc, rawShots);
+    const hasPropsForQuota = (doc.props && doc.props.length > 0) || rawShots.some((shot) => shot.key_props && shot.key_props.length > 0);
+    balanceShotQuota(rawShots, hasPropsForQuota);
     const { coveredSceneIdSet, allocatedBlockIds, blockMap, allAudibleBlockIds } = validateStoryboardCoverage(doc, rawShots);
 
     // 9. Deterministic assembly of dialogue, narration, audio_prompt & compilation
@@ -592,6 +788,7 @@ ${blocksDesc}`;
         total_shots: preparedCandidateShots.length,
         total_duration: totalDuration,
         instructions: params.instructions,
+        ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
       },
     });
   }

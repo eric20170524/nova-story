@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
+import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
 import { ScriptService, ScriptServiceError } from '../script_service';
@@ -133,6 +134,12 @@ export function verifyEventContentCoverage(
   return false;
 }
 
+function configuredLlmModel(provider?: AIProvider): string | undefined {
+  if (provider) return undefined;
+  const model = String(SettingsManager.loadSettings().llm?.model || '').trim();
+  return model || undefined;
+}
+
 function allocateLocationId(locations: Array<{ id: string }>): string {
   const used = new Set(locations.map((location) => location.id));
   let max = 0;
@@ -166,6 +173,38 @@ function resolveSceneProps(rawProps: GeneratedSceneResponse['props'], props: Scr
     ids.add(prop.id);
   }
   return [...ids];
+}
+
+const NARRATOR_LABELS = new Set([
+  '旁白', '画外音', '画外', '叙述', '叙述者', 'narrator', 'voiceover', 'voice-over', 'vo',
+]);
+
+/** Narration labels are not project characters. The model often writes them as either voiceover or dialogue. */
+export function isNarratorLabel(name: string | null | undefined): boolean {
+  const value = String(name || '').normalize('NFKC').trim().toLowerCase().replace(/[\s.。:：·]+/g, '');
+  return NARRATOR_LABELS.has(value);
+}
+
+function spokenBlock(
+  block: { type: string; characterName?: string | null; text: string; delivery?: string | null },
+  projectCharacters: Array<{ id: number; name: string }>,
+  unknownMessage: (name: string) => string,
+): { type: 'dialogue' | 'voiceover'; characterId: number | null; text: string; delivery?: string } {
+  const charName = (block.characterName || '').trim();
+  const narration = block.type === 'voiceover' || isNarratorLabel(charName);
+  if (!charName || isNarratorLabel(charName)) {
+    if (!narration) throw new ScriptGenerationError(unknownMessage(charName), 400);
+    return { type: 'voiceover', characterId: null, text: block.text.trim() };
+  }
+  const matched = matchProjectCharacter(charName, projectCharacters);
+  if (!matched) throw new ScriptGenerationError(unknownMessage(charName), 400);
+  if (narration) return { type: 'voiceover', characterId: matched.id, text: block.text.trim() };
+  return {
+    type: 'dialogue',
+    characterId: matched.id,
+    text: block.text.trim(),
+    delivery: block.delivery?.trim() || undefined,
+  };
 }
 
 /** Match a character name against project characters */
@@ -226,6 +265,7 @@ export class ScriptGenerationService {
       generationInfo: {
         instructions: params.instructions,
         targetDurationSec: params.targetDurationSec,
+        ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
       },
     });
   }
@@ -477,6 +517,7 @@ export class ScriptGenerationService {
       throw new ScriptGenerationError('改编提纲至少需要一个戏剧节拍', 400);
     }
     const generatedScenes: ScriptScene[] = [];
+    const anchoredEventIds: string[] = [];
     const locations = [...(script.document.locations || [])];
     const props = [...script.document.props];
 
@@ -553,6 +594,7 @@ export class ScriptGenerationService {
           }`
         : '剧集开端第一场，直接切入核心冲突或突发情境';
 
+      const verbatimEvents = matchedEvents.map((event) => event.text.trim()).filter(Boolean);
       const scenePrompt = formatPrompt(getPrompt('script_scene_gen'), {
         chapterTitle: chapter.title || '第1章',
         outlineSummary: `一句话梗概: ${outline.logline}\n结尾钩子: ${outline.endingHook}`,
@@ -563,146 +605,128 @@ export class ScriptGenerationService {
         characters: charactersPrompt,
         previousSceneSummary,
         instructions: params.instructions || '将小说叙事转化为外部动作表演与高张力台词对白',
-      });
+      }) + (verbatimEvents.length
+        ? `\n\n本场至少一个 action.text 必须原样包含下列完整句子，不要改写：\n${verbatimEvents.join('\n')}`
+        : '');
 
-      let rawScene: GeneratedSceneResponse | null = null;
-      try {
-        rawScene = await provider.generateStructured(
-          scenePrompt,
-          GeneratedSceneResponseSchema,
-          '你是一位专业短剧分场编剧，请严格输出合法的 JSON 格式分场戏剧剧本。'
+      let attemptPrompt = scenePrompt;
+      let stableScene: ScriptScene | null = null;
+      for (let attempt = 0; attempt < 2 && !stableScene; attempt++) {
+        let rawScene: GeneratedSceneResponse | null = null;
+        try {
+          rawScene = await provider.generateStructured(
+            attemptPrompt,
+            GeneratedSceneResponseSchema,
+            '你是一位专业短剧分场编剧，请严格输出合法的 JSON 格式分场戏剧剧本。'
+          );
+        } catch (err: any) {
+          logger.error(`Failed to generate scene ${sIdx + 1}: ${err}`);
+          throw new ScriptGenerationError(
+            `第 ${sIdx + 1} 场生成失败: ${err.message || String(err)}。已中止整章生成，正式剧本未发生任何更改。`,
+            502
+          );
+        }
+
+        if (!rawScene || !rawScene.blocks || rawScene.blocks.length === 0) {
+          throw new ScriptGenerationError(
+            `第 ${sIdx + 1} 场模型返回空结果或缺少表演块。已中止整章生成，正式剧本未发生任何更改。`,
+            502
+          );
+        }
+
+        const locName = (rawScene.location?.name || '场景地点').trim();
+        let locationId = '';
+        const existingLoc = locations.find(
+          (l) => l.name.trim().toLowerCase() === locName.toLowerCase()
         );
-      } catch (err: any) {
-        logger.error(`Failed to generate scene ${sIdx + 1}: ${err}`);
-        throw new ScriptGenerationError(
-          `第 ${sIdx + 1} 场生成失败: ${err.message || String(err)}。已中止整章生成，正式剧本未发生任何更改。`,
-          502
-        );
-      }
-
-      if (!rawScene || !rawScene.blocks || rawScene.blocks.length === 0) {
-        throw new ScriptGenerationError(
-          `第 ${sIdx + 1} 场模型返回空结果或缺少表演块。已中止整章生成，正式剧本未发生任何更改。`,
-          502
-        );
-      }
-
-      // Resolve location
-      const locName = (rawScene.location?.name || '场景地点').trim();
-      let locationId = '';
-      const existingLoc = locations.find(
-        (l) => l.name.trim().toLowerCase() === locName.toLowerCase()
-      );
-      if (existingLoc) {
-        locationId = existingLoc.id;
-      } else {
-        locationId = allocateLocationId(locations);
-        locations.push({
-          id: locationId,
-          name: locName,
-          description: (rawScene.location?.description || '').trim(),
-        });
-      }
-
-      // Resolve cast and blocks
-      const sceneCharacterIds = new Set<number>();
-      const sceneBlocks: ScriptBlock[] = [];
-
-      for (let bIdx = 0; bIdx < rawScene.blocks.length; bIdx++) {
-        const b = rawScene.blocks[bIdx]!;
-        const blockId = `b_${sIdx + 1}_${bIdx + 1}`;
-
-        if (b.type === 'action') {
-          sceneBlocks.push({
-            id: blockId,
-            type: 'action',
-            text: b.text.trim(),
+        if (existingLoc) {
+          locationId = existingLoc.id;
+        } else if (attempt === 1 || matchedEvents.every((event) => verifyEventContentCoverage(event.text, rawScene!.blocks.map((block) => block.text).join(' ')))) {
+          locationId = allocateLocationId(locations);
+          locations.push({
+            id: locationId,
+            name: locName,
+            description: (rawScene.location?.description || '').trim(),
           });
-        } else if (b.type === 'dialogue') {
-          // Strictly resolve character reference
-          const charName = (b.characterName || '').trim();
-          const matched = matchProjectCharacter(charName, projectCharacters);
+        }
 
-          if (!matched) {
-            throw new ScriptGenerationError(
-              `未知角色: 第 ${sIdx + 1} 场模型对白引用了角色 "${charName}"，但在项目角色库中未找到。请先在角色中心建立该角色档案。`,
-              400
+        const sceneCharacterIds = new Set<number>();
+        const sceneBlocks: ScriptBlock[] = [];
+
+        for (let bIdx = 0; bIdx < rawScene.blocks.length; bIdx++) {
+          const b = rawScene.blocks[bIdx]!;
+          const blockId = `b_${sIdx + 1}_${bIdx + 1}`;
+
+          if (b.type === 'action') {
+            sceneBlocks.push({ id: blockId, type: 'action', text: b.text.trim() });
+          } else if (b.type === 'dialogue' || b.type === 'voiceover') {
+            const spoken = spokenBlock(b, projectCharacters, (charName) =>
+              `未知角色: 第 ${sIdx + 1} 场模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。请先在角色中心建立该角色档案。`
             );
+            if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
+            sceneBlocks.push({
+              id: blockId,
+              type: spoken.type,
+              characterId: spoken.characterId,
+              text: spoken.text,
+              ...(spoken.delivery ? { delivery: spoken.delivery } : {}),
+            });
+          } else if (b.type === 'sound') {
+            sceneBlocks.push({ id: blockId, type: 'sound', text: b.text.trim() });
           }
+        }
 
-          sceneCharacterIds.add(matched.id);
-          sceneBlocks.push({
-            id: blockId,
-            type: 'dialogue',
-            characterId: matched.id,
-            text: b.text.trim(),
-            delivery: b.delivery?.trim() || undefined,
-          });
-        } else if (b.type === 'voiceover') {
-          let charId: number | null = null;
-          const charName = (b.characterName || '').trim();
-          if (
-            charName &&
-            charName !== '旁白' &&
-            charName.toLowerCase() !== 'narrator'
-          ) {
-            const matched = matchProjectCharacter(charName, projectCharacters);
-            if (!matched) {
-              throw new ScriptGenerationError(
-                `未知角色: 第 ${sIdx + 1} 场画外音引用了角色 "${charName}"，但在项目角色库中未找到。`,
-                400
-              );
-            }
-            charId = matched.id;
-            sceneCharacterIds.add(charId);
+        for (const name of rawScene.characterNames || []) {
+          const matched = matchProjectCharacter(name, projectCharacters);
+          if (matched) sceneCharacterIds.add(matched.id);
+        }
+
+        const sceneFullText = sceneBlocks.map((block) => [block.text, 'delivery' in block ? block.delivery : ''].filter(Boolean).join(' ')).join(' ');
+        const verifiedSceneEventIds = new Set<string>();
+        for (const ev of outline.mustKeepEvents) {
+          if (verifyEventContentCoverage(ev.text, sceneFullText)) verifiedSceneEventIds.add(ev.id);
+        }
+        const missingBeatEvents = matchedEvents.filter((event) => !verifiedSceneEventIds.has(event.id));
+        if (missingBeatEvents.length > 0 && attempt === 0) {
+          attemptPrompt = `${scenePrompt}\n\n上次草稿没有原样写入必保事件。请重写，并让 action.text 逐字包含这些完整句子：\n${missingBeatEvents.map((event) => event.text).join('\n')}`;
+          continue;
+        }
+        if (missingBeatEvents.length > 0) {
+          for (const event of missingBeatEvents) {
+            sceneBlocks.push({
+              id: `b_${sIdx + 1}_${sceneBlocks.length + 1}`,
+              type: 'action',
+              text: event.text.trim(),
+            });
+            verifiedSceneEventIds.add(event.id);
+            anchoredEventIds.push(event.id);
           }
-
-          sceneBlocks.push({
-            id: blockId,
-            type: 'voiceover',
-            characterId: charId,
-            text: b.text.trim(),
-          });
-        } else if (b.type === 'sound') {
-          sceneBlocks.push({
-            id: blockId,
-            type: 'sound',
-            text: b.text.trim(),
+        }
+        if (!locationId) {
+          locationId = allocateLocationId(locations);
+          locations.push({
+            id: locationId,
+            name: locName,
+            description: (rawScene.location?.description || '').trim(),
           });
         }
+
+        stableScene = {
+          id: `sc_${sIdx + 1}`,
+          beatIds: [beat.id],
+          eventIds: Array.from(verifiedSceneEventIds),
+          sourceParagraphIds: Array.from(sceneParagraphIds),
+          locationId,
+          interiorExterior: rawScene.interiorExterior === 'exterior' ? 'exterior' : 'interior',
+          timeOfDay: (rawScene.timeOfDay || 'day').trim(),
+          characterIds: Array.from(sceneCharacterIds),
+          propIds: resolveSceneProps(rawScene.props, props),
+          blocks: sceneBlocks,
+          estimatedDurationSec: rawScene.estimatedDurationSec || 30,
+        };
       }
 
-      // Add any explicit cast names
-      for (const name of rawScene.characterNames || []) {
-        const matched = matchProjectCharacter(name, projectCharacters);
-        if (matched) sceneCharacterIds.add(matched.id);
-      }
-
-      // Verify dramatic event coverage in scene content
-      const sceneFullText = sceneBlocks.map((b) => b.text).join(' ');
-
-      const verifiedSceneEventIds = new Set<string>();
-      for (const ev of outline.mustKeepEvents) {
-        if (verifyEventContentCoverage(ev.text, sceneFullText)) {
-          verifiedSceneEventIds.add(ev.id);
-        }
-      }
-
-      const stableScene: ScriptScene = {
-        id: `sc_${sIdx + 1}`,
-        beatIds: [beat.id],
-        eventIds: Array.from(verifiedSceneEventIds),
-        sourceParagraphIds: Array.from(sceneParagraphIds),
-        locationId,
-        interiorExterior: rawScene.interiorExterior === 'exterior' ? 'exterior' : 'interior',
-        timeOfDay: (rawScene.timeOfDay || 'day').trim(),
-        characterIds: Array.from(sceneCharacterIds),
-        propIds: resolveSceneProps(rawScene.props, props),
-        blocks: sceneBlocks,
-        estimatedDurationSec: rawScene.estimatedDurationSec || 30,
-      };
-
-      generatedScenes.push(stableScene);
+      generatedScenes.push(stableScene!);
     }
 
     // Step 3: Full Document Assembly & Validation
@@ -747,6 +771,8 @@ export class ScriptGenerationService {
         instructions: params.instructions,
         targetDurationSec: params.targetDurationSec,
         scenesCount: generatedScenes.length,
+        ...(anchoredEventIds.length ? { anchoredEventIds } : {}),
+        ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
       },
     });
   }
@@ -867,46 +893,17 @@ export class ScriptGenerationService {
           type: 'action',
           text: b.text.trim(),
         });
-      } else if (b.type === 'dialogue') {
-        const charName = (b.characterName || '').trim();
-        const matched = matchProjectCharacter(charName, projectCharacters);
-        if (!matched) {
-          throw new ScriptGenerationError(
-            `未知角色: 改写分场中模型对白引用了角色 "${charName}"，但在项目角色库中未找到。`,
-            400
-          );
-        }
-        sceneCharacterIds.add(matched.id);
+      } else if (b.type === 'dialogue' || b.type === 'voiceover') {
+        const spoken = spokenBlock(b, projectCharacters, (charName) =>
+          `未知角色: 改写分场中模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。`
+        );
+        if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
         sceneBlocks.push({
           id: blockId,
-          type: 'dialogue',
-          characterId: matched.id,
-          text: b.text.trim(),
-          delivery: b.delivery?.trim() || undefined,
-        });
-      } else if (b.type === 'voiceover') {
-        let charId: number | null = null;
-        const charName = (b.characterName || '').trim();
-        if (
-          charName &&
-          charName !== '旁白' &&
-          charName.toLowerCase() !== 'narrator'
-        ) {
-          const matched = matchProjectCharacter(charName, projectCharacters);
-          if (!matched) {
-            throw new ScriptGenerationError(
-              `未知角色: 画外音引用了角色 "${charName}"，但在项目角色库中未找到。`,
-              400
-            );
-          }
-          charId = matched.id;
-          sceneCharacterIds.add(charId);
-        }
-        sceneBlocks.push({
-          id: blockId,
-          type: 'voiceover',
-          characterId: charId,
-          text: b.text.trim(),
+          type: spoken.type,
+          characterId: spoken.characterId,
+          text: spoken.text,
+          ...(spoken.delivery ? { delivery: spoken.delivery } : {}),
         });
       } else if (b.type === 'sound') {
         sceneBlocks.push({

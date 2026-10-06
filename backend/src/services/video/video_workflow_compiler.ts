@@ -227,6 +227,27 @@ export class VideoWorkflowCompiler {
       const slot = slots.video_refs[0];
       if (slot && workflow[slot.node]?.inputs && stagedFiles.motionRefFilename) {
         workflow[slot.node].inputs[slot.input] = stagedFiles.motionRefFilename;
+      } else if (!stagedFiles.motionRefFilename) {
+        const refNode = workflow['10'];
+        if (refNode?.inputs) {
+          for (const key of Object.keys(refNode.inputs)) {
+            if (key.startsWith('ref_videos.') || key.startsWith('ref_video_audios.')) delete refNode.inputs[key];
+          }
+        }
+        for (const videoSlot of slots.video_refs) delete workflow[videoSlot.node];
+        delete slots.video_refs;
+      }
+    }
+
+    const audioVae = 'minimax_h3_audio_vae_fp32.safetensors';
+    for (const node of Object.values(workflow) as Array<{ class_type?: string; inputs?: Record<string, unknown> }>) {
+      if (node?.class_type === 'MiniMaxH3ReferenceToVideo' && node.inputs && node.inputs.audio_vae == null) {
+        const id = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+        workflow[id] = { class_type: 'VAELoader', inputs: { vae_name: audioVae } };
+        node.inputs.audio_vae = [id, 0];
+        if (Array.isArray(manifest.required_models) && !manifest.required_models.includes(audioVae)) {
+          manifest.required_models.push(audioVae);
+        }
       }
     }
 
@@ -243,7 +264,10 @@ export class VideoWorkflowCompiler {
       steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
     } else {
       const manifestSteps = Number(manifest.default_params?.steps);
-      steps = Number.isFinite(manifestSteps) && manifestSteps > 0 ? manifestSteps : 20;
+      const envSteps = Number(process.env.NOVASTORY_H3_STEPS);
+      steps = Number.isFinite(envSteps) && envSteps > 0
+        ? envSteps
+        : (Number.isFinite(manifestSteps) && manifestSteps > 0 ? manifestSteps : 20);
     }
     if (slots.steps) workflow[slots.steps.node].inputs[slots.steps.input] = steps;
 

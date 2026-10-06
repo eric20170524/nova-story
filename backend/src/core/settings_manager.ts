@@ -7,6 +7,45 @@ export { validateTtsBaseUrl, type TtsUrlValidationResult } from '../services/tts
 
 const SETTINGS_FILE = 'system_settings.json';
 const ENV_FILE = '.env';
+const RETIRED_LOCAL_LLM_MODEL = 'novastory-qwen3:8b';
+const CURRENT_LOCAL_LLM_MODEL = 'novastory-qwen3.5:9b';
+
+function migrateRetiredLocalLlmModel(settings: Record<string, any>): boolean {
+    const current = String(settings.llm?.model || '');
+    const topLevel = String(settings.llm_model || '');
+    if (current !== RETIRED_LOCAL_LLM_MODEL && topLevel !== RETIRED_LOCAL_LLM_MODEL) return false;
+    settings.llm = { ...(settings.llm || {}), model: CURRENT_LOCAL_LLM_MODEL };
+    if (!topLevel || topLevel === RETIRED_LOCAL_LLM_MODEL) settings.llm_model = CURRENT_LOCAL_LLM_MODEL;
+    if (process.env.LLM_MODEL === RETIRED_LOCAL_LLM_MODEL) process.env.LLM_MODEL = CURRENT_LOCAL_LLM_MODEL;
+    return true;
+}
+
+function persistRetiredLocalLlmModel(): void {
+    const filePath = SettingsManager.getFilePath();
+    if (fs.existsSync(filePath)) {
+        try {
+            const stored = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+            let changed = false;
+            if (stored?.llm?.model === RETIRED_LOCAL_LLM_MODEL) {
+                stored.llm.model = CURRENT_LOCAL_LLM_MODEL;
+                changed = true;
+            }
+            if (stored?.llm_model === RETIRED_LOCAL_LLM_MODEL) {
+                stored.llm_model = CURRENT_LOCAL_LLM_MODEL;
+                changed = true;
+            }
+            if (changed) fs.writeFileSync(filePath, JSON.stringify(stored, null, 4));
+        } catch { /* Leave an unreadable settings file untouched. */ }
+    }
+    const envPath = SettingsManager.getEnvPath();
+    if (!fs.existsSync(envPath)) return;
+    const envContent = fs.readFileSync(envPath, 'utf-8');
+    if (!new RegExp(`^LLM_MODEL=${RETIRED_LOCAL_LLM_MODEL}$`, 'm').test(envContent)) return;
+    fs.writeFileSync(envPath, envContent.replace(
+        new RegExp(`^LLM_MODEL=${RETIRED_LOCAL_LLM_MODEL}$`, 'm'),
+        `LLM_MODEL=${CURRENT_LOCAL_LLM_MODEL}`
+    ));
+}
 
 const DEFAULT_SETTINGS = {
     llm_model: 'novastory-qwen3.5:9b',
@@ -123,6 +162,7 @@ export class SettingsManager {
         }
 
         applyKnownRemoteLlm(settings);
+        if (migrateRetiredLocalLlmModel(settings)) persistRetiredLocalLlmModel();
 
         if (process.env.NOVASTORY_BUILTIN_AI === 'codex') {
             settings.llm = { provider: 'codex', model: process.env.NOVASTORY_CODEX_MODEL || 'gpt-6.1-sol' };

@@ -235,7 +235,7 @@ export class ComfyH3Provider {
       }
 
       const collectedVideos: ComfyVideoOutput[] = [];
-      const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
+      const timeoutMs = options.timeoutMs ?? 6 * 60 * 60 * 1000;
 
       return new Promise((resolve) => {
         let isDone = false;

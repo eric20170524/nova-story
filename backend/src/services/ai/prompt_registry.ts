@@ -509,9 +509,10 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 --- 规则与规范 ---
 1. 小说内向心理活动必须改编为可表演的外部动作 (action)、对白 (dialogue) 或画外音 (voiceover)。
 2. 严禁混入摄影机机位、景别或生成镜头英文 Prompt（视觉分镜由导演模式统一编译）。
-3. 严格使用已有角色名称，禁止凭空捏造未登场角色。
+3. 对白的 characterName 必须是出场角色档案里的姓名，禁止凭空捏造未登场角色。叙述不要写成对白；使用 voiceover，characterName 填“旁白”。不要把“画外音”当作角色名。
 4. props 列出本场动作中出现或实际使用的关键实物道具，给出准确名称和简短外观/用途；同一道具跨场沿用名称，不能把不同实物合并。没有道具才填空数组；不得把人物、声音或心理活动当道具。
-5. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
+5. 本场必保事件的可见动作必须写进 action 文本，coveredEventIds 填写这些事件的原始 id。只改措辞、不写出事件本身，不能算覆盖。
+6. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
 {
   "id": "scene_{{sceneIndex}}",
   "location": { "name": "地点名称", "description": "环境视觉特征" },
@@ -566,9 +567,10 @@ location 和 key_props 只能填写资产名称本身，不要添加“场景：
 --- 规则与分镜规范 ---
 1. 完整覆盖：每一个分场（Scene）必须有至少一个镜头；剧本中的每一条对白（dialogue）和画外音（voiceover）必须被分配到具体镜头的 block_ids 中，严禁遗漏！
 2. 保持顺序：同一分场内的对白和画外音必须严格按照剧本原稿顺序分配，不得颠倒。
-3. 镜头契约字段（严禁输出整段英文视觉 Prompt，由编译器根据契约字段自动编译）：
-   - script_scene_id: 对应的剧本分场 ID (例如 scene_1)
-   - block_ids: 本镜头涵盖的内容块 ID 列表（例如 ["b_1", "b_2"]）
+3. script_scene_id 和 block_ids 必须原样复制上面分场剧本里的 id，例如分场写着 id: sc_1、内容块 [b_1_1] 时就填 sc_1 和 b_1_1。不要改写成 scene_1、分场1 或 b_1。
+4. 镜头契约字段（严禁输出整段英文视觉 Prompt，由编译器根据契约字段自动编译）：
+   - script_scene_id: 剧本分场的原始 ID
+   - block_ids: 本镜头涵盖的原始内容块 ID 列表
    - shot_intent: 镜头叙事意图，必须且只能取以下之一：
      ['establish', 'wide-action', 'medium-action', 'insert', 'reaction', 'overhead-map', 'payoff']
    - shot_type: 景别，如 'Wide Shot', 'Medium Shot', 'Close-up', 'Extreme Close-up'
@@ -582,13 +584,13 @@ location 和 key_props 只能填写资产名称本身，不要添加“场景：
    - camera_movement: 运镜方式（'Static', 'Pan', 'Tilt', 'Tracking', 'Zoom In', 'Zoom Out' 等）
    - camera_angle: 机位视角（'Eye-level', 'Low-angle', 'High-angle', 'Dutch angle' 等）
    - duration: 预计镜头时长秒数（如 2.5 ~ 4.0）
-4. 镜头总数硬约束：整部短剧剧本镜头总数不得超过 20 镜！通常 8-15 镜为宜。
-5. 景别节奏配比要求：
+5. 镜头总数硬约束：整部短剧剧本镜头总数不得超过 20 镜！通常 8-15 镜为宜。
+6. 景别节奏配比要求：
    - 全景与大景 (establish + wide-action) 占总镜头数 ≥ 35%
    - 特写与反应 (insert + reaction) 占总镜头数 ≤ 20%
    - 若剧本包含道具，必须至少有 1 个特写镜头 (insert)
    - 单一景别或意图不得超过镜头总数的 65%
-6. 返回纯 JSON 格式：
+7. 返回纯 JSON 格式：
 {
   "shots": [
     {

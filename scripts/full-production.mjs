@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow } from './production-references.mjs';
+import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, coreCharactersReadyForAcceptance } from './production-references.mjs';
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
 
@@ -16,10 +16,16 @@ const chapterLimit = Number(option('chapter-limit', '5'));
 const stage = option('stage', 'all');
 const base = option('base-url', 'http://127.0.0.1:3000').replace(/\/$/, '');
 const directory = path.resolve(root, option('output', `local/production/${Number.isSafeInteger(projectId) ? projectId : 'unset'}`));
-const workflowOverride = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || null);
+const requestedWorkflow = option('video-workflow', process.env.NOVASTORY_VIDEO_WORKFLOW || null);
+const videoWorkflowFromCli = args.includes('--video-workflow');
+const allowGrokVideo = videoWorkflowFromCli && requestedWorkflow === 'grok_imagine_browser';
+const workflowOverride = requestedWorkflow === 'grok_imagine_browser' && !allowGrokVideo ? null : requestedWorkflow;
 const workflow = workflowOverride || 'minimax_h3_ref2va_official_12gb';
 const retryFailed = args.includes('--retry-failed');
-const rebuildStoryboards = args.includes('--rebuild-storyboards');
+const allowCodexImage = args.includes('--allow-codex-image');
+const rebuildScripts = args.includes('--rebuild-scripts');
+const rebuildAssets = args.includes('--rebuild-assets');
+const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts;
 const assetScopeArg = option('asset-scope', null);
 const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'video-preflight', 'videos', 'assemble', 'verify'];
 if (!projectArg || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 200 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project, --chapter-limit or --stage');
@@ -55,6 +61,16 @@ const write = (name, value) => {
 const save = () => write('state.json', state);
 state.chapterLimit = chapterLimit;
 save();
+function takeRebuildToken(slot) {
+  state.rebuildSerial ||= {};
+  if (retryFailed && state.rebuildSerial[slot]) return `:rebuild:${state.rebuildSerial[slot]}`;
+  state.rebuildSerial[slot] = (state.rebuildSerial[slot] || 0) + 1;
+  save();
+  return `:rebuild:${state.rebuildSerial[slot]}`;
+}
+const scriptRebuildToken = rebuildScripts ? takeRebuildToken('scripts') : '';
+const storyboardRebuildToken = rebuildStoryboards ? takeRebuildToken('storyboards') : '';
+const assetRebuildToken = rebuildAssets ? takeRebuildToken('assets') : '';
 const hash = text => createHash('sha256').update(Buffer.isBuffer(text) ? text : String(text)).digest('hex');
 const key = name => `production:${projectId}:${name}`;
 async function request(url, method = 'GET', body) {
@@ -103,7 +119,7 @@ const library = () => request(`/projects/${projectId}/asset-library`);
 const characters = () => request(`/characters/?project_id=${projectId}`);
 const shots = async () => (await Promise.all((await chapters()).map(c => request(`/timeline/${c.id}`)))).flatMap(r => r.timeline);
 async function waitTask(taskId, video = false) {
-  const deadline = Date.now() + (video ? 65 : 40) * 60 * 1000;
+  const deadline = Date.now() + (video ? 7 * 60 : 40) * 60 * 1000;
   while (Date.now() < deadline) {
     const task = await request(video ? `/videos/tasks/${taskId}` : `/assets/status/${taskId}`);
     if (['completed', 'review_required'].includes(task.status)) return task;
@@ -147,37 +163,73 @@ const briefFile = option('brief-file', null);
 let brief = briefFile ? fs.readFileSync(path.resolve(briefFile), 'utf8') : '按项目现有书名、说明和已确认设定创作。角色、场景和道具的名称保持稳定。每章写出可表演的动作和对白，前后因果连续，不要写说明文字。';
 
 let cachedProjectVideoWorkflow;
+let projectRequestsGrokVideo = false;
+function projectSettingsOf(project) {
+  if (!project || project.error) return {};
+  if (typeof project.settings === 'string') {
+    try { return JSON.parse(project.settings || '{}'); } catch { return {}; }
+  }
+  return project.settings || {};
+}
 async function projectVideoDefault() {
   if (workflowOverride) return null;
   if (cachedProjectVideoWorkflow !== undefined) return cachedProjectVideoWorkflow;
   try {
     const project = await request(`/projects/${projectId}`);
-    const settings = typeof project.settings === 'string' ? JSON.parse(project.settings || '{}') : (project.settings || {});
-    cachedProjectVideoWorkflow = readProjectVideoWorkflow(settings);
+    const selected = readProjectVideoWorkflow(projectSettingsOf(project));
+    projectRequestsGrokVideo = selected === 'grok_imagine_browser';
+    cachedProjectVideoWorkflow = projectRequestsGrokVideo ? null : selected;
   } catch {
     cachedProjectVideoWorkflow = null;
   }
   return cachedProjectVideoWorkflow;
 }
+function providerBlockers(settings) {
+  const blockers = [];
+  const provider = String(settings?.image_provider || '').toLowerCase();
+  const comfyEnabled = settings?.comfyui?.enabled === true;
+  if (!allowCodexImage && (provider === 'codex' || provider === 'grok' || !comfyEnabled)) {
+    blockers.push('生图和生视频默认使用已启用的本机 ComfyUI，并遵守项目图像设置。Codex 或 Grok 内置生图只有在明确要求时才加 --allow-codex-image。');
+  }
+  if (process.env.NOVASTORY_VIDEO_WORKFLOW === 'grok_imagine_browser' && !allowGrokVideo) {
+    blockers.push('NOVASTORY_VIDEO_WORKFLOW=grok_imagine_browser 不会自动生效。只有明确要求时才传入 --video-workflow grok_imagine_browser。');
+  }
+  if (projectRequestsGrokVideo && !allowGrokVideo) {
+    blockers.push('项目 video_generation.workflow_id 是 grok_imagine_browser。默认制作改用 ComfyUI；只有明确要求时才传入 --video-workflow grok_imagine_browser。');
+  }
+  return blockers;
+}
+async function assertProductionProviders() {
+  const [settings, projectWorkflow] = await Promise.all([request('/settings/'), projectVideoDefault()]);
+  const blockers = providerBlockers(settings);
+  if (blockers.length) throw new Error(blockers.join('\n'));
+  return { settings, projectWorkflow };
+}
 async function preflight() {
   state.currentStep = 'preflight'; save();
-  const activeVideoWorkflow = workflowOverride || await projectVideoDefault() || workflow;
   const settings = await request('/settings/');
-  const codexImage = settings.image_provider === 'codex';
-  const imageCheck = codexImage ? Promise.resolve().then(() => {
+  const projectWorkflow = await projectVideoDefault();
+  const activeVideoWorkflow = workflowOverride || projectWorkflow || workflow;
+  const provider = String(settings.image_provider || '').toLowerCase();
+  const useCodexQueue = allowCodexImage && provider === 'codex' && settings.comfyui?.enabled !== true;
+  const imageCheck = useCodexQueue ? Promise.resolve().then(() => {
     const queue = localQueueDir('NOVASTORY_CODEX_IMAGE_QUEUE_DIR', 'codex-image-jobs');
     fs.mkdirSync(queue, { recursive: true });
     fs.accessSync(queue, fs.constants.W_OK);
-    return { provider: 'codex', status: 'queue_writable', queue, worker: 'current Codex session imagegen' };
+    return { provider: 'codex', status: 'queue_writable', queue, worker: 'explicit Codex image queue' };
   }) : request('/settings/verify-comfy', 'POST', {});
   const checks = await Promise.allSettled([
     request(`/projects/${projectId}`), request('/settings/verify-llm', 'POST', {}),
     imageCheck, request(`/videos/capabilities?workflow_id=${activeVideoWorkflow}`), library(),
   ]);
-  const names = ['project', 'llm', codexImage ? 'image' : 'comfyui', 'video', 'asset_library'];
+  const names = ['project', 'llm', useCodexQueue ? 'image' : 'comfyui', 'video', 'asset_library'];
   const evidence = Object.fromEntries(checks.map((result, i) => [names[i], result.status === 'fulfilled' ? result.value : { error: result.reason.message }]));
+  if (!projectRequestsGrokVideo) {
+    projectRequestsGrokVideo = readProjectVideoWorkflow(projectSettingsOf(evidence.project)) === 'grok_imagine_browser';
+  }
   write('preflight.json', evidence);
   const blockers = checks.flatMap((result, i) => result.status === 'rejected' ? [`${names[i]}: ${result.reason.message}`] : []);
+  blockers.push(...providerBlockers(settings));
   if (evidence.video?.video_generation_enabled !== true) blockers.push(...(evidence.video?.missing_components || ['Video unavailable']));
   if (activeVideoWorkflow === 'grok_imagine_browser') {
     try {
@@ -249,8 +301,9 @@ async function text() {
 async function scripts(selected = null) {
   for (const chapter of selected || await chapters()) {
     let script = (await request(`/chapters/${chapter.id}/script`, 'POST', {})).script;
-    if (!script.document.scenes.length && !(script.document.outline?.beats?.length)) {
-      const name = `script-${script.id}:outline-compact`;
+    const missingOutline = !script.document.scenes.length && !(script.document.outline?.beats?.length);
+    if (rebuildScripts || missingOutline) {
+      const name = `script-${script.id}:outline-compact${scriptRebuildToken}`;
       const candidate = await step(`${name}:candidate`, () => request(`/scripts/${script.id}/candidates`, 'POST', {
         kind: 'outline', expected_revision: script.revision, request_key: key(`${name}:v1`),
         instructions: '按本章正文写出戏剧节拍。每个节拍对应一个分场，不是镜头。节拍概括一组连续事件，不写机位、秒数或对白。mustKeepEvents只保留可表演的核心事件，并覆盖起因、冲突、关键选择与结尾。地点和人物名称沿用原文，不要加入原文没有的事件。',
@@ -261,13 +314,15 @@ async function scripts(selected = null) {
         expected_revision: candidate.base_revision, expected_candidate_revision: candidate.candidate_revision, request_key: key(`apply-${candidate.id}`),
       }))).script;
     }
-    if (!script.document.scenes.length) {
+    if (rebuildScripts || !script.document.scenes.length) {
       const kind = 'script';
-      const candidate = await step(`script-${script.id}:${kind}:candidate`, () => request(`/scripts/${script.id}/candidates`, 'POST', {
-        kind, expected_revision: script.revision, request_key: key(`script-${script.id}-${kind}-r${script.revision}-v2`),
+      const name = `script-${script.id}:${kind}${scriptRebuildToken}`;
+      const requestName = scriptRebuildToken ? `${name}-r${script.revision}-v2` : `script-${script.id}-${kind}-r${script.revision}-v2`;
+      const candidate = await step(`${name}:candidate`, () => request(`/scripts/${script.id}/candidates`, 'POST', {
+        kind, expected_revision: script.revision, request_key: key(requestName),
         instructions: '按已采纳的节拍改编成分场剧本。每个必保事件必须写进实际表演块，先保留事件原句，再补充可见动作和对白。不能只在 coveredEventIds 里声称覆盖。场景与道具名称沿用原文和资产库，不要增加原文没有的情节。',
       }).then(result => result.candidate));
-      script = (await step(`script-${script.id}:${kind}:apply`, () => request(`/scripts/${script.id}/candidates/${candidate.id}/apply`, 'POST', {
+      script = (await step(`${name}:apply`, () => request(`/scripts/${script.id}/candidates/${candidate.id}/apply`, 'POST', {
         expected_revision: candidate.base_revision, expected_candidate_revision: candidate.candidate_revision, request_key: key(`apply-${candidate.id}`),
       }))).script;
     }
@@ -276,7 +331,14 @@ async function scripts(selected = null) {
     const exported = await request(`/scripts/${script.id}/export`); write(`05-script-${chapter.index}.txt`, exported.markdown);
   }
 }
+async function assertComfyImages() {
+  if (allowCodexImage) return;
+  const settings = await request('/settings/');
+  const blockers = providerBlockers(settings).filter(item => item.startsWith('生图和生视频'));
+  if (blockers.length) throw new Error(blockers.join('\n'));
+}
 async function assets(selected = null) {
+  await assertComfyImages();
   const scope = selected || await chapters();
   for (const chapter of scope) await step(`extract-assets:${chapter.id}:${hash(chapter.content || '').slice(0, 12)}`, () => request('/asset-library/extract', 'POST', { chapter_id: chapter.id }));
   const knownCharacters = await characters();
@@ -290,11 +352,11 @@ async function assets(selected = null) {
   for (let character of knownCharacters.filter(character => visibleIds.has(character.id))) {
     for (const type of ['portrait', 'turnaround']) {
       const slot = type === 'portrait' ? 'avatar_url' : 'turnaround_url';
-      if (character[slot]) continue;
+      if (character[slot] && !rebuildAssets) continue;
       const visualDescription = character.visual_tags?.visual_bible?.portrait_description || character.description;
       const referenceUrl = type === 'portrait' ? character.visual_tags?.visual_bible?.reference_image_url : character.avatar_url;
       const prompt = await step(`character-${character.id}:${type}:prompt`, () => request(`/characters/${character.id}/build-prompt`, 'POST', { gen_type: type, custom_description: visualDescription, use_ref_portrait: !!referenceUrl, ref_image_url: referenceUrl || undefined }));
-      const task = await generateImage(`character-${character.id}:${type}`, requestKey => request('/assets/generate', 'POST', {
+      const task = await generateImage(`character-${character.id}:${type}${assetRebuildToken}`, requestKey => request('/assets/generate', 'POST', {
         scene_id: 90_000_000 + character.id, request_key: requestKey, workflow: { ...prompt, character_id: character.id, gen_type: type, character_ref_url: referenceUrl || undefined, ref_image_url: referenceUrl || undefined, reference_tier: 'A' },
       }));
       character = await request(`/characters/${character.id}`, 'PUT', { [slot]: task.image_url });
@@ -314,8 +376,8 @@ async function assets(selected = null) {
   }
   const selectedAssets = allAssets.filter(asset => ids.has(asset.id));
   for (const asset of selectedAssets) {
-    if (asset.status === 'generating' && asset.task_id) await waitTask(asset.task_id);
-    else if (asset.status !== 'completed' || !asset.image_url) await generateImage(`library-${asset.id}:v${asset.revision}`, () => request(`/asset-library/${asset.id}/generate`, 'POST', {}));
+    if (!rebuildAssets && asset.status === 'generating' && asset.task_id) await waitTask(asset.task_id);
+    else if (rebuildAssets || asset.status !== 'completed' || !asset.image_url) await generateImage(`library-${asset.id}:v${asset.revision}${assetRebuildToken}`, () => request(`/asset-library/${asset.id}/generate`, 'POST', {}));
   }
   write('06-characters.json', await characters()); write('06-asset-library.json', await library());
 }
@@ -329,10 +391,18 @@ async function storyboards(selected = null) {
         const source = (typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec) : shot.shot_spec)?.source;
         return source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision;
       });
-      if (current) continue;
+      if (current && !rebuildStoryboards) continue;
       if (!rebuildStoryboards) throw new Error(`Script ${script.id}: existing storyboard uses an older or unverified source; review and run --rebuild-storyboards to retain a snapshot and replace it`);
+      const readyFinals = [];
+      for (const shot of existing.timeline) {
+        const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+        for (const asset of media.assets || []) {
+          if (asset.role === 'narrative_final' && asset.status === 'ready') readyFinals.push(asset.id);
+        }
+      }
+      if (readyFinals.length) throw new Error(`Chapter ${chapter.id} has accepted narrative_final assets (${readyFinals.join(', ')}). Keep the files, mark those rows archived, then rerun --rebuild-storyboards.`);
     }
-    const name = `storyboard-${script.id}:revision-${script.revision}`;
+    const name = `storyboard-${script.id}:revision-${script.revision}${storyboardRebuildToken}`;
     const candidate = await step(`${name}:candidate`, () => request(`/scripts/${script.id}/storyboard-candidates`, 'POST', {
       expected_revision: script.revision, request_key: key(name), instructions: '按已确认剧本生成本章分镜。每镜只有一个地点和一个连续动作，默认每镜5秒。覆盖每一场以及全部对白和旁白块，每块只分配一次并保持时序。地点和道具使用资产库中的稳定名称，不要把不同地点并进同一镜，也不要加入剧本没有的动作或角色。',
     }).then(result => result.candidate));
@@ -344,6 +414,7 @@ async function storyboards(selected = null) {
   write('07-storyboards.json', await shots());
 }
 async function images(selected = null) {
+  await assertComfyImages();
   const allAssets = await library();
   let knownCharacters;
   const snapshots = (await request(`/projects/${projectId}/export`)).asset_library?.image_snapshots || [];
@@ -366,7 +437,19 @@ async function images(selected = null) {
   }
   write('08-rendered-storyboards.json', await shots());
 }
+async function assertComfyVideo() {
+  await projectVideoDefault();
+  const blockers = [];
+  if (process.env.NOVASTORY_VIDEO_WORKFLOW === 'grok_imagine_browser' && !allowGrokVideo) {
+    blockers.push('NOVASTORY_VIDEO_WORKFLOW=grok_imagine_browser 不会自动生效。只有明确要求时才传入 --video-workflow grok_imagine_browser。');
+  }
+  if (projectRequestsGrokVideo && !allowGrokVideo) {
+    blockers.push('项目 video_generation.workflow_id 是 grok_imagine_browser。默认制作改用 ComfyUI；只有明确要求时才传入 --video-workflow grok_imagine_browser。');
+  }
+  if (blockers.length) throw new Error(blockers.join('\n'));
+}
 async function videoPreflight(selected = null) {
+  await assertComfyVideo();
   const known = await characters();
   const results = [];
   for (const shot of await selectedShots(selected)) {
@@ -393,6 +476,7 @@ async function videoPreflight(selected = null) {
   return results;
 }
 async function videos(selected = null) {
+  await assertComfyVideo();
   const pendingReview = [];
   for (const shot of await selectedShots(selected)) {
     const available = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
@@ -418,7 +502,7 @@ async function videos(selected = null) {
           delete state.steps[submittedKey]; state.videoAttempts ||= {}; state.videoAttempts[shot.id] = (state.videoAttempts[shot.id] || 0) + 1; save();
         }
       }
-      const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false,
+      const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'preview_480p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false,
         request_key: key(`${name}-attempt-${state.videoAttempts?.[shot.id] || 0}`) };
       const flight = await request('/videos/preflight', 'POST', body); write(`preflight-shot-${shot.id}.json`, flight);
       if (!flight.ready) throw new Error(`Shot ${shot.id}: ${flight.blockers.join('; ')}`);
@@ -535,7 +619,7 @@ async function verify() {
     ['F02', `前${chapterLimit}章正文非空且定稿哈希一致`, cs.length === chapterLimit && cs.every(c => c.content?.trim() && c.status === 'completed' && c.finalized_content_hash === hash(c.content))],
     ['F03', '章节字数达到规划的80%', cs.length === chapterLimit && cs.every(c => (c.content?.match(/[\p{L}\p{N}]/gu) || []).length >= c.target_word_count * 0.8)],
     ['F04', `前${chapterLimit}章剧本已确认且来源有效`, screenplay.length === chapterLimit && screenplay.every(s => s?.status === 'confirmed' && !s.freshness?.sourceChanged && s.document.scenes.length)],
-    ['F05', '蓝图核心角色有定妆照和三视图', coreCharacters.length === coreCharacterNames.size && coreCharacters.every(c => c.avatar_url && c.turnaround_url)],
+    ['F05', '已出场的蓝图核心角色有定妆照和三视图', coreCharactersReadyForAcceptance(coreCharacterNames, coreCharacters, ss)],
     ['F06', '分镜点名的场景与道具均已生成', (() => {
       const named = ss.flatMap(shot => resolveAssetBindings(shot, assets).required || []);
       const needs = kind => named.some(item => item.kind === kind);
@@ -596,7 +680,7 @@ function report(error) {
   const engineering = fs.existsSync(engineeringFile) ? JSON.parse(fs.readFileSync(engineeringFile, 'utf8')) : null;
   const manualFile = path.join(directory, 'manual-review.json');
   const manualReview = fs.existsSync(manualFile) ? JSON.parse(fs.readFileSync(manualFile, 'utf8')) : null;
-  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景和道具参考通过系统的 Codex 图像任务传递；跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
+  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景、道具和镜头视频默认由本机 ComfyUI 按项目设置生成。Codex 或 Grok 只有在命令明确要求时才使用。跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
 }
 let failure;
 try {

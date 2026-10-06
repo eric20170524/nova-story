@@ -118,7 +118,7 @@ export const packShotSpec = (shot: {
     visible_subjects,
     key_props,
     subject_scale: shot.subject_scale || null,
-    uniqueness_key: uniqueness_key || null,
+    uniqueness_key: uniqueness_key ? uniqueness_key.slice(0, 240) : null,
     must_not: Array.isArray(shot.must_not) ? shot.must_not : [],
     shot_type: shot.shot_type || null,
     source,

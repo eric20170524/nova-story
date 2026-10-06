@@ -18,6 +18,29 @@ function restoreEnv(saved: Record<string, string | undefined>) {
     }
 }
 
+test('retired local model alias novastory-qwen3:8b is rewritten to novastory-qwen3.5:9b', () => {
+    const saved = snapshotEnv();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-settings-migrate-'));
+    try {
+        process.env.NOVASTORY_CONFIG_DIR = dir;
+        delete process.env.LLM_MODEL;
+        fs.writeFileSync(path.join(dir, 'system_settings.json'), JSON.stringify({
+            llm_model: 'novastory-qwen3:8b',
+            llm: { provider: 'ollama', model: 'novastory-qwen3:8b', base_url: 'http://127.0.0.1:11434/v1' },
+        }));
+        fs.writeFileSync(path.join(dir, '.env'), 'LLM_MODEL=novastory-qwen3:8b\n');
+        const loaded = SettingsManager.loadSettings();
+        assert.equal(loaded.llm.model, 'novastory-qwen3.5:9b');
+        assert.equal(loaded.llm_model, 'novastory-qwen3.5:9b');
+        const stored = JSON.parse(fs.readFileSync(path.join(dir, 'system_settings.json'), 'utf8'));
+        assert.equal(stored.llm.model, 'novastory-qwen3.5:9b');
+        assert.match(fs.readFileSync(path.join(dir, '.env'), 'utf8'), /^LLM_MODEL=novastory-qwen3\.5:9b$/m);
+    } finally {
+        restoreEnv(saved);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test('saving a non-Ollama provider removes a placeholder LLM_API_KEY', () => {
     const saved = snapshotEnv();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-settings-'));

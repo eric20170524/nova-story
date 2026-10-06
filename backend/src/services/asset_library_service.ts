@@ -20,6 +20,37 @@ export class AssetLibraryError extends Error {
   constructor(message: string, public statusCode = 409) { super(message); }
 }
 
+const assetNameKey = (value: string) => value.normalize('NFKC').trim().toLowerCase().replace(/[\s\p{P}]/gu, '');
+
+export function normalizeExtractedAssets(
+  rawAssets: Array<{ kind: string; name: string; description?: string; visual_prompt?: string }>,
+  existing: Array<Pick<LibraryAsset, 'kind' | 'name'>>,
+  characterNames: string[] = [],
+): Array<z.infer<typeof LibraryAssetInput>> {
+  const characters = new Set(characterNames.map(assetNameKey).filter(Boolean));
+  const kindOf = (value: string) => {
+    const key = assetNameKey(value);
+    if (['location', '场景', '地点', '环境'].map(assetNameKey).includes(key)) return 'location' as const;
+    if (['prop', '道具', '物品'].map(assetNameKey).includes(key)) return 'prop' as const;
+    return null;
+  };
+  const normalized = [];
+  for (const raw of rawAssets) {
+    const kind = kindOf(raw.kind);
+    const name = String(raw.name || '').replace(/^(?:场景|地点|道具|物品)\s*[：:]\s*/u, '').trim();
+    if (!kind || !name || characters.has(assetNameKey(name))) continue;
+    const canonical = existing.find((asset) => asset.kind === kind && assetNameKey(asset.name) === assetNameKey(name));
+    const data = LibraryAssetInput.parse({
+      kind,
+      name: canonical?.name || name,
+      description: canonical ? '' : String(raw.description || ''),
+      visual_prompt: canonical ? '' : String(raw.visual_prompt || ''),
+    });
+    if (!normalized.some((item) => item.kind === data.kind && assetNameKey(item.name) === assetNameKey(data.name))) normalized.push(data);
+  }
+  return normalized;
+}
+
 export class AssetLibraryService {
   static async requireProject(projectId: number) {
     if (!await db.get('SELECT id FROM project WHERE id = ?', projectId)) throw new AssetLibraryError('Project not found', 404);
@@ -61,23 +92,33 @@ export class AssetLibraryService {
     const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
     if (!chapter) throw new AssetLibraryError('Chapter not found', 404);
     if (!String(chapter.content || '').trim()) throw new AssetLibraryError('Chapter has no content', 400);
-    const schema = z.object({ assets: z.array(LibraryAssetInput).min(1).max(40) });
+    const schema = z.object({
+      assets: z.array(z.object({
+        kind: z.string(),
+        name: z.string(),
+        description: z.string().optional().default(''),
+        visual_prompt: z.string().optional().default(''),
+      })).min(1).max(40),
+    });
     const existingAssets = await this.list(Number(chapter.project_id));
+    const characters = await db.all('SELECT name FROM character WHERE project_id = ?', chapter.project_id) as Array<{ name: string }>;
     const canonical = existingAssets.map(({ kind, name, description, visual_prompt }) => ({ kind, name, description, visual_prompt }));
     const result = await LLMService.generateStructuredWithRetry(
       `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
       `description 描述空间布局、材质、色彩及连续性；visual_prompt 用英文描述固定外观。` +
-      `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind/name/外观，不为别称创建副本；只返回本章出现的资产。\n` +
+      `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind 和 name，不要改名，也不要为人物建档。kind 只能是 location 或 prop。` +
       `不同实体不能仅因材质、颜色或名称相近就合并；按原文分别管理各自的用途与位置。\n` +
       (instructions?.trim() ? `本次提取补充要求：${instructions.trim()}\n` : '') +
       `已有资产：${JSON.stringify(canonical)}\n返回 JSON {assets:[{kind,name,description,visual_prompt}]}。\n本章正文：\n` + chapter.content,
       schema);
     if (!result) throw new AssetLibraryError('Model returned no assets', 502);
+    const accepted = normalizeExtractedAssets(result.assets, existingAssets, characters.map((character) => character.name));
+    if (!accepted.length) throw new AssetLibraryError('Model returned no location or prop assets', 502);
     return withImmediateTransaction(async () => {
       const fresh = await db.get('SELECT content FROM chapter WHERE id = ?', chapterId);
       if (!fresh || hashChapterContent(fresh.content) !== hashChapterContent(chapter.content)) throw new AssetLibraryError('Chapter changed during extraction');
       const saved: LibraryAsset[] = [];
-      for (const data of result.assets) {
+      for (const data of accepted) {
         const existing = await db.get('SELECT * FROM library_asset WHERE project_id = ? AND kind = ? AND name = ?', chapter.project_id, data.kind, data.name);
         if (existing) {
           const sources = [...new Set([...JSON.parse(existing.source_chapter_ids), chapterId])];

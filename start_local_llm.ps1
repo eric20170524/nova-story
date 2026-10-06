@@ -36,16 +36,11 @@ else {
     Start-Sleep -Milliseconds 400
 
     $kwargs = (Get-Content -LiteralPath $script:ChatTemplateKwargs -Raw -Encoding UTF8).Trim()
-    # Start-Process re-quotes ArgumentList on Windows and strips JSON quotes.
-    $env:LLAMA_ARG_CHAT_TEMPLATE_KWARGS = $kwargs
     $serverDir = Split-Path -Parent $serverPath
     $cudaToolkitBin = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin'
-    if (Test-Path -LiteralPath $cudaToolkitBin) {
-        $env:PATH = "$serverDir;$cudaToolkitBin;$env:PATH"
-    }
-    else {
-        $env:PATH = "$serverDir;$env:PATH"
-    }
+    $processPath = if (Test-Path -LiteralPath $cudaToolkitBin) { "$serverDir;$cudaToolkitBin;$env:PATH" } else { "$serverDir;$env:PATH" }
+    $env:LLAMA_ARG_CHAT_TEMPLATE_KWARGS = $kwargs
+    $env:PATH = $processPath
     $arguments = @(
         '-m', $script:ModelFile
         '--alias', $script:ModelAlias
@@ -75,12 +70,21 @@ else {
         }
     ) -join ' '
     $cmdLine = "`"$serverPath`" $quotedArgs"
-    # Win32_Process.Create starts outside the parent job, so the server stays up
-    # after this launcher (or an agent shell job) exits.
-    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine = $cmdLine
-        CurrentDirectory = $serverDir
+    # Win32_Process.Create runs in WmiPrvSE, so the child does not see this
+    # session's PATH or LLAMA_ARG_CHAT_TEMPLATE_KWARGS unless they are passed
+    # through ProcessStartupInformation.EnvironmentVariables.
+    $environment = foreach ($entry in [Environment]::GetEnvironmentVariables('Process').GetEnumerator()) {
+        "$($entry.Key)=$($entry.Value)"
     }
+    $startupClass = New-Object System.Management.ManagementClass 'Win32_ProcessStartup'
+    $startup = $startupClass.CreateInstance()
+    $startup['EnvironmentVariables'] = [string[]]$environment
+    $processClass = New-Object System.Management.ManagementClass 'Win32_Process'
+    $createParams = $processClass.GetMethodParameters('Create')
+    $createParams['CommandLine'] = $cmdLine
+    $createParams['CurrentDirectory'] = $serverDir
+    $createParams['ProcessStartupInformation'] = $startup
+    $created = $processClass.InvokeMethod('Create', $createParams, $null)
     if (-not $created -or [int]$created.ReturnValue -ne 0 -or -not $created.ProcessId) {
         throw "Failed to create llama-server process (WMI return $($created.ReturnValue))."
     }

@@ -82,6 +82,28 @@ function ollamaNativeBaseUrl(openaiCompatUrl?: string | null): string {
   return raw.replace(/\/v1$/i, '') || 'http://127.0.0.1:11434';
 }
 
+/** OpenAI `/v1/models` is not an identity check: Ollama serves it too. */
+export function classifyLlmProbe(input: { ollamaPsOk: boolean; llamaHealthOk: boolean }): 'ollama' | 'llamacpp' | 'unknown' {
+  if (input.ollamaPsOk) return 'ollama';
+  if (input.llamaHealthOk) return 'llamacpp';
+  return 'unknown';
+}
+
+export function isLoopbackBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl.includes('://') ? baseUrl : `http://${baseUrl}`);
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+export function isLlamaServerProcessImage(imageName: string | null | undefined): boolean {
+  const base = String(imageName || '').trim().split(/[/\\]/).pop() || '';
+  return /^llama-server(\.exe)?$/i.test(base);
+}
+
 function localLlmPort(baseUrl: string): number {
   try {
     const parsed = new URL(baseUrl.includes('://') ? baseUrl : `http://${baseUrl}`);
@@ -244,89 +266,97 @@ async function queryNvidiaSmi(): Promise<{
   }
 }
 
-const FALLBACK_LLAMACPP_VRAM_BYTES = Math.round(5.7 * 1024 ** 3);
-
-async function queryLlamaCpp(baseUrl: string): Promise<VramStatus['ollama'] | null> {
-  const result: VramStatus['ollama'] = {
-    online: false,
-    base_url: baseUrl,
-    used_bytes: 0,
-    models: [],
-  };
+async function probeJson(url: string, timeoutMs = 2500): Promise<{ ok: boolean; body: any } | null> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(`${baseUrl}/v1/models`, { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
-    if (!res.ok) return null;
-    result.online = true;
-    let modelName = DEFAULT_LOCAL_LLM_MODEL;
-    try {
-      const payload = (await res.json()) as { data?: Array<{ id?: string }> };
-      const id = payload.data?.[0]?.id;
-      if (id) modelName = String(id);
-    } catch (err) {
-      logger.debug({ err }, 'llama.cpp /v1/models parse failed');
-    }
-    const pid = await findWindowsListenerPid(localLlmPort(baseUrl));
-    let used = await queryProcessVramBytes(pid);
-    if (used <= 0) used = FALLBACK_LLAMACPP_VRAM_BYTES;
-    result.models = [{
-      name: modelName,
-      size: used,
-      size_vram: used,
-      processor: 'llamacpp',
-    }];
-    result.used_bytes = used;
-    return result;
+    const text = await res.text();
+    let body: any = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    return { ok: res.ok, body };
   } catch (err) {
-    logger.debug({ err }, 'llama.cpp /v1/models failed');
+    logger.debug({ err, url }, 'LLM probe failed');
+    return null;
+  }
+}
+
+async function queryProcessImageName(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+      timeout: 4000,
+      windowsHide: true,
+    });
+    const match = stdout.match(/"([^"]+)"/);
+    return match?.[1] || null;
+  } catch (err) {
+    logger.debug({ err, pid }, 'tasklist image lookup failed');
     return null;
   }
 }
 
 async function queryOllama(baseUrl: string): Promise<VramStatus['ollama']> {
-  const llama = await queryLlamaCpp(baseUrl);
-  if (llama) return llama;
-
   const result: VramStatus['ollama'] = {
     online: false,
     base_url: baseUrl,
     used_bytes: 0,
     models: [],
   };
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(`${baseUrl}/api/ps`, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return result;
-    const data = (await res.json()) as {
-      models?: Array<{
-        name?: string;
-        model?: string;
-        size?: number;
-        size_vram?: number;
-        details?: { family?: string };
-        processor?: string;
-      }>;
-    };
+  const ollamaPs = await probeJson(`${baseUrl}/api/ps`);
+  const ollamaPsOk = Boolean(ollamaPs?.ok && ollamaPs.body && Array.isArray(ollamaPs.body.models));
+  if (ollamaPsOk) {
+    const models = ollamaPs!.body.models as Array<{
+      name?: string;
+      model?: string;
+      size?: number;
+      size_vram?: number;
+      processor?: string;
+    }>;
     result.online = true;
-    const models = Array.isArray(data.models) ? data.models : [];
-    result.models = models.map((m) => {
-      const size = Number(m.size || 0);
-      const sizeVram = Number(m.size_vram != null ? m.size_vram : size);
+    result.models = models.map((model) => {
+      const size = Number(model.size || 0);
+      const sizeVram = Number(model.size_vram != null ? model.size_vram : size);
       return {
-        name: String(m.name || m.model || 'unknown'),
+        name: String(model.name || model.model || 'unknown'),
         size,
         size_vram: sizeVram,
-        processor: m.processor || 'ollama',
+        processor: model.processor || 'ollama',
       };
     });
-    result.used_bytes = result.models.reduce((sum, m) => sum + (m.size_vram || 0), 0);
-  } catch (err) {
-    logger.debug({ err }, 'Ollama /api/ps failed');
+    result.used_bytes = result.models.reduce((sum, model) => sum + (model.size_vram || 0), 0);
+    return result;
   }
+
+  const health = await probeJson(`${baseUrl}/health`);
+  const healthBody = health?.body;
+  const llamaHealthOk = Boolean(
+    health?.ok && (
+      (healthBody && typeof healthBody === 'object' && String(healthBody.status || '').toLowerCase() === 'ok')
+      || String(healthBody || '').trim().toLowerCase() === 'ok'
+    )
+  );
+  if (classifyLlmProbe({ ollamaPsOk, llamaHealthOk }) !== 'llamacpp') return result;
+
+  result.online = true;
+  if (!isLoopbackBaseUrl(baseUrl)) return result;
+
+  const pid = await findWindowsListenerPid(localLlmPort(baseUrl));
+  const image = pid ? await queryProcessImageName(pid) : null;
+  if (!pid || !isLlamaServerProcessImage(image)) return result;
+
+  const used = await queryProcessVramBytes(pid);
+  let modelName = DEFAULT_LOCAL_LLM_MODEL;
+  const listed = await probeJson(`${baseUrl}/v1/models`);
+  const listedId = listed?.body?.data?.[0]?.id;
+  if (listedId) modelName = String(listedId);
+  result.models = [{
+    name: modelName,
+    size: used,
+    size_vram: used,
+    processor: 'llamacpp',
+  }];
+  result.used_bytes = used;
   return result;
 }
 
@@ -559,7 +589,8 @@ export class VramService {
         };
       }
 
-      if (before.models.length === 0 || before.used_bytes <= 0) {
+      const confirmedLlama = before.models.some((model) => model.processor === 'llamacpp');
+      if (!confirmedLlama && (before.models.length === 0 || before.used_bytes <= 0)) {
         return {
           ok: true,
           skipped: true,
@@ -627,9 +658,20 @@ export class VramService {
 
     const isLlamaCpp = before.models.some((m) => m.processor === 'llamacpp');
     if (isLlamaCpp) {
+      if (!isLoopbackBaseUrl(ollamaBase)) {
+        details.push('remote LLM endpoint; refusing to stop a local listener');
+        return {
+          ok: false,
+          message: 'Configured LLM is not a local llama-server, so no process was stopped.',
+          message_zh: '配置的 LLM 不是本机 llama-server，未结束任何进程。',
+          details,
+          status: await this.getStatus(),
+        };
+      }
       const pid = await findWindowsListenerPid(localLlmPort(ollamaBase));
-      details.push(pid ? `llama.cpp pid=${pid}` : 'llama.cpp pid not found');
-      if (pid) {
+      const image = pid ? await queryProcessImageName(pid) : null;
+      details.push(pid ? `listener pid=${pid} image=${image || 'unknown'}` : 'llama.cpp pid not found');
+      if (pid && isLlamaServerProcessImage(image)) {
         try {
           await execFileAsync('taskkill', ['/PID', String(pid), '/F'], {
             timeout: 8000,
@@ -641,6 +683,8 @@ export class VramService {
           details.push(`taskkill error: ${err?.message || String(err)}`);
           logger.warn({ err, pid }, 'Failed to stop llama.cpp server');
         }
+      } else if (pid) {
+        details.push(`refusing to stop ${image || 'unknown process'}`);
       }
       await new Promise((r) => setTimeout(r, 800));
       const status = await this.getStatus();
@@ -779,6 +823,9 @@ export const __vramTestables = {
   classifyLevel,
   formatGiB,
   ollamaNativeBaseUrl,
+  classifyLlmProbe,
+  isLoopbackBaseUrl,
+  isLlamaServerProcessImage,
   buildSummaries,
   WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,

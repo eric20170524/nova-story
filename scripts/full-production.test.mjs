@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId } from './production-references.mjs';
+import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId, coreCharactersReadyForAcceptance } from './production-references.mjs';
 
 test('production requires an explicit project id', async () => {
   const child = spawn(process.execPath, ['scripts/full-production.mjs', '--stage', 'preflight'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -16,6 +16,18 @@ test('production requires an explicit project id', async () => {
   const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', resolve); });
   assert.equal(code, 1);
   assert.match(output, /Invalid --project/);
+});
+
+test('acceptance requires portraits only for core characters who have appeared', () => {
+  const cores = ['阿风', '阿宁'];
+  const characters = [
+    { name: '阿风', avatar_url: '/a.png', turnaround_url: '/t.png' },
+    { name: '阿宁' },
+  ];
+  const onlyFeng = [{ shot_spec: { primary_subject: '阿风', visible_subjects: [] } }];
+  assert.equal(coreCharactersReadyForAcceptance(cores, characters, onlyFeng), true);
+  const both = [{ shot_spec: { primary_subject: '阿风', visible_subjects: ['阿宁'] } }];
+  assert.equal(coreCharactersReadyForAcceptance(cores, characters, both), false);
 });
 
 test('visible shot references prioritize the focal character and exclude uncast extras', () => {
@@ -82,7 +94,7 @@ async function fixture(handler) {
 test('unavailable generation dependencies stop the full pipeline and remain visible in escaped reports', async () => {
   let generationCalls = 0;
   const f = await fixture((url) => {
-    if (url === '/api/settings/') return { body: { image_provider: 'comfyui' } };
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true } } };
     if (url.includes('/settings/verify')) return { status: 502, body: { detail: '<script>upstream offline</script>' } };
     if (url.includes('/videos/capabilities')) return { body: { video_generation_enabled: false, missing_components: ['ComfyUI offline'] } };
     if (url.includes('/asset-library')) return { body: [] };
@@ -203,6 +215,15 @@ test('every named asset is bound by kind, with explicit alias bindings reserved 
   const alias = { shot_spec: { location: '旧庙', key_props: ['系铃绳', '铜铃'] } };
   assert.equal(resolveAssetBindings(alias, assets, assets.slice(0, 3)).blockers.length, 0);
   assert.match(resolveAssetBindings(alias, assets, assets.slice(0, 2)).blockers.join(';'), /系铃绳/);
+  const library = [
+    { id: 10, kind: 'location', name: '清暮宫玉阶' },
+    { id: 11, kind: 'location', name: '花海' },
+    { id: 12, kind: 'location', name: '琼明仙域云海' },
+    { id: 13, kind: 'prop', name: '合欢香' },
+    { id: 14, kind: 'prop', name: '合欢香炉' },
+  ];
+  const prose = { shot_spec: { location: '清暮宫·玉阶，千瓣花海在云海间齐绽', key_props: ['合欢香还没有点燃'] } };
+  assert.deepEqual(resolveAssetBindings(prose, library).asset_ids, [10, 13]);
   const current = { id: 51, asset_url: '/static/frame.png' };
   const snapshots = [{ scene_id: 51, image_url: current.asset_url, references_json: JSON.stringify([{ id: 1, revision: 1 }, { id: 2, revision: 2 }]) }];
   assert.equal(keyframeUsesBindings(current, [{ id: 2, revision: 2 }, { id: 1, revision: 1 }], snapshots), true);
@@ -213,6 +234,7 @@ test('every named asset is bound by kind, with explicit alias bindings reserved 
 test('partial location matches never start keyframe generation or silently omit a prop', async () => {
   let generationCalls = 0;
   const f = await fixture(url => {
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true } } };
     if (url.includes('/asset-library')) return { body: [{ id: 1, kind: 'location', name: '山庙' }] };
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, shot_spec: { location: '山庙', key_props: ['铜铃'] } }] } };
@@ -327,7 +349,7 @@ test('full run does not start the next chapter until the current chapter video i
   });
   const f = await fixture((url, method, body) => {
     calls.push(`${method} ${url}${body?.scene_id ? ` scene:${body.scene_id}` : ''}${body?.character_id ? ` character:${body.character_id}` : ''}`);
-    if (url === '/api/settings/') return { body: { image_provider: 'comfyui' } };
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true } } };
     if (url.includes('/settings/verify')) return { body: { status: 'success' } };
     if (url.includes('/videos/capabilities')) return { body: { video_generation_enabled: true, missing_components: [] } };
     if (url === '/api/projects/90713823') return { body: { id: 90713823, title: '测试', description: '' } };
@@ -380,5 +402,72 @@ test('changing a keyframe creates one new video task while an unchanged resume n
     await f.run('videos'); await f.run('videos'); assert.equal(requests.length, 1);
     keyframe = '/static/frame-v2.png'; await f.run('videos'); await f.run('videos');
     assert.equal(requests.length, 2); assert.notEqual(requests[0].request_key, requests[1].request_key);
+  } finally { await f.close(); }
+});
+
+test('preflight keeps Codex and Grok off unless the command explicitly requests them', async () => {
+  const calls = [];
+  const f = await fixture((url) => {
+    calls.push(url);
+    if (url === '/api/settings/') return { body: { image_provider: 'codex', comfyui: { enabled: false } } };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: JSON.stringify({ video_generation: { workflow_id: 'grok_imagine_browser' } }) } };
+    if (url.includes('/settings/verify-llm')) return { body: { status: 'success' } };
+    if (url.includes('/settings/verify-comfy')) return { body: { status: 'success' } };
+    if (url.includes('/videos/capabilities')) return { body: { video_generation_enabled: true, missing_components: [] } };
+    if (url.includes('/asset-library')) return { body: [] };
+    return { status: 500, body: { error: `unexpected ${url}` } };
+  });
+  try {
+    const blocked = await f.run('preflight', [], { NOVASTORY_VIDEO_WORKFLOW: 'grok_imagine_browser' });
+    assert.equal(blocked.code, 1);
+    assert.match(blocked.output, /本机 ComfyUI/);
+    assert.match(blocked.output, /grok_imagine_browser/);
+    assert.equal(calls.some(url => url.includes('/videos/capabilities') && url.includes('grok_imagine_browser')), false);
+    calls.length = 0;
+    const allowed = await f.run('preflight', ['--allow-codex-image', '--video-workflow', 'grok_imagine_browser'], { NOVASTORY_VIDEO_WORKFLOW: '' });
+    assert.equal(allowed.code, 0, allowed.output);
+    assert.equal(calls.some(url => url.includes('workflow_id=grok_imagine_browser')), true);
+    assert.equal(calls.some(url => url.includes('/settings/verify-comfy')), false);
+  } finally { await f.close(); }
+});
+
+test('rebuild flags regenerate an existing screenplay and storyboard instead of reusing them', async () => {
+  const calls = [];
+  const script = {
+    id: 10, revision: 4, status: 'confirmed', freshness: { sourceChanged: false },
+    document: { scenes: [{ id: 'sc-1', blocks: [{ id: 'b-1' }] }], outline: { beats: [{ id: 'beat-1' }] } },
+  };
+  const outlineCandidate = { id: 'outline-1', state: 'pending', base_revision: 4, candidate_revision: 5, after_json: JSON.stringify({ beats: [{ id: 'beat-1' }] }) };
+  const scriptCandidate = { id: 'script-1', state: 'pending', base_revision: 5, candidate_revision: 6, after_json: JSON.stringify({ scenes: [{ id: 'sc-1' }] }) };
+  const f = await fixture((url, method) => {
+    calls.push(`${method} ${url}`);
+    if (url === '/api/chapters/?project_id=90713823') return { body: [{ id: 'ch-1', index: 1 }] };
+    if (url === '/api/chapters/ch-1/script' && method === 'POST') return { body: { script } };
+    if (url === '/api/chapters/ch-1/script' && method === 'GET') return { body: { script } };
+    if (url === '/api/scripts/10/export') return { body: { markdown: '剧本' } };
+    if (url === '/api/scripts/10/candidates' && method === 'POST') {
+      const kind = calls.filter(call => call === 'POST /api/scripts/10/candidates').length;
+      return { body: { candidate: kind === 1 ? outlineCandidate : scriptCandidate } };
+    }
+    if (url.includes('/candidates/') && url.endsWith('/apply')) return { body: { script: { ...script, revision: url.includes('outline') ? 5 : 6, status: 'draft' } } };
+    if (url === '/api/scripts/10/confirm') return { body: { script: { ...script, revision: 7, status: 'confirmed' } } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 202, active_version: 1, shot_spec: { source: { type: 'script', script_id: 10, script_revision: 4 } } }] } };
+    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url.includes('/storyboard-candidates')) return { body: { candidate: { id: 'board-1', state: 'pending', base_revision: 4, candidate_revision: 5 } } };
+    return { status: 500, body: { error: `unexpected ${method} ${url}` } };
+  });
+  try {
+    const kept = await f.run('scripts');
+    assert.equal(kept.code, 0, kept.output);
+    assert.equal(calls.some(call => call.includes('/candidates')), false);
+    calls.length = 0;
+    const rebuilt = await f.run('scripts', ['--rebuild-scripts']);
+    assert.equal(rebuilt.code, 0, rebuilt.output);
+    assert.equal(calls.filter(call => call === 'POST /api/scripts/10/candidates').length, 2);
+    calls.length = 0;
+    const board = await f.run('storyboards', ['--rebuild-storyboards']);
+    assert.equal(board.code, 0, board.output);
+    assert.equal(calls.some(call => call.startsWith('POST') && call.includes('/storyboard-candidates')), true);
+    assert.equal(calls.some(call => call.includes('/storyboard-candidates/') && call.includes('/apply')), true);
   } finally { await f.close(); }
 });

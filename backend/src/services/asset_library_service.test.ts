@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import Fastify from 'fastify';
 import { db, initDb } from '../db/database';
-import { AssetLibraryService } from './asset_library_service';
+import { AssetLibraryService, normalizeExtractedAssets } from './asset_library_service';
 import { exportAssetLibrary, restoreAssetLibrary } from './asset_library_backup';
 import { LLMService } from './llm';
 import { assetLibraryRoutes } from '../routes/asset_library';
@@ -122,4 +122,26 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
       assert.equal(foreign.statusCode, 404);
     } finally { await app.close(); }
   });
+});
+
+test('asset extraction keeps canonical names and drops characters or unknown kinds', () => {
+  const existing = [
+    { kind: 'location' as const, name: '琼明仙域云海' },
+    { kind: 'prop' as const, name: '合欢香' },
+    { kind: 'prop' as const, name: '合欢香炉' },
+  ];
+  const normalized = normalizeExtractedAssets([
+    { kind: '地点', name: '琼明仙域云海', description: '想改成金殿', visual_prompt: 'golden sea' },
+    { kind: '人物', name: '陆嘉静', description: '不应入库', visual_prompt: 'woman' },
+    { kind: 'prop', name: '陆嘉静', description: '人物不是道具', visual_prompt: 'woman' },
+    { kind: '道具', name: '合欢香', description: '未点燃', visual_prompt: 'incense' },
+    { kind: 'prop', name: '新玉简', description: '本章新道具', visual_prompt: 'jade slip' },
+  ], existing, ['陆嘉静']);
+  assert.deepEqual(normalized.map((asset) => [asset.kind, asset.name]), [
+    ['location', '琼明仙域云海'],
+    ['prop', '合欢香'],
+    ['prop', '新玉简'],
+  ]);
+  assert.equal(normalized[0]?.visual_prompt, '');
+  assert.equal(normalized[2]?.visual_prompt, 'jade slip');
 });

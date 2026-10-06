@@ -133,6 +133,34 @@ test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec
   assert.equal(compiled.workflow['4'].inputs.image, 'scene.png');
   assert.equal(compiled.workflow['5'].inputs.image, 'identity.png');
   assert.equal(compiled.workflow['8'].inputs.video, 'motion.mp4');
+  assert.equal(compiled.workflow['10'].inputs.audio_vae[1], 0);
+  assert.equal(compiled.workflow[compiled.workflow['10'].inputs.audio_vae[0]].inputs.vae_name, 'minimax_h3_audio_vae_fp32.safetensors');
+});
+
+test('Official Ref2VA omits the motion clip when the shot has no motion reference', () => {
+  const spec = VideoSpecCompiler.compile({
+    request: {
+      scene_id: 2,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      preset: 'standard_720p_5s',
+      run_loop_closer: false
+    },
+    scene: { id: 2, visual_prompt: 'raise the mirror' },
+    character: { name: 'Lu Jiajing' }
+  });
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: { firstFrameFilename: 'scene.png', characterRefFilenames: ['identity.png'] },
+    seed: 7
+  });
+  assert.equal(compiled.workflow['8'], undefined);
+  assert.equal(compiled.workflow['10'].inputs['ref_videos.ref_video_0'], undefined);
+  assert.equal(compiled.manifest.slots.video_refs, undefined);
+  assert.equal(compiled.workflow[compiled.workflow['10'].inputs.audio_vae[0]].inputs.vae_name, 'minimax_h3_audio_vae_fp32.safetensors');
 });
 
 test('VideoWorkflowCompiler selects Official FL2VA and injects distinct boundary frames', () => {

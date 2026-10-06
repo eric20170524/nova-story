@@ -24,9 +24,20 @@ export function resolveAssetBindings(shot, assets, bound = []) {
       blockers.push(`Ambiguous ${item.kind} name: ${item.name}`);
       return;
     }
-    if (exact.length === 1) {
-      selected.push(exact[0].id);
-      if (bound.length && !bound.some(asset => asset.id === exact[0].id)) blockers.push(`Missing ${item.kind} binding: ${item.name}`);
+    const contained = exact.length ? [] : assets.filter(asset => {
+      const name = normalized(asset.name);
+      return asset.kind === item.kind && name.length >= 2 && normalized(item.name).includes(name);
+    });
+    const longest = contained.reduce((best, asset) => Math.max(best, normalized(asset.name).length), 0);
+    const uniqueContained = contained.filter(asset => normalized(asset.name).length === longest);
+    const resolved = exact.length === 1 ? exact : uniqueContained;
+    if (resolved.length > 1) {
+      blockers.push(`Ambiguous ${item.kind} name: ${item.name}`);
+      return;
+    }
+    if (resolved.length === 1) {
+      selected.push(resolved[0].id);
+      if (bound.length && !bound.some(asset => asset.id === resolved[0].id)) blockers.push(`Missing ${item.kind} binding: ${item.name}`);
       return;
     }
     const manualIndex = manual.findIndex(asset => asset.kind === item.kind);
@@ -109,6 +120,21 @@ const PROJECT_VIDEO_WORKFLOW_IDS = new Set([
   'minimax_h3_multiframe_official_12gb',
   'minimax_h3_hongchao_a2a_12gb',
 ]);
+
+export function coreCharactersReadyForAcceptance(coreNames, characters, shots) {
+  const appearing = new Set();
+  for (const shot of shots || []) {
+    const spec = shotSpec(shot);
+    for (const name of [spec.primary_subject, ...(spec.visible_subjects || [])]) {
+      const key = normalized(name);
+      if (!key) continue;
+      if ([...coreNames].some(core => normalized(core) === key)) appearing.add(key);
+    }
+  }
+  const required = (characters || []).filter(character => appearing.has(normalized(character.name)));
+  const missingRecords = [...appearing].filter(key => !required.some(character => normalized(character.name) === key));
+  return missingRecords.length === 0 && required.every(character => character.avatar_url && character.turnaround_url);
+}
 
 export function readProjectVideoWorkflow(settings) {
   const raw = settings?.video_generation?.workflow_id;
