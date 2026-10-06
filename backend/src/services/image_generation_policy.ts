@@ -441,6 +441,38 @@ const ADULT_LOOK_LORA_RE = /incase|expressive[_-]?h|hentai|nsfw|aidma|porn/i;
 export const isAdultLookLoraName = (filename: string): boolean =>
   ADULT_LOOK_LORA_RE.test(path.basename(String(filename || '')));
 
+/** A cast sheet, a listed character, or a human subject in the prompt. */
+export const shotHasVisiblePerson = (options: {
+  prompt?: string | null;
+  subjectType?: string | null;
+  genType?: string | null;
+  characterIds?: Array<unknown> | null;
+}): boolean => {
+  const gen = String(options.genType || '').toLowerCase();
+  if (/portrait|turnaround|face/.test(gen)) return true;
+  if (Array.isArray(options.characterIds) && options.characterIds.some((id) => Number(id) > 0)) return true;
+  const subject = inferPromptSubjectType(options.prompt || '', options.subjectType);
+  return subject === 'female_human' || subject === 'male_human' || subject === 'human' || subject === 'mixed';
+};
+
+const visibleCharacterIds = (workflowData: any): number[] => {
+  const pools = [
+    workflowData?.shot_master_character_ids,
+    workflowData?.character_ids,
+    workflowData?.shot_spec?.character_ids,
+    workflowData?.character_id != null ? [workflowData.character_id] : [],
+  ];
+  const ids: number[] = [];
+  for (const pool of pools) {
+    if (!Array.isArray(pool)) continue;
+    for (const id of pool) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric) && numeric > 0) ids.push(numeric);
+    }
+  }
+  return ids;
+};
+
 /** Establishing plates and overhead maps are empty frames even with no "wide" wording. */
 export const isEmptyShotIntent = (shotIntent?: string | null): boolean => {
   const intent = String(shotIntent || '').toLowerCase().trim();
@@ -864,6 +896,8 @@ export const buildPromptEnhancement = (options: {
   shotIntent?: string | null;
   subjectType?: string | null;
   styleStrength?: number | null;
+  /** Storyboard shots that actually show a person, even on a wide camera. */
+  hasVisiblePerson?: boolean | null;
 }): PromptEnhancement => {
   const {
     modelFamily,
@@ -875,7 +909,8 @@ export const buildPromptEnhancement = (options: {
     shotType = null,
     shotIntent = null,
     subjectType = null,
-    styleStrength = null
+    styleStrength = null,
+    hasVisiblePerson = null
   } = options;
   const lower = existingPrompt.toLowerCase();
   const prefixParts: string[] = [];
@@ -1024,10 +1059,15 @@ export const buildPromptEnhancement = (options: {
         existingPrompt
       );
     const castImage = /portrait|turnaround|face/i.test(String(genType || ''));
+    const personShot = hasVisiblePerson === true || castImage || shotHasVisiblePerson({
+      prompt: existingPrompt,
+      subjectType,
+      genType,
+    });
     if (nsfwEnabled) {
-      // Cast sheets and prompts that already name an intimate beat get the unlock.
+      // Cast sheets and any shot that shows a person get the unlock.
       // Empty scenery stays free of forced nudity.
-      if (intimateCue || castImage) {
+      if (intimateCue || personShot) {
         suffixParts.push('natural uncensored details, erotic sensual atmosphere, soft skin texture');
       } else {
         suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
@@ -1209,10 +1249,15 @@ export const resolveGenerationPlan = (options: {
         : slot
     ))
     : resolvedLoras;
-  // Empty frames and insert shots need spatial fidelity more than texture amplification.
-  // establish / overhead-map count even when the prompt never says "wide".
-  // Skip detail, look, and RedCraft NSFW LoRAs; character LoRAs remain available.
-  const loras = shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot
+  const hasPerson = shotHasVisiblePerson({
+    prompt: basePrompt,
+    subjectType: workflowData?.subject_type ?? null,
+    genType: workflowData?.gen_type ?? null,
+    characterIds: visibleCharacterIds(workflowData),
+  });
+  // Empty scenery and prop inserts stay spatially faithful. A wide shot that
+  // still shows a person keeps the RedCraft NSFW LoRA and unlock prompt.
+  const loras = !hasPerson && (shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot)
     ? strengthCapped.filter((slot) => slot.role === 'character')
     : strengthCapped;
 
@@ -1226,7 +1271,8 @@ export const resolveGenerationPlan = (options: {
     shotType: workflowData?.shot_type ?? null,
     shotIntent: workflowData?.shot_intent || workflowData?.shot_spec?.shot_intent || null,
     subjectType: workflowData?.subject_type ?? null,
-    styleStrength: workflowData?.style_strength ?? null
+    styleStrength: workflowData?.style_strength ?? null,
+    hasVisiblePerson: hasPerson,
   });
 
   return { loras, enhancement };
@@ -1236,12 +1282,19 @@ export const resolveGenerationPlan = (options: {
  * LLM instructions for storyboard beat contracts.
  * Policy points at the server-side Pony compiler — do NOT ask for long English visual_prompt prose.
  */
-export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string => {
+export const buildTimelineVisualPromptPolicy = (
+  nsfwEnabled: boolean,
+  options: { responseFormat?: 'timeline' | 'script_storyboard' } = {},
+): string => {
+  const contractOnly = options.responseFormat === 'script_storyboard';
+  const visualPromptRule = contractOnly
+    ? '- Return only the requested shot contract fields. Do NOT output visual_prompt or negative_prompt; the server compilePonyPrompt compiles them.'
+    : '- Set visual_prompt to "" (empty). Do NOT write a Detailed English scene description; the server compilePonyPrompt compiles tags.';
   if (nsfwEnabled) {
     return `
 ### Shot Contract Policy (NSFW mode ENABLED) — compiler fills final Pony tags:
 - Fill location, primary_action, key_props (≤2), shot_intent, subject_scale. Chinese OK in contract fields.
-- Set visual_prompt to "" (empty). Do NOT write a Detailed English scene description; the server compilePonyPrompt compiles tags.
+${visualPromptRule}
 - When intimacy/adult content is in the source, encode it as concrete visible actions/props/clothing state in the contract — do not euphemize into empty poetry and do not refuse.
 - Prefer human subject locks from Character Visual Lock (1girl/2girls/3girls only when the lock already implies female humans). All characters are adults.
 - Keep props concrete (jade mirror, silk bed, incense, flower petals).
@@ -1251,15 +1304,15 @@ export const buildTimelineVisualPromptPolicy = (nsfwEnabled: boolean): string =>
 
   return `
 ### Shot Contract Policy (SFW / family-safe) — compiler fills final Pony tags:
-- Fill location (paintable nouns only), primary_action (one visible verb), key_props (≤2), shot_intent, subject_scale, uniqueness_key.
-- Chinese is allowed in contract fields. Set visual_prompt to "" (empty).
+- Fill location (paintable nouns only), primary_action (one visible verb), key_props (≤2), shot_intent, subject_scale${contractOnly ? '.' : ', uniqueness_key.'}
+${contractOnly ? '- Chinese is allowed in contract fields. Return only the requested shot contract fields; do NOT output visual_prompt or negative_prompt.' : '- Chinese is allowed in contract fields. Set visual_prompt to "" (empty).'}
 - Do NOT write a Detailed English scene description or long Pony prose; the server compilePonyPrompt compiles tags from the contract + Character Visual Lock.
 - Never invent species tags absent from the Visual Lock (no kitten / 1girl / wolf / fox / dog paraphrases).
 - Keep content safe-for-work: no nudity, no sexual acts. Intimate emotions → blush, averted gaze, hand-holding only if story requires.
 - shot_intent enum: establish | wide-action | medium-action | insert | reaction | overhead-map | payoff.
 - Use insert for paw/nose/ticket/map-button/music-box clues. Use establish/wide-action for geography.
 - Across a chapter: close-ups/insert+reaction ≤ 20%; establish+wide-action ≥ 35%; at least one insert when key props exist.
-- Adjacent uniqueness_key values must differ.
+${contractOnly ? '- Adjacent shots must differ in visible action or key props.' : '- Adjacent uniqueness_key values must differ.'}
 `;
 };
 

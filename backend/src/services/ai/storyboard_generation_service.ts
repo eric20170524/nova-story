@@ -31,6 +31,8 @@ import {
 } from '../timeline_generation_service';
 import { compilePonyPrompt } from '../pony_prompt_compiler';
 import { sanitizeVisualPrompt } from '../visual_prompt_sanitizer';
+import { buildTimelineVisualPromptPolicy } from '../image_generation_policy';
+import { parseProjectSettings, resolveEffectiveNsfw } from '../project_settings';
 import { compileNegativePrompt } from '../negative_prompt_compiler';
 import {
   assertChapterUniqueness,
@@ -505,6 +507,11 @@ export class StoryboardGenerationService {
     );
 
     // 5. Build prompt
+    const project = await db.get('SELECT settings FROM project WHERE id = ?', script.projectId);
+    const nsfwEnabled = resolveEffectiveNsfw({
+      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
+      projectSettings: parseProjectSettings(project?.settings),
+    });
     const locationNames = new Map(doc.locations.map(location => [location.id, location.name]));
     const propNames = new Map(doc.props.map(prop => [prop.id, prop.name]));
     const libraryAssets = await AssetLibraryService.list(script.projectId);
@@ -540,6 +547,7 @@ ${blocksDesc}`;
       characterProfiles: characterProfiles || '(无特定锁定标签)',
       assetCatalog,
       directorInstructions: params.instructions?.trim() || '遵循剧本，不增加无关地点和道具。',
+      visualPromptPolicy: buildTimelineVisualPromptPolicy(nsfwEnabled, { responseFormat: 'script_storyboard' }),
       scriptContent: scriptScenesSummary,
     });
 
@@ -788,6 +796,8 @@ ${blocksDesc}`;
         total_shots: preparedCandidateShots.length,
         total_duration: totalDuration,
         instructions: params.instructions,
+        nsfw_enabled: nsfwEnabled,
+        visual_prompt_policy_version: 1,
         ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
       },
     });

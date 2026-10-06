@@ -1,0 +1,51 @@
+{
+  "verifiedDate": "2026-10-06",
+  "baseline": "ae1eed0",
+  "database": ":memory:",
+  "provider": "mock",
+  "uniqueProviderPrompts": 1,
+  "modeMatrix": [
+    {
+      "projectMode": "on",
+      "system": false,
+      "expectedEffective": true,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    },
+    {
+      "projectMode": "off",
+      "system": false,
+      "expectedEffective": false,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    },
+    {
+      "projectMode": "inherit",
+      "system": false,
+      "expectedEffective": false,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    },
+    {
+      "projectMode": "on",
+      "system": true,
+      "expectedEffective": true,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    },
+    {
+      "projectMode": "off",
+      "system": true,
+      "expectedEffective": false,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    },
+    {
+      "projectMode": "inherit",
+      "system": true,
+      "expectedEffective": true,
+      "promptSha256": "b5be52388028acac087b16b71328c94cb18df9d32820c42c6c84a7f13b1cd3ed"
+    }
+  ],
+  "findings": {
+    "storyboardModeNotWired": true,
+    "rawVisualPromptField": false,
+    "visiblePrimaryActionPreserved": true
+  },
+  "productionModelCalls": 0
+}

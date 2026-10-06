@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { db } from '../../db/database';
 import { ScriptService } from '../script_service';
 import { ensureSceneVersionBaseline } from '../scene_versions';
+import { SettingsManager } from '../../core/settings_manager';
+import { getProjectImageSettings, type ProjectNsfwMode } from '../project_settings';
 import {
   StoryboardGenerationService,
   StoryboardGenerationError,
@@ -757,4 +759,110 @@ test('extra shots in one scene are merged without dropping block ids, and separa
     script_scene_id: `sc_${index + 1}`, block_ids: [], primary_action: `动作${index}`,
   }));
   assert.equal(compactStoryboardShots(separate, 20).length, 21);
+});
+
+test('storyboard uses project NSFW policy, inherits the system default, and preserves visible actions through adoption', async (t) => {
+  const fixture = await setupTestFixture();
+  let systemNsfwEnabled = false;
+  const initialSettings = JSON.parse((await db.get('SELECT settings FROM project WHERE id=?', fixture.projId)).settings);
+  t.mock.method(SettingsManager, 'loadSettings', () => ({
+    advanced: { nsfw_enabled: systemNsfwEnabled },
+    llm: { model: 'test-model' },
+  }));
+  const visibleAction = '成年陆尘穿着白色长袍，摘下手套并拥抱青檀';
+  const rawShots = [
+    { script_scene_id: 'sc_mode', block_ids: ['b_mode_1'], shot_intent: 'establish', shot_type: 'Wide Shot', location: '山门庭院', primary_action: visibleAction, primary_subject: '陆尘', visible_subjects: ['陆尘', '青檀'], subject_scale: 'small-15-20' },
+    { script_scene_id: 'sc_mode', block_ids: ['b_mode_2'], shot_intent: 'wide-action', shot_type: 'Wide Shot', location: '山门庭院', primary_action: '陆尘沿石阶走向大门', primary_subject: '陆尘', visible_subjects: ['陆尘'], subject_scale: 'medium-20-40' },
+    { script_scene_id: 'sc_mode', block_ids: ['b_mode_3'], shot_intent: 'payoff', shot_type: 'Medium Shot', location: '山门庭院', primary_action: '陆尘推开木门，灯笼亮起', primary_subject: '陆尘', visible_subjects: ['陆尘'], subject_scale: 'medium-20-40' },
+  ];
+  const script = await ScriptService.createOrGetScript(fixture.chapterId, '内容模式回归');
+  const document = createEmptyScriptDocument('内容模式回归');
+  document.locations = [{ id: 'loc_mode', name: '山门庭院', description: '石阶与木门' }];
+  document.scenes = [{
+    id: 'sc_mode', beatIds: [], eventIds: [], sourceParagraphIds: [], locationId: 'loc_mode',
+    interiorExterior: 'exterior', timeOfDay: 'dusk', characterIds: [fixture.charId, fixture.char2Id], propIds: [],
+    blocks: rawShots.map((shot, index) => ({ id: `b_mode_${index + 1}`, type: 'action' as const, text: shot.primary_action })),
+  }];
+  await ScriptService.saveManualScript({ scriptId: script.id, document, expectedRevision: 1 });
+  const confirmed = await ScriptService.confirmScript({ scriptId: script.id, expectedRevision: 2 });
+  const receivedPrompts: string[] = [];
+  const provider: AIProvider = {
+    async generateStructured(prompt, schema) {
+      receivedPrompts.push(prompt);
+      return schema.parse({ shots: rawShots });
+    },
+    async generateText() { throw new Error('Unexpected model call'); },
+    async generateImage() { throw new Error('Unexpected image call'); },
+  };
+  const cases: Array<{ mode?: ProjectNsfwMode; system: boolean; expected: boolean }> = [
+    { mode: 'on', system: false, expected: true },
+    { mode: 'off', system: false, expected: false },
+    { mode: 'inherit', system: false, expected: false },
+    { mode: 'on', system: true, expected: true },
+    { mode: 'off', system: true, expected: false },
+    { mode: 'inherit', system: true, expected: true },
+    { system: false, expected: false },
+    { system: true, expected: true },
+  ];
+  const candidates = [];
+  for (const [index, item] of cases.entries()) {
+    systemNsfwEnabled = item.system;
+    const settings = item.mode
+      ? { ...initialSettings, image_generation: { ...getProjectImageSettings({}), nsfw_mode: item.mode } }
+      : initialSettings;
+    await db.run('UPDATE project SET settings=? WHERE id=?', JSON.stringify(settings), fixture.projId);
+    const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
+      scriptId: script.id, expectedRevision: confirmed.revision, requestKey: `mode-${index}`, provider,
+    });
+    candidates.push(candidate);
+    const prompt = receivedPrompts[index]!;
+    assert.equal(prompt.includes('NSFW mode ENABLED'), item.expected, `project=${item.mode || 'default'}, system=${item.system}`);
+    assert.equal(prompt.includes('SFW / family-safe'), !item.expected);
+    assert.match(prompt, /do not output visual_prompt or negative_prompt/i);
+    assert.doesNotMatch(prompt, /Set visual_prompt to|uniqueness_key/);
+    if (item.expected) assert.match(prompt, /concrete visible actions\/props\/clothing state/);
+    const info = JSON.parse(candidate.generation_info_json!);
+    assert.equal(info.nsfw_enabled, item.expected);
+    assert.equal(info.visual_prompt_policy_version, 1);
+    const firstShot = JSON.parse(candidate.after_json).shots[0];
+    assert.equal(JSON.parse(firstShot.shot_spec).primary_action, visibleAction);
+    assert.ok(firstShot.visual_prompt.includes(visibleAction));
+  }
+  // Only the effective mode changes the policy, not its source (project/system).
+  assert.equal(new Set(receivedPrompts).size, 2);
+  assert.equal(receivedPrompts[0], receivedPrompts[5]);
+  assert.equal(receivedPrompts[1], receivedPrompts[6]);
+
+  // A retry of an existing key must return the original, auditable candidate.
+  const cached = await StoryboardGenerationService.generateStoryboardCandidate({
+    scriptId: script.id, expectedRevision: confirmed.revision, requestKey: 'mode-1', provider,
+  });
+  assert.equal(cached.id, candidates[1]!.id);
+  assert.equal(JSON.parse(cached.generation_info_json!).nsfw_enabled, false);
+  assert.equal(receivedPrompts.length, cases.length);
+
+  // Cap-rewrite requests must retain the effective policy from the first attempt.
+  const retryPrompts: string[] = [];
+  const retryProvider: AIProvider = {
+    ...provider,
+    async generateStructured(prompt, schema) {
+      retryPrompts.push(prompt);
+      return schema.parse({ shots: retryPrompts.length === 1
+        ? Array.from({ length: 21 }, (_, index) => ({ ...rawShots[0], script_scene_id: `over_${index}`, block_ids: [] }))
+        : rawShots });
+    },
+  };
+  await StoryboardGenerationService.generateStoryboardCandidate({
+    scriptId: script.id, expectedRevision: confirmed.revision, requestKey: 'mode-rewrite', provider: retryProvider,
+  });
+  assert.equal(retryPrompts.length, 2);
+  for (const prompt of retryPrompts) assert.match(prompt, /NSFW mode ENABLED/);
+  assert.match(retryPrompts[1]!, /上次输出了 21 个镜头/);
+
+  const adopted = await StoryboardGenerationService.applyStoryboardCandidate({
+    scriptId: script.id, changeId: candidates[0]!.id, expectedRevision: confirmed.revision,
+  });
+  const firstScene = await db.get('SELECT visual_prompt, shot_spec FROM scene WHERE id=?', adopted.scene_ids[0]);
+  assert.ok(firstScene.visual_prompt.includes(visibleAction));
+  assert.equal(JSON.parse(firstScene.shot_spec).primary_action, visibleAction);
 });

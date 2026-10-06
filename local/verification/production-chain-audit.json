@@ -1,0 +1,177 @@
+{
+  "checkedAt": "2026-10-06T09:32:25.973Z",
+  "purpose": "current defects and manual 720p assembly audit, without model inference",
+  "checks": [
+    {
+      "id": "preset_mismatch",
+      "reproduced": true,
+      "requests": [
+        {
+          "endpoint": "preflight",
+          "preset": "standard_720p_5s"
+        },
+        {
+          "endpoint": "preflight",
+          "preset": "preview_480p_5s"
+        },
+        {
+          "endpoint": "generate",
+          "preset": "preview_480p_5s"
+        }
+      ]
+    },
+    {
+      "id": "missing_bootstrap",
+      "reproduced": true,
+      "calls": [
+        "/api/projects/90713823",
+        "/api/projects/90713823/story-plan"
+      ]
+    },
+    {
+      "id": "obsolete_preflight",
+      "reproduced": true,
+      "sceneIds": [
+        50,
+        51
+      ]
+    },
+    {
+      "id": "acceptance_limits",
+      "reproduced": true,
+      "omittedAudibleBlocks": 2,
+      "omittedScriptScenes": 1,
+      "F15": "PASS",
+      "environmentIdentityCurrent": true,
+      "F13": "FAIL"
+    },
+    {
+      "id": "unknown_frame_count",
+      "reproduced": true
+    },
+    {
+      "id": "synthetic_assembly",
+      "previewBlocked": true,
+      "manual720pPassed": true,
+      "chapterCount": 1,
+      "finalProbe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            "profile": "High",
+            "codec_type": "video",
+            "codec_time_base": "1/48",
+            "codec_tag_string": "avc1",
+            "codec_tag": "0x31637661",
+            "width": 1280,
+            "height": 720,
+            "coded_width": 1280,
+            "coded_height": 720,
+            "closed_captions": 0,
+            "has_b_frames": 2,
+            "sample_aspect_ratio": "1:1",
+            "display_aspect_ratio": "16:9",
+            "pix_fmt": "yuv420p",
+            "level": 31,
+            "chroma_location": "left",
+            "refs": 1,
+            "is_avc": "true",
+            "nal_length_size": "4",
+            "r_frame_rate": "24/1",
+            "avg_frame_rate": "24/1",
+            "time_base": "1/12288",
+            "start_pts": 246,
+            "start_time": "0.020020",
+            "duration_ts": 61440,
+            "duration": "5.000000",
+            "bit_rate": "9059",
+            "bits_per_raw_sample": "8",
+            "nb_frames": "120",
+            "disposition": {
+              "default": 1,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0
+            },
+            "tags": {
+              "language": "und",
+              "handler_name": "VideoHandler"
+            }
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "codec_long_name": "AAC (Advanced Audio Coding)",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_time_base": "1/48000",
+            "codec_tag_string": "mp4a",
+            "codec_tag": "0x6134706d",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bits_per_sample": 0,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 104416,
+            "duration": "2.175333",
+            "bit_rate": "2313",
+            "max_bit_rate": "2313",
+            "nb_frames": "102",
+            "disposition": {
+              "default": 1,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0
+            },
+            "tags": {
+              "language": "und",
+              "handler_name": "SoundHandler"
+            }
+          }
+        ],
+        "format": {
+          "filename": "D:\\StudioProjects\\nova-story\\local\\verification\\chain-audit-YcFxEO\\videos\\chapters-1-1.mp4",
+          "nb_streams": 2,
+          "nb_programs": 0,
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "format_long_name": "QuickTime / MOV",
+          "start_time": "0.000000",
+          "duration": "5.000000",
+          "size": "10064",
+          "bit_rate": "16102",
+          "probe_score": 100,
+          "tags": {
+            "major_brand": "isom",
+            "minor_version": "512",
+            "compatible_brands": "isomiso2avc1mp41",
+            "encoder": "Lavf58.45.100"
+          }
+        }
+      },
+      "limitation": "one synthetic silent shot, not model production or a content-quality acceptance"
+    }
+  ]
+}

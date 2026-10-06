@@ -185,3 +185,19 @@ test('quality score tokens are not compiled into stored visual_prompt', () => {
   );
   assert.doesNotMatch(visual_prompt, /score_9|score_8_up|source_anime/i);
 });
+
+test('visible clothing and actions survive human establish, wide and medium contracts', () => {
+  const action = '成年林穿着蓝色长袍，摘下手套并拥抱同伴';
+  for (const intent of ['establish', 'wide-action', 'medium-action']) {
+    const { visual_prompt } = compilePonyPrompt({
+      shot_intent: intent,
+      location: '庭院',
+      primary_action: action,
+      primary_subject: '林',
+      visible_subjects: ['林'],
+      subject_scale: 'small-15-20',
+    }, [{ name: '林', lock: 'adult woman, black hair, amber eyes' }]);
+    assert.ok(visual_prompt.includes(action), intent);
+    assert.match(visual_prompt, /black hair/);
+  }
+});

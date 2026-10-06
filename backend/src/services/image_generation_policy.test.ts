@@ -7,6 +7,7 @@ import {
   applyPromptEnhancement,
   buildCharacterPromptHeader,
   buildPromptEnhancement,
+  buildTimelineVisualPromptPolicy,
   inferPromptSubjectType,
   inferStyleShotMode,
   isAdultLookLoraName,
@@ -22,6 +23,19 @@ import {
   stripSfwSuppressionFromNegative,
   stripStyleNarrativeTokens
 } from './image_generation_policy';
+
+test('script storyboard policy matches its schema while timeline keeps its existing response fields', () => {
+  for (const nsfwEnabled of [false, true]) {
+    const timeline = buildTimelineVisualPromptPolicy(nsfwEnabled);
+    assert.equal(timeline, buildTimelineVisualPromptPolicy(nsfwEnabled, { responseFormat: 'timeline' }));
+    assert.match(timeline, /Set visual_prompt to ""/);
+    const storyboard = buildTimelineVisualPromptPolicy(nsfwEnabled, { responseFormat: 'script_storyboard' });
+    assert.match(storyboard, /Do NOT output visual_prompt or negative_prompt|do NOT output visual_prompt or negative_prompt/);
+    assert.doesNotMatch(storyboard, /Set visual_prompt to|uniqueness_key/);
+    assert.equal(storyboard.includes('NSFW mode ENABLED'), nsfwEnabled);
+  }
+  assert.match(buildTimelineVisualPromptPolicy(false), /uniqueness_key/);
+});
 
 test('mergeClipPositivePrompt puts scene before framing and quality; dedupes score/source', () => {
   const REAL_TEMPLATE =
@@ -189,6 +203,16 @@ test('RedCraft NSFW unlocks cast sheets without forcing a landscape nude', () =>
   });
   assert.match(portrait.suffix, /natural uncensored details/);
   assert.match(portrait.suffix, /erotic sensual atmosphere/);
+
+  const personShot = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    existingPrompt: '清暮宫玉阶，陆嘉静举起神镜',
+    genType: 'scene',
+    shotType: 'Wide Shot',
+    hasVisiblePerson: true,
+  });
+  assert.match(personShot.suffix, /erotic sensual atmosphere/);
 });
 
 test('style preset injects guofeng boosters for xianxia stories', () => {
@@ -712,6 +736,16 @@ test('RedCraft NSFW plan loads the local Krea2 LoRA and skips it on empty frames
       basePrompt: 'a quiet courtyard at dawn'
     });
     assert.deepEqual(establish.loras, []);
+
+    const personWide = resolveGenerationPlan({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      runtimeSettings,
+      workflowData: { gen_type: 'scene', shot_type: 'Wide Shot', shot_intent: 'wide-action', shot_master_character_ids: [4] },
+      basePrompt: '清暮宫玉阶，陆嘉静举起神镜'
+    });
+    assert.ok(personWide.loras.some((slot) => slot.name === 'Krea2_NSFW_V4.1.safetensors' && slot.role === 'nsfw'));
+    assert.match(personWide.enhancement.suffix, /natural uncensored details/);
 
     const sfw = resolveGenerationPlan({
       modelFamily: 'redcraft_krea2',

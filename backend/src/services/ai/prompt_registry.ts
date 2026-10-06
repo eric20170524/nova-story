@@ -561,6 +561,9 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 {{directorInstructions}}
 location 和 key_props 只能填写资产名称本身，不要添加“场景：”“道具：”等类别前缀。每个镜头只处于一个物理地点；跨地点切换必须拆为不同镜头。
 
+--- 项目画面内容策略 ---
+{{visualPromptPolicy}}
+
 --- 完整分场剧本 ---
 {{scriptContent}}
 
@@ -575,7 +578,7 @@ location 和 key_props 只能填写资产名称本身，不要添加“场景：
      ['establish', 'wide-action', 'medium-action', 'insert', 'reaction', 'overhead-map', 'payoff']
    - shot_type: 景别，如 'Wide Shot', 'Medium Shot', 'Close-up', 'Extreme Close-up'
    - location: 画面地点环境描述（2-240字）
-   - primary_action: 画面核心动作描述（2-240字）
+   - primary_action: 画面核心动作描述（2-240字；按上述内容策略填写源文中可见的动作、服装状态与姿态，不用抽象情绪替代）
    - primary_subject: 焦点主体（角色名或物体）
    - visible_subjects: 画面中可见的主体/角色列表（最多6个）
    - key_props: 关键道具列表（最多2个）
