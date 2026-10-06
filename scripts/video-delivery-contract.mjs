@@ -8,8 +8,9 @@ const frameRate = (stream) => {
 
 /**
  * Accepted narrative clips and locally normalized shot files share this contract:
- * 1280×720, 24 fps, 120 frames, 5 seconds. Audio is required only after the
- * assembler has padded a silent source.
+ * Sources are 1280×720, 24 fps, 120 frames, 5 seconds. Edited shots/chapters
+ * supply their speech-safe duration. Decoded frame count is mandatory;
+ * assembled output must also contain audio.
  */
 export function assertChapterClipReady(probeResult, label, options = {}) {
   if (!probeResult || typeof probeResult !== 'object') throw new Error(`${label} has no media probe`);
@@ -21,13 +22,15 @@ export function assertChapterClipReady(probeResult, label, options = {}) {
     const width = Number(video.width);
     const height = Number(video.height);
     const fps = frameRate(video);
-    const frames = Number(video.nb_frames);
+    const frames = Number(video.nb_read_frames || video.nb_frames);
     if (width !== 1280 || height !== 720) problems.push(`resolution ${width}x${height}, expected 1280x720`);
     if (!Number.isFinite(fps) || Math.abs(fps - 24) > 0.05) problems.push(`fps ${Number.isFinite(fps) ? fps : 'unknown'}, expected 24`);
-    if (Number.isFinite(frames) && frames > 0 && frames !== 120) problems.push(`frames ${frames}, expected 120`);
+    const expectedFrames = Math.round((options.durationSeconds ?? 5) * 24);
+    if (!Number.isInteger(frames) || frames !== expectedFrames) problems.push(`frames ${Number.isFinite(frames) ? frames : 'unknown'}, expected ${expectedFrames}`);
   }
   const duration = Number(probeResult.format?.duration);
-  if (!Number.isFinite(duration) || Math.abs(duration - 5) > 0.2) problems.push(`duration ${Number.isFinite(duration) ? duration : 'unknown'}, expected 5s`);
+  const expectedDuration = options.durationSeconds ?? 5;
+  if (!Number.isFinite(duration) || Math.abs(duration - expectedDuration) > 0.2) problems.push(`duration ${Number.isFinite(duration) ? duration : 'unknown'}, expected ${expectedDuration}s`);
   if (options.requireAudio && !streams.some(stream => stream.codec_type === 'audio')) problems.push('missing audio stream');
   if (problems.length) throw new Error(`${label} failed the delivery contract: ${problems.join('; ')}`);
 }

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-10-06T15:24:49Z",
+  "baseline_commit": "84caf84c841d187ef5c85be6a5f3ea719ba1487d",
+  "scope": "制作链路缺口修复与隔离回归；不代表真实模型产物或人工内容验收",
+  "isolation": {
+    "database": ":memory:",
+    "config_static_data_logs": "local/verification/production-repair-*",
+    "providers": "模拟接口与提供方",
+    "media": "临时色块视频和合成声音，由真实 FFmpeg 解码、混音、字幕封装及合成",
+    "workflow_manifests": "隔离目录内复制仓库内置 video-workflows JSON",
+    "real_project_mutated": false,
+    "real_model_generation_executed": false
+  },
+  "checks": [
+    { "name": "frontend_typecheck", "command": "npm run typecheck", "exit_code": 0 },
+    { "name": "backend_typecheck", "command": "npm run typecheck --workspace backend", "exit_code": 0 },
+    { "name": "backend_regression", "command": "npm test --workspace backend", "passed": 490, "failed": 0, "log": "production-repair-backend-tests.log" },
+    { "name": "frontend_regression", "command": "npm run test:agent-ui", "passed": 42, "failed": 0, "log": "production-repair-ui-tests.log" },
+    { "name": "production_regression", "command": "npm run test:production", "passed": 30, "failed": 0, "log": "production-repair-production-tests.log" },
+    { "name": "application_build", "command": "npm run build", "exit_code": 0, "log": "production-repair-frontend-build.log" },
+    { "name": "diff_whitespace", "command": "git diff --check", "exit_code": 0 }
+  ],
+  "acceptance": {
+    "two_chapter_fixture": "F01-F17 全部通过，测试审核记录只代表夹具流程",
+    "long_speech": "超过 80 字原文完整送至配音接口；超过 5 秒配音延长剪辑，完整字幕分页并封装",
+    "speech_validation": "空音频、无法解码音频、不可听音量、失效剧本、请求冲突和中断均拒绝",
+    "sound_coverage": "模型遗漏音效块会补入对应分场，篡改候选或旧分镜遗漏音效块会拒绝；H3/Grok 编入音效提示；需要音效的源片无音轨时拒绝合成",
+    "review_gates": "图片签字、镜头视频采纳、章节签字均阻止提前放行，稳定恢复不重复主生成",
+    "source_invalidation": "配置或关键帧字节变化使 F16 失败；配音文件变化使 F17 失败",
+    "archive": "状态冲突、运行中任务和非法媒体角色受保护，重复归档幂等且文件保留"
+  },
+  "remaining_manual_checks": [
+    "真实 Qwen、ComfyUI、TTS 提供方运行及实际素材质量",
+    "完整正确朗读、指定音效、原生人声重叠、动作和角色连续性、口型",
+    "字幕分页使用源块时长比例，尚非逐字强制对齐；长台词目前以末帧冻结延长"
+  ],
+  "historical_diagnostic": "production-chain-audit.test.mjs 断言旧缺口存在，保留作为历史证据，不再作为当前验收条件"
+}

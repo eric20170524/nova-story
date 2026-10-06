@@ -195,7 +195,8 @@ export type MediaAssetRole =
   | 'loop_master'
   | 'narrative_final'
   | 'poster'
-  | 'qa_report';
+  | 'qa_report'
+  | 'script_speech';
 
 export interface MediaAsset {
   id: number;
@@ -204,7 +205,7 @@ export interface MediaAsset {
   scene_version?: number | null;
   character_id?: number | null;
   parent_asset_id?: number | null;
-  media_type: 'image' | 'video' | 'json';
+  media_type: 'image' | 'video' | 'audio' | 'json';
   role: MediaAssetRole;
   profile?: VideoProfile | null;
   status: 'draft' | 'review_required' | 'ready' | 'rejected' | 'archived';
@@ -282,6 +283,7 @@ export interface VideoCapabilities {
 }
 
 export interface VideoPreflightResponse {
+  input_signature?: string;
   ready: boolean;
   profile: VideoProfile;
   preset: VideoPreset;
@@ -302,6 +304,8 @@ export interface VideoPreflightResponse {
 }
 
 export interface VideoGenerationRequest {
+  request_key?: string;
+  expected_input_signature?: string;
   scene_id: number;
   scene_version?: number;
   profile: VideoProfile;

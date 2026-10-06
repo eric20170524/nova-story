@@ -47,7 +47,8 @@ export const MediaAssetRoleSchema = z.enum([
   'loop_master',
   'narrative_final',
   'poster',
-  'qa_report'
+  'qa_report',
+  'script_speech'
 ]);
 export type MediaAssetRole = z.infer<typeof MediaAssetRoleSchema>;
 
@@ -61,7 +62,7 @@ export const MediaAssetSchema = z.object({
   scene_version: z.number().int().nullable().optional(),
   character_id: z.number().int().nullable().optional(),
   parent_asset_id: z.number().int().nullable().optional(),
-  media_type: z.enum(['image', 'video', 'json']),
+  media_type: z.enum(['image', 'video', 'audio', 'json']),
   role: MediaAssetRoleSchema,
   profile: VideoProfileSchema.nullable().optional(),
   status: MediaAssetStatusSchema.default('ready'),
@@ -79,6 +80,7 @@ export const MediaAssetSchema = z.object({
 export type MediaAsset = z.infer<typeof MediaAssetSchema>;
 
 const VideoRequestBaseSchema = z.object({
+  expected_input_signature: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   request_key: z.string().min(1).max(200).optional(),
   scene_id: z.number().int().positive(),
   scene_version: z.number().int().positive().default(1),
@@ -198,7 +200,7 @@ export const VideoPreflightRequestSchema = VideoRequestBaseSchema.superRefine(re
 export type VideoPreflightRequest = z.infer<typeof VideoPreflightRequestSchema>;
 
 export const VideoGenerationRequestSchema = VideoRequestBaseSchema.superRefine(refineVideoStrategy);
-export type VideoGenerationRequest = z.infer<typeof VideoGenerationRequestSchema>;
+export type VideoGenerationRequest = z.infer<typeof VideoGenerationRequestSchema> & { input_signature?: string };
 
 export const VideoSpecOutputContractSchema = z.object({
   width: z.number().int().positive(),
@@ -285,6 +287,7 @@ export const VideoCapabilitiesSchema = z.object({
 export type VideoCapabilities = z.infer<typeof VideoCapabilitiesSchema>;
 
 export const VideoPreflightResponseSchema = z.object({
+  input_signature: z.string().optional(),
   ready: z.boolean(),
   profile: VideoProfileSchema,
   preset: VideoPresetSchema,

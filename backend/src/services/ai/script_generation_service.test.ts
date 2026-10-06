@@ -877,6 +877,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.match(anchoredDoc.scenes[1].blocks.map((block: { text: string }) => block.text).join('\n'), /长老质疑与碎石打脸/);
     assert.equal(anchoredDoc.scenes[1].eventIds.includes('ev_2'), true);
     assert.equal(anchoredDoc.scenes[0].eventIds.includes('ev_2'), false);
+    assert.ok(anchored.generation_info_json);
     assert.deepEqual(JSON.parse(anchored.generation_info_json).anchoredEventIds, ['ev_1', 'ev_2']);
 
     // Verify prompt included the source paragraph content

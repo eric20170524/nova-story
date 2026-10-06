@@ -78,7 +78,7 @@ export const RawStoryboardShotSchema = z.object({
   subject_scale: SubjectScaleSchema.optional(),
   camera_movement: z.string().optional().default('Static'),
   camera_angle: z.string().optional().default('Eye-level'),
-  duration: z.number().positive().optional().default(3.0),
+  duration: z.number().positive().optional().default(5.0),
   must_not: z.array(z.string().trim().min(1).max(120)).optional().default([]),
 });
 
@@ -149,7 +149,7 @@ export function attachMissingAudibleBlocks(
     const sceneShots = shots.filter((shot) => shot.script_scene_id === scene.id);
     if (!sceneShots.length) continue;
     scene.blocks.forEach((block, blockIndex) => {
-      if ((block.type !== 'dialogue' && block.type !== 'voiceover') || allocated.has(block.id)) return;
+      if (!['dialogue', 'voiceover', 'sound'].includes(block.type) || allocated.has(block.id)) return;
       let target = sceneShots[0]!;
       let insertAt = 0;
       for (const shot of sceneShots) {
@@ -366,6 +366,13 @@ function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<Ra
         `遗漏对白或画外音内容块: [${missingAudibleBlockIds.join(', ')}]`,
         400
       );
+    }
+
+    const missingSoundBlockIds = doc.scenes.flatMap(scene => scene.blocks)
+      .filter(block => block.type === 'sound' && !allocatedBlockIds.has(block.id))
+      .map(block => block.id);
+    if (missingSoundBlockIds.length) {
+      throw new StoryboardGenerationError(`遗漏音效内容块: [${missingSoundBlockIds.join(', ')}]`, 400);
     }
 
     // Check strict relative order of audible blocks in each scene
@@ -702,7 +709,7 @@ ${blocksDesc}`;
         audio_prompt,
         dialogue,
         narration,
-        duration: shot.duration || 3.0,
+        duration: shot.duration || 5.0,
         shot_type: shot.shot_type || 'Medium Shot',
         camera_movement: shot.camera_movement || 'Static',
         camera_angle: shot.camera_angle || 'Eye-level',
@@ -1014,7 +1021,7 @@ ${blocksDesc}`;
           shot.audio_prompt || '',
           shot.dialogue || '',
           shot.narration || '',
-          shot.duration || 3.0,
+          shot.duration || 5.0,
           shot.shot_type || '',
           shot.camera_movement || '',
           shot.camera_angle || '',

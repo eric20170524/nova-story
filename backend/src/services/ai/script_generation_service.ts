@@ -189,7 +189,7 @@ function spokenBlock(
   block: { type: string; characterName?: string | null; text: string; delivery?: string | null },
   projectCharacters: Array<{ id: number; name: string }>,
   unknownMessage: (name: string) => string,
-): { type: 'dialogue' | 'voiceover'; characterId: number | null; text: string; delivery?: string } {
+): Omit<Extract<ScriptBlock, { type: 'dialogue' }>, 'id'> | Omit<Extract<ScriptBlock, { type: 'voiceover' }>, 'id'> {
   const charName = (block.characterName || '').trim();
   const narration = block.type === 'voiceover' || isNarratorLabel(charName);
   if (!charName || isNarratorLabel(charName)) {
@@ -664,13 +664,7 @@ export class ScriptGenerationService {
               `未知角色: 第 ${sIdx + 1} 场模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。请先在角色中心建立该角色档案。`
             );
             if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
-            sceneBlocks.push({
-              id: blockId,
-              type: spoken.type,
-              characterId: spoken.characterId,
-              text: spoken.text,
-              ...(spoken.delivery ? { delivery: spoken.delivery } : {}),
-            });
+            sceneBlocks.push({ id: blockId, ...spoken });
           } else if (b.type === 'sound') {
             sceneBlocks.push({ id: blockId, type: 'sound', text: b.text.trim() });
           }
@@ -898,13 +892,7 @@ export class ScriptGenerationService {
           `未知角色: 改写分场中模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。`
         );
         if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
-        sceneBlocks.push({
-          id: blockId,
-          type: spoken.type,
-          characterId: spoken.characterId,
-          text: spoken.text,
-          ...(spoken.delivery ? { delivery: spoken.delivery } : {}),
-        });
+        sceneBlocks.push({ id: blockId, ...spoken });
       } else if (b.type === 'sound') {
         sceneBlocks.push({
           id: blockId,

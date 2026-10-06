@@ -15,6 +15,13 @@ test('Grok narrative prompts preserve the screenplay speech and sound', () => {
   assert.match(silent.positive_prompt, /no invented dialogue or narration/);
 });
 
+test('H3 narrative prompts carry source sound effects while formal speech remains a separate track', () => {
+  const spec = VideoSpecCompiler.compile({ request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false }, scene: { id: 64, dialogue: '完整对白', audio_prompt: '远处钟声' } });
+  assert.match(spec.positive_prompt, /Sound: 远处钟声/);
+  assert.match(spec.positive_prompt, /no invented dialogue or narration/);
+  assert.doesNotMatch(spec.positive_prompt, /verbatim/);
+});
+
 test('video identity uses stable cast appearance instead of later-chapter narrative status', () => {
   const spec = VideoSpecCompiler.compile({
     request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'grok_imagine_browser',

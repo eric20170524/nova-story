@@ -1,0 +1,77 @@
+import '../test_setup';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import Fastify from 'fastify';
+import { db, initDb } from '../db/database';
+import { ScriptService } from './script_service';
+import { TtsService } from './tts_service';
+import { ScriptAudioService } from './script_audio_service';
+import { MediaAssetService } from './video/media_asset_service';
+import { SettingsManager } from '../core/settings_manager';
+import { ttsRoutes } from '../routes/tts';
+import { getGeneratedDirectory } from '../core/paths';
+
+test('formal speech preserves long source text, persists media and replays once with stale-source and failure guards', async () => {
+  await initDb();
+  await db.run("INSERT INTO project (id, title) VALUES (930001, 'Audio isolated test')");
+  const text = '这是必须完整朗读的旁白。'.repeat(30);
+  const fixtureFile = path.join(getGeneratedDirectory(), 'formal-audio-fixture.mp3');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=400:sample_rate=48000', '-t', '0.3', fixtureFile]);
+  const audio = fs.readFileSync(fixtureFile);
+  let responseAudio = audio, sourceDrifts = false;
+  let revision = 2, changed = false, failed = false, calls = 0;
+  const originalScript = ScriptService.getScriptById, originalFetch = globalThis.fetch, originalSettings = SettingsManager.loadSettings;
+  ScriptService.getScriptById = async () => ({ id: 31, projectId: 930001, revision, status: 'confirmed', freshness: { sourceChanged: changed }, document: { scenes: [{ blocks: [{ id: 'v1', type: 'voiceover', characterId: null, text }] }] } } as any);
+  SettingsManager.loadSettings = () => ({ tts: { enabled: true, base_url: 'http://127.0.0.1:8765' } } as any);
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith('/api/voices')) return new Response(JSON.stringify([{ id: 'QF1', name: '测试', tier: 'light' }]), { headers: { 'Content-Type': 'application/json' } });
+    assert.ok(String(url).endsWith('/v1/audio/speech')); calls++;
+    assert.equal(JSON.parse(String(options?.body)).input, text);
+    assert.equal(options?.redirect, 'error');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    if (sourceDrifts) revision++;
+    return new Response(failed ? 'failed' : responseAudio, { status: failed ? 503 : 200 });
+  };
+  const input = { script_id: 31, expected_revision: 2, block_id: 'v1', voice_id: 'QF1', request_key: 'formal-audio-test-1' };
+  const app = Fastify(); await app.register(ttsRoutes, { prefix: '/api/tts' });
+  try {
+    const [a, b] = await Promise.all([ScriptAudioService.render(input), ScriptAudioService.render(input)]);
+    assert.equal(a.asset.id, b.asset.id); assert.equal(calls, 1);
+    assert.equal(a.source.text, text); assert.equal(a.asset.media_type, 'audio'); assert.equal(a.asset.role, 'script_speech');
+    assert.equal((await ScriptAudioService.render(input)).asset.id, a.asset.id); assert.equal(calls, 1);
+    const file = MediaAssetService.resolveSafePath(a.asset.url);
+    fs.writeFileSync(file, 'changed-by-test');
+    await assert.rejects(() => ScriptAudioService.render(input), (error: any) => error.code === 'AUDIO_FILE_CHANGED');
+    revision = 3;
+    await assert.rejects(() => ScriptAudioService.render(input), (error: any) => error.code === 'SCRIPT_SOURCE_CHANGED');
+    await assert.rejects(() => ScriptAudioService.render({ ...input, expected_revision: 3 }), (error: any) => error.code === 'AUDIO_KEY_CONFLICT');
+    changed = true;
+    assert.equal((await app.inject({ method: 'POST', url: '/api/tts/render-block', payload: { ...input, expected_revision: 3, request_key: 'source-changed' } })).statusCode, 409);
+    changed = false; failed = true;
+    const retry = { ...input, expected_revision: 3, request_key: 'formal-audio-failure' };
+    await assert.rejects(() => ScriptAudioService.render(retry), (error: any) => error.code === 'TTS_UNAVAILABLE');
+    await assert.rejects(() => ScriptAudioService.render(retry), (error: any) => error.code === 'AUDIO_FAILED');
+    failed = false;
+    const route = await app.inject({ method: 'POST', url: '/api/tts/render-block', payload: { ...retry, request_key: 'formal-audio-retry' } });
+    assert.equal(route.statusCode, 200); assert.equal(route.json().asset.status, 'ready');
+    sourceDrifts = true;
+    await assert.rejects(() => ScriptAudioService.render({ ...retry, request_key: 'source-drift-during-speech' }), (error: any) => error.code === 'SCRIPT_SOURCE_CHANGED');
+    sourceDrifts = false; revision = 3;
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono', '-t', '0.3', fixtureFile]);
+    responseAudio = fs.readFileSync(fixtureFile);
+    await assert.rejects(() => ScriptAudioService.render({ ...retry, request_key: 'silent-speech' }), (error: any) => error.code === 'AUDIO_SILENT');
+    responseAudio = Buffer.from('invalid audio response');
+    await assert.rejects(() => ScriptAudioService.render({ ...retry, request_key: 'invalid-speech' }), (error: any) => error.code === 'AUDIO_INVALID');
+    assert.equal((await app.inject({ method: 'POST', url: '/api/tts/render-block', payload: { ...input, block_id: '' } })).statusCode, 400);
+    await assert.rejects(() => TtsService.preview({ voice_id: 'QF1', text }), (error: any) => error.code === 'INVALID_PREVIEW_TEXT');
+    await db.run("INSERT INTO media_asset (project_id, media_type, role, status, url, metadata_json) VALUES (930001, 'audio', 'script_speech', 'draft', '/static/orphan.mp3', '{\"request_key\":\"orphan\"}')");
+    await ScriptAudioService.markInterruptedRequests();
+    const orphan = await db.get("SELECT status, metadata_json FROM media_asset WHERE url = '/static/orphan.mp3'");
+    assert.equal(orphan.status, 'rejected'); assert.equal(JSON.parse(orphan.metadata_json).interrupted, 1);
+  } finally {
+    await app.close(); fs.unlinkSync(fixtureFile); ScriptService.getScriptById = originalScript; globalThis.fetch = originalFetch; SettingsManager.loadSettings = originalSettings;
+  }
+});

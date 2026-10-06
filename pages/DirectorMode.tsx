@@ -973,10 +973,11 @@ export const DirectorMode: React.FC = () => {
 
     try {
       const preflight = await api.preflightVideo(request);
-      if (!preflight.ready && preflight.blockers && preflight.blockers.length > 0) {
-        showToast(`前置检查未通过: ${preflight.blockers.join('; ')}`, 'error');
+      if (!preflight.ready) {
+        showToast(`前置检查未通过: ${(preflight.blockers || []).join('; ') || '请刷新输入并重试'}`, 'error');
         return;
       }
+      request.expected_input_signature = preflight.input_signature;
       if (options.batchRun && stopBatchVideoRef.current) {
         return;
       }
@@ -1216,6 +1217,14 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
+  const handleArchiveVideoAsset = async (assetId: number, expectedStatus: string) => {
+    try {
+      const asset = await api.archiveVideoAsset(assetId, expectedStatus);
+      if (asset.scene_id) await loadSceneMedia(asset.scene_id);
+      showToast('候选已归档，视频文件已保留', 'success');
+    } catch (err: any) { showToast(err.message || '归档失败，请刷新后重试', 'error'); }
+  };
+
   const handleReprocessVideoAsset = async (assetId: number) => {
     try {
       await api.reprocessVideoAsset(assetId, runLoopCloser);
@@ -1255,6 +1264,7 @@ export const DirectorMode: React.FC = () => {
         projectVideoWorkflowId={projectVideoWorkflowId}
         onGenerateVideo={handleGenerateVideo}
         onPromoteVideoAsset={handlePromoteVideoAsset}
+        onArchiveVideoAsset={handleArchiveVideoAsset}
         onReprocessVideoAsset={handleReprocessVideoAsset}
         onCancelVideoTask={handleCancelVideoTask}
       />

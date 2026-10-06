@@ -278,6 +278,13 @@ test('Comprehensive /api/videos route verification', async () => {
   });
   assert.equal(preflightFallbackRes.statusCode, 200);
   assert.equal(JSON.parse(preflightFallbackRes.body).ready, true);
+  const currentSignature = preflightFallbackRes.json().input_signature;
+  assert.match(currentSignature, /^[a-f0-9]{64}$/);
+  await db.run("UPDATE scene SET visual_prompt = 'changed source prompt' WHERE id = 9991");
+  const changedSourceFlight = await app.inject({ method: 'POST', url: '/api/videos/preflight', payload: { scene_id: 9991, profile: 'narrative_clip', expected_input_signature: currentSignature } });
+  assert.equal(changedSourceFlight.json().ready, false);
+  assert.ok(changedSourceFlight.json().blockers.some((item: string) => item.includes('inputs changed')));
+  await db.run("UPDATE scene SET visual_prompt = 'Ice sword cold aura' WHERE id = 9991");
 
   const preflightNonExistentScene = await app.inject({
     method: 'POST', url: '/api/videos/preflight',
@@ -374,6 +381,20 @@ test('Comprehensive /api/videos route verification', async () => {
 
   const rejectMotionPromote = await app.inject({ method: 'POST', url: `/api/videos/assets/${motionAsset.id}/promote` });
   assert.equal(rejectMotionPromote.statusCode, 400);
+
+  // Archive is a guarded lifecycle transition; media bytes remain available.
+  const archiveUrl = `/api/videos/assets/${narrativeFinalAsset.id}/archive`;
+  assert.equal((await app.inject({ method: 'POST', url: archiveUrl, payload: { expected_status: 'draft' } })).statusCode, 409);
+  await db.run("INSERT INTO generation_task (task_id, scene_id, kind, status) VALUES ('archive-active-test', 9991, 'video', 'processing')");
+  assert.equal((await app.inject({ method: 'POST', url: archiveUrl, payload: { expected_status: 'ready' } })).statusCode, 409);
+  await db.run("DELETE FROM generation_task WHERE task_id = 'archive-active-test'");
+  const bytesBeforeArchive = fs.readFileSync(narrativeFinalPath);
+  const archived = await app.inject({ method: 'POST', url: archiveUrl, payload: { expected_status: 'ready' } });
+  assert.equal(archived.statusCode, 200); assert.equal(archived.json().status, 'archived');
+  assert.deepEqual(fs.readFileSync(narrativeFinalPath), bytesBeforeArchive);
+  assert.equal((await app.inject({ method: 'POST', url: archiveUrl, payload: { expected_status: 'ready' } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/videos/assets/${narrativeFinalAsset.id}/promote` })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/videos/assets/${motionAsset.id}/archive`, payload: { expected_status: 'ready' } })).statusCode, 409);
 
   // 8. Reprocess rejects missing/non-video source assets. Valid immutable reprocess
   // is covered by MediaAssetService/LoopCloser tests with actual ffmpeg fixtures.

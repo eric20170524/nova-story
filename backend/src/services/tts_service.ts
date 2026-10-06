@@ -366,6 +366,13 @@ export class TtsService {
     }
 
     static async preview(options: TtsPreviewOptions): Promise<TtsPreviewResult> {
+        const text = options?.text ?? '这是这个角色的声音。';
+        if (typeof text !== 'string' || !text.trim() || [...text.trim()].length > 80) throw new TtsServiceError('INVALID_PREVIEW_TEXT', 'Preview text must contain 1 to 80 characters', 400);
+        return this.synthesize({ ...options, text });
+    }
+
+    /** Production speech uses the complete source block, never the preview limit. */
+    static async synthesize(options: TtsPreviewOptions): Promise<TtsPreviewResult> {
         if (!options || typeof options !== 'object') {
             throw new TtsServiceError('INVALID_VOICE_ID', 'voice_id is required', 400);
         }
@@ -385,8 +392,8 @@ export class TtsService {
         if (trimmedText.length === 0) {
             throw new TtsServiceError('INVALID_PREVIEW_TEXT', 'Preview text cannot be empty', 400);
         }
-        if ([...trimmedText].length > 80) {
-            throw new TtsServiceError('INVALID_PREVIEW_TEXT', 'Preview text exceeds maximum length of 80 characters', 400);
+        if ([...trimmedText].length > 20000) {
+            throw new TtsServiceError('INVALID_SPEECH_TEXT', 'Speech block exceeds maximum length of 20000 characters; split the source script block', 400);
         }
 
         const settings = SettingsManager.loadSettings();
@@ -479,6 +486,7 @@ export class TtsService {
                 throw new TtsServiceError('TTS_TIMEOUT', 'TTS preview request timed out', 504);
             }
             const buffer = Buffer.concat(chunks, totalBytes);
+            if (!buffer.length) throw new TtsServiceError('TTS_UNAVAILABLE', 'TTS returned empty audio', 503);
             completed = true;
 
             return {

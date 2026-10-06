@@ -347,6 +347,14 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     return { ok, task_id };
   });
 
+  fastify.post('/assets/:asset_id/archive', async (request, reply) => {
+    const assetId = Number((request.params as { asset_id: string }).asset_id);
+    const expected = (request.body as { expected_status?: string } | null)?.expected_status;
+    if (!Number.isSafeInteger(assetId) || assetId <= 0 || !expected || !['ready', 'draft', 'review_required', 'rejected', 'archived'].includes(expected)) return reply.status(400).send({ error: 'Asset ID and expected_status are required' });
+    try { return await MediaAssetService.archiveAsset(assetId, expected); }
+    catch (err: any) { return reply.status(409).send({ error: err.message || String(err) }); }
+  });
+
   fastify.post('/assets/:asset_id/promote', async (request, reply) => {
     const { asset_id } = request.params as { asset_id: string };
     try {

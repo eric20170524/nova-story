@@ -528,6 +528,21 @@ test('Track 5 S3: 剧本到分镜的安全交接与门禁', async (t) => {
       provider: mockProvider,
     });
 
+    const repairedPayload = JSON.parse(candidate.after_json);
+    assert.equal(repairedPayload.shots[0].audio_prompt, '呼啸的凛冽狂风声');
+    assert.equal(repairedPayload.shots[1].audio_prompt, '轰隆沉闷的地脉震动声');
+    const omittedSound = structuredClone(repairedPayload);
+    const omittedShot = omittedSound.shots[0];
+    omittedShot.block_ids = omittedShot.block_ids.filter((id: string) => id !== 'blk_1_snd');
+    omittedShot.audio_prompt = '';
+    omittedShot.source.block_ids = omittedShot.block_ids;
+    const omittedSpec = JSON.parse(omittedShot.shot_spec);
+    omittedSpec.source.block_ids = omittedShot.block_ids;
+    omittedShot.shot_spec = JSON.stringify(omittedSpec);
+    await db.run('UPDATE script_change SET after_json=? WHERE id=?', JSON.stringify(omittedSound), candidate.id);
+    await assert.rejects(StoryboardGenerationService.applyStoryboardCandidate({ scriptId: script.id, changeId: candidate.id, expectedRevision: 3 }), /遗漏音效内容块/);
+    await db.run('UPDATE script_change SET after_json=? WHERE id=?', candidate.after_json, candidate.id);
+
     // Verify initial timeline is empty
     const countBefore = await db.get(
       'SELECT COUNT(*) as n FROM scene WHERE chapter_id = ?',

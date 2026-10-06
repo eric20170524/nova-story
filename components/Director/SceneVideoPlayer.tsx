@@ -43,6 +43,7 @@ interface SceneVideoPlayerProps {
   taskState?: VideoTaskState;
   onGenerateVideo?: (options?: any) => void;
   onPromoteAsset?: (assetId: number) => void;
+  onArchiveAsset?: (assetId: number, expectedStatus: string) => void;
   onReprocessAsset?: (assetId: number) => void;
   onCancelTask?: (taskId: string) => void;
 }
@@ -200,6 +201,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   taskState,
   onGenerateVideo,
   onPromoteAsset,
+  onArchiveAsset,
   onReprocessAsset,
   onCancelTask
 }) => {
@@ -1046,6 +1048,9 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       </div>
 
       <div className="p-2.5 bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between gap-1.5 text-xs transition-colors">
+        {activeAsset && ['narrative_final', 'loop_master'].includes(activeAsset.role) && activeAsset.status !== 'archived' && onArchiveAsset && (
+          <button type="button" onClick={() => onArchiveAsset(activeAsset.id, activeAsset.status)} className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300" title="保留视频文件和记录，取消此候选的当前使用状态">归档候选</button>
+        )}
         {canPromote && onPromoteAsset && activeAsset && (
           <button
             type="button"

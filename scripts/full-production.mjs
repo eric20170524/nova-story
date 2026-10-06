@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, coreCharactersReadyForAcceptance } from './production-references.mjs';
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, subtitles, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -27,7 +28,9 @@ const rebuildScripts = args.includes('--rebuild-scripts');
 const rebuildAssets = args.includes('--rebuild-assets');
 const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts;
 const assetScopeArg = option('asset-scope', null);
-const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'video-preflight', 'videos', 'assemble', 'verify'];
+const selectedChapterId = option('chapter-id', null);
+const narratorVoice = option('narrator-voice', null);
+const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'review-images', 'review-chapter', 'audio', 'video-preflight', 'videos', 'assemble', 'verify'];
 if (!projectArg || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 200 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project, --chapter-limit or --stage');
 fs.mkdirSync(directory, { recursive: true });
 const lockFile = path.join(directory, '.production.lock');
@@ -77,7 +80,10 @@ async function request(url, method = 'GET', body) {
   if (body?.request_key) {
     const requestId = hash(`${url}:${body.request_key}`);
     state.requests ||= {};
-    if (state.requests[requestId]) body = state.requests[requestId];
+    if (state.requests[requestId]) {
+      if (JSON.stringify(body) !== JSON.stringify(state.requests[requestId])) throw new Error(`Request key parameters changed: ${url}`);
+      body = state.requests[requestId];
+    }
     else { state.requests[requestId] = body; save(); }
   }
   const response = await fetch(`${base}/api${url}`, {
@@ -86,7 +92,10 @@ async function request(url, method = 'GET', body) {
   });
   const text = await response.text();
   let result; try { result = JSON.parse(text); } catch { throw new Error(`${url}: non-JSON response (${response.status})`); }
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status} ${JSON.stringify(result)}`);
+  if (!response.ok) {
+    const error = new Error(`${url}: HTTP ${response.status} ${JSON.stringify(result)}`);
+    error.status = response.status; error.code = result.code; throw error;
+  }
   return result;
 }
 async function step(name, work) {
@@ -129,6 +138,15 @@ async function waitTask(taskId, video = false) {
   throw new Error(`Task ${taskId} is still running; preserve its ID and resume later`);
 }
 async function generateImage(name, start) {
+  const completed = state.steps[name];
+  if (completed?.status === 'completed') {
+    let valid = false;
+    try { const digest = fileHash(localMedia(completed.result.image_url)); valid = !completed.result.artifact_sha256 || completed.result.artifact_sha256 === digest; } catch {}
+    if (!valid) {
+      if (!retryFailed) throw new Error(`${name}: cached image is missing or changed; inspect and use --retry-failed to generate a replacement`);
+      delete state.steps[name]; delete state.steps[`${name}:submit`]; state.imageAttempts ||= {}; state.imageAttempts[name] = (state.imageAttempts[name] || 0) + 1; save();
+    }
+  }
   return step(name, async () => {
     const cached = state.steps[`${name}:submit`]?.result;
     if (cached && retryFailed) {
@@ -138,7 +156,8 @@ async function generateImage(name, start) {
       }
     }
     const task = await step(`${name}:submit`, () => start(key(`${name}:attempt:${state.imageAttempts?.[name] || 0}`)));
-    return waitTask(task.task_id);
+    const result = await waitTask(task.task_id);
+    return { ...result, artifact_sha256: fileHash(localMedia(result.image_url)) };
   });
 }
 async function applyPlanCandidate(name, body) {
@@ -229,6 +248,7 @@ async function preflight() {
   }
   write('preflight.json', evidence);
   const blockers = checks.flatMap((result, i) => result.status === 'rejected' ? [`${names[i]}: ${result.reason.message}`] : []);
+  for (const binary of ['ffmpeg', 'ffprobe']) { try { command(binary, ['-version']); } catch (error) { blockers.push(error.message); } }
   blockers.push(...providerBlockers(settings));
   if (evidence.video?.video_generation_enabled !== true) blockers.push(...(evidence.video?.missing_components || ['Video unavailable']));
   if (activeVideoWorkflow === 'grok_imagine_browser') {
@@ -247,7 +267,12 @@ async function preflight() {
 }
 async function text() {
   const project = await request(`/projects/${projectId}`);
-  const existingPlan = await plan();
+  let existingPlan;
+  try { existingPlan = await plan(); }
+  catch (error) {
+    if (error.status !== 404 || error.code !== 'PLAN_NOT_FOUND') throw error;
+    existingPlan = await request(`/projects/${projectId}/story-plan/bootstrap`, 'POST', {});
+  }
   const canonicalNames = existingPlan.document.blueprint?.characters?.map(c => c.name).filter(Boolean) || [];
   brief = [
     `项目书名：《${project.title}》。必须准确使用该书名，不得用“沿用当前项目书名”等占位语。项目说明：${project.description || '无'}。`,
@@ -288,15 +313,15 @@ async function text() {
         project_id: projectId, chapter_id: chapter.id, instructions: `${brief}\n按本章规划完成完整正文：${chapter.title}\n${chapter.summary}`, target_word_count: chapter.target_word_count || 1600, apply: false,
       }));
       if ((draft.content.match(/[\p{L}\p{N}]/gu) || []).length < (chapter.target_word_count || 1600) * 0.8) throw new Error(`Chapter ${i + 1} draft is below 80% of its target; inspect before accepting`);
-      await step(`chapter-${i + 1}:save`, () => request(`/chapters/${chapter.id}`, 'PATCH', { content: draft.content }));
+      await request(`/chapters/${chapter.id}`, 'PATCH', { content: draft.content });
     }
     const latest = (await chapters())[i];
     if (latest.status !== 'completed' || latest.finalized_content_hash !== hash(latest.content)) {
-      await step(`chapter-${i + 1}:finalize:${hash(latest.content).slice(0, 12)}`, () => request('/agent/impact', 'POST', { project_id: projectId, chapter_id: latest.id, apply: true }));
+      await request('/agent/impact', 'POST', { project_id: projectId, chapter_id: latest.id, apply: true });
     }
     write(`03-chapter-${i + 1}.txt`, (await chapters())[i].content);
   }
-  write('04-continuity-review.json', await step('continuity-review', () => request('/agent/consistency', 'POST', { project_id: projectId })));
+  write('04-continuity-review.json', await step(`continuity-review:${fingerprint((await chapters()).map(chapter => ({ id: chapter.id, content: chapter.content }))).slice(0, 16)}`, () => request('/agent/consistency', 'POST', { project_id: projectId })));
 }
 async function scripts(selected = null) {
   for (const chapter of selected || await chapters()) {
@@ -352,14 +377,19 @@ async function assets(selected = null) {
   for (let character of knownCharacters.filter(character => visibleIds.has(character.id))) {
     for (const type of ['portrait', 'turnaround']) {
       const slot = type === 'portrait' ? 'avatar_url' : 'turnaround_url';
-      if (character[slot] && !rebuildAssets) continue;
+      const rebuildSlot = `${assetRebuildToken}:character:${character.id}:${type}`;
+      let fileExists = false; try { fileExists = fs.existsSync(localMedia(character[slot])); } catch {}
+      if (fileExists && (!rebuildAssets || (retryFailed && state.rebuiltAssets?.[rebuildSlot] === character[slot]))) continue;
       const visualDescription = character.visual_tags?.visual_bible?.portrait_description || character.description;
       const referenceUrl = type === 'portrait' ? character.visual_tags?.visual_bible?.reference_image_url : character.avatar_url;
-      const prompt = await step(`character-${character.id}:${type}:prompt`, () => request(`/characters/${character.id}/build-prompt`, 'POST', { gen_type: type, custom_description: visualDescription, use_ref_portrait: !!referenceUrl, ref_image_url: referenceUrl || undefined }));
-      const task = await generateImage(`character-${character.id}:${type}${assetRebuildToken}`, requestKey => request('/assets/generate', 'POST', {
+      const promptInput = { gen_type: type, custom_description: visualDescription, use_ref_portrait: !!referenceUrl, ref_image_url: referenceUrl || undefined };
+      const promptSignature = hash(JSON.stringify({ promptInput, version: character.active_version, settings: await request(`/projects/${projectId}`) })).slice(0, 16);
+      const prompt = await step(`character-${character.id}:${type}:prompt:${promptSignature}${assetRebuildToken}`, () => request(`/characters/${character.id}/build-prompt`, 'POST', promptInput));
+      const task = await generateImage(`character-${character.id}:${type}:${promptSignature}${assetRebuildToken}`, requestKey => request('/assets/generate', 'POST', {
         scene_id: 90_000_000 + character.id, request_key: requestKey, workflow: { ...prompt, character_id: character.id, gen_type: type, character_ref_url: referenceUrl || undefined, ref_image_url: referenceUrl || undefined, reference_tier: 'A' },
       }));
       character = await request(`/characters/${character.id}`, 'PUT', { [slot]: task.image_url });
+      if (rebuildAssets) { state.rebuiltAssets ||= {}; state.rebuiltAssets[rebuildSlot] = task.image_url; save(); }
     }
   }
   const allAssets = await library();
@@ -376,12 +406,20 @@ async function assets(selected = null) {
   }
   const selectedAssets = allAssets.filter(asset => ids.has(asset.id));
   for (const asset of selectedAssets) {
+    const rebuildSlot = `${assetRebuildToken}:library:${asset.id}`;
+    let fileExists = false; try { fileExists = fs.existsSync(localMedia(asset.image_url)); } catch {}
+    if (rebuildAssets && retryFailed && fileExists && state.rebuiltAssets?.[rebuildSlot] === asset.image_url) continue;
     if (!rebuildAssets && asset.status === 'generating' && asset.task_id) await waitTask(asset.task_id);
-    else if (rebuildAssets || asset.status !== 'completed' || !asset.image_url) await generateImage(`library-${asset.id}:v${asset.revision}${assetRebuildToken}`, () => request(`/asset-library/${asset.id}/generate`, 'POST', {}));
+    else if (rebuildAssets || asset.status !== 'completed' || !fileExists) {
+      const task = await generateImage(`library-${asset.id}:v${asset.revision}${assetRebuildToken}`, () => request(`/asset-library/${asset.id}/generate`, 'POST', {}));
+      if (rebuildAssets) { state.rebuiltAssets ||= {}; state.rebuiltAssets[rebuildSlot] = task.image_url; save(); }
+    }
   }
   write('06-characters.json', await characters()); write('06-asset-library.json', await library());
 }
 async function storyboards(selected = null) {
+  const [project, system] = await Promise.all([request(`/projects/${projectId}`), request('/settings/')]);
+  const policy = fingerprint({ nsfw_mode: projectSettingsOf(project).image_generation?.nsfw_mode || 'inherit', system_nsfw: Boolean(system.advanced?.nsfw_enabled), llm: system.llm, visual_prompt_policy_version: 1 });
   for (const chapter of selected || await chapters()) {
     const existing = await request(`/timeline/${chapter.id}`);
     const script = (await request(`/chapters/${chapter.id}/script`)).script;
@@ -391,8 +429,9 @@ async function storyboards(selected = null) {
         const source = (typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec) : shot.shot_spec)?.source;
         return source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision;
       });
-      if (current && !rebuildStoryboards) continue;
-      if (!rebuildStoryboards) throw new Error(`Script ${script.id}: existing storyboard uses an older or unverified source; review and run --rebuild-storyboards to retain a snapshot and replace it`);
+      const previousPolicy = state.storyboardInputs?.[chapter.id];
+      if (current && !rebuildStoryboards && (!previousPolicy || previousPolicy === policy)) { state.storyboardInputs ||= {}; state.storyboardInputs[chapter.id] = policy; save(); continue; }
+      if (!rebuildStoryboards) throw new Error(`Script ${script.id}: storyboard source or content policy changed; review and run --rebuild-storyboards to retain a snapshot and replace it`);
       const readyFinals = [];
       for (const shot of existing.timeline) {
         const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
@@ -400,9 +439,9 @@ async function storyboards(selected = null) {
           if (asset.role === 'narrative_final' && asset.status === 'ready') readyFinals.push(asset.id);
         }
       }
-      if (readyFinals.length) throw new Error(`Chapter ${chapter.id} has accepted narrative_final assets (${readyFinals.join(', ')}). Keep the files, mark those rows archived, then rerun --rebuild-storyboards.`);
+      if (readyFinals.length) throw new Error(`Chapter ${chapter.id} has accepted narrative_final assets (${readyFinals.join(', ')}). Archive these candidates in Director to keep their files and history, then rerun --rebuild-storyboards.`);
     }
-    const name = `storyboard-${script.id}:revision-${script.revision}${storyboardRebuildToken}`;
+    const name = `storyboard-${script.id}:revision-${script.revision}:policy-${policy.slice(0, 12)}${storyboardRebuildToken}`;
     const candidate = await step(`${name}:candidate`, () => request(`/scripts/${script.id}/storyboard-candidates`, 'POST', {
       expected_revision: script.revision, request_key: key(name), instructions: '按已确认剧本生成本章分镜。每镜只有一个地点和一个连续动作，默认每镜5秒。覆盖每一场以及全部对白和旁白块，每块只分配一次并保持时序。地点和道具使用资产库中的稳定名称，不要把不同地点并进同一镜，也不要加入剧本没有的动作或角色。',
     }).then(result => result.candidate));
@@ -410,6 +449,7 @@ async function storyboards(selected = null) {
       expected_revision: candidate.base_revision, expected_candidate_revision: candidate.candidate_revision, request_key: key(`apply-${candidate.id}`),
       ...(existing.timeline.length ? { replace_existing: true, expected_scene_ids: existing.timeline.map(shot => shot.id) } : {}),
     }));
+    state.storyboardInputs ||= {}; state.storyboardInputs[chapter.id] = policy; save();
   }
   write('07-storyboards.json', await shots());
 }
@@ -418,6 +458,8 @@ async function images(selected = null) {
   const allAssets = await library();
   let knownCharacters;
   const snapshots = (await request(`/projects/${projectId}/export`)).asset_library?.image_snapshots || [];
+  const imageSettings = projectSettingsOf(await request(`/projects/${projectId}`));
+  const systemSettings = await request('/settings/');
   for (const shot of await selectedShots(selected)) {
     const existing = await request(`/timeline/scenes/${shot.id}/asset-references`);
     const binding = resolveAssetBindings(shot, allAssets, existing);
@@ -427,12 +469,17 @@ async function images(selected = null) {
     knownCharacters ||= await characters();
     const visibleCharacters = resolveVisibleShotCharacters(shot, knownCharacters);
     const visibleCast = resolveVisibleShotCast(shot, knownCharacters);
+    const signature = fingerprint({ contract: shotContract(shot), settings: imageSettings, system: { image_provider: systemSettings.image_provider, image_generation: systemSettings.image_generation, advanced: systemSettings.advanced, comfyui: systemSettings.comfyui }, refs: refs.map(r => ({ id: r.id, revision: r.revision, image: r.image_url ? { url: r.image_url, sha256: fileHash(localMedia(r.image_url)) } : null })), cast: visibleCast.map(c => ({ id: c.id, version: c.active_version || 1, visual_tags: c.visual_tags, avatar: c.avatar_url ? { url: c.avatar_url, sha256: fileHash(localMedia(c.avatar_url)) } : null })) });
+    const recorded = state.imageInputs?.[shot.id];
+    let currentImageHash;
+    try { currentImageHash = fileHash(localMedia(shot.asset_url)); } catch {}
     if (shot.asset_status !== 'completed' || !shot.asset_url
+      || recorded?.signature !== signature || recorded?.url !== shot.asset_url || !currentImageHash || recorded?.sha256 !== currentImageHash
       || !keyframeUsesBindings(shot, refs, snapshots)
       || !keyframeUsesCharacterVersions(shot, knownCharacters, snapshots, visibleCast.map(character => character.id))) {
       const primary = resolveShotCharacter(shot, knownCharacters);
-      const signature = hash(JSON.stringify({ source: shot.asset_url, refs: refs.map(r => ({ id: r.id, revision: r.revision })), cast: visibleCast.map(c => [c.id, c.active_version || 1, c.avatar_url]) })).slice(0, 16);
-      await generateImage(`shot-${shot.id}:image:${signature}`, requestKey => request('/assets/generate', 'POST', { scene_id: shot.id, request_key: requestKey, workflow: { gen_type: 'scene', character_ref_url: primary?.avatar_url || undefined, character_ref_urls: visibleCharacters.map(c => c.avatar_url), shot_master_character_ids: visibleCast.map(c => c.id) } }));
+      const task = await generateImage(`shot-${shot.id}:image:${signature.slice(0, 16)}`, requestKey => request('/assets/generate', 'POST', { scene_id: shot.id, request_key: requestKey, workflow: { gen_type: 'scene', character_ref_url: primary?.avatar_url || undefined, character_ref_urls: visibleCharacters.map(c => c.avatar_url), shot_master_character_ids: visibleCast.map(c => c.id) } }));
+      state.imageInputs ||= {}; state.imageInputs[shot.id] = { signature, url: task.image_url, sha256: hash(fs.readFileSync(localMedia(task.image_url))) }; save();
     }
   }
   write('08-rendered-storyboards.json', await shots());
@@ -471,8 +518,10 @@ async function videoPreflight(selected = null) {
       merged = [...prior.filter(result => !ids.has(result.scene_id)), ...results];
     } catch { merged = results; }
   }
+  const currentIds = new Set((await shots()).map(shot => shot.id));
+  merged = merged.filter(result => currentIds.has(result.scene_id));
   write('09-video-preflight.json', { chapterLimit, workflow, results: merged });
-  if (merged.some(result => !result.keyframe_ready || !result.ready)) throw new Error('Some selected shots are not ready for video generation; see 09-video-preflight.json');
+  if (results.some(result => !result.keyframe_ready || !result.ready)) throw new Error('Some selected shots are not ready for video generation; see 09-video-preflight.json');
   return results;
 }
 async function videos(selected = null) {
@@ -481,31 +530,36 @@ async function videos(selected = null) {
   for (const shot of await selectedShots(selected)) {
     const available = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
     const known = await characters();
-    const readyVideo = (available.assets || []).filter(a => a.role === 'narrative_final' && a.status === 'ready').at(-1);
-    if (readyVideo) {
-      const provenance = videoProvenance(shot, available.assets, known);
-      if (provenance.source_current && provenance.identity_current) continue;
-    }
     const refs = (available.assets || []).filter(a => a.role === 'character_reference' && a.character_id != null && a.status === 'ready');
     const primary = resolveShotCharacter(shot, known);
     const selectedRefs = primary ? refs.filter(a => a.character_id === primary.id).slice(-2).map(a => a.id) : [];
     const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault());
     if (primary && !selectedRefs.length && strategy.workflow_id !== 'minimax_h3_fl2va_official_12gb') throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
-    const signature = hash(JSON.stringify({ source: shot.asset_url, version: shot.active_version || 1, selectedRefs, strategy })).slice(0, 16);
+    const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false };
+    const flight = await request('/videos/preflight', 'POST', parameters); write(`preflight-shot-${shot.id}.json`, flight);
+    if (!flight.ready) throw new Error(`Shot ${shot.id}: ${(flight.blockers || []).join('; ')}`);
+    const readyVideo = (available.assets || []).filter(a => a.role === 'narrative_final' && a.status === 'ready').at(-1);
+    let invalidFinal = false;
+    if (readyVideo) {
+      const provenance = videoProvenance(shot, available.assets, known);
+      try { const file = localMedia(readyVideo.url); invalidFinal = !readyVideo.sha256 || readyVideo.sha256 !== fileHash(file); assertChapterClipReady(probe(file), `Shot ${shot.id}`); }
+      catch { invalidFinal = true; }
+      if (!invalidFinal && provenance.source_current && provenance.identity_current && flight.input_signature && provenance.input_signature === flight.input_signature) continue;
+    }
+    const signature = fingerprint({ parameters, source: shotContract(shot), keyframe: shot.asset_url, input_signature: flight.input_signature }).slice(0, 16);
     const name = `shot-${shot.id}:video:${signature}`;
+    if (retryFailed && state.steps[name]?.status === 'completed') { delete state.steps[name]; save(); }
     await step(name, async () => {
       const submittedKey = `${name}:submit`;
       const cached = state.steps[submittedKey]?.result;
       if (cached && retryFailed) {
         const task = await request(`/videos/tasks/${cached.task_id}`);
-        if (['failed', 'cancelled', 'interrupted', 'rejected'].includes(task.status)) {
+        if (['failed', 'cancelled', 'interrupted', 'rejected'].includes(task.status) || (task.status === 'completed' && invalidFinal)) {
           delete state.steps[submittedKey]; state.videoAttempts ||= {}; state.videoAttempts[shot.id] = (state.videoAttempts[shot.id] || 0) + 1; save();
         }
       }
-      const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'preview_480p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false,
+      const body = { ...parameters, ...(flight.input_signature ? { expected_input_signature: flight.input_signature } : {}),
         request_key: key(`${name}-attempt-${state.videoAttempts?.[shot.id] || 0}`) };
-      const flight = await request('/videos/preflight', 'POST', body); write(`preflight-shot-${shot.id}.json`, flight);
-      if (!flight.ready) throw new Error(`Shot ${shot.id}: ${flight.blockers.join('; ')}`);
       const submitted = await step(submittedKey, () => request('/videos/generate', 'POST', body));
       const task = await waitTask(submitted.task_id, true);
       write(`09-video-task-${shot.id}.json`, task);
@@ -540,6 +594,7 @@ function videoProvenance(shot, assets, characters_) {
     const keyframe = assets.find(a => a.id === generation.keyframe_asset_id);
     return {
       scene_id: shot.id, character_id: primary?.id || null, reference_ids: referenceIds,
+      input_signature: generation.input_signature,
       identity_current: !primary || generation.workflow_id === 'minimax_h3_fl2va_official_12gb'
         || (referenceIds.length > 0 && references.length === referenceIds.length && references.every(a => a.role === 'character_reference' && a.status === 'ready' && a.character_id === primary.id)),
       source_current: generation.scene_id === shot.id && generation.scene_version === (shot.active_version || 1) && keyframe?.url === shot.asset_url,
@@ -551,23 +606,167 @@ function command(binary, arguments_) {
   if (result.status !== 0) throw new Error(`${binary}: ${(result.stderr || result.error?.message || '').slice(-2500)}`);
   return result.stdout;
 }
-const probe = file => JSON.parse(command('ffprobe', ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', file]));
+const probe = file => JSON.parse(command('ffprobe', ['-v', 'error', '-count_frames', '-show_format', '-show_streams', '-of', 'json', file]));
+const fileHash = file => hash(fs.readFileSync(file));
+const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+function decode(file) { command('ffmpeg', ['-v', 'error', '-xerror', '-i', file, '-map', '0:v?', '-map', '0:a?', '-f', 'null', '-']); }
+async function chapterSnapshot(chapter, includeVideos = false) {
+  const [project, system, result, scriptResult, known, assets] = await Promise.all([
+    request(`/projects/${projectId}`), request('/settings/'), request(`/timeline/${chapter.id}`), request(`/chapters/${chapter.id}/script`), characters(), library(),
+  ]);
+  const timeline = result.timeline;
+  const script = scriptResult.script;
+  const errors = validateScriptCoverage(script, timeline);
+  if (errors.length) throw new Error(errors.join('; '));
+  const speechBlocks = script.document.scenes.flatMap(scene => scene.blocks.filter(block => ['dialogue', 'voiceover'].includes(block.type)));
+  const needsDefault = speechBlocks.some(block => !(block.type === 'voiceover' && narratorVoice) && !known.find(character => character.id === block.characterId)?.voice_id);
+  const speechStatus = needsDefault ? await request('/tts/status') : null;
+  if (needsDefault && (!speechStatus.ok || !speechStatus.default_voice)) throw new Error('Local speech service has no available default voice');
+  const voices = speechBlocks.map(block => ({ block_id: block.id, voice_id: block.type === 'voiceover' && narratorVoice ? narratorVoice : known.find(character => character.id === block.characterId)?.voice_id || speechStatus?.default_voice }));
+  const referencedCharacters = new Set(timeline.flatMap(shot => resolveVisibleShotCast(shot, known).map(character => character.id)));
+  const referencedAssets = new Set();
+  const frames = [];
+  for (const shot of timeline) {
+    if (shot.asset_status !== 'completed') throw new Error(`Shot ${shot.id}: image is incomplete`);
+    const file = localMedia(shot.asset_url), info = probe(file), stream = info.streams.find(stream => stream.codec_type === 'video');
+    if (!stream || stream.width < 1280 || stream.height < 720 || Math.abs(stream.width / stream.height - 16 / 9) > 0.02) throw new Error(`Shot ${shot.id}: keyframe must be at least 1280×720 and 16:9`);
+    decode(file);
+    const refs = await request(`/timeline/scenes/${shot.id}/asset-references`);
+    const binding = resolveAssetBindings(shot, assets, refs);
+    if (binding.blockers.length || refs.some(ref => ref.stale)) throw new Error(`Shot ${shot.id}: asset bindings are stale or incomplete`);
+    binding.asset_ids.forEach(id => referencedAssets.add(id));
+    const frame = { contract: shotContract(shot), image: { url: shot.asset_url, sha256: fileHash(file) }, references: refs };
+    if (includeVideos) {
+      const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+      const final = media.assets.filter(asset => asset.role === 'narrative_final' && asset.status === 'ready').at(-1);
+      if (!final) throw new Error(`Shot ${shot.id}: final video has not been accepted`);
+      const provenance = videoProvenance(shot, media.assets, known);
+      const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault());
+      const primary = resolveShotCharacter(shot, known);
+      const refs = media.assets.filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(-2).map(asset => asset.id);
+      const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, run_loop_closer: false });
+      if (!flight.ready || !flight.input_signature || provenance.input_signature !== flight.input_signature || !provenance.source_current || !provenance.identity_current) throw new Error(`Shot ${shot.id}: final video inputs changed; regenerate and review`);
+      const file = localMedia(final.url); assertChapterClipReady(probe(file), `Shot ${shot.id}`); decode(file);
+      if (!final.sha256 || final.sha256 !== fileHash(file)) throw new Error(`Shot ${shot.id}: final video bytes changed since QA`);
+      frame.video = { id: final.id, url: final.url, sha256: fileHash(file), input_signature: provenance.input_signature };
+    }
+    frames.push(frame);
+  }
+  const mediaCharacter = character => ({ id: character.id, version: character.active_version || 1, voice_id: character.voice_id || null, images: [character.avatar_url, character.turnaround_url].filter(Boolean).map(url => ({ url, sha256: fileHash(localMedia(url)) })) });
+  return { schema_version: 1, project_id: projectId, chapter_id: chapter.id, content_hash: hash(chapter.content || ''), settings: projectSettingsOf(project), system: { image_provider: system.image_provider, image_generation: system.image_generation, advanced: system.advanced, comfyui: system.comfyui, tts: system.tts, video_generation: system.video_generation }, narrator_voice: narratorVoice, voices, script: { id: script.id, revision: script.revision, document: script.document }, characters: known.filter(character => referencedCharacters.has(character.id) || script.document.scenes.some(scene => scene.blocks.some(block => block.characterId === character.id))).map(mediaCharacter), assets: assets.filter(asset => referencedAssets.has(asset.id)).map(asset => ({ id: asset.id, revision: asset.revision, url: asset.image_url, sha256: fileHash(localMedia(asset.image_url)) })), frames };
+}
+function reviewPreview(chapter, kind, snapshot) {
+  const digest = fingerprint(snapshot);
+  const name = `${kind}-chapter-${chapter.id}`;
+  write(`${name}.json`, { fingerprint: digest, snapshot });
+  const escape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  const media = kind === 'review-images' ? snapshot.frames.map(frame => `<figure><img width="640" src="${escape(pathToFileURL(localMedia(frame.image.url)).href)}"><figcaption>镜头 ${frame.contract.id}</figcaption></figure>`).join('') : `<video controls width="960" src="${escape(pathToFileURL(snapshot.delivery.file).href)}"></video>`;
+  write(`${name}.html`, `<!doctype html><meta charset="utf-8"><title>章节验收</title><h1>第${chapter.index}章 · ${kind === 'review-images' ? '分镜图片' : '完整成片'}验收</h1><p>检查人物、服装、场景道具、动作连续性${kind === 'review-chapter' ? '、完整对白旁白、音效、字幕及口型' : ''}。</p>${media}<p>看完并通过后，用本页指纹记录审核人；来源变化后需重新验收。</p><pre>--stage ${kind} --chapter-id ${escape(chapter.id)} --reviewer 审核人 --review-fingerprint ${digest}</pre>`);
+  return digest;
+}
+async function requireImageReview(chapter) {
+  const snapshot = await chapterSnapshot(chapter);
+  reviewPreview(chapter, 'review-images', snapshot);
+  assertReview(state.reviews?.images?.[chapter.id], snapshot, `Chapter ${chapter.index} images`);
+}
+async function chapterDeliverySnapshot(chapter) {
+  const source = await chapterSnapshot(chapter, true);
+  const manifest = readJson(path.join(directory, 'videos', `chapter-${chapter.index}.manifest.json`));
+  if (manifest.source_fingerprint !== fingerprint(source)) throw new Error(`Chapter ${chapter.index}: composition sources changed; reassemble`);
+  if (fileHash(manifest.file) !== manifest.sha256 || fileHash(manifest.subtitle_file) !== manifest.subtitle_sha256 || manifest.speech_files.some(item => fileHash(localMedia(item.url)) !== item.sha256)) throw new Error(`Chapter ${chapter.index}: delivery or speech files changed; reassemble`);
+  return { source, delivery: manifest };
+}
+async function requireChapterReview(chapter) {
+  const snapshot = await chapterDeliverySnapshot(chapter);
+  reviewPreview(chapter, 'review-chapter', snapshot);
+  assertReview(state.reviews?.chapters?.[chapter.id], snapshot, `Chapter ${chapter.index} chapter_ready`);
+}
+async function recordReview(kind) {
+  const reviewer = option('reviewer', '').trim(), expected = option('review-fingerprint', '');
+  if (!selectedChapterId || !reviewer || !expected) throw new Error('Review requires --chapter-id, --reviewer and the fingerprint from the current preview');
+  const chapter = (await chapters()).find(chapter => String(chapter.id) === selectedChapterId);
+  if (!chapter) throw new Error('Selected chapter is outside this production scope');
+  if (kind === 'chapters') await requireImageReview(chapter);
+  const snapshot = kind === 'images' ? await chapterSnapshot(chapter) : await chapterDeliverySnapshot(chapter);
+  const digest = reviewPreview(chapter, kind === 'images' ? 'review-images' : 'review-chapter', snapshot);
+  if (expected !== digest) throw new Error('Preview fingerprint changed; review the new preview before approving');
+  state.reviews ||= {}; state.reviews[kind] ||= {};
+  state.reviews[kind][chapter.id] = { status: 'approved', reviewer, reviewed_at: new Date().toISOString(), fingerprint: digest, note: option('review-note', ''), checks: kind === 'chapters' ? ['speech_complete', 'sound_effects', 'subtitles', 'lip_sync', 'visual_continuity'] : ['characters', 'locations_props', 'actions', 'continuity'] }; save();
+  write('production-reviews.json', state.reviews);
+}
+async function audioForChapter(chapter) {
+  const [result, timeline, known] = await Promise.all([request(`/chapters/${chapter.id}/script`), request(`/timeline/${chapter.id}`), characters()]);
+  const script = result.script;
+  const errors = validateScriptCoverage(script, timeline.timeline);
+  if (errors.length) throw new Error(errors.join('; '));
+  const allBlocks = timeline.timeline.flatMap(shot => spokenBlocks(script, shot));
+  const status = allBlocks.length ? await request('/tts/status') : null;
+  const ttsSettings = allBlocks.length ? (await request('/settings/')).tts : null;
+  const needsDefault = allBlocks.some(block => !(block.type === 'voiceover' && narratorVoice) && !known.find(character => character.id === block.characterId)?.voice_id);
+  if (allBlocks.length && (!status.ok || (needsDefault && !status.default_voice))) throw new Error('Local speech service has no available voice');
+  const layout = {};
+  for (const shot of timeline.timeline) {
+    const blocks = spokenBlocks(script, shot), files = [];
+    for (const block of blocks) {
+      const character = known.find(character => character.id === block.characterId);
+      const voice = block.type === 'voiceover' && narratorVoice ? narratorVoice : character?.voice_id || status.default_voice;
+      const signature = fingerprint({ script_id: script.id, revision: script.revision, block, voice, character_version: character?.active_version || null, ttsSettings });
+      const name = `speech-${signature.slice(0, 24)}`;
+      const render = () => request('/tts/render-block', 'POST', { script_id: script.id, expected_revision: script.revision, block_id: block.id, voice_id: voice, request_key: key(`${name}-attempt-${state.audioAttempts?.[name] || 0}`) });
+      let generated;
+      try { generated = await render(); }
+      catch (error) {
+        if (!retryFailed || !['AUDIO_FAILED', 'AUDIO_FILE_CHANGED', 'AUDIO_INTERRUPTED'].includes(error.code)) throw error;
+        state.audioAttempts ||= {}; state.audioAttempts[name] = (state.audioAttempts[name] || 0) + 1; save(); generated = await render();
+      }
+      const asset = generated.asset, file = localMedia(asset.url), info = probe(file);
+      if (asset.status !== 'ready' || generated.source.script_id !== script.id || generated.source.script_revision !== script.revision || generated.source.block_id !== block.id || generated.source.text !== block.text.trim() || generated.source.voice_id !== voice || !info.streams.some(stream => stream.codec_type === 'audio') || asset.sha256 !== fileHash(file)) throw new Error(`Speech block ${block.id}: invalid audio or source`);
+      decode(file);
+      files.push({ block_id: block.id, url: asset.url, sha256: asset.sha256, duration: Number(info.format.duration), source: generated.source });
+    }
+    layout[shot.id] = { ...timedSpeech(blocks, files.map(file => file.duration), Math.max(5, Number(shot.duration) || 5)), files };
+  }
+  write(`audio-chapter-${chapter.id}.json`, layout); return layout;
+}
+async function audio(selected = null) { for (const chapter of selected || await chapters()) await audioForChapter(chapter); }
 async function assemble(selected = null, options = {}) {
   const { shots: renderShots = true, fullFilm = true } = options;
   const scope = selected || await chapters();
   const videoDirectory = path.join(directory, 'videos'); fs.mkdirSync(videoDirectory, { recursive: true });
   const chapterFiles = [];
+  const fullCues = [];
+  let fullOffset = 0;
   const [known, assets, backup] = await Promise.all([characters(), library(), request(`/projects/${projectId}/export`)]);
   for (const chapter of scope) {
     const final = path.join(videoDirectory, `chapter-${chapter.index}.mp4`);
+    if (renderShots && fs.existsSync(path.join(videoDirectory, `chapter-${chapter.index}.manifest.json`))) {
+      try {
+        const snapshot = await chapterDeliverySnapshot(chapter);
+        const manifest = snapshot.delivery;
+        assertChapterClipReady(probe(final), `Chapter ${chapter.index}`, { requireAudio: true, durationSeconds: manifest.duration }); decode(final);
+        chapterFiles.push(final);
+        fullCues.push(...manifest.cues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset })));
+        fullOffset += manifest.duration;
+        continue;
+      } catch (error) { console.log(`REASSEMBLE chapter ${chapter.index}: ${error.message}`); }
+    }
     if (!renderShots) {
       if (!fs.existsSync(final)) throw new Error(`Missing chapter video for chapter ${chapter.index ?? chapter.id}`);
+      await requireImageReview(chapter);
+      await requireChapterReview(chapter);
+      const manifest = readJson(path.join(videoDirectory, `chapter-${chapter.index}.manifest.json`));
+      fullCues.push(...manifest.cues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset })));
+      fullOffset += manifest.duration;
       chapterFiles.push(final);
       continue;
     }
     const chapterShots = (await request(`/timeline/${chapter.id}`)).timeline;
     assertNonEmptyChapterShots(chapterShots.length, `Chapter ${chapter.index ?? chapter.id}`);
+    const sourceSnapshot = await chapterSnapshot(chapter, true);
+    const speech = await audioForChapter(chapter);
     const chapterClips = [];
+    const chapterCues = [], speechFiles = [];
+    let chapterOffset = 0;
     for (const shot of chapterShots) {
       const available = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
       const final = (available.assets || []).filter(a => a.role === 'narrative_final' && a.status === 'ready').at(-1);
@@ -582,23 +781,50 @@ async function assemble(selected = null, options = {}) {
       assertChapterClipReady(info, `Shot ${shot.id}`);
       const output = path.join(videoDirectory, `shot-${shot.id}.mp4`);
       const hasAudio = info.streams.some(s => s.codec_type === 'audio');
-      command('ffmpeg', ['-y', '-i', source, ...(!hasAudio ? ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo'] : []),
-        '-map', '0:v:0', '-map', hasAudio ? '0:a:0' : '1:a:0', '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
-        '-r', '24', '-frames:v', '120', '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-af', 'apad', '-shortest', '-movflags', '+faststart', output]);
-      assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`, { requireAudio: true });
+      if (shot.audio_prompt?.trim() && !hasAudio) throw new Error(`Shot ${shot.id}: script requires sound effects but the accepted source has no audio; regenerate and review its sound before assembly`);
+      const layout = speech[shot.id];
+      const duration = layout.duration;
+      const inputs = layout.files.flatMap(file => ['-i', localMedia(file.url)]);
+      const filters = layout.files.map((file, index) => `[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(layout.cues[index].start * 1000)}|${Math.round(layout.cues[index].start * 1000)}[speech${index}]`);
+      const tracks = layout.files.map((_, index) => `[speech${index}]`);
+      // Keep quiet native ambience under formal speech; the chapter review checks
+      // overlapping native voices and lip sync before any next chapter can run.
+      if (hasAudio) { filters.push(`[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=${layout.files.length ? '0.12' : '1'}[native]`); tracks.push('[native]'); }
+      if (tracks.length) filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
+      else filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`);
+      command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', filters.join(';'),
+        '-map', '0:v:0', '-map', '[audio]', '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=${Math.max(0, duration - 5)}`,
+        '-r', '24', '-frames:v', String(Math.round(duration * 24)), '-t', String(duration), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', output]);
+      assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`, { requireAudio: true, durationSeconds: duration });
+      decode(output);
+      chapterCues.push(...layout.cues.map(cue => ({ ...cue, start: cue.start + chapterOffset, end: cue.end + chapterOffset })));
+      speechFiles.push(...layout.files);
+      chapterOffset += duration;
       chapterClips.push(output);
     }
     const list = path.join(videoDirectory, `chapter-${chapter.index}.concat.txt`);
     fs.writeFileSync(list, chapterClips.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join('\n'));
-    command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', final]);
+    const subtitleFile = path.join(videoDirectory, `chapter-${chapter.index}.srt`);
+    fs.writeFileSync(subtitleFile, subtitles(chapterCues));
+    command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, ...(chapterCues.length ? ['-i', subtitleFile] : []), '-map', '0:v:0', '-map', '0:a:0', ...(chapterCues.length ? ['-map', '1:0', '-c:s', 'mov_text', '-metadata:s:s:0', 'language=zho'] : []), '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', final]);
+    assertChapterClipReady(probe(final), `Chapter ${chapter.index}`, { requireAudio: true, durationSeconds: chapterOffset }); decode(final);
+    if (fingerprint(await chapterSnapshot(chapter, true)) !== fingerprint(sourceSnapshot)) throw new Error(`Chapter ${chapter.index}: sources changed during assembly`);
+    write(`videos/chapter-${chapter.index}.manifest.json`, { schema_version: 1, source_fingerprint: fingerprint(sourceSnapshot), file: final, sha256: fileHash(final), subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), speech_files: speechFiles, cues: chapterCues, duration: chapterOffset, shot_durations: chapterShots.map(shot => ({ scene_id: shot.id, duration: speech[shot.id].duration })), created_at: new Date().toISOString() });
+    fullCues.push(...chapterCues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset }))); fullOffset += chapterOffset;
     chapterFiles.push(final);
   }
-  if (!fullFilm) return chapterFiles;
+  if (!fullFilm) {
+    for (const chapter of scope) reviewPreview(chapter, 'review-chapter', await chapterDeliverySnapshot(chapter));
+    return chapterFiles;
+  }
+  for (const chapter of scope) { await requireImageReview(chapter); await requireChapterReview(chapter); }
   if (!chapterFiles.length) throw new Error('No chapters to assemble');
   const list = path.join(videoDirectory, 'full.concat.txt'); fs.writeFileSync(list, chapterFiles.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join('\n'));
   const final = path.join(videoDirectory, chapterLimit === 5 ? 'full-story.mp4' : `chapters-1-${chapterLimit}.mp4`);
-  command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', final]);
-  write('10-video-delivery.json', { chapterLimit, chapters: chapterFiles.map(file => ({ file, probe: probe(file) })), final: { file: final, probe: probe(final) } });
+  const subtitleFile = path.join(videoDirectory, 'full-story.srt'); fs.writeFileSync(subtitleFile, subtitles(fullCues));
+  command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, ...(fullCues.length ? ['-i', subtitleFile] : []), '-map', '0:v:0', '-map', '0:a:0', ...(fullCues.length ? ['-map', '1:0', '-c:s', 'mov_text', '-metadata:s:s:0', 'language=zho'] : []), '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', final]);
+  assertChapterClipReady(probe(final), 'Full delivery', { requireAudio: true, durationSeconds: fullOffset }); decode(final);
+  write('10-video-delivery.json', { schema_version: 1, chapterLimit, chapters: chapterFiles.map((file, index) => ({ chapter_id: scope[index].id, file, sha256: fileHash(file), probe: probe(file), manifest: readJson(path.join(videoDirectory, `chapter-${scope[index].index}.manifest.json`)) })), final: { file: final, sha256: fileHash(final), duration: fullOffset, subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), probe: probe(final) } });
 }
 async function verify() {
   state.currentStep = 'verify'; save();
@@ -637,8 +863,9 @@ async function verify() {
     })()],
   ].map(([id, criterion, pass]) => ({ id, criterion, status: pass ? 'PASS' : 'FAIL' }));
   const imageUrls = [...coreCharacters.flatMap(c => [c.avatar_url, c.turnaround_url]), ...requiredAssets.map(a => a.image_url), ...ss.map(s => s.asset_url)].filter(Boolean);
+  const frameUrls = new Set(ss.map(shot => shot.asset_url));
   const imageEvidence = imageUrls.map(url => {
-    try { const file = localMedia(url); const info = probe(file); const video = info.streams.find(s => s.codec_type === 'video'); return { url, valid: video?.width >= 256 && video?.height >= 256, width: video?.width, height: video?.height, sha256: hash(fs.readFileSync(file)) }; }
+    try { const file = localMedia(url); const info = probe(file); decode(file); const video = info.streams.find(s => s.codec_type === 'video'); return { url, valid: frameUrls.has(url) ? video?.width >= 1280 && video?.height >= 720 && Math.abs(video.width / video.height - 16 / 9) <= 0.02 : video?.width >= 256 && video?.height >= 256, width: video?.width, height: video?.height, sha256: hash(fs.readFileSync(file)) }; }
     catch (error) { return { url, valid: false, error: error.message }; }
   });
   const shotReferences = await Promise.all(ss.map(s => request(`/timeline/scenes/${s.id}/asset-references`)));
@@ -648,15 +875,23 @@ async function verify() {
   acceptance.push({ id: 'F11', criterion: '镜头引用与分镜所需场景道具一致且关键帧使用当前素材', status: ss.length > 0 && bindingEvidence.every(e => !e.blockers.length && e.keyframe_current) ? 'PASS' : 'FAIL' });
   let deliveryEvidence;
   try {
-    const videos = Array.from({ length: chapterLimit }, (_, i) => path.join(directory, 'videos', `chapter-${i + 1}.mp4`));
+    const videos = cs.map(chapter => path.join(directory, 'videos', `chapter-${chapter.index}.mp4`));
     const final = path.join(directory, 'videos', chapterLimit === 5 ? 'full-story.mp4' : `chapters-1-${chapterLimit}.mp4`);
     deliveryEvidence = [...videos, final].map(file => ({ file, probe: probe(file), sha256: hash(fs.readFileSync(file)) }));
+    const delivery = readJson(path.join(directory, '10-video-delivery.json'));
+    for (const [index, item] of deliveryEvidence.entries()) {
+      const expected = index < chapterLimit ? delivery.chapters[index].manifest.duration : delivery.final.duration;
+      assertChapterClipReady(item.probe, item.file, { requireAudio: true, durationSeconds: expected }); decode(item.file);
+      const digest = index < chapterLimit ? delivery.chapters[index].sha256 : delivery.final.sha256;
+      if (item.sha256 !== digest) throw new Error('Delivery file changed since assembly');
+    }
+    if (fileHash(delivery.final.subtitle_file) !== delivery.final.subtitle_sha256) throw new Error('Final subtitles changed');
     const valid = deliveryEvidence.every(e => e.probe.streams.some(s => s.codec_type === 'video') && e.probe.streams.some(s => s.codec_type === 'audio') && Number(e.probe.format.duration) > 0);
     const expected = deliveryEvidence.slice(0, chapterLimit).reduce((sum, e) => sum + Number(e.probe.format.duration), 0);
     acceptance.push({ id: 'F12', criterion: `前${chapterLimit}章和阶段总片均可解码、含音轨且总片时长完整`, status: valid && Math.abs(Number(deliveryEvidence[chapterLimit].probe.format.duration) - expected) < 1 ? 'PASS' : 'FAIL' });
   } catch (error) { deliveryEvidence = { error: error.message }; acceptance.push({ id: 'F12', criterion: `前${chapterLimit}章和阶段总片均可解码、含音轨且总片时长完整`, status: 'FAIL' }); }
   const identityEvidence = ss.map((shot, index) => videoProvenance(shot, media[index].assets, chars));
-  acceptance.push({ id: 'F13', criterion: '主角视频实际使用同一角色的有效定妆参考', status: identityEvidence.some(e => e.character_id != null) && identityEvidence.every(e => e.identity_current) ? 'PASS' : 'FAIL' });
+  acceptance.push({ id: 'F13', criterion: '出场角色的身份参考有效；无人镜头无需身份参考', status: identityEvidence.length > 0 && identityEvidence.every(e => e.identity_current) ? 'PASS' : 'FAIL' });
   acceptance.push({ id: 'F14', criterion: '视频来源与当前关键帧及镜头版本一致', status: ss.length > 0 && identityEvidence.every(e => e.source_current) ? 'PASS' : 'FAIL' });
   const scriptEvidence = ss.map(shot => {
     const script = screenplay[cs.findIndex(chapter => chapter.id === shot.chapter_id)];
@@ -666,8 +901,27 @@ async function verify() {
     const current = script?.status === 'confirmed' && !script.freshness?.sourceChanged && source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision && !!scene && (source.block_ids || []).every(id => scene.blocks.some(block => block.id === id));
     return { scene_id: shot.id, script_id: script?.id || null, script_revision: script?.revision || null, source: source || null, current: !!current };
   });
-  acceptance.push({ id: 'F15', criterion: '分镜来源与已确认剧本修订及原声文本块一致', status: scriptEvidence.length > 0 && scriptEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
-  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, scripts: scriptEvidence, delivery: deliveryEvidence });
+  const coverageEvidence = cs.map((chapter, index) => ({ chapter_id: chapter.id, errors: validateScriptCoverage(screenplay[index], ss.filter(shot => shot.chapter_id === chapter.id)) }));
+  acceptance.push({ id: 'F15', criterion: '分镜完整覆盖剧本分场和原声文本，次序、次数和内容一致', status: scriptEvidence.length > 0 && scriptEvidence.every(item => item.current) && coverageEvidence.every(item => !item.errors.length) ? 'PASS' : 'FAIL' });
+  const reviewEvidence = [];
+  const speechEvidence = [];
+  for (const chapter of cs) {
+    try {
+      await requireImageReview(chapter); await requireChapterReview(chapter);
+      reviewEvidence.push({ chapter_id: chapter.id, current: true });
+    } catch (error) { reviewEvidence.push({ chapter_id: chapter.id, current: false, error: error.message }); }
+    try {
+      const snapshot = await chapterDeliverySnapshot(chapter);
+      const expected = snapshot.source.script.document.scenes.flatMap(scene => scene.blocks.filter(block => ['dialogue', 'voiceover'].includes(block.type))).map(block => ({ block_id: block.id, text: block.text.trim() }));
+      const actual = snapshot.delivery.cues.map(cue => ({ block_id: cue.block_id, text: cue.text }));
+      const cues = snapshot.delivery.cues;
+      const current = fingerprint(expected) === fingerprint(actual) && fs.readFileSync(snapshot.delivery.subtitle_file, 'utf8') === subtitles(cues) && cues.every(cue => cue.start >= 0 && cue.end > cue.start && cue.end <= snapshot.delivery.duration) && snapshot.delivery.speech_files.length === expected.length;
+      speechEvidence.push({ chapter_id: chapter.id, current, spoken_blocks: expected.length });
+    } catch (error) { speechEvidence.push({ chapter_id: chapter.id, current: false, error: error.message }); }
+  }
+  acceptance.push({ id: 'F16', criterion: '分镜图片和完整章节成片已人工验收且来源未变化', status: cs.length === chapterLimit && reviewEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
+  acceptance.push({ id: 'F17', criterion: '完整对白旁白、字幕与源块逐一对应且音频未被截断', status: cs.length === chapterLimit && speechEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
+  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, scripts: scriptEvidence, coverage: coverageEvidence, reviews: reviewEvidence, speech: speechEvidence, delivery: deliveryEvidence });
   write('acceptance.json', { checkedAt: new Date().toISOString(), chapterLimit, acceptance, counts: { chapters: cs.length, characters: chars.length, locations: assets.filter(a => a.kind === 'location').length, props: assets.filter(a => a.kind === 'prop').length, requiredAssets: requiredAssets.length, generatedAssets: assets.filter(a => a.status === 'completed' && a.image_url).length, shots: ss.length }, manualReview: [`前${chapterLimit}章因果和人物动机`, '跨镜头脸型服装及道具形状一致性', '画面缺陷和声音对白同步'] });
   write('project-backup.novastory.json', backup);
   if (acceptance.some(a => a.status !== 'PASS')) throw new Error('Acceptance has failing items; see acceptance.json');
@@ -684,7 +938,7 @@ function report(error) {
 }
 let failure;
 try {
-  const handlers = { preflight, text, scripts, assets, storyboards, images, 'video-preflight': videoPreflight, videos, assemble, verify };
+  const handlers = { preflight, text, scripts, assets, storyboards, images, audio, 'review-images': () => recordReview('images'), 'review-chapter': () => recordReview('chapters'), 'video-preflight': videoPreflight, videos, assemble, verify };
   if (stage === 'all') {
     await preflight();
     await text();
@@ -693,13 +947,20 @@ try {
       await storyboards([chapter]);
       await assets([chapter]);
       await images([chapter]);
+      await requireImageReview(chapter);
       await videoPreflight([chapter]);
       await videos([chapter]);
       await assemble([chapter], { fullFilm: false });
+      await requireChapterReview(chapter);
     }
     await assemble(null, { shots: false, fullFilm: true });
     await verify();
   } else if (stage === 'preflight') await preflight();
-  else await handlers[stage]();
+  else {
+    const selected = selectedChapterId ? (await chapters()).filter(chapter => String(chapter.id) === selectedChapterId) : null;
+    if (selected && !selected.length) throw new Error('Selected chapter is outside this production scope');
+    if (stage === 'assemble' && selected) await assemble(selected, { fullFilm: false });
+    else await handlers[stage](selected);
+  }
 } catch (error) { failure = error; console.error(error.message); process.exitCode = 1; }
 finally { report(failure); }

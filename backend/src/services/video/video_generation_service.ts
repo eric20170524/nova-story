@@ -29,6 +29,7 @@ import { createProgressPublisher, ProgressPublisher } from '../generation_progre
 import { VramService } from '../vram_service';
 import { ScriptService } from '../script_service';
 import sharp from 'sharp';
+import { SettingsManager } from '../../core/settings_manager';
 
 type QaDisposition = {
   assetStatus: MediaAssetStatus;
@@ -424,12 +425,25 @@ export class VideoGenerationService {
       compiledSpec = VideoSpecCompiler.compile({ request, scene, character });
     }
 
+    const assetIds = [...new Set([request.keyframe_asset_id, ...(request.character_reference_asset_ids || []), request.motion_reference_asset_id, request.last_frame_asset_id, request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id)].filter(Boolean))];
+    const inputs = await Promise.all(assetIds.map(async id => {
+      const asset = await MediaAssetService.getAssetById(Number(id));
+      let fileHash = null;
+      if (asset) { try { fileHash = MediaAssetService.computeSha256(MediaAssetService.resolveSafePath(asset.url)); } catch {} }
+      return asset ? { id: asset.id, url: asset.url, status: asset.status, character_id: asset.character_id, sha256: fileHash || asset.sha256 || null } : { id, missing: true };
+    }));
+    const project = projectId ? await db.get('SELECT settings FROM project WHERE id = ?', projectId) : null;
+    const { request_key: _key, expected_input_signature: _expected, input_signature: _stored, ...parameters } = request;
+    const inputSignature = hashCanonical({ parameters, scene: scene ? { id: scene.id, active_version: scene.active_version, shot_spec: scene.shot_spec, visual_prompt: scene.visual_prompt, motion_prompt: scene.motion_prompt, dialogue: scene.dialogue, narration: scene.narration, audio_prompt: scene.audio_prompt } : null, compiledSpec: compiledSpec || null, inputs, character: character ? { id: character.id, active_version: character.active_version, visual_tags: character.visual_tags } : null, projectSettings: project?.settings || null, systemAdvanced: SettingsManager.loadSettings().advanced, systemVideo: SettingsManager.loadSettings().video_generation });
+    if (request.expected_input_signature && request.expected_input_signature !== inputSignature) blockers.push('Video inputs changed since preflight; refresh and review the current sources');
+
     if (request.workflow_id === 'grok_imagine_browser') {
       warnings.push('Grok Imagine is browser assisted; a signed-in Chrome session must complete the queued request.');
     }
     const estSeconds = request.workflow_id === 'grok_imagine_browser'
       ? 180 : request.preset === 'preview_480p_5s' ? 360 : 720;
     return {
+      input_signature: inputSignature,
       ready: blockers.length === 0,
       profile: request.profile,
       preset: request.preset,
@@ -454,6 +468,7 @@ export class VideoGenerationService {
       if (!preflightRes.ready) {
         throw new Error(`Preflight failed: ${preflightRes.blockers.join('; ')}`);
       }
+      request.input_signature = preflightRes.input_signature;
 
       const taskId = `vtask_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
       const now = new Date().toISOString();

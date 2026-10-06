@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -106,6 +106,48 @@ test('unavailable generation dependencies stop the full pipeline and remain visi
     const report = await readFile(path.join(f.directory, 'report.html'), 'utf8');
     assert.match(report, /尚未完成/); assert.match(report, /&lt;script&gt;/); assert.doesNotMatch(report, /<script>/);
     const state = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8')); assert.ok(state.preflight.blockers.length >= 3);
+  } finally { await f.close(); }
+});
+
+test('text bootstraps only PLAN_NOT_FOUND and keeps other HTTP failures visible', async () => {
+  for (const code of ['PLAN_NOT_FOUND', 'PROJECT_NOT_FOUND']) {
+    let bootstrap = 0, existing = false;
+    const document = { blueprint: { characters: [] } };
+    const content = '已完成正文'.repeat(10);
+    const f = await fixture(url => {
+      if (url === '/api/projects/90713823') return { body: { title: '新项目' } };
+      if (url.endsWith('/story-plan')) return existing ? { body: { document, entries: [{ disposition: 'active', summary: '规划' }] } } : { status: 404, body: { code } };
+      if (url.endsWith('/story-plan/bootstrap')) { bootstrap++; existing = true; return { body: { document, entries: [{ disposition: 'active', summary: '规划' }] } }; }
+      if (url === '/api/assistant/chat') return { body: { response: '构思' } };
+      if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1', index: 1, content, status: 'completed', finalized_content_hash: createHash('sha256').update(content).digest('hex'), target_word_count: 10 }] };
+      if (url === '/api/agent/consistency') return { body: { issues: [] } };
+      throw new Error(`Unexpected ${url}`);
+    });
+    try {
+      const result = await f.run('text', ['--chapter-limit', '1']);
+      assert.equal(result.code, code === 'PLAN_NOT_FOUND' ? 0 : 1, result.output);
+      assert.equal(bootstrap, code === 'PLAN_NOT_FOUND' ? 1 : 0);
+    } finally { await f.close(); }
+  }
+});
+
+test('preflight prunes replaced shot failures and blocks only the currently selected result', async () => {
+  const f = await fixture(url => {
+    if (url === '/api/projects/90713823') return { body: { settings: {} } };
+    if (url.startsWith('/api/videos/capabilities')) return { body: { video_generation_enabled: true, missing_components: [] } };
+    if (url.startsWith('/api/characters/')) return { body: [] };
+    if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 2, chapter_id: 'ch-1', asset_status: 'completed', asset_url: '/static/frame.png' }] } };
+    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
+    throw new Error(`Unexpected ${url}`);
+  });
+  try {
+    await writeFile(path.join(f.directory, '09-video-preflight.json'), JSON.stringify({ results: [{ scene_id: 1, ready: false }] }));
+    const result = await f.run('video-preflight', ['--chapter-limit', '1', '--chapter-id', 'ch-1']);
+    assert.equal(result.code, 0, result.output);
+    const evidence = JSON.parse(await readFile(path.join(f.directory, '09-video-preflight.json'), 'utf8'));
+    assert.deepEqual(evidence.results.map(result => result.scene_id), [2]);
   } finally { await f.close(); }
 });
 
@@ -235,6 +277,7 @@ test('partial location matches never start keyframe generation or silently omit 
   let generationCalls = 0;
   const f = await fixture(url => {
     if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true } } };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: {} } };
     if (url.includes('/asset-library')) return { body: [{ id: 1, kind: 'location', name: '山庙' }] };
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, shot_spec: { location: '山庙', key_props: ['铜铃'] } }] } };
@@ -334,7 +377,7 @@ test('identity acceptance checks the actual generated manifest instead of merely
   } finally { await f.close(); }
 });
 
-test('full run does not start the next chapter until the current chapter video is accepted', async () => {
+test('full run waits for current image approval before video generation or starting the next chapter', async () => {
   const content = '山风吹过石阶，铜铃仍在掌心。';
   const contentHash = createHash('sha256').update(content).digest('hex');
   const calls = [];
@@ -363,12 +406,14 @@ test('full run does not start the next chapter until the current chapter video i
     if (url === '/api/timeline/ch-2') return { body: { timeline: [shotFor(2, '阿宁')] } };
     if (url === '/api/asset-library/extract') return { body: [] };
     if (url.startsWith('/api/characters/')) return { body: [
-      { id: 2, name: '阿风', avatar_url: '/a.png', turnaround_url: '/t.png', active_version: 1 },
+      { id: 2, name: '阿风', avatar_url: '/static/a.png', turnaround_url: '/static/t.png', active_version: 1 },
       { id: 3, name: '阿宁' },
     ] };
     if (url.includes('/asset-library')) return { body: [] };
     if (url.endsWith('/export')) return { body: { asset_library: { image_snapshots: [{ scene_id: 71, image_url: '/static/shot-1.png', references_json: '[]', character_versions_json: JSON.stringify([{ id: 2, version: 1 }]) }] } } };
     if (url.endsWith('/asset-references')) return { body: [] };
+    if (url === '/api/assets/generate') return { body: { task_id: 'image-71' } };
+    if (url === '/api/assets/status/image-71') return { body: { status: 'completed', image_url: '/static/shot-1.png' } };
     if (url.includes('/media?')) return { body: { assets: [{ id: 82, character_id: 2, role: 'character_reference', status: 'ready' }] } };
     if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
     if (url === '/api/videos/generate') return { body: { task_id: `task-${body.scene_id}` } };
@@ -376,12 +421,13 @@ test('full run does not start the next chapter until the current chapter video i
     return { status: 500, body: { error: `unexpected ${method} ${url}` } };
   });
   try {
-    const result = await f.run('all', ['--chapter-limit', '2']);
+    for (const name of ['shot-1.png', 'a.png', 't.png']) execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=1280x720', '-frames:v', '1', path.join(f.directory, name)]);
+    const result = await f.run('all', ['--chapter-limit', '2'], { NOVASTORY_STATIC_DIR: f.directory });
     assert.equal(result.code, 1);
-    assert.match(result.output, /visual review/);
+    assert.match(result.output, /images: human approval/);
     assert.equal(calls.some(call => call.includes('/chapters/ch-2/script')), false);
     assert.equal(calls.some(call => call.includes('scene:72') || call.includes('/characters/3/')), false);
-    assert.equal(calls.some(call => call.includes('/videos/generate') && call.includes('scene:71')), true);
+    assert.equal(calls.some(call => call.includes('/videos/generate')), false);
   } finally { await f.close(); }
 });
 
@@ -441,6 +487,8 @@ test('rebuild flags regenerate an existing screenplay and storyboard instead of 
   const scriptCandidate = { id: 'script-1', state: 'pending', base_revision: 5, candidate_revision: 6, after_json: JSON.stringify({ scenes: [{ id: 'sc-1' }] }) };
   const f = await fixture((url, method) => {
     calls.push(`${method} ${url}`);
+    if (url === '/api/projects/90713823') return { body: { settings: {} } };
+    if (url === '/api/settings/') return { body: {} };
     if (url === '/api/chapters/?project_id=90713823') return { body: [{ id: 'ch-1', index: 1 }] };
     if (url === '/api/chapters/ch-1/script' && method === 'POST') return { body: { script } };
     if (url === '/api/chapters/ch-1/script' && method === 'GET') return { body: { script } };

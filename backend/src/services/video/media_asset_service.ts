@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { db } from '../../db/database';
+import { db, withImmediateTransaction } from '../../db/database';
 import { logger } from '../../core/logging';
 import { getStaticDirectory, getVideoStagingDirectory } from '../../core/paths';
 import { MediaAsset } from '../../schemas/video';
@@ -78,7 +78,7 @@ export class MediaAssetService {
     // Strip leading /static/ or http.../static/
     const cleaned = relativeOrUrl.replace(/^[a-zA-Z0-9]+:\/\/[^/]+\/static\//, '').replace(/^\/?static\//, '');
     const absolute = path.resolve(staticRoot, cleaned);
-    if (!absolute.startsWith(staticRoot)) {
+    if (!absolute.startsWith(`${staticRoot}${path.sep}`)) {
       throw new Error(`Path traversal detected for asset path: ${relativeOrUrl}`);
     }
     return absolute;
@@ -500,6 +500,7 @@ export class MediaAssetService {
   }
 
   static async promoteAsset(assetId: number): Promise<MediaAsset> {
+    return withImmediateTransaction(async () => {
     const asset = await this.getAssetById(assetId);
     if (!asset) {
       throw new Error(`Media asset ${assetId} not found`);
@@ -527,6 +528,22 @@ export class MediaAssetService {
     await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'ready', assetId);
     logger.info(`Promoted asset ${assetId} as active final for scene ${asset.scene_id}`);
     return (await this.getAssetById(assetId))!;
+    });
+  }
+
+  static async archiveAsset(assetId: number, expectedStatus: string): Promise<MediaAsset> {
+    return withImmediateTransaction(async () => {
+      const asset = await this.getAssetById(assetId);
+      if (!asset) throw new Error(`Media asset ${assetId} not found`);
+      if (asset.media_type !== 'video' || !['narrative_final', 'loop_master'].includes(asset.role)) throw new Error('Only final video candidates can be archived');
+      if (asset.status === 'archived') return asset;
+      if (asset.status !== expectedStatus) throw new Error('Video status changed; refresh before archiving');
+      const active = await db.get("SELECT task_id FROM generation_task WHERE scene_id = ? AND kind = 'video' AND status = 'processing' LIMIT 1", asset.scene_id);
+      if (active) throw new Error('Wait for the current video task to finish or cancel it before archiving');
+      const metadata = parseMetadata(asset.metadata_json);
+      await db.run("UPDATE media_asset SET status = 'archived', metadata_json = ? WHERE id = ?", JSON.stringify({ ...metadata, archive: { previous_status: asset.status, archived_at: new Date().toISOString() } }), asset.id);
+      return (await this.getAssetById(assetId))!;
+    });
   }
 
   /**

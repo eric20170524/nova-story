@@ -524,6 +524,8 @@ class ApiService {
     );
   promoteVideoAsset = (assetId: number) =>
     this.request<MediaAsset>(`/videos/assets/${assetId}/promote`, { method: 'POST' });
+  archiveVideoAsset = (assetId: number, expectedStatus: string) =>
+    this.request<MediaAsset>(`/videos/assets/${assetId}/archive`, { method: 'POST', body: { expected_status: expectedStatus } });
   reprocessVideoAsset = (assetId: number, runLoopCloser = true) =>
     this.request<any>(`/videos/assets/${assetId}/reprocess`, { method: 'POST', body: { run_loop_closer: runLoopCloser } });
   setGuideFrameIndex = (assetId: number, guideFrameIdx: number) =>

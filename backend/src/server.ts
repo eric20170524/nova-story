@@ -30,6 +30,7 @@ import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
 import { VideoStartupRecoveryService } from './services/video/video_startup_recovery';
 import { StoryPlanService } from './services/story_plan_service';
+import { ScriptAudioService } from './services/script_audio_service';
 import { logger } from './core/logging';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
@@ -142,6 +143,7 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   // 3) only then interrupt generic/image tasks that have no durable worker.
   try {
     await StoryPlanService.markInterruptedGenerations();
+    await ScriptAudioService.markInterruptedRequests();
     await VideoStartupRecoveryService.reconcileActivePromptsOnStartup();
     await VideoGenerationService.markOrphanedTasks();
     await AssetTaskStore.markOrphanedProcessingInterrupted();

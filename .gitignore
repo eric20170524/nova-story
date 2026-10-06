@@ -41,6 +41,12 @@ backend/scripts/**
 !/scripts/full-production.mjs
 !/scripts/full-production.test.mjs
 !/scripts/production-references.mjs
+!/scripts/production-contracts.mjs
+!/scripts/production-contracts.test.mjs
+!/scripts/production-pipeline.test.mjs
+!/scripts/video-delivery-contract.mjs
+!/scripts/video-delivery-contract.test.mjs
+!/scripts/local-queue.mjs
 !/scripts/codex-image-jobs.mjs
 !/scripts/grok-video-jobs.mjs
 backend/codex-image-jobs/

@@ -189,9 +189,10 @@ export const VideoSpecCompiler = {
     if (!isLoop && request.workflow_id === 'grok_imagine_browser') {
       if (scene.dialogue?.trim()) positiveParts.push(`Spoken dialogue in Mandarin Chinese, verbatim: ${JSON.stringify(scene.dialogue.trim())}. Keep speech synchronized with the speaking character.`);
       if (scene.narration?.trim()) positiveParts.push(`Mandarin Chinese voiceover, verbatim: ${JSON.stringify(scene.narration.trim())}.`);
-      if (scene.audio_prompt?.trim()) positiveParts.push(`Sound: ${scene.audio_prompt.trim()}.`);
       if (!scene.dialogue?.trim() && !scene.narration?.trim()) positiveParts.push('Natural ambient sound only; no invented dialogue or narration.');
     }
+    if (!isLoop && scene.audio_prompt?.trim()) positiveParts.push(`Sound: ${scene.audio_prompt.trim()}.`);
+    if (!isLoop && request.workflow_id !== 'grok_imagine_browser') positiveParts.push('Natural ambient sound and requested sound effects; no invented dialogue or narration.');
     if (request.prompt_override) positiveParts.push(cleanPromptForH3(request.prompt_override));
     positiveParts.push(environmentMotion);
 

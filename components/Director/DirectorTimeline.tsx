@@ -46,6 +46,7 @@ interface DirectorTimelineProps {
   projectVideoWorkflowId?: VideoWorkflowId | null;
   onGenerateVideo?: (sceneId: number | string, options?: any) => void;
   onPromoteVideoAsset?: (assetId: number) => void;
+  onArchiveVideoAsset?: (assetId: number, expectedStatus: string) => void;
   onReprocessVideoAsset?: (assetId: number) => void;
   onCancelVideoTask?: (taskId: string) => void;
   chapterScript?: { id: number; revision: number; status: string } | null;
@@ -72,6 +73,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   projectVideoWorkflowId = null,
   onGenerateVideo,
   onPromoteVideoAsset,
+  onArchiveVideoAsset,
   onReprocessVideoAsset,
   onCancelVideoTask
 }) => {
@@ -398,6 +400,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             taskState={sceneTask}
                             onGenerateVideo={(opts) => onGenerateVideo?.(scene.id, opts)}
                             onPromoteAsset={onPromoteVideoAsset}
+                            onArchiveAsset={onArchiveVideoAsset}
                             onReprocessAsset={onReprocessVideoAsset}
                             onCancelTask={onCancelVideoTask}
                           />

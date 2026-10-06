@@ -34,7 +34,7 @@ export function normalizeExtractedAssets(
     if (['prop', '道具', '物品'].map(assetNameKey).includes(key)) return 'prop' as const;
     return null;
   };
-  const normalized = [];
+  const normalized: Array<z.infer<typeof LibraryAssetInput>> = [];
   for (const raw of rawAssets) {
     const kind = kindOf(raw.kind);
     const name = String(raw.name || '').replace(/^(?:场景|地点|道具|物品)\s*[：:]\s*/u, '').trim();
