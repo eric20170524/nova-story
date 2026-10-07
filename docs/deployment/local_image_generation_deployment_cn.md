@@ -1,6 +1,6 @@
 # 本地生图模型部署推荐 (RTX 3060 12GB)
 
-本文档整理了针对 **RTX 3060 12GB + 32GB 系统内存** 的 NovaStory 本地生图策略（2026-08 实测结论）。
+本文档整理了针对 **RTX 3060 12GB + 32GB 系统内存** 的 NovaStory 本地生图策略（Pony / SD1.5 / FLUX 结论来自 2026-08）。RedCraft 的权重、路径和 3060 运行时以 2026-10-07 对本机 `D:\ComfyUI` 的核对为准，见第 3 节。
 
 文档索引：[README.md](../README.md) · ComfyUI 步骤：[comfyui_local_setup_guide_3060.md](./comfyui_local_setup_guide_3060.md) · 参考图策略：[local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)
 
@@ -91,18 +91,68 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
   - Pony / SDXL 的 LoRA **严禁**混入 RedCraft 工作流。
   - RedCraft 采用 `LoraLoaderModelOnly` 机制注入 Diffusion UNet/DiT，文本端不挂 LoRA。
 
-### 3.2 RTX 3060 12GB 部署与运行参数推荐
-- **模型文件与放置路径**：
-  - **UNet / DiT**：推荐 **INT4 ConvRot 版本**（约 6GB，显存余量充足），放置于 `ComfyUI/models/diffusion_models/` 或 `unet/`（文件名如 `redcraft_krea2_int4.safetensors`）。*注：INT8 版本约 12GB，在 3060 上运行余量极小，不推荐。*
-  - **Text Encoder / CLIP**：Qwen3VL 编码器，放置于 `ComfyUI/models/clip/`（如 `qwen3_vl_text.safetensors`，CLIPLoader 类型选 `krea2`）。
-  - **VAE**：Qwen Image VAE，放置于 `ComfyUI/models/vae/`（如 `qwen_image_vae.safetensors`）。
-  - **LoRA**（可选）：`ComfyUI/models/loras/`（风格增强或特定成人概念）。
-- **推荐推理参数**：
-  - **Steps**：10 步（DiT 快速收敛）
-  - **CFG**：1.0（无需过高引导尺度）
-  - **Sampler / Scheduler**：`euler` + `simple`
-  - **分辨率**：768×1024 或 1024×1024
-- **内置工作流**：`backend/static/workflows/redcraft_krea2_12gb.json`
+### 3.2 RTX 3060 12GB 的权重、路径与运行时
+
+2026-10-07 按本机 `D:\ComfyUI` 核对。官方 [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) 的 `diffusion_models` 没有约 6GB 的 INT4 ConvRot。该仓库已发布的 turbo 量化是 bf16、fp8_scaled、int8_convrot、mxfp8、nvfp4。其中 nvfp4 不是约 6GB 的 INT4 ConvRot，本机也不使用它。本机扩散权重是 turbo **INT8 ConvRot**。
+
+仓库仍只有一份图 `backend/static/workflows/redcraft_krea2_12gb.json`，没有 INT4 / INT8 双 Profile 切换。
+
+**扩散权重**
+
+| 工作流 `UNETLoader` 请求的文件名 | 同一份数据的官方文件名 | 大小 | 目录 |
+| --- | --- | --- | --- |
+| `redcraft_krea2_int4.safetensors` | `krea2_turbo_int8_convrot.safetensors` | 13,492,686,496 字节（约 13.5 GB） | `ComfyUI/models/diffusion_models/` |
+
+这两个名字是硬链接，不是两份权重。`redcraft_krea2_int4.safetensors` 这个名字保留，是因为内置工作流的 `UNETLoader` 仍请求它；文件内容是 INT8 ConvRot。
+
+ComfyUI 的 `diffusion_models` 搜索路径包含 `models/unet` 和 `models/diffusion_models`。本机文件在 `diffusion_models`；`models/unet` 下没有这份权重。
+
+不要再下载或摆放一份约 6GB、名叫 INT4 的扩散权重。此前写的「推荐约 6GB INT4」和「INT8 约 12GB、3060 余量极小、不推荐」作废。
+
+**文本编码器**
+
+工作流 `CLIPLoader` 请求 `qwen_vl.safetensors`，类型 `krea2`。该名字与官方文件 `qwen3vl_4b_fp8_scaled.safetensors` 是同一份硬链接，5,242,467,968 字节（约 5.24 GB）。下面三处路径指向同一份数据：
+
+- `models/clip/qwen_vl.safetensors`
+- `models/text_encoders/qwen_vl.safetensors`
+- `models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors`
+
+`CLIPLoader` 走 `text_encoders` 搜索路径，会同时查找 `models/text_encoders` 和 `models/clip`。不要使用旧示例名 `qwen3_vl_text.safetensors`。
+
+**VAE**
+
+`qwen_image_vae.safetensors` 放在 `ComfyUI/models/vae/`。本机 253,806,246 字节（约 242 MB），与官方仓库同名。
+
+**LoRA**（可选）
+
+放在 `ComfyUI/models/loras/`。Pony / SDXL 的 LoRA 不要挂进这条工作流。
+
+**推理参数**
+
+- **Steps**：10
+- **CFG**：1.0
+- **Sampler / Scheduler**：`euler` + `simple`
+- **标准 16:9**：交付图 **1280×720**。Comfy 潜空间按 64 对齐，高度 720 对齐为 704，即 **1280×704**。见 `backend/src/services/image_output_spec.ts` 的 `resolveComfyLatentDimensions`。
+- 工作流 JSON 里的 `EmptyLatentImage` 仍写 1024×1024。NovaStory 按项目的 16:9 standard 规格编译时，把它改写成 1280×704。
+
+**3060 上跑通 1280×704 的运行时**
+
+ComfyUI 虚拟环境是 `D:\ComfyUI\venv`。2026-10-07 核对到的版本：
+
+| 包 | 版本 |
+| --- | --- |
+| PyTorch | 2.9.1+cu130 |
+| torchvision | 0.24.1+cu130 |
+| torchaudio | 2.9.1+cu130 |
+| comfy-kitchen | 0.2.37 |
+
+2026-10-07 在该虚拟环境中导入 comfy-kitchen：`cuda` 后端可用，并且实现了 `int8_linear`；`eager` 也可用。`triton` 未安装，不参与这条路径。INT8 ConvRot 因此走 CUDA `int8_linear`。kitchen 0.2.37 的 CUDA 扩展按 CUDA 13 寻找 `cublasLt`（`nvidia.cu13`）。扩展加载失败时，注册表把 `cuda` 后端标成不可用，`int8_linear` 落到 eager。
+
+PyTorch **2.6.0+cu124** 会关掉这个 CUDA 后端。INT8 ConvRot 改为 eager 反量化。标准潜空间 1280×704 在这条路径上会显存溢出，ComfyUI 加上 `--lowvram` 也避免不了。不要把该虚拟环境退回 cu124。
+
+`--lowvram` 不能代替 CUDA `int8_linear`。1280×704 能在这张 3060 上出图，是因为量化线性层留在 CUDA 内核里计算。
+
+**内置工作流**：`backend/static/workflows/redcraft_krea2_12gb.json`
 
 ---
 
@@ -140,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 
 ```text
 1. Pony XL（二次元国漫主力成片 + 角色一致性）
-2. RedCraft Krea2 INT4（次世代静态摄影/写实 + 原生高细 NSFW）
+2. RedCraft Krea2 INT8 ConvRot（次世代静态摄影/写实；工作流文件名仍是 redcraft_krea2_int4.safetensors，内容是约 13.5GB 的 INT8 硬链接，见第 3.2 节）
 3. SD1.5 精品模（极速草稿机）
 ```
 
@@ -152,7 +202,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 - **系统 RAM**：32GB 足够；生图时尽量关闭占显存的其它程序  
 - **分辨率**：
   - Pony/SDXL：768–1024，需要再 Hires / 放大  
-  - RedCraft Krea2：768–1024  
+  - RedCraft Krea2：标准 16:9 交付 1280×720，Comfy 潜空间 1280×704。前提是第 3.2 节的 PyTorch 2.9.1+cu130 与 comfy-kitchen 0.2.37  
   - SD1.5：512–768  
 - **NSFW**：
   - Pony：Civitai 上 Pony/SDXL 专用 LoRA；系统设置里开启 NSFW 后自动叠加载细节 + 成人向 LoRA  
@@ -169,7 +219,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 | --- | --- |
 | SD1.5 草稿 | 约 2–8 秒/张 |
 | Pony / SDXL | 约 5–20 秒/张 |
-| RedCraft Krea2 INT4 (10 steps) | 约 6–18 秒/张 |
+| RedCraft Krea2 INT8 ConvRot（10 steps，潜空间 1280×704） | 本文不记录耗时。旧的「约 6–18 秒」按并不存在的约 6GB INT4 估算，作废 |
 | ~~FLUX Dev GGUF~~ | ~~20–60 秒/张（已弃用）~~ |
 
 ---

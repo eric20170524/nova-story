@@ -28,6 +28,7 @@ const rebuildScripts = args.includes('--rebuild-scripts');
 const rebuildAssets = args.includes('--rebuild-assets');
 const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts;
 const acceptLegacyStoryboards = args.includes('--accept-legacy-storyboards');
+const allowLaterChapterImages = args.includes('--allow-later-chapter-images');
 const assetScopeArg = option('asset-scope', null);
 const selectedChapterId = option('chapter-id', null);
 const narratorVoice = option('narrator-voice', null);
@@ -95,17 +96,36 @@ async function request(url, method = 'GET', body) {
     }
     else { state.requests[requestId] = body; save(); }
   }
-  const response = await fetch(`${base}/api${url}`, {
-    method, headers: { 'Content-Type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30 * 60 * 1000),
-  });
-  const text = await response.text();
-  let result; try { result = JSON.parse(text); } catch { throw new Error(`${url}: non-JSON response (${response.status})`); }
-  if (!response.ok) {
-    const error = new Error(`${url}: HTTP ${response.status} ${JSON.stringify(result)}`);
-    error.status = response.status; error.code = result.code; throw error;
+  const send = async () => {
+    const response = await fetch(`${base}/api${url}`, {
+      method, headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30 * 60 * 1000),
+    });
+    const text = await response.text();
+    let result; try { result = JSON.parse(text); } catch { throw new Error(`${url}: non-JSON response (${response.status})`); }
+    if (!response.ok) {
+      const error = new Error(`${url}: HTTP ${response.status} ${JSON.stringify(result)}`);
+      error.status = response.status; error.code = result.code; throw error;
+    }
+    return result;
+  };
+  // Status polls are GET. A director page can stall the dev server in Vite and reset
+  // the socket; that must not abandon a ComfyUI job that is still sampling.
+  if (method !== 'GET') return send();
+  let lastError;
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    try {
+      return await send();
+    } catch (error) {
+      lastError = error;
+      const code = error?.cause?.code || '';
+      const message = String(error?.message || error);
+      const transient = message === 'fetch failed' || ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET'].includes(code);
+      if (!transient || attempt === 6) throw error;
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+    }
   }
-  return result;
+  throw lastError;
 }
 async function step(name, work) {
   if (state.steps[name]?.status === 'completed') return state.steps[name].result;
@@ -804,7 +824,9 @@ async function assertPriorChaptersReady(chapter, scope = null) {
 async function runChapterProductionStage(handler, selected = null) {
   const scope = await chapters();
   for (const chapter of selected || scope) {
-    await assertPriorChaptersReady(chapter, scope);
+    // Still-only runs can move on when the operator asked for a later chapter's images.
+    // Full production and video still wait until earlier chapters are accepted.
+    if (!(allowLaterChapterImages && stage === 'images')) await assertPriorChaptersReady(chapter, scope);
     await requireContinuityReview();
     activeProductionChapterId = chapter.id;
     try { await handler([chapter]); }
@@ -1085,7 +1107,7 @@ function report(error) {
   const engineering = fs.existsSync(engineeringFile) ? JSON.parse(fs.readFileSync(engineeringFile, 'utf8')) : null;
   const manualFile = path.join(directory, 'manual-review.json');
   const manualReview = fs.existsSync(manualFile) ? JSON.parse(fs.readFileSync(manualFile, 'utf8')) : null;
-  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景、道具和镜头视频默认由本机 ComfyUI 按项目设置生成。Codex 或 Grok 只有在命令明确要求时才使用。跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed${acceptLegacyStoryboards ? ' --accept-legacy-storyboards' : ''}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
+  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景、道具和镜头视频默认由本机 ComfyUI 按项目设置生成。Codex 或 Grok 只有在命令明确要求时才使用。跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed${acceptLegacyStoryboards ? ' --accept-legacy-storyboards' : ''}${allowLaterChapterImages ? ' --allow-later-chapter-images' : ''}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
 }
 let failure;
 try {

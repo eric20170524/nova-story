@@ -223,8 +223,20 @@
 - [ ] **P1-9: 记录完整 generation provenance 元数据**。
 
 ### 3. P2 — 部署体验与文档
-- [ ] **P2-1: 修订 `docs/deployment/local_image_generation_deployment_cn.md` 中的模型文件名与路径**。
-- [ ] **P2-2: 在 `docs/deployment/comfyui_local_setup_guide_3060.md` 增加 RedCraft 配置清单**。
+- [x] **P2-1: 修订 `docs/deployment/local_image_generation_deployment_cn.md` 中的模型文件名与路径**。
+  - **Decision & Audit（2026-10-07）**：
+    - **决策**：部署文档改记本机事实。扩散权重是 `krea2_turbo_int8_convrot.safetensors`（13,492,686,496 字节，约 13.5 GB）的硬链接，工作流文件名仍为 `redcraft_krea2_int4.safetensors`。官方 Comfy-Org/Krea-2 没有约 6GB 的 INT4 扩散权重。文本编码器是 `qwen3vl_4b_fp8_scaled.safetensors` 的硬链接 `qwen_vl.safetensors`。3060 上标准潜空间 1280×704 依赖 `D:\ComfyUI\venv` 的 PyTorch 2.9.1+cu130 与 comfy-kitchen 0.2.37，使 CUDA `int8_linear` 生效。PyTorch 2.6.0+cu124 会关掉该后端，INT8 走 eager 反量化，该潜空间溢出。
+    - **改动文件**：`docs/deployment/local_image_generation_deployment_cn.md`；本任务状态。
+    - **下游调用方**：阅读部署文档的操作者。`redcraft_krea2_12gb.json` 的 UNETLoader / CLIPLoader 文件名未改，仍靠上述硬链接解析。
+    - **边界**：P2-1 当时不改 3060 指南。该清单已由 P2-2 补上。P2-3、P2-4 仍不关闭，也不实现 INT4 / INT8 Profile。P0-9 仍把 INT4 写成 3060 默认档；官方并没有那份约 6GB INT4 扩散权重，该前提留在未完成任务里，本次不把它改写成已实现。
+    - **验收**：`fsutil hardlink list` 确认两个扩散文件名、以及 `qwen_vl.safetensors` 与 `qwen3vl_4b_fp8_scaled.safetensors` 为硬链接。该虚拟环境报 torch 2.9.1+cu130、torchvision 0.24.1+cu130、torchaudio 2.9.1+cu130、comfy-kitchen 0.2.37。同日导入 comfy-kitchen 后，`cuda` 后端可用且实现了 `int8_linear`。本次没有重跑 2.6.0+cu124 的溢出。
+- [x] **P2-2: 在 `docs/deployment/comfyui_local_setup_guide_3060.md` 增加 RedCraft 配置清单**。
+  - **Decision & Audit（2026-10-07）**：
+    - **决策**：3060 指南改为本机启动方式，并写入 RedCraft 配置清单。扩散、文本编码器、VAE 用工作流文件名与本机硬链接对照；运行时写明 PyTorch 2.9.1+cu130 与 comfy-kitchen 0.2.37。量化原因仍以 `local_image_generation_deployment_cn.md` 第 3.2 节为准，本指南不另写一套，也不记录耗时或峰值显存。
+    - **改动文件**：`docs/deployment/comfyui_local_setup_guide_3060.md`；本任务状态。
+    - **下游调用方**：按该指南启动 ComfyUI 或摆放 RedCraft 权重的操作者。`start_all.ps1` 的启动命令未改。
+    - **边界**：不关闭 P2-3、P2-4，不加入下载脚本或仓库内权重，也不实现 INT4 / INT8 Profile。指南只给出官方仓库链接和本机已核对的文件名。
+    - **验收**：本机 `D:\ComfyUI` 为 0.34.5，`install_path` 为 `D:\ComfyUI`，存在 `venv\Scripts\python.exe` 与 `main.py`，不存在 `run_nvidia_gpu.bat` 与 `python_embeded`。指南中的启动参数与 `start_all.ps1` 一致，清单中的文件名和字节数与 2026-10-07 的磁盘核对一致。
 - [ ] **P2-3: 仅提供检测与下载指引，不内置第三方权重**。
 - [ ] **P2-4: 记录 3060 Benchmark (INT4 vs INT8 耗时与峰值显存)**。
 
@@ -237,7 +249,7 @@
 
 - **决策**：Track 3 不能整体标为完成。现有 `redcraft_krea2` 模型族、项目模型选项和单份 INT4 工作流属于接入基础；尚无 `auto | int4 | int8` Profile 配置、运行时 Loader 注入和 RedCraft 专用 Preflight。`redcraft_krea2_12gb.json` 仍固定扩散模型与 `qwen_vl.safetensors`，因此 P0-1–4、P0-6–9 保持未完成。工作流已有 10 steps / cfg 1 / euler / simple，编译器也有 RedCraft 默认参数，但没有 INT8 Profile，P0-5 仍待双档验证。
 - **已完成项及调用方**：`backend/src/services/image_generation_policy.ts` 按模型族选择 LoRA 并排除 Pony 文件，`image_generation_policy.test.ts` 覆盖隔离行为，支撑 P1-4；`backend/src/services/generation_service.ts` 在非 Pony 模型上禁用 Tier B 的角色适配与构图控制，并保留 RedCraft 的 Tier A img2img，支撑 P1-5。下游调用方仍走通用 `GenerationService → ComfyUIService`，未新增 RedCraft Provider。
-- **未完成边界**：`pages/Settings.tsx` 只有 RedCraft LoRA 设置，`pages/ProjectSettings.tsx` 只有模型选择，没有 Profile 档位；未见 RedCraft Ready、专用 smoke、完整 provenance、Krea2 原生 Style Reference 或 3060 INT4/INT8 实测。部署文档仍使用示例模型名，3060 指南尚无 RedCraft 配置清单。P1-1–3、P1-6–9 与 P2-1–4 保持未完成；P2-3 需同时有检测和下载指引才能关闭。
+- **未完成边界**：`pages/Settings.tsx` 只有 RedCraft LoRA 设置，`pages/ProjectSettings.tsx` 只有模型选择，没有 Profile 档位；未见 RedCraft Ready、专用 smoke、完整 provenance、Krea2 原生 Style Reference 或 3060 INT4/INT8 实测。2026-09-28 时部署文档仍使用示例模型名；该文档已于 2026-10-07 按 P2-1 修订。3060 指南已于同日按 P2-2 写入 RedCraft 配置清单与本机启动方式。P1-1–3、P1-6–9 与 P2-3–4 保持未完成；P2-3 需同时有检测和下载指引才能关闭。
 - **验收矩阵**：根目录及后端 `typecheck` 通过；静态检查确认 P1-4 / P1-5 的代码路径；相关模型族、工作流选择与 LoRA 策略测试 34/34 通过。标准 `backend/npm test` 在当前沙箱因 `tsx` IPC 管道 `listen EPERM` 未能启动，相关测试改用 `node --import tsx --test` 运行。三个 DoD 场景均缺目标 RTX 3060 + ComfyUI 的可复现记录，不能据仓库静态状态判定通过。
 
 ---

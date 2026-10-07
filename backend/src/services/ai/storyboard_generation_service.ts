@@ -267,7 +267,7 @@ export function normalizeStoryboardReferences<T extends { script_scene_id: strin
       const numeric = /^(?:内容块|block|b)[_-]?(\d+)$/i.exec(id.normalize('NFKC').toLowerCase());
       const index = numeric ? Number(numeric[1]) - 1 : -1;
       return index >= 0 && sceneBlocks[index] ? sceneBlocks[index]! : id;
-    });
+    }).filter((id) => allBlockIds.has(id));
     return { ...shot, script_scene_id, block_ids };
   });
 }

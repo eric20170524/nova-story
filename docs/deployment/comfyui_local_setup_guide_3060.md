@@ -2,18 +2,42 @@
 
 为了让 NovaStory 在本地生成高质量分镜，需要配置 ComfyUI。本指南针对 **RTX 3060 (12GB)**；后端已内置对应工作流模板。
 
-**本地策略（2026-08）：** 主力 **Pony / SDXL** + 草稿 **SD 1.5**。  
-**FLUX.1-dev GGUF 已退役**，详见 [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md)。  
-**参考图 / IP-Adapter 何时生效：** [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。
+**本地策略：** 主力 **Pony / SDXL**，草稿 **SD 1.5**，次世代静帧 **RedCraft「赤佬 3.0 / Krea2」**（本机是 INT8 ConvRot）。Pony / SD1.5 / FLUX 的选型结论来自 2026-08；RedCraft 的文件与运行时以 2026-10-07 对本机的核对为准。  
+**FLUX.1-dev GGUF 已退役**。权重原因与 1280×704 的运行时说明见 [local_image_generation_deployment_cn.md](./local_image_generation_deployment_cn.md) 第 3.2 节。  
+**参考图 / IP-Adapter 何时生效：** [local_image_reference_policy_cn.md](./local_image_reference_policy_cn.md)。档位 B 只服务 Pony / SDXL。
 
 文档总索引：[README.md](../README.md)。
 
-## 1. 下载与运行 ComfyUI
+## 1. 本机 ComfyUI 与启动
 
-1. 前往 [ComfyUI 官方 Releases](https://github.com/comfyanonymous/ComfyUI/releases) 下载最新 **Portable**（Windows 推荐）。
-2. 解压到空间充足的磁盘（如 `D:\ComfyUI`）。
-3. 运行 `run_nvidia_gpu.bat`。
-4. 浏览器访问 `http://127.0.0.1:8188` 确认界面可用。
+本机安装在 `D:\ComfyUI`，版本 **0.34.5**。`backend/system_settings.json` 的 `comfyui.install_path` 也是这个目录；环境变量 `NOVASTORY_COMFYUI_DIR` 可以覆盖它。
+
+这里不是 Portable 包：没有 `run_nvidia_gpu.bat`，也没有 `python_embeded`。解释器是 `D:\ComfyUI\venv\Scripts\python.exe`。
+
+在仓库根目录启动（会先放开本机文本模型占用的显存，再拉起 ComfyUI）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_all.ps1 -ComfyUIOnly
+```
+
+`start_all.ps1` 实际执行的是：
+
+```text
+D:\ComfyUI\venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8188 --lowvram --disable-pinned-memory --cache-none
+```
+
+浏览器打开 `http://127.0.0.1:8188`。`127.0.0.1:8188` 上只保留一个 `main.py`。
+
+RedCraft 要在这张 3060 上出标准潜空间 1280×704，这个虚拟环境必须是：
+
+| 包 | 版本 |
+| --- | --- |
+| PyTorch | 2.9.1+cu130 |
+| torchvision | 0.24.1+cu130 |
+| torchaudio | 2.9.1+cu130 |
+| comfy-kitchen | 0.2.37 |
+
+2026-10-07 在该环境中导入 comfy-kitchen 时，`cuda` 后端可用并实现了 `int8_linear`。不要把虚拟环境退回 PyTorch 2.6.0+cu124：那个组合会关掉 CUDA 后端，INT8 走 eager 反量化，1280×704 会溢出。`--lowvram` 不能代替这个内核。说明见部署文档第 3.2 节。
 
 ## 2. 下载推荐模型
 
@@ -37,7 +61,23 @@
 
 ### 写实向（可选，替代原 FLUX 写实位）
 
-需要电影感/摄影风时，使用 **Juggernaut XL** / **RealVisXL** 等 SDXL 写实模：复制 Pony 工作流并改 checkpoint。**不要**再安装 FLUX.1-dev GGUF。
+需要电影感/摄影风时，使用 **Juggernaut XL** / **RealVisXL** 等 SDXL 写实模：复制 Pony 工作流并改 checkpoint。**不要**再安装 FLUX.1-dev GGUF。次世代静帧也可以走下面的 RedCraft，而不是再装 FLUX。
+
+### RedCraft「赤佬 3.0 / Krea2」配置清单
+
+项目里选择 **RedCraft 3.0 (Krea2)**（模型族 `redcraft_krea2`）时，使用内置工作流 `backend/static/workflows/redcraft_krea2_12gb.json`。推理参数是 10 steps、CFG 1、`euler` + `simple`。标准 16:9 的交付图是 1280×720，送进 Comfy 的潜空间是 1280×704。耗时和峰值显存不在本指南记录。
+
+官方文件来自 [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2)。该仓库没有约 6GB 的 INT4 扩散权重。本机用的是 turbo INT8 ConvRot；工作流里的文件名是硬链接，不是第二份权重。
+
+| 组件 | 工作流请求的文件名 | 本机上的同一份文件 | 目录 |
+| --- | --- | --- | --- |
+| 扩散模型 | `redcraft_krea2_int4.safetensors` | `krea2_turbo_int8_convrot.safetensors`，13,492,686,496 字节（约 13.5 GB），INT8 ConvRot | `ComfyUI/models/diffusion_models/` |
+| 文本编码器 | `qwen_vl.safetensors`（CLIPLoader 类型 `krea2`） | `qwen3vl_4b_fp8_scaled.safetensors`，5,242,467,968 字节（约 5.24 GB） | `models/clip/` 与 `models/text_encoders/` 各有一份硬链接 |
+| VAE | `qwen_image_vae.safetensors` | 同名，253,806,246 字节（约 242 MB） | `ComfyUI/models/vae/` |
+
+`models/unet/` 里没有这份扩散权重。ComfyUI 会搜索 `models/unet` 和 `models/diffusion_models`，本机文件在后者。
+
+Pony / SDXL 的 LoRA 不要挂进这条工作流。档位 B 的 IP-Adapter 与 ControlNet 也不用于 RedCraft。可选的 Krea2 LoRA 放在 `ComfyUI/models/loras/`。
 
 ## 2.5 档位 B：人物 + 构图双参考（Pony / SDXL）
 
@@ -82,8 +122,8 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
 
 1. 保持 ComfyUI 终端运行。  
 2. 启动 NovaStory（`start_all.ps1` 或 README 方式）。  
-3. 系统设置：启用 ComfyUI，`selected_workflow_file` / `default_workflow` 为 `pony_xl_12gb.json`。  
-4. 项目设置可选默认模型 **Pony XL** 或 **SD 1.5 Draft**。  
+3. 系统设置：启用 ComfyUI。系统默认工作流保持 `pony_xl_12gb.json`（`selected_workflow_file` / `default_workflow`）。  
+4. 项目设置可选 **Pony XL**、**SD 1.5 Draft** 或 **RedCraft 3.0 (Krea2)**。选 RedCraft 时走 `redcraft_krea2_12gb.json`，文件见上面的配置清单。  
 5. Director Mode 生成素材；完成后图片回写到项目静态目录。
 
 ## FAQ
@@ -98,7 +138,10 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_tier_b_comfyui.ps1 -Comfy
   A: 检查是否误传全镜 `character_ref` 且权重过高；关闭 NSFW 时尚在动作镜会剥离 alluring 类风格词；对比 `style_preset` 是否过「魅惑」。
 
 - **Q: Workflow template not found？**  
-  A: 确认 `backend/static/workflows/` 存在 `pony_xl_12gb.json` 或 `sd15_draft_12gb.json`，重启后端以重新 seed。可用环境变量 `NOVASTORY_STATIC_DIR` 覆盖静态根目录。
+  A: 确认 `backend/static/workflows/` 存在 `pony_xl_12gb.json`、`sd15_draft_12gb.json` 或 `redcraft_krea2_12gb.json`，重启后端以重新 seed。可用环境变量 `NOVASTORY_STATIC_DIR` 覆盖静态根目录。
+
+- **Q: RedCraft 在 1280×704 显存溢出？**  
+  A: 先看第 1 节的虚拟环境。PyTorch 2.9.1+cu130 与 comfy-kitchen 0.2.37 让 CUDA `int8_linear` 生效后，这个潜空间才能在 3060 上跑。PyTorch 2.6.0+cu124 会走 eager 反量化并溢出。`--lowvram` 不能代替该内核。
 
 - **Q: 库里还有旧 flux 工作流？**  
   A: Workflow 管理页禁用/删除即可；后端启动也会清理已下架的 bundled `flux_dev_*` 名。
