@@ -75,7 +75,7 @@ async function fixture(handler) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'nova-production-test-'));
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
-    try { const result = await handler(req.url, req.method, raw ? JSON.parse(raw) : undefined); res.writeHead(result.status || 200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body)); }
+    try { const result = req.url === '/api/agent/consistency' ? { body: { issues: [] } } : await handler(req.url, req.method, raw ? JSON.parse(raw) : undefined); res.writeHead(result.status || 200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result.body)); }
     catch (error) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -176,7 +176,7 @@ test('failed video tasks keep their identity until an explicit retry allocates a
   let submissions = 0; const requestKeys = [];
   const f = await fixture((url, method, body) => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
-    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, active_version: 1 }] } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', active_version: 1 }] } };
     if (url.includes('/media?')) return { body: { assets: [] } };
     if (url.startsWith('/api/characters/')) return { body: [] };
     if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
@@ -193,7 +193,7 @@ test('failed video tasks keep their identity until an explicit retry allocates a
   } finally { await f.close(); }
 });
 
-test('chapter limit stops the original video workflow after the selected chapters', async () => {
+test('chapter limit does not allow the second chapter before the first is accepted', async () => {
   const submissions = [];
   const preflightScenes = [];
   const f = await fixture((url, method, body) => {
@@ -218,7 +218,7 @@ test('chapter limit stops the original video workflow after the selected chapter
     const result = await f.run('videos', ['--chapter-limit', '2']);
     assert.equal(result.code, 1);
     assert.match(result.output, /visual review/);
-    assert.deepEqual(submissions, [61, 62]);
+    assert.deepEqual(submissions, [61]);
     const state = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
     assert.equal(state.chapterLimit, 2);
   } finally { await f.close(); }
@@ -280,7 +280,7 @@ test('partial location matches never start keyframe generation or silently omit 
     if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: {} } };
     if (url.includes('/asset-library')) return { body: [{ id: 1, kind: 'location', name: '山庙' }] };
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
-    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, shot_spec: { location: '山庙', key_props: ['铜铃'] } }] } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', shot_spec: { location: '山庙', key_props: ['铜铃'] } }] } };
     if (url.endsWith('/asset-references')) return { body: [] };
     if (url.endsWith('/export')) return { body: {} };
     generationCalls++; return { status: 500, body: { error: 'must not generate' } };
@@ -295,7 +295,7 @@ test('the focus character selects its own portrait references regardless of cast
   let selected;
   const f = await fixture((url, method, body) => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
-    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, active_version: 1, shot_spec: { primary_subject: '阿风', visible_subjects: ['阿宁', '阿风'] } }] } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', active_version: 1, shot_spec: { primary_subject: '阿风', visible_subjects: ['阿宁', '阿风'] } }] } };
     if (url.includes('/media?')) return { body: { assets: [
       { id: 81, character_id: 1, role: 'character_reference', status: 'ready' },
       { id: 82, character_id: 2, role: 'character_reference', status: 'ready' },
@@ -315,7 +315,7 @@ test('a named character without identity references stops before video inference
   const f = await fixture(url => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
     if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: '{}' } };
-    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, shot_spec: { primary_subject: '阿风' } }] } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', shot_spec: { primary_subject: '阿风' } }] } };
     if (url.includes('/media?')) return { body: { assets: [] } };
     if (url.startsWith('/api/characters/')) return { body: [{ id: 2, name: '阿风' }] };
     submissions++; return { status: 500, body: { error: 'must not infer' } };
@@ -422,7 +422,7 @@ test('full run waits for current image approval before video generation or start
   });
   try {
     for (const name of ['shot-1.png', 'a.png', 't.png']) execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=1280x720', '-frames:v', '1', path.join(f.directory, name)]);
-    const result = await f.run('all', ['--chapter-limit', '2'], { NOVASTORY_STATIC_DIR: f.directory });
+    const result = await f.run('all', ['--chapter-limit', '2', '--accept-legacy-storyboards'], { NOVASTORY_STATIC_DIR: f.directory });
     assert.equal(result.code, 1);
     assert.match(result.output, /images: human approval/);
     assert.equal(calls.some(call => call.includes('/chapters/ch-2/script')), false);
@@ -436,7 +436,7 @@ test('changing a keyframe creates one new video task while an unchanged resume n
   const requests = [];
   const f = await fixture((url, method, body) => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
-    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, active_version: 1, asset_url: keyframe }] } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', active_version: 1, asset_url: keyframe }] } };
     if (url.includes('/media?')) return { body: { assets: [] } };
     if (url.startsWith('/api/characters/')) return { body: [] };
     if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
@@ -453,9 +453,10 @@ test('changing a keyframe creates one new video task while an unchanged resume n
 
 test('preflight keeps Codex and Grok off unless the command explicitly requests them', async () => {
   const calls = [];
+  let imageSettings = { image_provider: 'codex', comfyui: { enabled: false } };
   const f = await fixture((url) => {
     calls.push(url);
-    if (url === '/api/settings/') return { body: { image_provider: 'codex', comfyui: { enabled: false } } };
+    if (url === '/api/settings/') return { body: imageSettings };
     if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: JSON.stringify({ video_generation: { workflow_id: 'grok_imagine_browser' } }) } };
     if (url.includes('/settings/verify-llm')) return { body: { status: 'success' } };
     if (url.includes('/settings/verify-comfy')) return { body: { status: 'success' } };
@@ -474,6 +475,10 @@ test('preflight keeps Codex and Grok off unless the command explicitly requests 
     assert.equal(allowed.code, 0, allowed.output);
     assert.equal(calls.some(url => url.includes('workflow_id=grok_imagine_browser')), true);
     assert.equal(calls.some(url => url.includes('/settings/verify-comfy')), false);
+    imageSettings = { image_provider: 'pony', comfyui: { enabled: true } };
+    const ignored = await f.run('preflight', ['--allow-codex-image', '--video-workflow', 'grok_imagine_browser'], { NOVASTORY_VIDEO_WORKFLOW: '' });
+    assert.equal(ignored.code, 1);
+    assert.match(ignored.output, /当前配置不会走该通路/);
   } finally { await f.close(); }
 });
 
@@ -508,6 +513,14 @@ test('rebuild flags regenerate an existing screenplay and storyboard instead of 
     const kept = await f.run('scripts');
     assert.equal(kept.code, 0, kept.output);
     assert.equal(calls.some(call => call.includes('/candidates')), false);
+    const legacyBoard = await f.run('storyboards');
+    assert.equal(legacyBoard.code, 1, legacyBoard.output);
+    assert.match(legacyBoard.output, /policy is unknown/);
+    assert.equal(JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8')).storyboardInputs?.['ch-1'], undefined);
+    const acceptedLegacyBoard = await f.run('storyboards', ['--accept-legacy-storyboards']);
+    assert.equal(acceptedLegacyBoard.code, 0, acceptedLegacyBoard.output);
+    assert.match(acceptedLegacyBoard.output, /policy remains unknown/);
+    assert.equal(JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8')).storyboardInputs?.['ch-1'], undefined);
     calls.length = 0;
     const rebuilt = await f.run('scripts', ['--rebuild-scripts']);
     assert.equal(rebuilt.code, 0, rebuilt.output);

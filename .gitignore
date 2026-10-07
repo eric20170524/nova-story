@@ -44,6 +44,7 @@ backend/scripts/**
 !/scripts/production-contracts.mjs
 !/scripts/production-contracts.test.mjs
 !/scripts/production-pipeline.test.mjs
+!/scripts/production-gates.test.mjs
 !/scripts/video-delivery-contract.mjs
 !/scripts/video-delivery-contract.test.mjs
 !/scripts/local-queue.mjs

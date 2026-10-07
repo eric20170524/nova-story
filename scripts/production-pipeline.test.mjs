@@ -72,7 +72,7 @@ test('two chapters resume through image/video/chapter approvals and deliver full
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const output = path.join(folder, 'production');
   const run = async (stage = 'all', extra = []) => {
-    const child = spawn(process.execPath, ['scripts/full-production.mjs', '--project', '99001', '--chapter-limit', '2', '--stage', stage, '--base-url', `http://127.0.0.1:${server.address().port}`, '--output', output, ...extra], { env: { ...process.env, NOVASTORY_STATIC_DIR: staticRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['scripts/full-production.mjs', '--project', '99001', '--chapter-limit', '2', '--stage', stage, '--base-url', `http://127.0.0.1:${server.address().port}`, '--output', output, '--accept-legacy-storyboards', ...extra], { env: { ...process.env, NOVASTORY_STATIC_DIR: staticRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
     let log = ''; child.stdout.on('data', data => { log += data; }); child.stderr.on('data', data => { log += data; });
     const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', resolve); }); return { code, log };
   };

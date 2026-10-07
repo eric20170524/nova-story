@@ -27,10 +27,11 @@ const allowCodexImage = args.includes('--allow-codex-image');
 const rebuildScripts = args.includes('--rebuild-scripts');
 const rebuildAssets = args.includes('--rebuild-assets');
 const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts;
+const acceptLegacyStoryboards = args.includes('--accept-legacy-storyboards');
 const assetScopeArg = option('asset-scope', null);
 const selectedChapterId = option('chapter-id', null);
 const narratorVoice = option('narrator-voice', null);
-const stages = ['preflight', 'text', 'scripts', 'assets', 'storyboards', 'images', 'review-images', 'review-chapter', 'audio', 'video-preflight', 'videos', 'assemble', 'verify'];
+const stages = ['preflight', 'text', 'review-continuity', 'review-task-order', 'scripts', 'assets', 'storyboards', 'images', 'review-images', 'review-chapter', 'audio', 'video-preflight', 'videos', 'assemble', 'verify'];
 if (!projectArg || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 200 || ![...stages, 'all'].includes(stage)) throw new Error('Invalid --project, --chapter-limit or --stage');
 fs.mkdirSync(directory, { recursive: true });
 const lockFile = path.join(directory, '.production.lock');
@@ -76,6 +77,14 @@ const storyboardRebuildToken = rebuildStoryboards ? takeRebuildToken('storyboard
 const assetRebuildToken = rebuildAssets ? takeRebuildToken('assets') : '';
 const hash = text => createHash('sha256').update(Buffer.isBuffer(text) ? text : String(text)).digest('hex');
 const key = name => `production:${projectId}:${name}`;
+let activeProductionChapterId = null;
+async function submitProductionTask(kind, submissionStep, submit) {
+  if (!activeProductionChapterId) throw new Error(`Missing chapter context for ${kind} submission`);
+  state.taskSubmissions ||= [];
+  state.taskSubmissions.push({ chapter_id: activeProductionChapterId, kind, submission_step: submissionStep, submitted_at: new Date().toISOString() });
+  save();
+  return submit();
+}
 async function request(url, method = 'GET', body) {
   if (body?.request_key) {
     const requestId = hash(`${url}:${body.request_key}`);
@@ -155,7 +164,7 @@ async function generateImage(name, start) {
         delete state.steps[`${name}:submit`]; state.imageAttempts ||= {}; state.imageAttempts[name] = (state.imageAttempts[name] || 0) + 1; save();
       }
     }
-    const task = await step(`${name}:submit`, () => start(key(`${name}:attempt:${state.imageAttempts?.[name] || 0}`)));
+    const task = await step(`${name}:submit`, () => submitProductionTask('image', `${name}:submit`, () => start(key(`${name}:attempt:${state.imageAttempts?.[name] || 0}`))));
     const result = await waitTask(task.task_id);
     return { ...result, artifact_sha256: fileHash(localMedia(result.image_url)) };
   });
@@ -210,6 +219,9 @@ function providerBlockers(settings) {
   if (!allowCodexImage && (provider === 'codex' || provider === 'grok' || !comfyEnabled)) {
     blockers.push('生图和生视频默认使用已启用的本机 ComfyUI，并遵守项目图像设置。Codex 或 Grok 内置生图只有在明确要求时才加 --allow-codex-image。');
   }
+  if (allowCodexImage && (provider !== 'codex' || comfyEnabled)) {
+    blockers.push('--allow-codex-image 仅在 image_provider=codex 且 comfyui.enabled=false 时启用 Codex 图像队列；当前配置不会走该通路。');
+  }
   if (process.env.NOVASTORY_VIDEO_WORKFLOW === 'grok_imagine_browser' && !allowGrokVideo) {
     blockers.push('NOVASTORY_VIDEO_WORKFLOW=grok_imagine_browser 不会自动生效。只有明确要求时才传入 --video-workflow grok_imagine_browser。');
   }
@@ -217,6 +229,17 @@ function providerBlockers(settings) {
     blockers.push('项目 video_generation.workflow_id 是 grok_imagine_browser。默认制作改用 ComfyUI；只有明确要求时才传入 --video-workflow grok_imagine_browser。');
   }
   return blockers;
+}
+function keyframeOutputBlocker(project) {
+  const image = projectSettingsOf(project).image_generation || {};
+  const model = image.model || 'pony';
+  const output = image.output_spec || {};
+  const resolution = output.resolution || 'standard';
+  const ratio = output.aspect_ratio || '16:9';
+  if (model === 'sd15' || resolution === 'draft' || ratio !== '16:9' || output.orientation_policy === 'auto_by_shot') {
+    return `项目关键帧设置 ${model}/${resolution}/${ratio}/${output.orientation_policy || 'fixed'} 无法保证 1280×720、16:9；请在项目图像设置中选择支持的模型、standard 或 high、固定 16:9 后再生成。`;
+  }
+  return null;
 }
 async function assertProductionProviders() {
   const [settings, projectWorkflow] = await Promise.all([request('/settings/'), projectVideoDefault()]);
@@ -250,6 +273,10 @@ async function preflight() {
   const blockers = checks.flatMap((result, i) => result.status === 'rejected' ? [`${names[i]}: ${result.reason.message}`] : []);
   for (const binary of ['ffmpeg', 'ffprobe']) { try { command(binary, ['-version']); } catch (error) { blockers.push(error.message); } }
   blockers.push(...providerBlockers(settings));
+  if (evidence.project && !evidence.project.error) {
+    const imageBlocker = keyframeOutputBlocker(evidence.project);
+    if (imageBlocker) blockers.push(imageBlocker);
+  }
   if (evidence.video?.video_generation_enabled !== true) blockers.push(...(evidence.video?.missing_components || ['Video unavailable']));
   if (activeVideoWorkflow === 'grok_imagine_browser') {
     try {
@@ -321,7 +348,54 @@ async function text() {
     }
     write(`03-chapter-${i + 1}.txt`, (await chapters())[i].content);
   }
-  write('04-continuity-review.json', await step(`continuity-review:${fingerprint((await chapters()).map(chapter => ({ id: chapter.id, content: chapter.content }))).slice(0, 16)}`, () => request('/agent/consistency', 'POST', { project_id: projectId })));
+  await requireContinuityReview();
+}
+async function continuityReport() {
+  const source = (await chapters()).map(chapter => ({ id: chapter.id, content: chapter.content }));
+  const sourceFingerprint = fingerprint(source);
+  const report = await step(`continuity-review:${sourceFingerprint.slice(0, 16)}`, () => request('/agent/consistency', 'POST', { project_id: projectId }));
+  const reviewFingerprint = fingerprint({ sourceFingerprint, issues: report.issues });
+  write('04-continuity-review.json', { ...report, review_fingerprint: reviewFingerprint });
+  return { report, fingerprint: reviewFingerprint };
+}
+async function requireContinuityReview() {
+  const current = await continuityReport();
+  if (!Array.isArray(current.report.issues)) throw new Error('Continuity report has no issues array');
+  if (current.report.issues.length && (state.continuityReview?.fingerprint !== current.fingerprint || state.continuityReview?.status !== 'approved')) {
+    throw new Error(`Continuity issues need disposition before production; see 04-continuity-review.json. After resolving or documenting each issue, use --stage review-continuity --reviewer NAME --review-fingerprint ${current.fingerprint} --review-note RESOLUTION`);
+  }
+}
+async function recordContinuityReview() {
+  const current = await continuityReport();
+  const reviewer = option('reviewer', '').trim();
+  const expected = option('review-fingerprint', '');
+  const note = option('review-note', '').trim();
+  if (!reviewer || !note || expected !== current.fingerprint) throw new Error('Continuity disposition requires --reviewer, --review-note and the current report fingerprint');
+  state.continuityReview = { status: 'approved', reviewer, reviewed_at: new Date().toISOString(), fingerprint: current.fingerprint, note, issues: current.report.issues };
+  save();
+}
+async function legacyTaskOrderEvidence() {
+  const tracked = new Set((state.taskSubmissions || []).map(item => item.submission_step));
+  const untracked = Object.entries(state.steps)
+    .filter(([name]) => /^(shot-|library-|character-).*:submit$/.test(name) && !tracked.has(name))
+    .map(([name, entry]) => ({ step: name, started_at: entry.startedAt || null, completed_at: entry.completedAt || null, status: entry.status }));
+  const approvals = (await chapters()).map(chapter => ({ chapter_id: chapter.id, index: chapter.index,
+    image_review: state.reviews?.images?.[chapter.id] || null,
+    chapter_review: state.reviews?.chapters?.[chapter.id] || null }));
+  const snapshot = { untracked, approvals };
+  const digest = fingerprint(snapshot);
+  write('legacy-task-order.json', { fingerprint: digest, snapshot });
+  return { fingerprint: digest, untracked };
+}
+async function recordLegacyTaskOrderReview() {
+  const evidence = await legacyTaskOrderEvidence();
+  const reviewer = option('reviewer', '').trim(), note = option('review-note', '').trim();
+  if (!evidence.untracked.length) throw new Error('No legacy task submissions need review');
+  if (!reviewer || !note || option('review-fingerprint', '') !== evidence.fingerprint) {
+    throw new Error('Legacy task order review requires --reviewer, --review-note and the current legacy-task-order.json fingerprint');
+  }
+  state.legacyTaskOrderReview = { status: 'approved', reviewer, reviewed_at: new Date().toISOString(), fingerprint: evidence.fingerprint, note };
+  save();
 }
 async function scripts(selected = null) {
   for (const chapter of selected || await chapters()) {
@@ -357,9 +431,15 @@ async function scripts(selected = null) {
   }
 }
 async function assertComfyImages() {
-  if (allowCodexImage) return;
+  const imageBlocker = keyframeOutputBlocker(await request(`/projects/${projectId}`));
+  if (imageBlocker) throw new Error(imageBlocker);
   const settings = await request('/settings/');
   const blockers = providerBlockers(settings).filter(item => item.startsWith('生图和生视频'));
+  if (allowCodexImage) {
+    const codexBlocker = providerBlockers(settings).find(item => item.startsWith('--allow-codex-image'));
+    if (codexBlocker) throw new Error(codexBlocker);
+    return;
+  }
   if (blockers.length) throw new Error(blockers.join('\n'));
 }
 async function assets(selected = null) {
@@ -430,7 +510,12 @@ async function storyboards(selected = null) {
         return source?.type === 'script' && source.script_id === script.id && source.script_revision === script.revision;
       });
       const previousPolicy = state.storyboardInputs?.[chapter.id];
-      if (current && !rebuildStoryboards && (!previousPolicy || previousPolicy === policy)) { state.storyboardInputs ||= {}; state.storyboardInputs[chapter.id] = policy; save(); continue; }
+      if (current && !rebuildStoryboards && !previousPolicy) {
+        if (!acceptLegacyStoryboards) throw new Error(`Storyboard ${chapter.id}: generation content policy is unknown; use --rebuild-storyboards after archiving accepted video candidates, or inspect it and explicitly pass --accept-legacy-storyboards`);
+        console.log(`REUSE storyboard ${chapter.id}: legacy policy remains unknown by explicit operator choice`);
+        continue;
+      }
+      if (current && !rebuildStoryboards && previousPolicy === policy) continue;
       if (!rebuildStoryboards) throw new Error(`Script ${script.id}: storyboard source or content policy changed; review and run --rebuild-storyboards to retain a snapshot and replace it`);
       const readyFinals = [];
       for (const shot of existing.timeline) {
@@ -560,7 +645,7 @@ async function videos(selected = null) {
       }
       const body = { ...parameters, ...(flight.input_signature ? { expected_input_signature: flight.input_signature } : {}),
         request_key: key(`${name}-attempt-${state.videoAttempts?.[shot.id] || 0}`) };
-      const submitted = await step(submittedKey, () => request('/videos/generate', 'POST', body));
+      const submitted = await step(submittedKey, () => submitProductionTask('video', submittedKey, () => request('/videos/generate', 'POST', body)));
       const task = await waitTask(submitted.task_id, true);
       write(`09-video-task-${shot.id}.json`, task);
       return task;
@@ -635,7 +720,7 @@ async function chapterSnapshot(chapter, includeVideos = false) {
     const binding = resolveAssetBindings(shot, assets, refs);
     if (binding.blockers.length || refs.some(ref => ref.stale)) throw new Error(`Shot ${shot.id}: asset bindings are stale or incomplete`);
     binding.asset_ids.forEach(id => referencedAssets.add(id));
-    const frame = { contract: shotContract(shot), image: { url: shot.asset_url, sha256: fileHash(file) }, references: refs };
+    const frame = { contract: shotContract(shot), image: { url: shot.asset_url, sha256: fileHash(file) }, references: refs.map(ref => ({ id: ref.id, revision: ref.asset_revision ?? ref.revision, image_url: ref.image_url })) };
     if (includeVideos) {
       const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
       const final = media.assets.filter(asset => asset.role === 'narrative_final' && asset.status === 'ready').at(-1);
@@ -656,6 +741,7 @@ async function chapterSnapshot(chapter, includeVideos = false) {
   return { schema_version: 1, project_id: projectId, chapter_id: chapter.id, content_hash: hash(chapter.content || ''), settings: projectSettingsOf(project), system: { image_provider: system.image_provider, image_generation: system.image_generation, advanced: system.advanced, comfyui: system.comfyui, tts: system.tts, video_generation: system.video_generation }, narrator_voice: narratorVoice, voices, script: { id: script.id, revision: script.revision, document: script.document }, characters: known.filter(character => referencedCharacters.has(character.id) || script.document.scenes.some(scene => scene.blocks.some(block => block.characterId === character.id))).map(mediaCharacter), assets: assets.filter(asset => referencedAssets.has(asset.id)).map(asset => ({ id: asset.id, revision: asset.revision, url: asset.image_url, sha256: fileHash(localMedia(asset.image_url)) })), frames };
 }
 function reviewPreview(chapter, kind, snapshot) {
+  migrateReviewFingerprint(chapter, kind, snapshot);
   const digest = fingerprint(snapshot);
   const name = `${kind}-chapter-${chapter.id}`;
   write(`${name}.json`, { fingerprint: digest, snapshot });
@@ -663,6 +749,23 @@ function reviewPreview(chapter, kind, snapshot) {
   const media = kind === 'review-images' ? snapshot.frames.map(frame => `<figure><img width="640" src="${escape(pathToFileURL(localMedia(frame.image.url)).href)}"><figcaption>镜头 ${frame.contract.id}</figcaption></figure>`).join('') : `<video controls width="960" src="${escape(pathToFileURL(snapshot.delivery.file).href)}"></video>`;
   write(`${name}.html`, `<!doctype html><meta charset="utf-8"><title>章节验收</title><h1>第${chapter.index}章 · ${kind === 'review-images' ? '分镜图片' : '完整成片'}验收</h1><p>检查人物、服装、场景道具、动作连续性${kind === 'review-chapter' ? '、完整对白旁白、音效、字幕及口型' : ''}。</p>${media}<p>看完并通过后，用本页指纹记录审核人；来源变化后需重新验收。</p><pre>--stage ${kind} --chapter-id ${escape(chapter.id)} --reviewer 审核人 --review-fingerprint ${digest}</pre>`);
   return digest;
+}
+function canonicalReviewSnapshot(snapshot) {
+  if (snapshot?.source && snapshot?.delivery) {
+    const source = canonicalReviewSnapshot(snapshot.source);
+    return { ...snapshot, source, delivery: { ...snapshot.delivery, source_fingerprint: fingerprint(source) } };
+  }
+  return { ...snapshot, frames: snapshot.frames.map(frame => ({ ...frame, references: frame.references.map(ref => ({ id: ref.id, revision: ref.asset_revision ?? ref.revision, image_url: ref.image_url })) })) };
+}
+function migrateReviewFingerprint(chapter, kind, snapshot) {
+  const review = state.reviews?.[kind === 'review-images' ? 'images' : 'chapters']?.[chapter.id];
+  const file = path.join(directory, `${kind}-chapter-${chapter.id}.json`);
+  if (!review || !fs.existsSync(file)) return;
+  const previous = readJson(file);
+  if (review.fingerprint !== previous.fingerprint || fingerprint(previous.snapshot) !== previous.fingerprint) return;
+  if (fingerprint(canonicalReviewSnapshot(previous.snapshot)) !== fingerprint(snapshot)) return;
+  review.fingerprint = fingerprint(snapshot);
+  save();
 }
 async function requireImageReview(chapter) {
   const snapshot = await chapterSnapshot(chapter);
@@ -672,6 +775,17 @@ async function requireImageReview(chapter) {
 async function chapterDeliverySnapshot(chapter) {
   const source = await chapterSnapshot(chapter, true);
   const manifest = readJson(path.join(directory, 'videos', `chapter-${chapter.index}.manifest.json`));
+  if (manifest.source_fingerprint !== fingerprint(source)) {
+    const previousFile = path.join(directory, `review-chapter-chapter-${chapter.id}.json`);
+    if (fs.existsSync(previousFile)) {
+      const previous = readJson(previousFile);
+      if (previous.snapshot?.source && fingerprint(previous.snapshot.source) === manifest.source_fingerprint
+        && fingerprint(canonicalReviewSnapshot(previous.snapshot.source)) === fingerprint(source)) {
+        manifest.source_fingerprint = fingerprint(source);
+        write(`videos/chapter-${chapter.index}.manifest.json`, manifest);
+      }
+    }
+  }
   if (manifest.source_fingerprint !== fingerprint(source)) throw new Error(`Chapter ${chapter.index}: composition sources changed; reassemble`);
   if (fileHash(manifest.file) !== manifest.sha256 || fileHash(manifest.subtitle_file) !== manifest.subtitle_sha256 || manifest.speech_files.some(item => fileHash(localMedia(item.url)) !== item.sha256)) throw new Error(`Chapter ${chapter.index}: delivery or speech files changed; reassemble`);
   return { source, delivery: manifest };
@@ -680,6 +794,22 @@ async function requireChapterReview(chapter) {
   const snapshot = await chapterDeliverySnapshot(chapter);
   reviewPreview(chapter, 'review-chapter', snapshot);
   assertReview(state.reviews?.chapters?.[chapter.id], snapshot, `Chapter ${chapter.index} chapter_ready`);
+}
+async function assertPriorChaptersReady(chapter, scope = null) {
+  for (const prior of (scope || await chapters()).filter(item => item.index < chapter.index)) {
+    await requireImageReview(prior);
+    await requireChapterReview(prior);
+  }
+}
+async function runChapterProductionStage(handler, selected = null) {
+  const scope = await chapters();
+  for (const chapter of selected || scope) {
+    await assertPriorChaptersReady(chapter, scope);
+    await requireContinuityReview();
+    activeProductionChapterId = chapter.id;
+    try { await handler([chapter]); }
+    finally { activeProductionChapterId = null; }
+  }
 }
 async function recordReview(kind) {
   const reviewer = option('reviewer', '').trim(), expected = option('review-fingerprint', '');
@@ -905,6 +1035,24 @@ async function verify() {
   acceptance.push({ id: 'F15', criterion: '分镜完整覆盖剧本分场和原声文本，次序、次数和内容一致', status: scriptEvidence.length > 0 && scriptEvidence.every(item => item.current) && coverageEvidence.every(item => !item.errors.length) ? 'PASS' : 'FAIL' });
   const reviewEvidence = [];
   const speechEvidence = [];
+  const submissionEvidence = (state.taskSubmissions || []).map(event => {
+    const chapter = cs.find(item => item.id === event.chapter_id);
+    const prior = chapter && cs.filter(item => item.index < chapter.index);
+    const submittedAt = Date.parse(event.submitted_at);
+    const ordered = !!chapter && Number.isFinite(submittedAt) && prior.every(item => {
+      const approval = state.reviews?.chapters?.[item.id];
+      const approvedAt = Date.parse(approval?.reviewed_at);
+      return approval?.status === 'approved' && Number.isFinite(approvedAt) && approvedAt <= submittedAt;
+    });
+    return { ...event, ordered };
+  });
+  const trackedSteps = new Set(submissionEvidence.map(item => item.submission_step));
+  const hasUntrackedSubmissions = Object.keys(state.steps).some(name => /^(shot-|library-|character-).*:submit$/.test(name) && !trackedSteps.has(name));
+  const continuitySource = fingerprint(cs.map(chapter => ({ id: chapter.id, content: chapter.content })));
+  const continuityStep = state.steps[`continuity-review:${continuitySource.slice(0, 16)}`];
+  const continuityIssues = continuityStep?.result?.issues;
+  const continuityFingerprint = fingerprint({ sourceFingerprint: continuitySource, issues: continuityIssues });
+  const continuityCurrent = Array.isArray(continuityIssues) && (!continuityIssues.length || (state.continuityReview?.status === 'approved' && state.continuityReview?.fingerprint === continuityFingerprint));
   for (const chapter of cs) {
     try {
       await requireImageReview(chapter); await requireChapterReview(chapter);
@@ -919,9 +1067,12 @@ async function verify() {
       speechEvidence.push({ chapter_id: chapter.id, current, spoken_blocks: expected.length });
     } catch (error) { speechEvidence.push({ chapter_id: chapter.id, current: false, error: error.message }); }
   }
-  acceptance.push({ id: 'F16', criterion: '分镜图片和完整章节成片已人工验收且来源未变化', status: cs.length === chapterLimit && reviewEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
+  const legacyOrder = await legacyTaskOrderEvidence();
+  const legacyOrderReviewed = !hasUntrackedSubmissions || (state.legacyTaskOrderReview?.status === 'approved'
+    && state.legacyTaskOrderReview?.reviewer?.trim() && state.legacyTaskOrderReview?.fingerprint === legacyOrder.fingerprint);
+  acceptance.push({ id: 'F16', criterion: '连续性问题已处置；图片与章节成片已人工验收、来源未变化，制作任务符合章序或有旧记录人工核验', status: cs.length === chapterLimit && continuityCurrent && reviewEvidence.every(item => item.current) && legacyOrderReviewed && submissionEvidence.every(item => item.ordered) ? 'PASS' : 'FAIL' });
   acceptance.push({ id: 'F17', criterion: '完整对白旁白、字幕与源块逐一对应且音频未被截断', status: cs.length === chapterLimit && speechEvidence.every(item => item.current) ? 'PASS' : 'FAIL' });
-  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, scripts: scriptEvidence, coverage: coverageEvidence, reviews: reviewEvidence, speech: speechEvidence, delivery: deliveryEvidence });
+  write('media-quality.json', { images: imageEvidence, bindings: bindingEvidence, identities: identityEvidence, scripts: scriptEvidence, coverage: coverageEvidence, continuity: { current: continuityCurrent, issues: continuityIssues }, reviews: reviewEvidence, submissions: submissionEvidence, hasUntrackedSubmissions, legacyOrderReviewed, speech: speechEvidence, delivery: deliveryEvidence });
   write('acceptance.json', { checkedAt: new Date().toISOString(), chapterLimit, acceptance, counts: { chapters: cs.length, characters: chars.length, locations: assets.filter(a => a.kind === 'location').length, props: assets.filter(a => a.kind === 'prop').length, requiredAssets: requiredAssets.length, generatedAssets: assets.filter(a => a.status === 'completed' && a.image_url).length, shots: ss.length }, manualReview: [`前${chapterLimit}章因果和人物动机`, '跨镜头脸型服装及道具形状一致性', '画面缺陷和声音对白同步'] });
   write('project-backup.novastory.json', backup);
   if (acceptance.some(a => a.status !== 'PASS')) throw new Error('Acceptance has failing items; see acceptance.json');
@@ -934,22 +1085,23 @@ function report(error) {
   const engineering = fs.existsSync(engineeringFile) ? JSON.parse(fs.readFileSync(engineeringFile, 'utf8')) : null;
   const manualFile = path.join(directory, 'manual-review.json');
   const manualReview = fs.existsSync(manualFile) ? JSON.parse(fs.readFileSync(manualFile, 'utf8')) : null;
-  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景、道具和镜头视频默认由本机 ComfyUI 按项目设置生成。Codex 或 Grok 只有在命令明确要求时才使用。跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
+  write('report.html', `<!doctype html><html lang="zh"><meta charset="utf-8"><title>NovaStory ${scopeLabel}生成验收</title><style>body{font:16px system-ui;max-width:1100px;margin:40px auto;padding:24px;line-height:1.65;color:#172033;background:#f4f6fa}h1{font-size:28px}table{border-collapse:collapse;width:100%;background:white}td,th{padding:12px;border:1px solid #ddd;text-align:left}pre{white-space:pre-wrap;background:white;padding:20px;border-left:4px solid #5965d8}.ok{color:#16803a}.bad{color:#b33939}</style><h1>项目 ${projectId} · ${scopeLabel}生成验收</h1><p>本次验收仅覆盖前${chapterLimit}章；后续章节的既有素材保留，不计入本次通过条件。</p><p>生成时间：${escape(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p><p>当前状态：${error ? '尚未完成' : '所选阶段执行完成'}；当前步骤：${escape(state.currentStep)}</p>${error ? `<pre>${escape(error.message)}</pre>` : ''}${engineering ? `<h2>功能核查与工程验证</h2><table>${engineering.checks.map(c => `<tr><td>${escape(c.name)}</td><td>${escape(c.status)}</td><td>${escape(c.evidence)}</td></tr>`).join('')}</table><h2>已完成的修复</h2><ul>${engineering.changes.map(c => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}${state.preflight?.blockers?.length ? `<h2>实生成阻塞</h2><pre>${escape(state.preflight.blockers.join('\n'))}</pre>` : ''}<h2>执行记录</h2><table><tr><th>步骤</th><th>状态</th><th>说明</th></tr>${Object.entries(state.steps).map(([name, step]) => `<tr><td>${escape(name)}</td><td>${escape(step.status)}</td><td>${escape(step.error || step.completedAt || '')}</td></tr>`).join('')}</table>${acceptance ? `<h2>验收矩阵</h2><table>${acceptance.acceptance.map(a => `<tr><td>${escape(a.id)}</td><td>${escape(a.criterion)}</td><td class="${a.status === 'PASS' ? 'ok' : 'bad'}">${escape(a.status)}</td></tr>`).join('')}</table>` : '<p>产物尚未齐备，未判定内容、视觉或视频质量通过。</p>'}${manualReview ? `<h2>人工质量复核</h2><table>${manualReview.checks.map(item => `<tr><td>${escape(item.name)}</td><td>${escape(item.status)}</td><td>${escape(item.evidence)}</td></tr>`).join('')}</table><p>复核证据：${(manualReview.evidenceFiles || []).map(file => `<a href="./${escape(path.basename(file))}">${escape(path.basename(file))}</a>`).join(' · ')}</p>` : ''}<h2>实际生成与人工质量核验</h2><p>只有本项目真实产物齐备才可通过内容验收。跨镜头角色一致性、道具形状、对白及声音同步必须观看实生成结果后判定。角色、场景、道具和镜头视频默认由本机 ComfyUI 按项目设置生成。Codex 或 Grok 只有在命令明确要求时才使用。跨镜头外观仍需逐张目视核验，接口或单元测试不能代替画面验收。</p><p>续跑：<code>npm run production:full -- --project ${projectId} --base-url ${escape(base)} --chapter-limit ${chapterLimit} --asset-scope ${assetScope} --video-workflow ${escape(workflow)} --retry-failed${acceptLegacyStoryboards ? ' --accept-legacy-storyboards' : ''}</code></p><p>同目录 JSON、文本和视频保留分阶段证据。人工验收需检查人物一致性、叙事质量及音画同步。</p></html>`);
 }
 let failure;
 try {
-  const handlers = { preflight, text, scripts, assets, storyboards, images, audio, 'review-images': () => recordReview('images'), 'review-chapter': () => recordReview('chapters'), 'video-preflight': videoPreflight, videos, assemble, verify };
+  const handlers = { preflight, text, scripts, assets, storyboards, images, audio, 'review-continuity': recordContinuityReview, 'review-task-order': recordLegacyTaskOrderReview, 'review-images': () => recordReview('images'), 'review-chapter': () => recordReview('chapters'), 'video-preflight': videoPreflight, videos, assemble, verify };
   if (stage === 'all') {
     await preflight();
     await text();
     for (const chapter of await chapters()) {
+      await assertPriorChaptersReady(chapter);
       await scripts([chapter]);
       await storyboards([chapter]);
-      await assets([chapter]);
-      await images([chapter]);
+      await runChapterProductionStage(assets, [chapter]);
+      await runChapterProductionStage(images, [chapter]);
       await requireImageReview(chapter);
       await videoPreflight([chapter]);
-      await videos([chapter]);
+      await runChapterProductionStage(videos, [chapter]);
       await assemble([chapter], { fullFilm: false });
       await requireChapterReview(chapter);
     }
@@ -959,7 +1111,9 @@ try {
   else {
     const selected = selectedChapterId ? (await chapters()).filter(chapter => String(chapter.id) === selectedChapterId) : null;
     if (selected && !selected.length) throw new Error('Selected chapter is outside this production scope');
-    if (stage === 'assemble' && selected) await assemble(selected, { fullFilm: false });
+    if (!['review-continuity', 'review-task-order', 'verify', 'assets', 'images', 'videos'].includes(stage)) await requireContinuityReview();
+    if (['assets', 'images', 'videos'].includes(stage)) await runChapterProductionStage(handlers[stage], selected);
+    else if (stage === 'assemble' && selected) await assemble(selected, { fullFilm: false });
     else await handlers[stage](selected);
   }
 } catch (error) { failure = error; console.error(error.message); process.exitCode = 1; }
