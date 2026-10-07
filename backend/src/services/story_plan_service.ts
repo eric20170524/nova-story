@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db, withImmediateTransaction } from '../db/database';
 import { parseProjectSettings, serializeProjectSettings } from './project_settings';
-import { mergeCharacterDescription } from './ai/writing_service';
+
 import {
   CHAPTER_CONTENT_UNFINALIZE_SQL,
   DETERMINISTIC_NEXT_CONFLICTS,
@@ -1089,9 +1089,10 @@ export class StoryPlanService {
     if (take('project.style')) settings.style = blueprint.style;
     if (take('initial_relations')) {
       settings.initial_relations = blueprint.initialRelations;
-      if (!String(settings.character_relations || '').trim()) {
-        settings.character_relations = blueprint.initialRelations;
-      }
+    }
+    if (take('blueprint')) {
+      settings.plot_direction = blueprint.mainPlot;
+      settings.planned_relations = blueprint.plannedRelations;
     }
     await db.run(
       'UPDATE project SET title = ?, description = ?, settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
@@ -1108,26 +1109,25 @@ export class StoryPlanService {
         projectId,
         character.name
       );
-      const descriptionText = mergeCharacterDescription(
-        existing?.description,
-        character.description,
-        character.personality
-      );
       if (existing) {
         await db.run(
-          'UPDATE character SET role = ?, description = ? WHERE id = ?',
+          'UPDATE character SET role = ?, description = ?, personality = ?, growth_path = ? WHERE id = ?',
           character.role,
-          descriptionText,
+          character.description,
+          character.personality,
+          character.growthPath,
           existing.id
         );
       } else {
         await db.run(
-          'INSERT INTO character (project_id, name, role, description, visual_tags) VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO character (project_id, name, role, description, visual_tags, personality, growth_path) VALUES (?, ?, ?, ?, ?, ?, ?)',
           projectId,
           character.name,
           character.role,
-          descriptionText,
-          '{}'
+          character.description,
+          '{}',
+          character.personality,
+          character.growthPath
         );
       }
     }

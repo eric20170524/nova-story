@@ -251,11 +251,8 @@ mainPlot 是未来走向，不是已经发生的事实。
 书名: {{title}}
 类型: {{genre}}
 风格: {{style}}
-主线: {{mainPlot}}
 
-**人物档案 (Characters)**:
-请特别注意人物的[核心欲望]、[恐惧]以及[行为逻辑]：
-{{characters}}
+{{storyBible}}
 
 **专有名词 (Glossary)**:
 {{glossary}}

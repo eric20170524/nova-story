@@ -495,11 +495,12 @@ export class AgentExecutor {
           const settings = parseProjectSettings(project.settings);
           if (action.genre !== undefined) settings.genre = action.genre;
           if (action.style !== undefined) settings.style = action.style;
-          if (action.main_plot !== undefined)
-            settings.main_plot = action.main_plot;
-          if (action.character_relations !== undefined) {
-            settings.character_relations = action.character_relations;
-          }
+          const { applyLegacyAuthorFields } = await import('../story_bible');
+          const legacy = applyLegacyAuthorFields(settings, {
+            main_plot: action.main_plot,
+            character_relations: action.character_relations,
+          });
+          Object.assign(settings, legacy.settings);
           const title = action.title ?? project.title;
           const description =
             action.description !== undefined

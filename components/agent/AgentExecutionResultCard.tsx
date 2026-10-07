@@ -166,7 +166,7 @@ const SingleResultCard: React.FC<{
                   <p className="text-[11px] text-emerald-900 dark:text-emerald-300 bg-white dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-xl px-3 py-2 shadow-xs">
                     {t(
                       preview ? 'agent.impact_personality_preview' : 'agent.impact_personality_merged',
-                      preview ? '已提取性格特征，尚未写入角色库' : '已将性格特征合并写入角色库'
+                      preview ? '已提取性格特征，尚未写入角色库' : '已提取性格特征，未写入角色卡'
                     )}
                   </p>
                 )}

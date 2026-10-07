@@ -717,6 +717,15 @@ const migrations: Migration[] = [
         character_versions_json: 'TEXT'
       });
     }
+  },
+  {
+    version: '020_character_persona',
+    up: async (database) => {
+      await ensureColumns(database, 'character', {
+        personality: 'TEXT',
+        growth_path: 'TEXT'
+      });
+    }
   }
 ];
 

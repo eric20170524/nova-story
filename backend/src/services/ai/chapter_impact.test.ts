@@ -75,12 +75,18 @@ test('finalization previews without writes; API and agent persist both settings 
   assert.equal(firstData.characterRelationsChanged, true);
   assert.match(first.message || '', /timeline→main_plot.*relationships→character_relations/);
   const stored = JSON.parse((await db.get('SELECT settings FROM project WHERE id = ?', projectId)).settings);
-  assert.match(stored.main_plot, /作者主线.*[\s\S]*角色状态[\s\S]*伏笔/);
-  assert.match(stored.character_relations, /既有关系[\s\S]*由敌对转为盟友/);
+  assert.equal(stored.main_plot, settings.main_plot);
+  assert.equal(stored.character_relations, settings.character_relations);
+  assert.match(stored.chapter_impact_entries[chapterId].main_plot, /角色状态[\s\S]*伏笔/);
+  assert.match(stored.chapter_impact_entries[chapterId].character_relations, /由敌对转为盟友/);
+  assert.equal(stored.chapter_impact_entries[chapterId].state_refs[0].character_id > 0, true);
   assert.deepEqual(stored.image_generation, settings.image_generation);
   assert.equal(stored.tone, settings.tone);
-  const character = await db.get('SELECT description, visual_tags FROM character WHERE project_id = ?', projectId);
-  assert.match(character.description, /状态：重伤[\s\S]*性格特征：坚韧/);
+  const character = await db.get('SELECT role, description, personality, visual_tags FROM character WHERE project_id = ?', projectId);
+  assert.equal(character.role, 'protagonist');
+  assert.match(character.description, /状态：重伤/);
+  assert.equal(character.personality, null);
+  assert.doesNotMatch(character.description, /性格特征/);
   assert.equal(JSON.parse(character.visual_tags).hair, 'black hair');
   assert.equal((await db.get('SELECT term FROM glossary WHERE project_id = ?', projectId)).term, '星钥');
 
@@ -96,11 +102,13 @@ test('finalization previews without writes; API and agent persist both settings 
   assert.equal(updated.statusCode, 200);
   assert.equal(updated.json().applied, true);
   const revised = JSON.parse((await db.get('SELECT settings FROM project WHERE id = ?', projectId)).settings);
-  assert.match(revised.main_plot, /作者主线[\s\S]*伤势痊愈/);
-  assert.doesNotMatch(revised.main_plot, /重伤/);
-  assert.doesNotMatch(revised.character_relations, /由敌对转为盟友/);
-  assert.match(revised.character_relations, /既有关系[\s\S]*结盟破裂/);
-  assert.equal((revised.main_plot.match(/### 第1章/g) || []).length, 1);
+  assert.equal(revised.main_plot, settings.main_plot);
+  assert.equal(revised.character_relations, settings.character_relations);
+  assert.match(revised.chapter_impact_entries[chapterId].main_plot, /伤势痊愈/);
+  assert.doesNotMatch(revised.chapter_impact_entries[chapterId].main_plot, /重伤/);
+  assert.doesNotMatch(revised.chapter_impact_entries[chapterId].character_relations, /由敌对转为盟友/);
+  assert.match(revised.chapter_impact_entries[chapterId].character_relations, /结盟破裂/);
+  assert.equal((revised.chapter_impact_entries[chapterId].main_plot.match(/### 第1章/g) || []).length, 1);
 });
 
 test('finalizing identical content retries automatic next chapter after a post-commit plan conflict', async (t) => {
@@ -153,12 +161,16 @@ test('plot and relationship entries stay in chapter order, preserve author text,
   const base = { main_plot: '手工主线', character_relations: '手工关系', tone: '保留' };
   const second = mergeChapterImpactSettings(base, chapters[1]!, chapters, facts());
   const first = mergeChapterImpactSettings(second.settings, chapters[0]!, chapters, { ...facts(), events: ['初遇事件'] });
-  assert.ok(first.settings.main_plot!.indexOf('第1章') < first.settings.main_plot!.indexOf('第2章'));
-  assert.ok(first.settings.character_relations!.indexOf('第1章') < first.settings.character_relations!.indexOf('第2章'));
+  assert.equal(first.settings.main_plot, '手工主线');
+  assert.equal(first.settings.character_relations, '手工关系');
+  assert.match(first.settings.chapter_impact_entries!.first!.main_plot, /初遇事件/);
+  assert.match(first.settings.chapter_impact_entries!.second!.main_plot, /夺回星钥/);
   const cleared = mergeChapterImpactSettings(first.settings, chapters[1]!, chapters, ChapterContinuitySchema.parse({}));
-  assert.match(cleared.settings.main_plot!, /手工主线[\s\S]*初遇事件/);
-  assert.doesNotMatch(cleared.settings.main_plot!, /第2章|夺回星钥/);
-  assert.doesNotMatch(cleared.settings.character_relations!, /第2章/);
+  assert.equal(cleared.settings.main_plot, '手工主线');
+  assert.equal(cleared.settings.character_relations, '手工关系');
+  assert.match(cleared.settings.chapter_impact_entries!.first!.main_plot, /初遇事件/);
+  assert.equal(cleared.settings.chapter_impact_entries!.second!.main_plot, '');
+  assert.equal(cleared.settings.chapter_impact_entries!.second!.character_relations, '');
   assert.equal(cleared.settings.tone, '保留');
 });
 
@@ -217,7 +229,8 @@ test('rejects stale or empty chapters and keeps settings edits made during analy
   await WritingService.analyzeChapterImpact(projectId, chapterId);
   const latest = JSON.parse((await db.get('SELECT settings FROM project WHERE id = ?', projectId)).settings);
   assert.equal(latest.tone, '新风格');
-  assert.match(latest.main_plot, /^分析期间手工修改/);
+  assert.equal(latest.main_plot, '分析期间手工修改');
+  assert.match(latest.chapter_impact_entries[chapterId].main_plot, /角色状态/);
   await db.run('UPDATE chapter SET content = ? WHERE id = ?', '   ', chapterId);
   await assert.rejects(WritingService.analyzeChapterImpact(projectId, chapterId), /content is empty/);
 });

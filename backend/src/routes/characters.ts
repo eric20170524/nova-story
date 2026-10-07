@@ -299,6 +299,14 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       updateFields.push('description = ?');
       params.push(data.description);
     }
+    if (data.personality !== undefined) {
+      updateFields.push('personality = ?');
+      params.push(data.personality);
+    }
+    if (data.growth_path !== undefined) {
+      updateFields.push('growth_path = ?');
+      params.push(data.growth_path);
+    }
 
     // Voice field validation and handling
     if (data.voice_id !== undefined) {

@@ -364,11 +364,13 @@ export function mapRoleInChapterToRole(
   fallback?: string | null
 ): string {
   const fb = String(fallback || '').trim().toLowerCase();
-  if (fb === 'main' || fb === 'supporting' || fb === 'minor') return fb;
-  const r = String(roleInChapter || fallback || '');
-  if (/主[角色]?|protagonist|heroine?|\bmain\b/i.test(r)) return 'main';
-  if (/观众|群众|群体|路人|次要|minor|extra|crowd/i.test(r)) return 'minor';
-  if (fallback) return String(fallback);
+  if (fb === 'protagonist' || fb === 'antagonist' || fb === 'supporting' || fb === 'extra') return fb;
+  if (fb === 'main') return 'protagonist';
+  if (fb === 'minor') return 'extra';
+  const r = String(roleInChapter || '');
+  if (/反派|antagonist|villain/i.test(r)) return 'antagonist';
+  if (/主[角色]?|protagonist|heroine?|\bmain\b/i.test(r)) return 'protagonist';
+  if (/观众|群众|群体|路人|次要|minor|extra|crowd/i.test(r)) return 'extra';
   return 'supporting';
 }
 
@@ -637,22 +639,17 @@ async function resolveDraftConstraint(
   overrides: Parameters<typeof buildNextChapterConstraint>[1]
 ): Promise<string> {
   let summary = nextChapterSummary?.trim() || null;
-  let future = '';
   try {
     const plan = await db.get('SELECT document_json FROM story_plan WHERE project_id = ?', projectId);
     if (plan?.document_json) {
       const { StoryPlanDocumentSchema, upcomingPlanSummary } = await import('../../schemas/story_plan');
       const document = StoryPlanDocumentSchema.parse(JSON.parse(String(plan.document_json)));
       if (!summary) summary = upcomingPlanSummary(document, chapters, chapterId);
-      const direction = String(document.blueprint?.mainPlot || document.blueprint?.summary || '').trim();
-      if (direction) {
-        future = `\n未来计划（尚未发生，禁止写成已发生事实）：${direction.slice(0, 400)}`;
-      }
     }
   } catch (error) {
     logger.warn(`Story plan draft context skipped: ${error}`);
   }
-  return buildNextChapterConstraint(summary, overrides) + future;
+  return buildNextChapterConstraint(summary, overrides);
 }
 
 export class WritingService {
@@ -702,16 +699,6 @@ export class WritingService {
     const formatRules =
       '小说叙述体规范：直接输出小说正文，用连贯叙述与生动对话展开情节，禁止输出【场景】【画面】【动作指令】【视觉特效】等分镜/剧本标签。直接输出正文，不要输出标题，不要输出任何解释性文字或代码块。';
 
-    const memoryPrompt = [
-      creativeConstraints ? `[创作约束]\n${creativeConstraints}` : '',
-      bundle.supplementalContext ? `[补充资料]\n${bundle.supplementalContext}` : '',
-      layered?.oldSummaries ? `[较早梗概]\n${layered.oldSummaries}` : '',
-      layered?.recentCondensed ? `[近期浓缩]\n${layered.recentCondensed}` : '',
-      layered?.recentFullText ? `[紧邻前文]\n${layered.recentFullText}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
     let existing = '';
     if (options.includeExisting !== false) {
       const source =
@@ -734,21 +721,6 @@ export class WritingService {
         : '';
     }
 
-    // Prefer layered worldBible (already capped) over raw full dumps
-    const worldBible =
-      layered?.worldBible ||
-      [
-        `Title: ${bundle.bible.title}`,
-        bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
-        bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
-        creativeConstraints,
-        bundle.bible.main_plot
-          ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-
     const existingLabel = rewriteMode
       ? '原文（请全文改写为小说叙述，删除分镜标签，输出完整替换稿）'
       : '已有正文(可续写)';
@@ -762,29 +734,37 @@ export class WritingService {
       ? '【模式=全文重写】只输出完整新小说正文，不要“续写”、不要保留【画面】【动作指令】等标签。'
       : '【模式=续写】在已有正文之后自然接写。';
 
-    const prompt = formatPrompt(getPrompt('writing_chapter_gen', bundle.overrides), {
-      contentForm,
-      title: bundle.bible.title,
-      genre: bundle.bible.genre || '',
-      style: bundle.bible.style || '',
-      mainPlot: head(
-        bundle.bible.main_plot || bundle.bible.description || '',
-        BUDGET.mainPlot
-      ),
-      characters: budgetedCharacters(bundle.characters),
+    const { fitPromptToBudget, loadBibleParts } = await import('../story_bible');
+    const bible = await loadBibleParts(options.projectId, chapter.id);
+    const fitted = fitPromptToBudget({
+      template: getPrompt('writing_chapter_gen', bundle.overrides),
+      variables: {
+        contentForm,
+        title: bundle.bible.title,
+        genre: bundle.bible.genre || '',
+        style: bundle.bible.style || '',
+        lastScene: layered?.lastScene || '无',
+        chapterTitle: chapter.title,
+        chapterSummary: head(String(chapter.summary || ''), BUDGET.chapterSummary),
+        existingContentLabel: existingLabel,
+        nextChapterConstraint: nextConstraint,
+        instructions: options.instructions,
+        targetWordCount: String(options.targetWordCount || (storedTarget >= 200 ? storedTarget : (rewriteMode ? 1200 : 800))),
+        formatRules,
+        writingModeNote,
+        creativeConstraints,
+      },
+      bible,
+      oldSummaries: layered?.oldSummaries || '',
+      recentCondensed: layered?.recentCondensed || '',
+      supplemental: bundle.supplementalContext || '',
       glossary: budgetedGlossary(bundle.glossary),
-      lastScene: layered?.lastScene || '无',
-      memoryPrompt: memoryPrompt || worldBible || '无',
-      chapterTitle: chapter.title,
-      chapterSummary: head(String(chapter.summary || ''), BUDGET.chapterSummary),
-      existingContentLabel: existingLabel,
+      recentFullText: layered?.recentFullText || '',
+      lastScene: layered?.lastScene || '',
       existingContent: existingBlock,
-      nextChapterConstraint: nextConstraint,
-      instructions: options.instructions,
-      targetWordCount: options.targetWordCount || (storedTarget >= 200 ? storedTarget : (rewriteMode ? 1200 : 800)),
-      formatRules,
-      writingModeNote,
-    });
+      existingFloor: rewriteMode ? existingBlock.length : 800,
+    }, formatPrompt);
+    const prompt = fitted.prompt;
 
     const provider = LLMService.getProvider();
     const raw = await provider.generateText(prompt);
@@ -917,14 +897,16 @@ export class WritingService {
     const content = String(chapter.content || '').trim();
     if (!content) throw new Error('Chapter content is empty');
     const analyzeImpact = async () => {
+      const { loadBibleParts, renderStoryBible } = await import('../story_bible');
+      const priorBible = renderStoryBible(await loadBibleParts(projectId, chapterId));
       const chunks = splitChapterIntoAnalysisChunks(content);
       const parts: z.infer<typeof ImpactSchema>[] = [];
       for (let i = 0; i < chunks.length; i++) {
         const prompt = formatPrompt(getPrompt('analysis_impact', bundle.overrides), {
           characters: budgetedCharacters(bundle.characters),
           glossary: budgetedGlossary(bundle.glossary),
-          mainPlot: head(bundle.bible.main_plot || '', 1200),
-          characterRelations: head(bundle.bible.character_relations || '', 1200),
+          mainPlot: priorBible,
+          characterRelations: '关系见上方故事设定中“本章之前的关系”。作者走向尚未发生。',
           chapterTitle: chunks.length > 1 ? `${chapter.title}（分段 ${i + 1}/${chunks.length}）` : chapter.title,
           content: chunks[i],
         });
@@ -1008,18 +990,9 @@ export class WritingService {
             projectId,
             ch.name
           );
-          const personality = formatPersonalityBlock(ch);
           const impactBio = stripPersonalitySections(ch.description || '');
-          const finalDesc = mergeCharacterDescription(
-            existing?.description,
-            impactBio,
-            personality
-          );
-          const role =
-            ch.role ||
-            existing?.role ||
-            mapRoleInChapterToRole(ch.roleInChapter) ||
-            'supporting';
+          const appearance = /依据[:：]|本章/.test(impactBio) ? '' : impactBio;
+          const role = mapRoleInChapterToRole(ch.roleInChapter, ch.role);
           const incomingVisual = normalizeVisualTags(ch.visual_tags);
           const mergedVisualDoc = mergeVisualTagsDocument(
             existing?.visual_tags,
@@ -1029,27 +1002,25 @@ export class WritingService {
 
           if (existing) {
             await db.run(
-              'UPDATE character SET role = ?, description = ?, visual_tags = ? WHERE id = ?',
-              role,
-              finalDesc || existing.description || '',
+              'UPDATE character SET visual_tags = ? WHERE id = ?',
               visualJson,
               existing.id
             );
-            ch.description = finalDesc || existing.description || '';
-            ch.role = role;
+            ch.description = existing.description || '';
+            ch.role = existing.role || role;
             ch.visual_tags = Object.keys(incomingVisual).length
               ? incomingVisual
               : ch.visual_tags;
           } else {
             await db.run(
-              'INSERT INTO character (project_id, name, role, description, visual_tags) VALUES (?, ?, ?, ?, ?)',
+              'INSERT INTO character (project_id, name, role, description, visual_tags, personality, growth_path) VALUES (?, ?, ?, ?, ?, NULL, NULL)',
               projectId,
               ch.name,
               role,
-              finalDesc || '',
+              appearance,
               visualJson
             );
-            ch.description = finalDesc || '';
+            ch.description = appearance;
             ch.role = role;
           }
         }
@@ -1083,6 +1054,27 @@ export class WritingService {
         );
         const { hashChapterContent } = await import('../../schemas/story_plan');
         const contentHash = hashChapterContent(stored?.content);
+        const { attachImpactRefs, aliasesFromTags } = await import('../story_bible');
+        const castRows = await db.all(
+          'SELECT id, name, visual_tags FROM character WHERE project_id = ? ORDER BY id ASC',
+          projectId
+        );
+        merged.entry = attachImpactRefs(
+          merged.entry,
+          data.chapterContinuity,
+          (castRows as Array<{ id: number; name: string; visual_tags: unknown }>).map((row) => ({
+            id: Number(row.id),
+            name: String(row.name || ''),
+            aliases: aliasesFromTags(row.visual_tags),
+          }))
+        );
+        merged.settings = {
+          ...merged.settings,
+          chapter_impact_entries: {
+            ...(merged.settings.chapter_impact_entries || {}),
+            [chapterId]: merged.entry,
+          },
+        };
         await db.run(
           'UPDATE chapter SET status = ?, finalized_content_hash = ? WHERE id = ? AND project_id = ?',
           'completed',
@@ -1194,14 +1186,12 @@ export class WritingService {
       .join('\n');
     outlines = head(outlines, BUDGET.outlinesTotal);
 
+    const { loadBibleParts, renderStoryBible } = await import('../story_bible');
     const prompt = formatPrompt(
       getPrompt('consistency_check', bundle.overrides),
       {
         title: bundle.bible.title,
-        mainPlot: head(
-          bundle.bible.main_plot || bundle.bible.description || '',
-          BUDGET.mainPlot
-        ),
+        mainPlot: renderStoryBible(await loadBibleParts(projectId)),
         characters: budgetedCharacters(bundle.characters),
         outlines,
       }
@@ -1261,14 +1251,13 @@ export class WritingService {
     );
     const contentForm = '短篇小说（小说叙述与对话）';
 
+    const { loadBibleParts: loadSkillBible, renderStoryBible: renderSkillBible } = await import('../story_bible');
     const contextSummary = head(
       [
         `Title: ${bundle.bible.title}`,
         bundle.bible.genre ? `Genre: ${bundle.bible.genre}` : '',
         bundle.bible.style ? `Style: ${bundle.bible.style}` : '',
-        bundle.bible.main_plot
-          ? `Main plot: ${head(bundle.bible.main_plot, BUDGET.mainPlot)}`
-          : '',
+        renderSkillBible(await loadSkillBible(options.projectId, options.chapterId)),
         creativeConstraints,
         bundle.supplementalContext ? `[补充资料]\n${bundle.supplementalContext}` : '',
         bundle.characters.length

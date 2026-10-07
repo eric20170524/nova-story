@@ -324,9 +324,11 @@ export class ScriptGenerationService {
     const validParagraphIds = new Set(paragraphs.map((p) => p.id));
 
     const context = await ScriptService.loadSourceContext(script.projectId);
-    const bibleSummary = context.bible
-      ? `类型: ${context.bible.genre || ''}, 风格: ${context.bible.style || ''}, 主线: ${context.bible.main_plot || ''}`
-      : '无特定世界观约束';
+    const { loadBibleParts, renderStoryBible } = await import('../story_bible');
+    const bibleSummary = [
+      context.bible ? `类型: ${context.bible.genre || ''}, 风格: ${context.bible.style || ''}` : '',
+      renderStoryBible(await loadBibleParts(script.projectId, chapter.id)),
+    ].filter(Boolean).join('\n');
 
     const prompt = formatPrompt(getPrompt('script_outline_gen'), {
       chapterTitle: chapter.title || '第1章',

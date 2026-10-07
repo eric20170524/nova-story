@@ -167,6 +167,17 @@ export const chapterRoutes: FastifyPluginAsync = async (app) => {
       );
       await db.run('DELETE FROM scene WHERE chapter_id = ?', id);
       await StoryPlanService.retireLinkedChapter(existing.project_id, id);
+      const project = await db.get('SELECT settings FROM project WHERE id = ?', existing.project_id);
+      if (project) {
+        const { dropChapterImpact } = await import('../services/story_bible');
+        const { parseProjectSettings } = await import('../services/project_settings');
+        const nextSettings = dropChapterImpact(parseProjectSettings(project.settings), id);
+        await db.run(
+          'UPDATE project SET settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          JSON.stringify(nextSettings),
+          existing.project_id
+        );
+      }
       await db.run('DELETE FROM chapter WHERE id = ?', id);
       await db.exec('COMMIT');
       return { status: 'success', id };

@@ -719,7 +719,14 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ detail: 'Not authorized to access this project' });
     }
 
-    return { ...project, settings: JSON.stringify(canonicalProjectSettings(project.settings)) };
+    const { buildStoryBibleView } = await import('../services/story_bible');
+    const storyBible = await buildStoryBibleView(id);
+    const fresh = await db.get('SELECT * FROM project WHERE id = ?', id);
+    return {
+      ...fresh,
+      settings: JSON.stringify(canonicalProjectSettings(fresh.settings)),
+      story_bible: storyBible,
+    };
   });
 
   // --- Glossary (Agent OS / story bible) ---
@@ -868,11 +875,48 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       updateFields.push('description = ?');
       params.push(data.description);
     }
+    let settingsJson: string | null | undefined;
     if (data.settings !== undefined) {
-      const settingsJson = data.settings == null ? null : await validateImageSettings(data.settings, reply);
-      if (settingsJson == null) return;
+      if (data.settings == null) {
+        settingsJson = null;
+      } else {
+        let incoming: Record<string, unknown>;
+        try {
+          incoming = JSON.parse(data.settings);
+        } catch {
+          return reply.status(400).send({ detail: 'Project settings must be valid JSON' });
+        }
+        if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+          return reply.status(400).send({ detail: 'Project settings must be valid JSON' });
+        }
+        await db.exec('BEGIN IMMEDIATE TRANSACTION');
+        try {
+          const fresh = await db.get('SELECT settings FROM project WHERE id = ?', id);
+          const { patchProjectSettings } = await import('../services/story_bible');
+          const merged = patchProjectSettings(parseProjectSettings(fresh?.settings), incoming);
+          settingsJson = await validateImageSettings(JSON.stringify(merged), reply);
+          if (settingsJson == null) {
+            await db.exec('ROLLBACK');
+            return;
+          }
+          updateFields.push('settings = ?');
+          params.push(settingsJson);
+          updateFields.push('updated_at = CURRENT_TIMESTAMP');
+          params.push(id);
+          await db.run(`UPDATE project SET ${updateFields.join(', ')} WHERE id = ?`, ...params);
+          await db.exec('COMMIT');
+        } catch (error) {
+          await db.exec('ROLLBACK');
+          throw error;
+        }
+        const updatedProject = await db.get('SELECT * FROM project WHERE id = ?', id);
+        return updatedProject;
+      }
+    }
+
+    if (settingsJson === null) {
       updateFields.push('settings = ?');
-      params.push(settingsJson);
+      params.push(null);
     }
 
     if (updateFields.length > 0) {

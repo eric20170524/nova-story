@@ -57,14 +57,23 @@ test('character versions: baseline, create, activate, sync', async () => {
   );
   await syncActiveCharacterVersion(charId);
 
+  await db.run(
+    'UPDATE character SET personality = ?, growth_path = ? WHERE id = ?',
+    '冷静',
+    '从守卫变成引路人',
+    charId
+  );
   versions = await listCharacterVersions(charId);
   const v2 = versions.find((v) => v.version === 2)!;
-  assert.equal(v2.description, 'desc B');
+  assert.equal(v2.description, null);
   assert.match(String(v2.visual_tags), /b\.png/);
 
   const restored = await activateCharacterVersion(charId, 1);
   assert.equal(restored.active_version, 1);
-  assert.equal(restored.description, 'desc A');
+  assert.equal(restored.description, 'desc B');
+  assert.equal(restored.personality, '冷静');
+  assert.equal(restored.growth_path, '从守卫变成引路人');
+  assert.equal(restored.role, 'main');
   const tags1 = JSON.parse(restored.visual_tags || '{}');
   assert.equal(tags1.assets?.avatar_url, '/static/a.png');
 

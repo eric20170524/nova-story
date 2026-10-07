@@ -10,7 +10,13 @@ export const ChapterContinuitySchema = z.object({
 });
 
 export type ChapterContinuity = z.infer<typeof ChapterContinuitySchema>;
-export type ChapterImpactEntry = { main_plot: string; character_relations: string };
+export type ChapterImpactEntry = {
+  main_plot: string;
+  character_relations: string;
+  invalid?: boolean;
+  state_refs?: Array<{ line: string; character_id: number | null }>;
+  relation_refs?: Array<{ line: string; a_id: number | null; b_id: number | null }>;
+};
 type Chapter = { id: string; title: string; index: number };
 
 // Always append this contract, including when a project uses a legacy prompt override.
@@ -55,25 +61,15 @@ export function mergeChapterImpactSettings(
       ? `${heading}\n\n${facts.characterRelations.map((line) => `- ${line}`).join('\n')}` : '',
   };
   const previous = current.chapter_impact_entries || {};
+  const prior = previous[chapter.id];
   const entries = { ...previous, [chapter.id]: entry };
   const settings = { ...current, chapter_impact_entries: entries };
-  const changed = { main_plot: false, character_relations: false };
-
-  for (const key of ['main_plot', 'character_relations'] as const) {
-    const original = typeof current[key] === 'string' ? current[key] : '';
-    let manual = original;
-    // Remove only exact blocks produced by us; preserve author edits and other settings.
-    for (const old of Object.values(previous)) {
-      if (old?.[key]) manual = manual.replace(old[key], '');
-    }
-    const blocks = ordered
-      .map((c) => entries[c.id]?.[key]).filter(Boolean);
-    const merged = [manual.trim(), ...blocks].filter(Boolean).join('\n\n');
-    // Leave untouched fields byte-for-byte intact when no blocks were changed.
-    if (blocks.length || manual !== original) {
-      settings[key] = merged;
-      changed[key] = merged !== original;
-    }
-  }
-  return { settings, entry, changed };
+  return {
+    settings,
+    entry,
+    changed: {
+      main_plot: (prior?.main_plot || '') !== entry.main_plot,
+      character_relations: (prior?.character_relations || '') !== entry.character_relations,
+    },
+  };
 }

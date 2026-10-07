@@ -1,6 +1,6 @@
 /**
- * Character description + visual asset versioning (A/B test looks & tags).
- * Character row always mirrors the active version.
+ * Visual asset versioning (A/B test looks and tags).
+ * Persona text stays on the character row. Versions store visual_tags only.
  */
 import { db } from '../db/database';
 
@@ -62,9 +62,8 @@ export async function ensureCharacterVersionBaseline(characterId: number): Promi
 
   await db.run(
     `INSERT INTO character_version (character_id, version, label, description, visual_tags)
-     VALUES (?, 1, 'v1', ?, ?)`,
+     VALUES (?, 1, 'v1', NULL, ?)`,
     characterId,
-    char.description ?? null,
     tagsToString(char.visual_tags)
   );
   await db.run('UPDATE character SET active_version = 1 WHERE id = ?', characterId);
@@ -93,11 +92,9 @@ export async function activateCharacterVersion(
   await db.run(
     `UPDATE character SET
       active_version = ?,
-      description = ?,
       visual_tags = ?
     WHERE id = ?`,
     version,
-    ver.description,
     ver.visual_tags,
     characterId
   );
@@ -142,11 +139,10 @@ export async function commitCharacterEdits(characterId: number, previousVisualTa
   const nextVersion = Number((maxRow as { m?: number } | undefined)?.m || 0) + 1;
   await db.run(
     `INSERT INTO character_version (character_id, version, label, description, visual_tags)
-     VALUES (?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, NULL, ?)`,
     characterId,
     nextVersion,
     `v${nextVersion}`,
-    char.description ?? null,
     tagsToString(char.visual_tags)
   );
   await db.run('UPDATE character SET active_version = ? WHERE id = ?', nextVersion, characterId);
@@ -160,9 +156,8 @@ export async function syncActiveCharacterVersion(characterId: number): Promise<v
   const active = Number(char.active_version || 1);
 
   await db.run(
-    `UPDATE character_version SET description = ?, visual_tags = ?
+    `UPDATE character_version SET visual_tags = ?
      WHERE character_id = ? AND version = ?`,
-    char.description,
     tagsToString(char.visual_tags),
     characterId,
     active
@@ -220,7 +215,7 @@ export async function createCharacterVersion(
     characterId,
     nextVersion,
     label,
-    source.description ?? char.description ?? null,
+    null,
     tagsToString(visualTags)
   );
 

@@ -60,6 +60,8 @@ export interface Character {
   name: string;
   role: string; // 'protagonist' | 'antagonist' | 'supporting'
   description: string;
+  personality?: string | null;
+  growth_path?: string | null;
   visual_tags: Record<string, any>; // Key-value pairs for ComfyUI or complex object
   avatar_url?: string;
   turnaround_url?: string;

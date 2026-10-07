@@ -15,6 +15,7 @@ import {
   type VisualStyleDef,
 } from '../constants';
 import { ProjectDocumentsPanel } from '../components/ProjectDocumentsPanel';
+import { StoryBiblePanel, type StoryBibleView, type StoryCharacterDraft } from '../components/story/StoryBiblePanel';
 
 type SettingsTab = 'overview' | 'story' | 'glossary' | 'documents' | 'advanced';
 
@@ -150,8 +151,12 @@ export const ProjectSettings: React.FC = () => {
   const [storyTagsText, setStoryTagsText] = useState('');
   const [pov, setPov] = useState('');
   const [tone, setTone] = useState('');
-  const [mainPlot, setMainPlot] = useState('');
-  const [characterRelations, setCharacterRelations] = useState('');
+  const [plotDirection, setPlotDirection] = useState('');
+  const [initialRelations, setInitialRelations] = useState('');
+  const [plannedRelations, setPlannedRelations] = useState('');
+  const [storyCast, setStoryCast] = useState<StoryCharacterDraft[]>([]);
+  const [savedCast, setSavedCast] = useState<StoryCharacterDraft[]>([]);
+  const [storyBible, setStoryBible] = useState<StoryBibleView | null>(null);
   const [glossary, setGlossary] = useState<
     Array<{ id: number; term: string; definition?: string | null; category?: string | null }>
   >([]);
@@ -229,12 +234,10 @@ export const ProjectSettings: React.FC = () => {
           );
           setPov(typeof settingsObj.pov === 'string' ? settingsObj.pov : '');
           setTone(typeof settingsObj.tone === 'string' ? settingsObj.tone : '');
-          setMainPlot(typeof settingsObj.main_plot === 'string' ? settingsObj.main_plot : '');
-          setCharacterRelations(
-            typeof settingsObj.character_relations === 'string'
-              ? settingsObj.character_relations
-              : ''
-          );
+          setPlotDirection(typeof settingsObj.plot_direction === 'string' ? settingsObj.plot_direction : '');
+          setInitialRelations(typeof settingsObj.initial_relations === 'string' ? settingsObj.initial_relations : '');
+          setPlannedRelations(typeof settingsObj.planned_relations === 'string' ? settingsObj.planned_relations : '');
+          setStoryBible((data.story_bible as StoryBibleView) || null);
           if (
             settingsObj.agent_prompts_override &&
             typeof settingsObj.agent_prompts_override === 'object'
@@ -247,6 +250,22 @@ export const ProjectSettings: React.FC = () => {
           }
       } catch (e) {
           console.error("Failed to parse project settings", e);
+      }
+      try {
+        const rows = await api.getCharacters(Number(data.id));
+        const drafts: StoryCharacterDraft[] = (rows || []).map((row: { id: number; name?: string; role?: string; description?: string; personality?: string; growth_path?: string; visual_tags?: { aliases?: unknown } }) => ({
+          id: row.id,
+          name: String(row.name || ''),
+          role: String(row.role || 'supporting'),
+          description: String(row.description || ''),
+          personality: String(row.personality || ''),
+          growth_path: String(row.growth_path || ''),
+          aliases: Array.isArray(row.visual_tags?.aliases) ? row.visual_tags.aliases.map((alias) => String(alias || '')).filter(Boolean) : [],
+        }));
+        setStoryCast(drafts);
+        setSavedCast(drafts);
+      } catch (characterError) {
+        console.error(characterError);
       }
     } catch (e) {
       console.error(e);
@@ -310,8 +329,9 @@ export const ProjectSettings: React.FC = () => {
             story_tags: storyTags,
             pov,
             tone,
-            main_plot: mainPlot,
-            character_relations: characterRelations,
+            plot_direction: plotDirection,
+            initial_relations: initialRelations,
+            planned_relations: plannedRelations,
             ...(agent_prompts_override
               ? { agent_prompts_override }
               : promptOverrideJson.trim() === ''
@@ -324,6 +344,27 @@ export const ProjectSettings: React.FC = () => {
             description,
             settings: settingsJson
         });
+        const changedCast = storyCast.filter((row) => {
+          const previous = savedCast.find((item) => item.id === row.id);
+          return JSON.stringify(previous) !== JSON.stringify(row);
+        });
+        try {
+          for (const row of changedCast) {
+            await api.updateCharacter(row.id, {
+              name: row.name,
+              role: row.role,
+              description: row.description,
+              personality: row.personality,
+              growth_path: row.growth_path,
+            });
+          }
+          setSavedCast(storyCast);
+        } catch (characterError) {
+          console.error(characterError);
+          showToast(t('project_settings.story_saved_characters_failed'), 'error');
+          setSaving(false);
+          return;
+        }
         setSettingsBase(JSON.parse(settingsJson));
         
         window.dispatchEvent(new Event('novastory-project-settings-changed'));
@@ -470,7 +511,7 @@ export const ProjectSettings: React.FC = () => {
                   <div className="text-xs font-semibold text-slate-800 dark:text-slate-300">{t('project_settings.story_jump')}</div>
                   <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
                     {[genre, storyStyle, tone].filter(Boolean).join(' · ') ||
-                      mainPlot.trim() ||
+                      plotDirection.trim() ||
                       t('project_settings.story_empty_hint')}
                   </p>
                 </button>
@@ -689,24 +730,18 @@ export const ProjectSettings: React.FC = () => {
                   placeholder={t('project_settings.placeholder_tags')}
                 />
               </Field>
-              <div className="grid gap-3 lg:grid-cols-2">
-                <Field label={t('project_settings.main_plot')}>
-                  <textarea
-                    data-testid="project-settings-plot"
-                    className={`${fieldClass} h-28 resize-y`}
-                    value={mainPlot}
-                    onChange={(e) => setMainPlot(e.target.value)}
-                  />
-                </Field>
-                <Field label={t('project_settings.character_relations')}>
-                  <textarea
-                    data-testid="project-settings-relations"
-                    className={`${fieldClass} h-28 resize-y`}
-                    value={characterRelations}
-                    onChange={(e) => setCharacterRelations(e.target.value)}
-                  />
-                </Field>
-              </div>
+              <StoryBiblePanel
+                projectId={String(id || '')}
+                characters={storyCast}
+                onCharacters={setStoryCast}
+                plotDirection={plotDirection}
+                onPlotDirection={setPlotDirection}
+                initialRelations={initialRelations}
+                onInitialRelations={setInitialRelations}
+                plannedRelations={plannedRelations}
+                onPlannedRelations={setPlannedRelations}
+                view={storyBible}
+              />
             </SectionCard>
           )}
 

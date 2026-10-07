@@ -302,8 +302,8 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
     mapRoleInChapterToRole,
   } = await import('../services/ai/writing_service');
 
-  assert.equal(mapRoleInChapterToRole('主角/决斗者'), 'main');
-  assert.equal(mapRoleInChapterToRole('观众（群体）'), 'minor');
+  assert.equal(mapRoleInChapterToRole('主角/决斗者'), 'protagonist');
+  assert.equal(mapRoleInChapterToRole('观众（群体）'), 'extra');
   assert.equal(mapRoleInChapterToRole('对手', 'supporting'), 'supporting');
 
   const block = formatPersonalityBlock({
@@ -384,7 +384,7 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
 
   const akaliRow = merged.newOrUpdatedCharacters.find((c) => c.name === '阿卡丽');
   assert.ok(akaliRow);
-  assert.equal(akaliRow!.role, 'main');
+  assert.equal(akaliRow!.role, 'protagonist');
   assert.match(String(akaliRow!.description), /性格特征：/);
   assert.equal(akaliRow!.traits?.length, 1);
 
