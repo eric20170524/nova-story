@@ -40,7 +40,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
   const [applyingChangeId, setApplyingChangeId] = useState<string | null>(null);
   const [discardingChangeId, setDiscardingChangeId] = useState<string | null>(null);
   const [savingCandidateId, setSavingCandidateId] = useState<string | null>(null);
-  const [replaceCandidateId, setReplaceCandidateId] = useState<string | null>(null);
+  const [confirmCandidateId, setConfirmCandidateId] = useState<string | null>(null);
 
   const candidates = (script?.pendingChanges || []).filter((change) => change.kind === 'storyboard');
   if (!script || candidates.length === 0) return null;
@@ -51,7 +51,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
       return;
     }
     setApplyingChangeId(candidate.id);
-    setReplaceCandidateId(null);
+    setConfirmCandidateId(null);
     try {
       await api.applyStoryboardCandidate(script.id, candidate.id, {
         expected_revision: script.revision,
@@ -71,15 +71,11 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
   };
 
   const requestSubmit = (candidate: (typeof candidates)[number]) => {
-    if (!timelineReady || sceneIds === null) {
+    if (!timelineReady) {
       showToast(t('director.scene_ids_unavailable'), 'warning');
       return;
     }
-    if (sceneIds.length > 0) {
-      setReplaceCandidateId(candidate.id);
-      return;
-    }
-    void submitCandidate(candidate, false);
+    setConfirmCandidateId(candidate.id);
   };
 
   const discardCandidate = async (candidate: (typeof candidates)[number]) => {
@@ -88,7 +84,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
       await api.discardScriptCandidate(script.id, candidate.id);
       showToast(t('script_editor.candidate_discarded_success'), 'info');
       if (editingCandidateId === candidate.id) setEditingCandidateId(null);
-      if (replaceCandidateId === candidate.id) setReplaceCandidateId(null);
+      if (confirmCandidateId === candidate.id) setConfirmCandidateId(null);
       onScriptChanged();
     } catch (err: any) {
       showToast(err.message || '丢弃候选失败', 'error');
@@ -121,7 +117,18 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
     }
   };
 
-  const replaceCandidate = candidates.find((candidate) => candidate.id === replaceCandidateId);
+  const confirmCandidate = candidates.find((candidate) => candidate.id === confirmCandidateId);
+  const replacingExisting = (sceneIds?.length || 0) > 0;
+  const confirmShotCount = (() => {
+    if (!confirmCandidate) return sceneIds?.length || 0;
+    try {
+      const payload = JSON.parse(confirmCandidate.after_json);
+      const shots = Array.isArray(payload?.shots) ? payload.shots.length : 0;
+      return replacingExisting ? (sceneIds?.length || 0) : shots;
+    } catch {
+      return sceneIds?.length || 0;
+    }
+  })();
 
   return (
     <>
@@ -166,6 +173,20 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    data-testid={`storyboard-adopt-${candidate.id}`}
+                    disabled={busy || !timelineReady}
+                    onClick={() => requestSubmit(candidate)}
+                    className="px-3 py-1 rounded-md text-[11px] font-medium bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <Check size={13} />
+                    <span>
+                      {isApplying
+                        ? t('script_editor.applying_candidate')
+                        : t('script_editor.apply_candidate')}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setExpandedCandidateId(isExpanded ? null : candidate.id)}
                     className="px-2 py-1 rounded-md text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
                   >
@@ -204,19 +225,6 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
                       {isDiscarding
                         ? t('script_editor.discarding_candidate')
                         : t('script_editor.discard_candidate')}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || !timelineReady}
-                    onClick={() => requestSubmit(candidate)}
-                    className="px-3 py-1 rounded-md text-[11px] font-medium bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <Check size={13} />
-                    <span>
-                      {isApplying
-                        ? t('script_editor.submitting_to_timeline')
-                        : t('script_editor.submit_to_timeline')}
                     </span>
                   </button>
                 </div>
@@ -335,36 +343,49 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
         })}
       </div>
 
-      {replaceCandidate && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      {confirmCandidate && (
+        <div
+          data-testid="storyboard-adopt-confirm"
+          className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+        >
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-amber-500">
               <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-800/50">
                 <AlertTriangle size={22} />
               </div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                {t('director.replace_confirm_title')}
+                {replacingExisting
+                  ? t('director.replace_confirm_title')
+                  : t('director.adopt_confirm_title')}
               </h3>
             </div>
             <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              {t('director.replace_confirm_desc', 'This chapter already has {count} shots.', {
-                count: sceneIds?.length || 0,
-              })}
+              {replacingExisting
+                ? t('director.replace_confirm_desc', { count: sceneIds?.length || 0 })
+                : t('director.adopt_confirm_desc', { count: confirmShotCount })}
             </p>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setReplaceCandidateId(null)}
+                data-testid="storyboard-adopt-cancel"
+                onClick={() => setConfirmCandidateId(null)}
                 className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl"
               >
                 {t('common.cancel', '取消')}
               </button>
               <button
                 type="button"
-                onClick={() => submitCandidate(replaceCandidate, true)}
+                data-testid="storyboard-adopt-confirm-submit"
+                onClick={() => {
+                  if (replacingExisting && (!sceneIds || sceneIds.length === 0)) {
+                    showToast(t('director.scene_ids_unavailable'), 'warning');
+                    return;
+                  }
+                  void submitCandidate(confirmCandidate, replacingExisting);
+                }}
                 className="px-4 py-2 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-500 rounded-xl"
               >
-                {t('director.confirm_replace')}
+                {replacingExisting ? t('director.confirm_replace') : t('director.confirm_adopt')}
               </button>
             </div>
           </div>
