@@ -8,6 +8,11 @@ import { mergeVerifyLlmConfig } from '../services/llm_presets';
 import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 import { VramService } from '../services/vram_service';
 import { ComfyUIService } from '../services/ai/comfyui_service';
+import { GpuLeaseService } from '../services/gpu_lease_service';
+
+function localGpuBusy(): boolean {
+  return Boolean(GpuLeaseService.getCurrentLease()) || GpuLeaseService.getQueueLength() > 0;
+}
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', async () => {
@@ -28,6 +33,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   /** Reset ComfyUI model + torch VRAM cache */
   app.post('/vram/free-comfy', async () => {
     return VramService.freeComfy();
+  });
+
+  /** Stop local ComfyUI and start llama.cpp. Refuses while an image or video lease is held. */
+  app.post('/vram/switch-llamacpp', async () => {
+    return VramService.switchTo('llamacpp', { gpuBusy: localGpuBusy() });
+  });
+
+  /** Stop the local text model and start ComfyUI. Refuses while an image or video lease is held. */
+  app.post('/vram/switch-comfyui', async () => {
+    return VramService.switchTo('comfyui', { gpuBusy: localGpuBusy() });
   });
 
   /** Probe ComfyUI install for Tier B (IP-Adapter + ControlNet) readiness */

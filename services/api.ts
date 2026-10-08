@@ -610,6 +610,26 @@ class ApiService {
       status?: any;
     }>('/settings/vram/free-comfy', { method: 'POST' });
 
+  /** Stop local ComfyUI and start llama.cpp */
+  switchToLlamaCpp = () =>
+    this.request<{
+      ok: boolean;
+      message: string;
+      message_zh: string;
+      details?: string[];
+      status?: any;
+    }>('/settings/vram/switch-llamacpp', { method: 'POST' });
+
+  /** Stop the local text model and start ComfyUI */
+  switchToComfyUi = () =>
+    this.request<{
+      ok: boolean;
+      message: string;
+      message_zh: string;
+      details?: string[];
+      status?: any;
+    }>('/settings/vram/switch-comfyui', { method: 'POST' });
+
   // --- Track 5: Structured Screenplay / Script API ---
   getChapterScript = (chapterId: string) =>
     this.request<{ exists: boolean; script: any | null }>(`/chapters/${chapterId}/script`);
@@ -765,6 +785,8 @@ class ApiService {
       expected_revision: number;
       expected_candidate_revision?: number;
       request_key?: string;
+      replace_existing?: boolean;
+      expected_scene_ids?: number[];
     }
   ) =>
     this.request<{

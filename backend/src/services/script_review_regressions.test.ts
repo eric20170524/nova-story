@@ -18,8 +18,10 @@ import { projectRoutes } from '../routes/projects';
 import { creativeRoutes } from '../routes/creative';
 import { normalizeNovaStoryJsonProject } from './import/novastory_json_model';
 import { restoreNovaStoryJsonProject } from './import/novastory_json_import';
+import { setVisualPromptVerifierForTests } from './english_visual_prompt';
 
 async function fixture() {
+  setVisualPromptVerifierForTests(async (facts, english) => ({ facts: facts.map((_, id) => ({ id, status: 'preserved', evidence: english })) }));
   await initDb();
   const project = await db.run("INSERT INTO project (title, settings, user_id) VALUES ('review regression', '{}', 'local_admin')");
   const projectId = Number(project.lastID);

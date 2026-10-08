@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   __vramTestables,
   buildVramStatus,
+  setVramSwitchDepsForTests,
+  VramService,
   type VramStatus,
 } from './vram_service';
 
 const {
   classifyLevel, formatGiB, ollamaNativeBaseUrl, classifyLlmProbe, isLoopbackBaseUrl,
-  isLlamaServerProcessImage, WARNING_THRESHOLD, CRITICAL_THRESHOLD,
+  isLlamaServerProcessImage, decideVramSwitch, localLlmStartScriptPath,
+  WARNING_THRESHOLD, CRITICAL_THRESHOLD,
 } = __vramTestables;
 
 test('classifyLevel maps percent to good / warning / critical', () => {
@@ -178,6 +183,196 @@ test('prepareForImageGeneration skips when no Ollama models are resident', async
   if (result.skipped) {
     assert.equal(result.ok, true);
     assert.equal(result.phase, 'vram_ready');
+  }
+});
+
+function switchStatus(flags: { llm?: boolean; comfy?: boolean }): VramStatus {
+  return {
+    level: 'good',
+    percent: 10,
+    used_bytes: 1024,
+    total_bytes: 12 * 1024 ** 3,
+    free_bytes: 11 * 1024 ** 3,
+    gpu_name: 'RTX 3060',
+    ollama: {
+      online: Boolean(flags.llm),
+      base_url: 'http://127.0.0.1:11434',
+      used_bytes: flags.llm ? 1024 : 0,
+      models: flags.llm
+        ? [{ name: 'novastory-qwen3.5:9b', size: 1024, size_vram: 1024, processor: 'llamacpp' }]
+        : [],
+    },
+    comfyui: {
+      online: Boolean(flags.comfy),
+      base_url: 'http://127.0.0.1:8188',
+      used_bytes: flags.comfy ? 1024 : 0,
+      total_bytes: 12 * 1024 ** 3,
+      torch_used_bytes: 0,
+    },
+    processes: [],
+    summary: '',
+    summary_zh: '',
+    tip: '',
+    tip_zh: '',
+    source: 'nvidia-smi',
+    polled_at: '2026-10-08T00:00:00.000Z',
+  };
+}
+
+test('decideVramSwitch keeps the two local backends exclusive', () => {
+  assert.equal(decideVramSwitch({
+    target: 'llamacpp', llmLoopback: true, llmOnline: true, comfyRemote: false, comfyOnline: false, gpuBusy: false,
+  }).action, 'already');
+  assert.equal(decideVramSwitch({
+    target: 'llamacpp', llmLoopback: true, llmOnline: true, comfyRemote: true, comfyOnline: true, gpuBusy: true,
+  }).action, 'already');
+  assert.equal(decideVramSwitch({
+    target: 'llamacpp', llmLoopback: true, llmOnline: false, comfyRemote: false, comfyOnline: true, gpuBusy: false,
+  }).action, 'start_llamacpp');
+  assert.equal(decideVramSwitch({
+    target: 'llamacpp', llmLoopback: true, llmOnline: true, comfyRemote: false, comfyOnline: true, gpuBusy: true,
+  }).action, 'refuse');
+  assert.equal(decideVramSwitch({
+    target: 'llamacpp', llmLoopback: false, llmOnline: false, comfyRemote: false, comfyOnline: false, gpuBusy: false,
+  }).action, 'refuse');
+  assert.equal(decideVramSwitch({
+    target: 'comfyui', llmLoopback: true, llmOnline: false, comfyRemote: false, comfyOnline: true, gpuBusy: false,
+  }).action, 'already');
+  const toComfy = decideVramSwitch({
+    target: 'comfyui', llmLoopback: true, llmOnline: true, comfyRemote: false, comfyOnline: false, gpuBusy: false,
+  });
+  assert.equal(toComfy.action, 'start_comfy');
+  if (toComfy.action === 'start_comfy') assert.equal(toComfy.stopLocalLlm, true);
+  assert.equal(decideVramSwitch({
+    target: 'comfyui', llmLoopback: true, llmOnline: false, comfyRemote: true, comfyOnline: false, gpuBusy: false,
+  }).action, 'refuse');
+  assert.equal(decideVramSwitch({
+    target: 'comfyui', llmLoopback: true, llmOnline: false, comfyRemote: false, comfyOnline: false, gpuBusy: true,
+  }).action, 'refuse');
+});
+
+test('local llama.cpp launcher is the bundled start script', () => {
+  const script = localLlmStartScriptPath();
+  assert.equal(path.basename(script), 'start_local_llm.ps1');
+  assert.equal(fs.existsSync(script), true);
+});
+
+test('switchTo starts only the requested local backend', async () => {
+  const calls: string[] = [];
+  let state = switchStatus({ llm: false, comfy: true });
+  setVramSwitchDepsForTests({
+    loadSettings: () => ({ llm: { base_url: 'http://127.0.0.1:11434/v1' }, comfyui: { mode: 'local' } }),
+    getStatus: async () => state,
+    runTextMode: async () => {
+      calls.push('llm');
+      state = switchStatus({ llm: true, comfy: false });
+    },
+    startComfy: async () => {
+      calls.push('comfy');
+      return true;
+    },
+    releaseLlm: async () => {
+      calls.push('release');
+      return { ok: true, message: '', message_zh: '' };
+    },
+  });
+  try {
+    const toLlm = await VramService.switchTo('llamacpp');
+    assert.equal(toLlm.ok, true);
+    assert.match(toLlm.message_zh, /llama\.cpp/);
+    assert.deepEqual(calls, ['llm']);
+
+    calls.length = 0;
+    state = switchStatus({ llm: true, comfy: false });
+    setVramSwitchDepsForTests({
+      loadSettings: () => ({ llm: { base_url: 'http://127.0.0.1:11434/v1' }, comfyui: { mode: 'local' } }),
+      getStatus: async () => state,
+      runTextMode: async () => { calls.push('llm'); },
+      startComfy: async () => {
+        calls.push('comfy');
+        state = switchStatus({ llm: false, comfy: true });
+        return true;
+      },
+      releaseLlm: async () => {
+        calls.push('release');
+        state = switchStatus({ llm: false, comfy: false });
+        return { ok: true, message: '', message_zh: '', status: state };
+      },
+    });
+    const toComfy = await VramService.switchTo('comfyui');
+    assert.equal(toComfy.ok, true);
+    assert.match(toComfy.message_zh, /ComfyUI/);
+    assert.deepEqual(calls, ['release', 'comfy']);
+  } finally {
+    setVramSwitchDepsForTests(null);
+  }
+});
+
+test('switchTo does not start ComfyUI when the text model stays resident or the GPU is busy', async () => {
+  const calls: string[] = [];
+  let state = switchStatus({ llm: true, comfy: false });
+  setVramSwitchDepsForTests({
+    loadSettings: () => ({ llm: { base_url: 'http://127.0.0.1:11434/v1' }, comfyui: { mode: 'local' } }),
+    getStatus: async () => state,
+    runTextMode: async () => { calls.push('llm'); },
+    startComfy: async () => { calls.push('comfy'); return true; },
+    releaseLlm: async () => {
+      calls.push('release');
+      return { ok: false, message: 'still up', message_zh: '仍在', status: state };
+    },
+  });
+  try {
+    const blocked = await VramService.switchTo('comfyui');
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.message_zh, /仍在运行/);
+    assert.deepEqual(calls, ['release']);
+
+    calls.length = 0;
+    state = switchStatus({ llm: false, comfy: true });
+    const busy = await VramService.switchTo('llamacpp', { gpuBusy: true });
+    assert.equal(busy.ok, false);
+    assert.match(busy.message_zh, /占用显卡/);
+    assert.deepEqual(calls, []);
+
+    const remote = await VramService.switchTo('comfyui');
+    assert.equal(remote.ok, true);
+    setVramSwitchDepsForTests({
+      loadSettings: () => ({
+        llm: { base_url: 'http://127.0.0.1:11434/v1' },
+        comfyui: { mode: 'remote', remote_base_url: 'https://comfy.example.com' },
+      }),
+      getStatus: async () => switchStatus({ llm: false, comfy: false }),
+      runTextMode: async () => { calls.push('llm'); },
+      startComfy: async () => { calls.push('comfy'); return true; },
+      releaseLlm: async () => { calls.push('release'); return { ok: true, message: '', message_zh: '' }; },
+    });
+    const refused = await VramService.switchTo('comfyui');
+    assert.equal(refused.ok, false);
+    assert.match(refused.message_zh, /远端/);
+    assert.deepEqual(calls, []);
+  } finally {
+    setVramSwitchDepsForTests(null);
+  }
+});
+
+test('switchTo reports a launcher failure without throwing', async () => {
+  setVramSwitchDepsForTests({
+    loadSettings: () => ({ llm: { base_url: 'http://127.0.0.1:11434/v1' }, comfyui: { mode: 'local' } }),
+    getStatus: async () => switchStatus({ llm: false, comfy: false }),
+    runTextMode: async () => {
+      const error = new Error('exit 1') as Error & { stderr?: string };
+      error.stderr = 'llama-server exited early';
+      throw error;
+    },
+    startComfy: async () => true,
+    releaseLlm: async () => ({ ok: true, message: '', message_zh: '' }),
+  });
+  try {
+    const result = await VramService.switchTo('llamacpp');
+    assert.equal(result.ok, false);
+    assert.match(result.message_zh, /llama-server exited early/);
+  } finally {
+    setVramSwitchDepsForTests(null);
   }
 });
 

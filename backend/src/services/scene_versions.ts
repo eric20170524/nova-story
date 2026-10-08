@@ -16,7 +16,8 @@ export const SCENE_VERSION_FIELDS = [
   'negative_prompt',
   'asset_status',
   'task_id',
-  'asset_url'
+  'asset_url',
+  'english_visual_prompt'
 ] as const;
 
 export type SceneVersionField = (typeof SCENE_VERSION_FIELDS)[number];
@@ -38,7 +39,13 @@ export interface SceneVersionRow {
   asset_status?: string | null;
   task_id?: string | null;
   asset_url?: string | null;
+  english_visual_prompt?: string | null;
   created_at?: string;
+}
+
+function englishPromptFromScene(scene: any): string | null {
+  try { return JSON.parse(scene.shot_spec || '{}').english_visual_prompt ?? null; }
+  catch { return null; }
 }
 
 const snapshotFromScene = (scene: any, version: number, label?: string | null) => ({
@@ -56,7 +63,8 @@ const snapshotFromScene = (scene: any, version: number, label?: string | null) =
   negative_prompt: scene.negative_prompt ?? null,
   asset_status: scene.asset_status || 'idle',
   task_id: scene.task_id ?? null,
-  asset_url: scene.asset_url ?? null
+  asset_url: scene.asset_url ?? null,
+  english_visual_prompt: englishPromptFromScene(scene),
 });
 
 export async function ensureSceneVersionBaseline(sceneId: number): Promise<void> {
@@ -80,8 +88,8 @@ export async function ensureSceneVersionBaseline(sceneId: number): Promise<void>
     `INSERT INTO scene_version (
       scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration, duration,
       shot_type, camera_movement, camera_angle, negative_prompt,
-      asset_status, task_id, asset_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      asset_status, task_id, asset_url, english_visual_prompt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     snap.scene_id,
     snap.version,
     snap.label,
@@ -96,7 +104,8 @@ export async function ensureSceneVersionBaseline(sceneId: number): Promise<void>
     snap.negative_prompt,
     snap.asset_status,
     snap.task_id,
-    snap.asset_url
+    snap.asset_url,
+    snap.english_visual_prompt
   );
   await db.run('UPDATE scene SET active_version = 1 WHERE id = ?', sceneId);
 }
@@ -128,6 +137,11 @@ export async function activateSceneVersion(
   );
   if (!ver) return null;
 
+  const current = await db.get('SELECT shot_spec FROM scene WHERE id = ?', sceneId);
+  const spec = JSON.parse(current?.shot_spec || '{}');
+  delete spec.english_visual_prompt;
+  if (ver.english_visual_prompt) spec.english_visual_prompt = ver.english_visual_prompt;
+
   await db.run(
     `UPDATE scene SET
       active_version = ?,
@@ -142,7 +156,8 @@ export async function activateSceneVersion(
       negative_prompt = ?,
       asset_status = ?,
       task_id = ?,
-      asset_url = ?
+      asset_url = ?,
+      shot_spec = ?
     WHERE id = ?`,
     version,
     ver.visual_prompt,
@@ -157,6 +172,7 @@ export async function activateSceneVersion(
     ver.asset_status || 'idle',
     ver.task_id,
     ver.asset_url,
+    JSON.stringify(spec),
     sceneId
   );
 
@@ -183,7 +199,8 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
       negative_prompt = ?,
       asset_status = ?,
       task_id = ?,
-      asset_url = ?
+      asset_url = ?,
+      english_visual_prompt = ?
     WHERE scene_id = ? AND version = ?`,
     scene.visual_prompt,
     scene.audio_prompt,
@@ -197,6 +214,7 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
     scene.asset_status || 'idle',
     scene.task_id,
     scene.asset_url,
+    englishPromptFromScene(scene),
     sceneId,
     active
   );
@@ -205,12 +223,13 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
 /** Push asset status/url/task into active version (after generation) */
 export async function syncActiveVersionAssets(
   sceneId: number,
-  fields: { asset_status?: string; asset_url?: string | null; task_id?: string | null }
+  fields: { asset_status?: string; asset_url?: string | null; task_id?: string | null; english_visual_prompt?: string | null },
+  version?: number,
 ): Promise<void> {
   await ensureSceneVersionBaseline(sceneId);
   const scene = await db.get('SELECT active_version FROM scene WHERE id = ?', sceneId);
   if (!scene) return;
-  const active = Number(scene.active_version || 1);
+  const active = version ?? Number(scene.active_version || 1);
 
   const sets: string[] = [];
   const params: any[] = [];
@@ -226,12 +245,22 @@ export async function syncActiveVersionAssets(
     sets.push('task_id = ?');
     params.push(fields.task_id);
   }
+  if (fields.english_visual_prompt !== undefined) {
+    sets.push('english_visual_prompt = ?');
+    params.push(fields.english_visual_prompt);
+  }
   if (!sets.length) return;
   params.push(sceneId, active);
   await db.run(
     `UPDATE scene_version SET ${sets.join(', ')} WHERE scene_id = ? AND version = ?`,
     ...params
   );
+  if (version !== undefined) {
+    const sceneSets = sets.map(set => set === 'english_visual_prompt = ?'
+      ? "shot_spec = json_set(COALESCE(shot_spec, '{}'), '$.english_visual_prompt', ?)"
+      : set);
+    await db.run(`UPDATE scene SET ${sceneSets.join(', ')} WHERE id = ? AND COALESCE(active_version, 1) = ?`, ...params);
+  }
 }
 
 export async function createSceneVersion(
@@ -271,8 +300,8 @@ export async function createSceneVersion(
     `INSERT INTO scene_version (
       scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration, duration,
       shot_type, camera_movement, camera_angle, negative_prompt,
-      asset_status, task_id, asset_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      asset_status, task_id, asset_url, english_visual_prompt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     sceneId,
     nextVersion,
     label,
@@ -287,7 +316,8 @@ export async function createSceneVersion(
     source.negative_prompt,
     clearAsset ? 'idle' : source.asset_status || 'idle',
     clearAsset ? null : source.task_id ?? null,
-    clearAsset ? null : source.asset_url ?? null
+    clearAsset ? null : source.asset_url ?? null,
+    clearAsset ? null : source.english_visual_prompt ?? null
   );
 
   let resultScene = scene;

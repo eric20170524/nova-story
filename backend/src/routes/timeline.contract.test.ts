@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import { db, initDb } from '../db/database';
 import { timelineRoutes } from './timeline';
 import { packShotSpec } from '../schemas/shot_contract';
+import { draftEnglishFromCues, setVisualPromptTranslatorForTests, setVisualPromptVerifierForTests } from '../services/english_visual_prompt';
 
 test('Director scene edit canonicalizes a shot contract without changing screenplay provenance', async () => {
   await initDb();
@@ -18,14 +19,18 @@ test('Director scene edit canonicalizes a shot contract without changing screenp
   await db.run('INSERT INTO scene (id,chapter_id,"index",visual_prompt,shot_spec) VALUES (?,?,1,?,?)', sceneId, chapterId, 'old prompt', oldSpec);
   const app = Fastify();
   await app.register(timelineRoutes, { prefix: '/api/timeline' });
+  setVisualPromptTranslatorForTests(async (prompt) => draftEnglishFromCues(prompt) || 'adult figures, visible action preserved');
+  setVisualPromptVerifierForTests(async (facts, english) => ({ facts: facts.map((_, id) => ({ id, status: 'preserved', evidence: english })) }));
   try {
     const nextSpec = packShotSpec({ location: '石井台', primary_action: '主角走到井边', key_props: ['旧铜铃'], source });
     const edited = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: nextSpec } });
     assert.equal(edited.statusCode, 200);
     const saved = JSON.parse(edited.body);
     assert.equal(JSON.parse(saved.shot_spec).location, '石井台');
-    assert.match(saved.visual_prompt, /石井台/);
+    assert.equal(JSON.parse(saved.shot_spec).primary_action, '主角走到井边');
+    assert.doesNotMatch(saved.visual_prompt, /[\u3400-\u9fff]/);
     assert.doesNotMatch(saved.visual_prompt, /场景：/);
+    assert.match(saved.visual_prompt, /adult figures, visible action preserved/);
 
     const wrongSource = packShotSpec({ location: '药屋', primary_action: '主角走到井边', source: { ...source, block_ids: ['b_2'] } });
     const rejected = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: wrongSource } });
@@ -34,6 +39,8 @@ test('Director scene edit canonicalizes a shot contract without changing screenp
     const rendered = await app.inject({ method: 'PUT', url: `/api/timeline/scene/${sceneId}`, payload: { shot_spec: nextSpec } });
     assert.equal(rendered.statusCode, 409);
   } finally {
+    setVisualPromptTranslatorForTests(null);
+    setVisualPromptVerifierForTests(null);
     await app.close();
     await db.run('DELETE FROM scene WHERE id=?', sceneId);
     await db.run('DELETE FROM chapter WHERE id=?', chapterId);

@@ -31,6 +31,9 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
       error instanceof ScriptGenerationError ||
       error instanceof StoryboardGenerationError
     ) {
+      if (error instanceof ScriptGenerationError || error instanceof StoryboardGenerationError) {
+        app.log.warn({ statusCode: error.statusCode }, error.message);
+      }
       return reply.status(error.statusCode).send({ detail: error.message });
     }
     const message = error instanceof Error ? error.message : String(error);

@@ -29,10 +29,9 @@ import {
   buildCharacterLockRefsForChapter,
   buildCharacterProfilesForChapter,
 } from '../timeline_generation_service';
-import { compilePonyPrompt } from '../pony_prompt_compiler';
-import { sanitizeVisualPrompt } from '../visual_prompt_sanitizer';
-import { buildTimelineVisualPromptPolicy } from '../image_generation_policy';
-import { parseProjectSettings, resolveEffectiveNsfw } from '../project_settings';
+import { buildTimelineVisualPromptPolicy, normalizeImageModelFamily } from '../image_generation_policy';
+import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../project_settings';
+import { compileEnglishShotPrompt, coversVisibleBeat, assertEnglishFidelity } from '../english_visual_prompt';
 import { compileNegativePrompt } from '../negative_prompt_compiler';
 import {
   assertChapterUniqueness,
@@ -208,6 +207,66 @@ export function balanceShotQuota<T extends { shot_intent?: string | null; shot_t
   }
 }
 
+function copiesSpokenLine(model: string, line: string): boolean {
+  const left = model.replace(/\s+/g, '');
+  const right = line.replace(/\s+/g, '');
+  if (!left || !right) return false;
+  if (!left.includes(right) && !right.includes(left)) return false;
+  const shorter = Math.min(left.length, right.length);
+  const longer = Math.max(left.length, right.length);
+  return shorter >= 4 && shorter / longer >= 0.6;
+}
+
+function nearestActionText(scene: ScriptScene, blockIds: string[]): string {
+  const indexes = blockIds
+    .map((id) => scene.blocks.findIndex((block) => block.id === id))
+    .filter((index) => index >= 0);
+  const origin = indexes.length ? Math.min(...indexes) : 0;
+  for (let index = origin; index >= 0; index -= 1) {
+    const block = scene.blocks[index];
+    if (block?.type === 'action' && block.text.trim()) return block.text.trim();
+  }
+  for (let index = origin + 1; index < scene.blocks.length; index += 1) {
+    const block = scene.blocks[index];
+    if (block?.type === 'action' && block.text.trim()) return block.text.trim();
+  }
+  return '';
+}
+
+/** Keep a readable Chinese action. Owned action blocks win. Dialogue is not copied onto neighboring shots. */
+export function resolvePrimaryAction(
+  doc: ScriptDocument,
+  shot: { script_scene_id: string; block_ids: string[]; primary_action: string; shot_type?: string | null },
+): string {
+  const checked = (text: string) => {
+    if (text.length > 240) throw new StoryboardGenerationError('镜头动作超过 240 字，必须拆镜或保真压缩后重试；不能截断可见事实', 400);
+    return text;
+  };
+  const fallback = String(shot.primary_action || '').trim();
+  const scene = doc.scenes.find((item) => item.id === shot.script_scene_id);
+  if (!scene) return checked(fallback);
+  const owned = shot.block_ids
+    .map((id) => scene.blocks.find((block) => block.id === id))
+    .filter((block): block is Extract<ScriptBlock, { type: 'action' }> => block?.type === 'action')
+    .map((block) => block.text.trim())
+    .filter(Boolean);
+  if (owned.length) return checked(owned.join('；'));
+  const spoken = shot.block_ids
+    .map((id) => scene.blocks.find((block) => block.id === id))
+    .filter((block): block is Extract<ScriptBlock, { type: 'dialogue' | 'voiceover' }> =>
+      block?.type === 'dialogue' || block?.type === 'voiceover')
+    .map((block) => block.text.trim())
+    .filter(Boolean);
+  const model = String(shot.primary_action || '').trim();
+  const copiesSpeech = spoken.some((line) => copiesSpokenLine(model, line));
+  const narrationCue = /旁白|声音|低语|喊出|问道/.test(model);
+  if (!copiesSpeech && !narrationCue) return checked(model || fallback);
+  const nearest = nearestActionText(scene, shot.block_ids);
+  if (!nearest) return checked(model || fallback);
+  const shotType = String(shot.shot_type || 'shot').trim() || 'shot';
+  return checked(`${shotType}: ${nearest}`);
+}
+
 /** Merge adjacent shots in the same scene until the list fits the cap. Shots are not dropped, and block ids are kept. */
 export function compactStoryboardShots<T extends { script_scene_id: string; block_ids: string[]; primary_action: string }>(
   shots: T[],
@@ -232,7 +291,7 @@ export function compactStoryboardShots<T extends { script_scene_id: string; bloc
     const following = next[best + 1]!;
     current.block_ids = [...new Set([...current.block_ids, ...following.block_ids])];
     if (following.primary_action && !current.primary_action.includes(following.primary_action)) {
-      current.primary_action = `${current.primary_action}；${following.primary_action}`.slice(0, 240);
+      current.primary_action = `${current.primary_action}；${following.primary_action}`;
     }
     next.splice(best + 1, 1);
   }
@@ -272,7 +331,7 @@ export function normalizeStoryboardReferences<T extends { script_scene_id: strin
   });
 }
 
-function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>) {
+export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>) {
     // 8. Coverage and validation gates
     const sceneMap = new Map<string, ScriptScene>();
     for (const sc of doc.scenes) {
@@ -375,6 +434,22 @@ function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<Ra
       throw new StoryboardGenerationError(`遗漏音效内容块: [${missingSoundBlockIds.join(', ')}]`, 400);
     }
 
+    const missingVisibleIds = doc.scenes.flatMap(scene => scene.blocks)
+      .filter(block => block.type === 'action' && block.id.startsWith('vis_') && !allocatedBlockIds.has(block.id))
+      .map(block => block.id);
+    if (missingVisibleIds.length) {
+      throw new StoryboardGenerationError(`遗漏可见动作内容块: [${missingVisibleIds.join(', ')}]`, 400);
+    }
+    for (const beat of doc.outline.visibleBeats || []) {
+      const covered = rawShots.some(shot => {
+        const scene = sceneMap.get(shot.script_scene_id)!;
+        const action = shot.block_ids.map(id => scene.blocks.find(block => block.id === id))
+          .filter(block => block?.type === 'action').map(block => block!.text).join('；');
+        return coversVisibleBeat(beat.text, action);
+      });
+      if (!covered) throw new StoryboardGenerationError(`分镜遗漏可见事实: ${beat.id}`, 400);
+    }
+
     // Check strict relative order of audible blocks in each scene
     for (const sc of doc.scenes) {
       const sceneShots = rawShots.filter((s) => s.script_scene_id === sc.id);
@@ -423,12 +498,23 @@ export class StoryboardGenerationService {
         }
       }
       const blocks = shot.block_ids.map((id) => blockMap.get(id)!.block);
+      for (const block of blocks.filter(block => block.type === 'action')) {
+        if ((block.id.startsWith('vis_') || (script.document.outline.visibleBeats || []).some(beat => coversVisibleBeat(beat.text, block.text)))
+          && !coversVisibleBeat(block.text, spec.primary_action)) {
+          throw new StoryboardGenerationError(`镜头动作遗漏已分配的可见事实: ${block.id}`, 400);
+        }
+      }
       const text = (type: ScriptBlock['type'], separator: string) => blocks.filter((block) => block.type === type).map((block) => block.text.trim()).join(separator);
       if (shot.dialogue !== text('dialogue', '\n') || shot.narration !== text('voiceover', '\n') || shot.audio_prompt !== text('sound', '; ')) {
         throw new StoryboardGenerationError('镜头对白、旁白或音效与剧本内容块不一致', 400);
       }
       return { ...shot, shot_intent: spec.shot_intent, key_props: spec.key_props };
     });
+    for (const beat of script.document.outline.visibleBeats || []) {
+      if (!payload.shots.some(shot => coversVisibleBeat(beat.text, JSON.parse(shot.shot_spec).primary_action))) {
+        throw new StoryboardGenerationError(`镜头契约遗漏可见事实: ${beat.id}`, 400);
+      }
+    }
     for (let index = 1; index < contracts.length; index++) {
       const previousPrompt = String(contracts[index - 1]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
       const currentPrompt = String(contracts[index]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
@@ -515,10 +601,12 @@ export class StoryboardGenerationService {
 
     // 5. Build prompt
     const project = await db.get('SELECT settings FROM project WHERE id = ?', script.projectId);
+    const projectSettings = parseProjectSettings(project?.settings);
     const nsfwEnabled = resolveEffectiveNsfw({
       systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
-      projectSettings: parseProjectSettings(project?.settings),
+      projectSettings,
     });
+    const modelFamily = normalizeImageModelFamily(getProjectImageSettings(projectSettings).model);
     const locationNames = new Map(doc.locations.map(location => [location.id, location.name]));
     const propNames = new Map(doc.props.map(prop => [prop.id, prop.name]));
     const libraryAssets = await AssetLibraryService.list(script.projectId);
@@ -587,7 +675,7 @@ ${blocksDesc}`;
       rawShots = compactStoryboardShots(normalizeStoryboardReferences(doc, rawResult.shots.map(shot => ({
         ...shot,
         location: stripAssetLabel(shot.location).slice(0, 240),
-        primary_action: shot.primary_action.slice(0, 240),
+        primary_action: shot.primary_action,
         key_props: (shot.key_props || []).map(stripAssetLabel),
       }))), 20);
       if (rawShots.length > 20 && attempt === 0) {
@@ -617,7 +705,7 @@ ${blocksDesc}`;
     for (let i = 0; i < rawShots.length; i++) {
       const shot = rawShots[i]!;
       const location = shot.location.trim();
-      const primary_action = shot.primary_action.trim();
+      const primary_action = resolvePrimaryAction(doc, shot);
       const key_props = shot.key_props || [];
       const shot_intent = shot.shot_intent || null;
       const subject_scale = shot.subject_scale || null;
@@ -645,38 +733,41 @@ ${blocksDesc}`;
       const narration = narrationTexts.join('\n');
       const audio_prompt = soundTexts.join('; ');
 
-      // Compile visual prompt from contract fields
-      const compiled = compilePonyPrompt(
-        {
-          shot_intent,
-          shot_type: shot.shot_type,
-          location,
-          primary_action,
-          primary_subject,
-          visible_subjects,
-          key_props,
-          subject_scale,
-          must_not: shot.must_not || [],
-        },
-        characterLocks
-      );
-
-      const sanitized = sanitizeVisualPrompt(compiled.visual_prompt);
+      // English image prompt. The contract fields above stay Chinese.
+      let compiled;
+      try {
+        compiled = await compileEnglishShotPrompt(
+          {
+            shot_intent,
+            shot_type: shot.shot_type,
+            location,
+            primary_action,
+            primary_subject,
+            visible_subjects,
+            key_props,
+            subject_scale,
+            must_not: shot.must_not || [],
+          },
+          characterLocks,
+          { modelFamily, nsfwEnabled },
+        );
+      } catch (err: any) {
+        throw new StoryboardGenerationError(
+          `英文生图提示词未能保留可见画面：${err?.message || String(err)}`,
+          502,
+        );
+      }
       const compiledNegative = compileNegativePrompt({
         shot_type: shot.shot_type,
         shot_intent: compiled.shot_intent || shot_intent,
-        visual_prompt: sanitized.visual_prompt,
+        visual_prompt: compiled.visual_prompt,
         location,
         key_props,
         character_lock: characterLocks.map((ref) => ref.lock).join(', '),
         identity_mode: 'auto',
       });
 
-      const negative_prompt = [
-        compiledNegative,
-        ...compiled.negative_extras,
-        ...sanitized.negative_extras,
-      ]
+      const negative_prompt = [compiledNegative, ...compiled.negative_extras]
         .filter(Boolean)
         .join(', ');
 
@@ -705,7 +796,7 @@ ${blocksDesc}`;
         index: i + 1,
         script_scene_id: shot.script_scene_id,
         block_ids: shot.block_ids,
-        visual_prompt: sanitized.visual_prompt,
+        visual_prompt: compiled.visual_prompt,
         audio_prompt,
         dialogue,
         narration,
@@ -965,6 +1056,16 @@ ${blocksDesc}`;
       );
     }
 
+    this.validatePayload(payload, script);
+    for (const shot of payload.shots) {
+      const spec = JSON.parse(shot.shot_spec);
+      try {
+        await assertEnglishFidelity([spec.primary_action, spec.location, ...spec.key_props].join('，'), shot.visual_prompt);
+      } catch (error: any) {
+        throw new StoryboardGenerationError(`候选英文提示词未通过保真核验：${error?.message || String(error)}`, 502);
+      }
+    }
+
     // 6. Atomic application in a short transaction
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
@@ -973,7 +1074,7 @@ ${blocksDesc}`;
       const lockedCandidate = await db.get('SELECT * FROM script_change WHERE id = ? AND script_id = ?', params.changeId, params.scriptId);
       if (lockedScript.revision !== params.expectedRevision || lockedScript.status !== 'confirmed' || lockedScript.freshness.sourceChanged ||
           !lockedCandidate || lockedCandidate.state !== 'pending' || lockedCandidate.base_revision !== lockedScript.revision ||
-          lockedCandidate.candidate_revision !== candidate.candidate_revision) {
+          lockedCandidate.candidate_revision !== candidate.candidate_revision || lockedCandidate.after_json !== candidate.after_json) {
         throw new StoryboardGenerationError('Revision conflict: script or candidate changed before submission', 409);
       }
       this.validatePayload(payload, lockedScript);

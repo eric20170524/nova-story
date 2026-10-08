@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/api';
+import {
+  claimProjectWork,
+  clearProjectWorkStop,
+  isProjectWorkStopRequested,
+  isProjectWorkUnloading,
+  listProjectWorkJobs,
+  projectWorkId,
+  rememberVideoTask,
+  releaseProjectWork,
+  requestStopProjectWork,
+  startProjectWork,
+  useProjectWorkJobs,
+  watchVideoTask,
+  type ProjectWorkJob,
+} from '../services/project_work_tracker';
 import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
 import { defaultIdentityReferenceIds, readProjectVideoWorkflow, resolveProjectVideoWorkflow } from '../services/videoWorkflowPolicy';
 import {
@@ -23,8 +38,8 @@ import { useToast } from '../ToastContext';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
+import { DirectorStoryboardCandidates, type DirectorScreenplay } from '../components/Director/DirectorStoryboardCandidates';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
-import { AlertTriangle, Film, Settings } from 'lucide-react';
 import {
   buildCharacterAppearanceSnippet,
   getCharacterLoraName,
@@ -66,9 +81,6 @@ const isNonhumanCharacter = (char: any): boolean => {
 const HUMAN_IDENTITY_NEGATIVE_RE =
   /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
 
-const isTerminalVideoStatus = (status?: string) =>
-  ['completed', 'review_required', 'rejected', 'failed', 'cancelled', 'interrupted'].includes(String(status || ''));
-
 export const DirectorMode: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
   const { t } = useLanguage();
@@ -78,6 +90,12 @@ export const DirectorMode: React.FC = () => {
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [timeline, setTimeline] = useState<Scene[]>([]);
   const [chapterScript, setChapterScript] = useState<{ id: number; revision: number; status: string } | null>(null);
+  const [screenplay, setScreenplay] = useState<DirectorScreenplay | null>(null);
+  const [screenplayChapterId, setScreenplayChapterId] = useState('');
+  const projectJobs = useProjectWorkJobs(projectId);
+  const generatingStoryboard = projectJobs.some((job) => job.kind === 'storyboard' && job.chapterId === selectedChapterId);
+  const generatingNarration = projectJobs.some((job) => job.kind === 'narration' && job.chapterId === selectedChapterId);
+  const isBatchGeneratingVideo = projectJobs.some((job) => job.kind === 'video_batch' && job.chapterId === selectedChapterId);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   
   // Advanced Generation Params State
@@ -102,16 +120,11 @@ export const DirectorMode: React.FC = () => {
   const [videoPreset, setVideoPreset] = useState<VideoPreset>('standard_720p_5s');
   const [runLoopCloser, setRunLoopCloser] = useState<boolean>(true);
   const [videoMotionPrompt, setVideoMotionPrompt] = useState<string>('');
-  const [isBatchGeneratingVideo, setIsBatchGeneratingVideo] = useState<boolean>(false);
   const stopBatchVideoRef = React.useRef<boolean>(false);
   const activeVideoEvtSourcesRef = React.useRef<Map<string, EventSource>>(new Map());
   const activeBatchVideoTaskIdRef = React.useRef<string | null>(null);
 
-  // Re-storyboard Confirmation Modal
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-
   const [loading, setLoading] = useState(false);
-  const [generatingNarration, setGeneratingNarration] = useState(false);
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
@@ -265,11 +278,28 @@ export const DirectorMode: React.FC = () => {
     } catch (_) {}
   };
 
-  const loadTimeline = (chapterId: string) => {
+  const selectedChapterIdRef = React.useRef(selectedChapterId);
+  selectedChapterIdRef.current = selectedChapterId;
+
+  const loadScreenplay = React.useCallback(async (chapterId: string) => {
+    try {
+      const res = await api.getChapterScript(chapterId);
+      if (selectedChapterIdRef.current !== chapterId) return;
+      setScreenplay(res?.script ?? null);
+    } catch {
+      if (selectedChapterIdRef.current !== chapterId) return;
+      setScreenplay(null);
+    } finally {
+      if (selectedChapterIdRef.current === chapterId) setScreenplayChapterId(chapterId);
+    }
+  }, []);
+
+  const loadTimeline = (chapterId: string, options?: { silent?: boolean }) => {
     if (!chapterId) return;
-    setLoading(true);
+    if (!options?.silent) setLoading(true);
     api.getTimeline(chapterId)
       .then(data => {
+        if (selectedChapterIdRef.current !== chapterId) return;
         setChapterScript(data?.script || null);
         if (data && data.timeline) {
           const scenes = data.timeline.map((s: Scene) => ({ 
@@ -285,63 +315,188 @@ export const DirectorMode: React.FC = () => {
         }
       })
       .catch(() => {
+        if (selectedChapterIdRef.current !== chapterId) return;
         setTimeline([]);
         setChapterScript(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (selectedChapterIdRef.current === chapterId) setLoading(false);
+      });
   };
 
   useEffect(() => {
-    if (selectedChapterId) {
-      loadTimeline(selectedChapterId);
+    if (!selectedChapterId) {
+      setScreenplay(null);
+      setScreenplayChapterId('');
+      return;
     }
-  }, [selectedChapterId]);
+    setScreenplay(null);
+    setScreenplayChapterId('');
+    loadTimeline(selectedChapterId);
+    void loadScreenplay(selectedChapterId);
+  }, [selectedChapterId, loadScreenplay]);
 
-  const triggerGenerateTimeline = () => {
-    if (!selectedChapterId) return;
-    if (timeline.length > 0) {
-      setShowConfirmModal(true);
-    } else {
-      executeGenerateTimeline();
+  useEffect(() => {
+    const onFinished = (event: Event) => {
+      const chapterId = (event as CustomEvent<{ chapterId?: string }>).detail?.chapterId;
+      if (!chapterId || chapterId !== selectedChapterIdRef.current) return;
+      void loadScreenplay(chapterId);
+    };
+    const onOpenChapter = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string; chapterId?: string }>).detail;
+      if (!detail?.chapterId || detail.projectId !== projectId) return;
+      setSelectedChapterId(detail.chapterId);
+    };
+    const onNarration = (event: Event) => {
+      const chapterId = (event as CustomEvent<{ chapterId?: string }>).detail?.chapterId;
+      if (!chapterId || chapterId !== selectedChapterIdRef.current) return;
+      loadTimeline(chapterId, { silent: true });
+    };
+    const onVideo = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        chapterId?: string;
+        sceneId?: number | string;
+        status?: VideoTaskState['status'];
+        error?: string;
+        taskId?: string;
+      }>).detail;
+      if (!detail?.sceneId || detail.chapterId !== selectedChapterIdRef.current) return;
+      if (detail.status) {
+        const sceneId = detail.sceneId;
+        setVideoTasksByScene((prev) => ({
+          ...prev,
+          [sceneId]: {
+            task_id: '',
+            scene_id: Number(sceneId) || 0,
+            ...prev[sceneId],
+            ...(detail.taskId ? { task_id: detail.taskId } : {}),
+            status: detail.status || prev[sceneId]?.status || 'processing',
+            error: detail.error,
+          },
+        }));
+      }
+      if (detail.status === 'completed' || detail.status === 'review_required') {
+        void loadSceneMedia(detail.sceneId);
+      }
+    };
+    window.addEventListener('novastory-storyboard-candidate-finished', onFinished);
+    window.addEventListener('novastory-director-open-chapter', onOpenChapter);
+    window.addEventListener('novastory-narration-finished', onNarration);
+    window.addEventListener('novastory-video-task-finished', onVideo);
+    return () => {
+      window.removeEventListener('novastory-storyboard-candidate-finished', onFinished);
+      window.removeEventListener('novastory-director-open-chapter', onOpenChapter);
+      window.removeEventListener('novastory-narration-finished', onNarration);
+      window.removeEventListener('novastory-video-task-finished', onVideo);
+    };
+  }, [loadScreenplay, projectId]);
+
+  useEffect(() => {
+    const updates: Record<string, VideoTaskState> = {};
+    for (const job of projectJobs) {
+      if (job.kind !== 'video' || job.chapterId !== selectedChapterId || job.sceneId == null || !job.task) continue;
+      updates[String(job.sceneId)] = job.task;
     }
-  };
+    if (Object.keys(updates).length === 0) return;
+    setVideoTasksByScene((prev) => ({ ...prev, ...updates }));
+  }, [projectJobs, selectedChapterId]);
 
-  const executeGenerateTimeline = async () => {
-    if (!selectedChapterId) return;
-    setShowConfirmModal(false);
-    setLoading(true);
-    try {
-      const res = await api.generateTimeline(selectedChapterId, 'narrative');
-      const scenes = res.timeline.map((s: Scene) => ({ ...s, asset_status: s.asset_status || 'idle' }));
-      setTimeline(scenes);
-      showToast(t('director.timeline_generated') || "Timeline generated", 'success');
-    } catch (e: any) {
-      const errMsg = e.message || t('director.error_timeline');
-      showToast(errMsg, 'error');
-    } finally {
-      setLoading(false);
+  const handleGenerateStoryboard = async () => {
+    if (!selectedChapterId || screenplayChapterId !== selectedChapterId || !screenplay) {
+      showToast(t('director.storyboard_need_script'), 'warning');
+      return;
+    }
+    if (screenplay.status !== 'confirmed') {
+      showToast(t('director.storyboard_need_confirmed'), 'warning');
+      return;
+    }
+    if (screenplay.freshness?.sourceChanged) {
+      showToast(t('director.storyboard_source_stale'), 'warning');
+      return;
+    }
+    const chapterId = selectedChapterId;
+    const scriptId = screenplay.id;
+    const expectedRevision = screenplay.revision;
+    const chapterTitle = chapters.find((chapter) => chapter.id === chapterId)?.title || '';
+    const requestKey = `fe_storyboard_${scriptId}_${Date.now()}`;
+    const started = startProjectWork(
+      {
+        id: projectWorkId('storyboard', chapterId),
+        kind: 'storyboard',
+        projectId: projectId || '',
+        chapterId,
+        chapterTitle,
+        scriptId,
+        requestKey,
+        startedAt: Date.now(),
+      },
+      async () => {
+        try {
+          await api.createStoryboardCandidate(scriptId, {
+            expected_revision: expectedRevision,
+            request_key: requestKey,
+          });
+          if (isProjectWorkUnloading()) return;
+          showToast(t('director.storyboard_candidate_ready'), 'success');
+        } catch (err: any) {
+          if (isProjectWorkUnloading()) return;
+          showToast(err.message || t('director.storyboard_candidate_failed'), 'error');
+        } finally {
+          if (isProjectWorkUnloading()) return;
+          window.dispatchEvent(
+            new CustomEvent('novastory-storyboard-candidate-finished', {
+              detail: { projectId, chapterId },
+            })
+          );
+        }
+      }
+    );
+    if (!started) {
+      showToast(t('director.storyboard_already_running'), 'info');
     }
   };
 
   const handleGenerateNarration = async () => {
     if (!selectedChapterId || timeline.length === 0) return;
-    setGeneratingNarration(true);
-    try {
-      const result = await api.generateNarration(selectedChapterId);
-      await loadTimeline(selectedChapterId);
-      showToast(
-        t('director.narration_generated', 'Generated narration for {count} scenes', {
-          count: result.generated_count || timeline.length,
-        }),
-        'success'
-      );
-    } catch (e: any) {
-      showToast(
-        e.message || t('director.narration_failed', 'Local narration generation failed'),
-        'error'
-      );
-    } finally {
-      setGeneratingNarration(false);
+    const chapterId = selectedChapterId;
+    const chapterTitle = chapters.find((chapter) => chapter.id === chapterId)?.title || '';
+    const shotCount = timeline.length;
+    const baseline = timeline.map((scene) => `${scene.id}:${scene.narration || ''}`).join('\n');
+    const started = startProjectWork(
+      {
+        id: projectWorkId('narration', chapterId),
+        kind: 'narration',
+        projectId: projectId || '',
+        chapterId,
+        chapterTitle,
+        baseline,
+        startedAt: Date.now(),
+      },
+      async () => {
+        try {
+          const result = await api.generateNarration(chapterId);
+          if (isProjectWorkUnloading()) return;
+          showToast(
+            t('director.narration_generated', 'Generated narration for {count} scenes', {
+              count: result.generated_count || shotCount,
+            }),
+            'success'
+          );
+        } catch (err: any) {
+          if (isProjectWorkUnloading()) return;
+          showToast(err.message || t('director.narration_failed', 'Local narration generation failed'), 'error');
+        } finally {
+          if (isProjectWorkUnloading()) return;
+          window.dispatchEvent(
+            new CustomEvent('novastory-narration-finished', {
+              detail: { projectId, chapterId },
+            })
+          );
+        }
+      }
+    );
+    if (!started) {
+      showToast(t('director.narration_already_running'), 'info');
     }
   };
 
@@ -978,10 +1133,34 @@ export const DirectorMode: React.FC = () => {
         return;
       }
       request.expected_input_signature = preflight.input_signature;
-      if (options.batchRun && stopBatchVideoRef.current) {
+      if (options.batchRun && (stopBatchVideoRef.current || isProjectWorkStopRequested(projectWorkId('video_batch', selectedChapterId)))) {
         return;
       }
 
+      const shotNumber = timeline.findIndex((item) => item.id === sceneId) + 1;
+      const videoJob: ProjectWorkJob = {
+        id: projectWorkId('video', selectedChapterId, sceneId),
+        kind: 'video' as const,
+        projectId: projectId || '',
+        chapterId: selectedChapterId,
+        chapterTitle: chapters.find((chapter) => chapter.id === selectedChapterId)?.title || '',
+        detail: shotNumber > 0 ? t('director.video_shot_detail', { n: shotNumber }) : '',
+        sceneId,
+        startedAt: Date.now(),
+        task: {
+          task_id: '',
+          scene_id: numericSceneId,
+          status: 'queued' as const,
+          stage: 'queued',
+        },
+      };
+      if (!claimProjectWork(videoJob)) {
+        showToast(t('director.video_already_running'), 'info');
+        return;
+      }
+
+      let watching = false;
+      try {
       emitVramSchedulerPhase({
         phase: 'vram_tuning',
         message: 'Optimizing VRAM for H3 video generation…',
@@ -990,16 +1169,18 @@ export const DirectorMode: React.FC = () => {
 
       setVideoTasksByScene((prev) => ({
         ...prev,
-        [sceneId]: {
-          task_id: '',
-          scene_id: numericSceneId,
-          status: 'queued',
-          stage: 'queued'
-        }
+        [sceneId]: videoJob.task,
       }));
 
       const response = await api.generateVideo(request);
       const taskId = response.task_id;
+      rememberVideoTask(videoJob.id, videoJob.startedAt, {
+        task_id: taskId,
+        scene_id: numericSceneId,
+        status: 'processing',
+        stage: 'vram_tuning',
+        queue_position: response.queue_position,
+      });
       if (options.batchRun) activeBatchVideoTaskIdRef.current = taskId;
 
       setVideoTasksByScene((prev) => ({
@@ -1013,7 +1194,7 @@ export const DirectorMode: React.FC = () => {
         }
       }));
 
-      if (options.batchRun && stopBatchVideoRef.current) {
+      if (options.batchRun && (stopBatchVideoRef.current || isProjectWorkStopRequested(projectWorkId('video_batch', selectedChapterId)))) {
         try {
           await api.cancelVideoTask(taskId);
         } finally {
@@ -1029,154 +1210,126 @@ export const DirectorMode: React.FC = () => {
             }
           }));
           clearVramSchedulerPhase();
+          releaseProjectWork(videoJob.id, videoJob.startedAt);
         }
         return;
       }
 
-      return new Promise<void>((resolve) => {
-        let isDone = false;
-        let pollInterval: ReturnType<typeof setInterval> | null = null;
-
-        const cleanup = () => {
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
-          }
-          const src = activeVideoEvtSourcesRef.current.get(taskId);
-          if (src) {
-            src.close();
-            activeVideoEvtSourcesRef.current.delete(taskId);
-          }
+      watching = true;
+      await watchVideoTask(
+        videoJob,
+        taskId,
+        `${API_BASE_URL}/videos/tasks/${taskId}/stream`,
+        (state) => {
+          setVideoTasksByScene((prev) => ({
+            ...prev,
+            [sceneId]: { ...prev[sceneId], ...state },
+          }));
           if (activeBatchVideoTaskIdRef.current === taskId) {
             activeBatchVideoTaskIdRef.current = null;
           }
           clearVramSchedulerPhase();
-        };
-
-        const onTaskFinished = (status: string, outputUrl?: string, errorMsg?: string, qaReport?: any) => {
-          if (isDone) return;
-          isDone = true;
-          cleanup();
-
-          if (status === 'completed' || status === 'review_required') {
-            loadSceneMedia(sceneId);
+          if (state.status === 'completed' || state.status === 'review_required') {
+            void loadSceneMedia(sceneId);
             showToast(
-              status === 'review_required'
-                ? '视频已生成，需人工复核后再设为成片'
-                : t('director.video_completed', 'H3 视频生成完成！'),
-              status === 'review_required' ? 'warning' : 'success'
+              state.status === 'review_required'
+                ? t('director.video_review_required')
+                : t('director.video_completed'),
+              state.status === 'review_required' ? 'warning' : 'success'
             );
-          } else if (status === 'cancelled') {
-            showToast('视频生成任务已取消', 'info');
+          } else if (state.status === 'cancelled') {
+            showToast(t('director.video_cancelled'), 'info');
           } else {
-            showToast(errorMsg || t('director.video_failed', '视频生成失败'), 'error');
+            showToast(state.error || t('director.video_failed'), 'error');
           }
-          resolve();
-        };
-
-        const startPollingFallback = () => {
-          if (pollInterval || isDone) return;
-          pollInterval = setInterval(async () => {
-            try {
-              const taskState = await api.getVideoTask(taskId);
-              if (taskState) {
-                setVideoTasksByScene((prev) => ({
-                  ...prev,
-                  [sceneId]: { ...prev[sceneId], ...taskState }
-                }));
-                if (isTerminalVideoStatus(taskState.status)) {
-                  onTaskFinished(taskState.status, taskState.output_url || undefined, taskState.error || undefined, taskState.qa_report);
-                }
-              }
-            } catch (_) {}
-          }, 2000);
-        };
-
-        const evtSource = new EventSource(`${API_BASE_URL}/videos/tasks/${taskId}/stream`);
-        activeVideoEvtSourcesRef.current.set(taskId, evtSource);
-
-        evtSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'snapshot' && data.task) {
-              setVideoTasksByScene((prev) => ({
-                ...prev,
-                [sceneId]: { ...prev[sceneId], ...data.task }
-              }));
-              if (isTerminalVideoStatus(data.task.status)) {
-                onTaskFinished(data.task.status, data.task.output_url, data.task.error, data.task.qa_report);
-              }
-            } else if (data.stage || data.status || data.phase) {
-              const updatedStatus = data.status || 'processing';
-              const updatedStage = data.stage || data.phase;
-              setVideoTasksByScene((prev) => ({
-                ...prev,
-                [sceneId]: {
-                  ...prev[sceneId],
-                  status: updatedStatus,
-                  stage: updatedStage || prev[sceneId]?.stage,
-                  output_url: data.output_url || prev[sceneId]?.output_url,
-                  qa_report: data.qa_report || prev[sceneId]?.qa_report,
-                  error: data.error
-                }
-              }));
-
-              if (isTerminalVideoStatus(updatedStatus)) {
-                onTaskFinished(updatedStatus, data.output_url, data.error, data.qa_report);
-              }
-            }
-          } catch (_) {}
-        };
-
-        evtSource.onerror = () => {
-          startPollingFallback();
-        };
-      });
+          window.dispatchEvent(
+            new CustomEvent('novastory-video-task-finished', {
+              detail: {
+                projectId,
+                chapterId: selectedChapterId,
+                sceneId,
+                status: state.status,
+                error: state.error,
+                taskId: state.task_id,
+              },
+            })
+          );
+        }
+      );
+      } catch (err: any) {
+        if (isProjectWorkUnloading()) return;
+        if (!watching) releaseProjectWork(videoJob.id, videoJob.startedAt);
+        clearVramSchedulerPhase();
+        if (options.batchRun) activeBatchVideoTaskIdRef.current = null;
+        setVideoTasksByScene((prev) => ({
+          ...prev,
+          [sceneId]: { task_id: '', scene_id: numericSceneId, status: 'failed', error: err.message }
+        }));
+        showToast(err.message || t('director.video_failed'), 'error');
+      }
     } catch (err: any) {
+      if (isProjectWorkUnloading()) return;
       clearVramSchedulerPhase();
       if (options.batchRun) activeBatchVideoTaskIdRef.current = null;
       setVideoTasksByScene((prev) => ({
         ...prev,
         [sceneId]: { task_id: '', scene_id: numericSceneId, status: 'failed', error: err.message }
       }));
-      showToast(err.message || 'Failed to submit video generation', 'error');
+      showToast(err.message || t('director.video_failed'), 'error');
     }
   };
 
   const handleBatchGenerateVideo = async () => {
-    if (isBatchGeneratingVideo || timeline.length === 0) return;
-
-    stopBatchVideoRef.current = false;
-    activeBatchVideoTaskIdRef.current = null;
-    setIsBatchGeneratingVideo(true);
-    showToast(t('director.batch_started', 'Sequential batch video generation started'), 'info');
-
-    for (const scene of timeline) {
-      if (stopBatchVideoRef.current) break;
-      await handleGenerateVideo(scene.id, { batchRun: true });
-      if (stopBatchVideoRef.current) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    const wasStopped = stopBatchVideoRef.current;
-    setIsBatchGeneratingVideo(false);
-    stopBatchVideoRef.current = false;
-    activeBatchVideoTaskIdRef.current = null;
-
-    if (wasStopped) {
-      showToast(t('director.batch_stopped', 'Batch video generation stopped'), 'warning');
-    } else {
-      showToast(t('director.batch_complete', 'Batch video generation complete'), 'success');
+    if (!selectedChapterId || timeline.length === 0) return;
+    const chapterId = selectedChapterId;
+    const batchId = projectWorkId('video_batch', chapterId);
+    const scenes = [...timeline];
+    const started = startProjectWork(
+      {
+        id: batchId,
+        kind: 'video_batch',
+        projectId: projectId || '',
+        chapterId,
+        chapterTitle: chapters.find((chapter) => chapter.id === chapterId)?.title || '',
+        startedAt: Date.now(),
+      },
+      async () => {
+        clearProjectWorkStop(batchId);
+        stopBatchVideoRef.current = false;
+        activeBatchVideoTaskIdRef.current = null;
+        showToast(t('director.batch_started', 'Sequential batch video generation started'), 'info');
+        for (const scene of scenes) {
+          if (stopBatchVideoRef.current || isProjectWorkStopRequested(batchId) || isProjectWorkUnloading()) break;
+          await handleGenerateVideo(scene.id, { batchRun: true });
+          if (stopBatchVideoRef.current || isProjectWorkStopRequested(batchId) || isProjectWorkUnloading()) break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        if (isProjectWorkUnloading()) return;
+        const wasStopped = stopBatchVideoRef.current || isProjectWorkStopRequested(batchId);
+        stopBatchVideoRef.current = false;
+        activeBatchVideoTaskIdRef.current = null;
+        showToast(
+          wasStopped
+            ? t('director.batch_stopped', 'Batch video generation stopped')
+            : t('director.batch_complete', 'Batch video generation complete'),
+          wasStopped ? 'warning' : 'success'
+        );
+      }
+    );
+    if (!started) {
+      showToast(t('director.video_batch_already_running'), 'info');
     }
   };
 
   const handleStopBatchGenerateVideo = async () => {
+    if (!selectedChapterId) return;
+    const batchId = projectWorkId('video_batch', selectedChapterId);
     stopBatchVideoRef.current = true;
-    const activeTaskId = activeBatchVideoTaskIdRef.current;
+    requestStopProjectWork(batchId);
+    const activeTaskId = activeBatchVideoTaskIdRef.current
+      || listProjectWorkJobs(projectId).find((job) => job.kind === 'video' && job.chapterId === selectedChapterId)?.task?.task_id
+      || '';
 
-    // Keep the task SSE alive while cancellation is in flight. The terminal
-    // `cancelled` event (or poll fallback) must resolve handleGenerateVideo's Promise;
-    // closing it here would make a stopped batch leak an await forever.
     if (activeTaskId) {
       try {
         await api.cancelVideoTask(activeTaskId);
@@ -1185,21 +1338,25 @@ export const DirectorMode: React.FC = () => {
       }
     }
 
-    setIsBatchGeneratingVideo(false);
     clearVramSchedulerPhase();
-    showToast(t('director.batch_stopped', 'Batch generation stopped'), 'warning');
   };
 
   const handleCancelVideoTask = async (taskId: string) => {
-    if (activeBatchVideoTaskIdRef.current === taskId) {
+    const batchId = selectedChapterId ? projectWorkId('video_batch', selectedChapterId) : '';
+    const batchRunning = Boolean(batchId) && listProjectWorkJobs(projectId).some((job) => job.id === batchId);
+    const matchesChapterTask = listProjectWorkJobs(projectId).some(
+      (job) => job.kind === 'video' && job.chapterId === selectedChapterId && job.task?.task_id === taskId
+    );
+    if (activeBatchVideoTaskIdRef.current === taskId || (batchRunning && matchesChapterTask)) {
       stopBatchVideoRef.current = true;
+      if (batchId) requestStopProjectWork(batchId);
     }
     try {
       // Deliberately keep SSE/polling alive until the backend publishes the terminal
       // cancellation state. That guarantees any caller awaiting handleGenerateVideo
       // (including batch mode) unwinds instead of hanging on a manually closed stream.
       await api.cancelVideoTask(taskId);
-      showToast('视频取消请求已发送', 'info');
+      showToast(t('director.video_cancel_requested'), 'info');
     } catch (error) {
       console.error('Failed to cancel video task:', error);
     }
@@ -1235,6 +1392,38 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
+  const screenplayReady = Boolean(selectedChapterId) && screenplayChapterId === selectedChapterId;
+  const canGenerateStoryboard = Boolean(
+    screenplayReady &&
+    screenplay &&
+    screenplay.status === 'confirmed' &&
+    !screenplay.freshness?.sourceChanged
+  );
+  const generateStoryboardTitle = generatingStoryboard
+    ? t('director.generating_storyboard')
+    : !selectedChapterId
+    ? t('director.storyboard_need_chapter')
+    : !screenplayReady
+      ? t('director.storyboard_loading_script')
+      : !screenplay
+        ? t('director.storyboard_need_script')
+        : screenplay.status !== 'confirmed'
+          ? t('director.storyboard_need_confirmed')
+          : screenplay.freshness?.sourceChanged
+            ? t('director.storyboard_source_stale')
+            : t('director.generate_scenes');
+  const storyboardSceneIds = !selectedChapterId || loading
+    ? null
+    : timeline.every((scene) => Number.isInteger(Number(scene.id)) && Number(scene.id) > 0)
+      ? [...timeline]
+          .sort((a, b) => {
+            const aIndex = Number((a as Scene & { index?: number }).index ?? 0);
+            const bIndex = Number((b as Scene & { index?: number }).index ?? 0);
+            return aIndex - bIndex || Number(a.id) - Number(b.id);
+          })
+          .map((scene) => Number(scene.id))
+      : null;
+
   return (
     <div className="flex-1 flex overflow-hidden bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 h-full w-full min-h-0">
       <DirectorSidebar
@@ -1248,7 +1437,25 @@ export const DirectorMode: React.FC = () => {
         loading={loading}
         selectedChapterId={selectedChapterId}
         chapterScript={chapterScript}
-        onGenerateTimeline={triggerGenerateTimeline}
+        onGenerateStoryboard={handleGenerateStoryboard}
+        generatingStoryboard={generatingStoryboard}
+        canGenerateStoryboard={canGenerateStoryboard}
+        generateStoryboardTitle={generateStoryboardTitle}
+        storyboardPanel={
+          <DirectorStoryboardCandidates
+            script={screenplayReady ? screenplay : null}
+            sceneIds={storyboardSceneIds}
+            timelineReady={!loading}
+            onApplied={() => {
+              if (!selectedChapterId) return;
+              loadTimeline(selectedChapterId, { silent: true });
+              void loadScreenplay(selectedChapterId);
+            }}
+            onScriptChanged={() => {
+              if (selectedChapterId) void loadScreenplay(selectedChapterId);
+            }}
+          />
+        }
         onGenerateNarration={handleGenerateNarration}
         generatingNarration={generatingNarration}
         showRightPanel={showRightPanel}
@@ -1304,41 +1511,6 @@ export const DirectorMode: React.FC = () => {
         isBatchGeneratingVideo={isBatchGeneratingVideo}
         onStopBatchGenerateVideo={handleStopBatchGenerateVideo}
       />
-
-      {showConfirmModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-3 text-amber-500">
-              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-800/50">
-                <AlertTriangle size={22} />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                {t('director.re_generate_confirm_title', '重新生成分镜')}
-              </h3>
-            </div>
-            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              {t(
-                'director.re_generate_confirm_desc',
-                '重新生成分镜将覆盖当前章节的所有镜头与参数设置。确认继续？'
-              )}
-            </p>
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                onClick={() => setShowConfirmModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
-              >
-                {t('common.cancel', '取消')}
-              </button>
-              <button
-                onClick={executeGenerateTimeline}
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-500 rounded-xl transition-colors shadow-lg shadow-amber-600/30 font-semibold"
-              >
-                {t('common.confirm', '确认重新生成')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

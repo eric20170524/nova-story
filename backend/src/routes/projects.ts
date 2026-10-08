@@ -563,8 +563,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                 `INSERT INTO scene_version (
                   scene_id, version, label, visual_prompt, audio_prompt, dialogue, narration,
                   duration, shot_type, camera_movement, camera_angle, negative_prompt,
-                  asset_status, task_id, asset_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  asset_status, task_id, asset_url, english_visual_prompt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 newSceneId,
                 sv.version,
                 sv.label ?? null,
@@ -579,7 +579,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
                 sv.negative_prompt ?? null,
                 sv.asset_status || 'idle',
                 sv.task_id ?? null,
-                sv.asset_url ?? null
+                sv.asset_url ?? null,
+                sv.english_visual_prompt ?? null
               );
             }
 

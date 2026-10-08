@@ -30,6 +30,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { isProjectWorkUnloading, scriptWorkId, startProjectWork, useProjectWorkJobs } from '../services/project_work_tracker';
 import { Chapter } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -91,12 +92,17 @@ export const ScriptEditor: React.FC = () => {
   const [confirming, setConfirming] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
-  // AI Generation & Candidates state
-  const [generatingOutline, setGeneratingOutline] = useState(false);
-  const [generatingScript, setGeneratingScript] = useState(false);
-  const [generatingStoryboard, setGeneratingStoryboard] = useState(false);
-  const [timelineSceneCount, setTimelineSceneCount] = useState<number | null>(null);
-  const [rewritingSceneId, setRewritingSceneId] = useState<string | null>(null);
+  // AI Generation & Candidates state. Spinners follow the project-level job,
+  // so leaving this page does not clear an in-flight outline, script, or rewrite.
+  const projectJobs = useProjectWorkJobs(projectIdStr);
+  const scriptJob = selectedChapter
+    ? projectJobs.find((job) => job.id === scriptWorkId(selectedChapter.id))
+    : undefined;
+  const generatingOutline = scriptJob?.kind === 'script_outline';
+  const generatingScript = scriptJob?.kind === 'script_full';
+  const rewritingSceneId =
+    scriptJob?.kind === 'script_scene' && scriptJob.sceneId != null ? String(scriptJob.sceneId) : null;
+  const scriptGenerationBusy = Boolean(scriptJob);
   const [applyingChangeId, setApplyingChangeId] = useState<string | null>(null);
   const [discardingChangeId, setDiscardingChangeId] = useState<string | null>(null);
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
@@ -114,6 +120,8 @@ export const ScriptEditor: React.FC = () => {
   // Tracking refs to prevent async race conditions (P1-3)
   const selectedChapterRef = useRef<Chapter | null>(null);
   selectedChapterRef.current = selectedChapter;
+  const chaptersRef = useRef<Chapter[]>([]);
+  chaptersRef.current = chapters;
 
   const documentRef = useRef<ScriptDocument | null>(null);
   documentRef.current = document;
@@ -256,25 +264,6 @@ export const ScriptEditor: React.FC = () => {
   useEffect(() => () => setActiveScriptContext(null, null), [setActiveScriptContext]);
 
   useEffect(() => {
-    if (!selectedChapter) {
-      setTimelineSceneCount(null);
-      return;
-    }
-    let isCancelled = false;
-    api.getTimeline(selectedChapter.id)
-      .then((res: any) => {
-        if (!isCancelled) {
-          const count = Array.isArray(res) ? res.length : (res?.timeline?.length ?? (res?.scenes?.length ?? 0));
-          setTimelineSceneCount(count);
-        }
-      })
-      .catch(() => {
-        if (!isCancelled) setTimelineSceneCount(null);
-      });
-    return () => { isCancelled = true; };
-  }, [selectedChapter?.id]);
-
-  useEffect(() => {
     const onAgentDataChanged = (event: Event) => {
       const chapterId = (event as CustomEvent<{ chapterId?: string | null }>).detail?.chapterId;
       if (
@@ -291,6 +280,32 @@ export const ScriptEditor: React.FC = () => {
     window.addEventListener('novastory-agent-data-changed', onAgentDataChanged);
     return () => window.removeEventListener('novastory-agent-data-changed', onAgentDataChanged);
   }, [loadScriptForChapter]);
+
+  useEffect(() => {
+    const onFinished = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string; chapterId?: string }>).detail;
+      if (!detail?.chapterId || String(detail.projectId) !== String(projectIdStr)) return;
+      if (selectedChapterRef.current?.id !== detail.chapterId) return;
+      void loadScriptForChapter(detail.chapterId, { preserveUnsaved: true });
+    };
+    const onOpenChapter = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string; chapterId?: string }>).detail;
+      if (!detail?.chapterId || String(detail.projectId) !== String(projectIdStr)) return;
+      const chapter = chaptersRef.current.find((item) => item.id === detail.chapterId);
+      if (!chapter || chapter.id === selectedChapterRef.current?.id) return;
+      if (isDirtyRef.current) {
+        const proceed = window.confirm(t('script_editor.unsaved_warning'));
+        if (!proceed) return;
+      }
+      setSelectedChapter(chapter);
+    };
+    window.addEventListener('novastory-script-candidate-finished', onFinished);
+    window.addEventListener('novastory-script-open-chapter', onOpenChapter);
+    return () => {
+      window.removeEventListener('novastory-script-candidate-finished', onFinished);
+      window.removeEventListener('novastory-script-open-chapter', onOpenChapter);
+    };
+  }, [loadScriptForChapter, projectIdStr, t]);
 
   // Safe chapter switch
   const handleSelectChapter = (chapter: Chapter) => {
@@ -473,155 +488,88 @@ export const ScriptEditor: React.FC = () => {
     }
   };
 
-  // AI Adaptation & Candidate handlers
-  const handleGenerateOutline = async () => {
-    if (!scriptData || !selectedChapter) return;
+  // AI Adaptation & Candidate handlers. One lock per chapter so outline,
+  // full script, and scene rewrite cannot run together.
+  const handleStartScriptWork = (kind: 'script_outline' | 'script_full' | 'script_scene', sceneId?: string) => {
+    if (!scriptData || !selectedChapter || !projectIdStr) return;
     if (isDirty) {
-      showToast('请先保存当前未保存的修改，再生成提纲候选', 'warning');
+      showToast(t('script_editor.save_before_candidate'), 'warning');
       return;
     }
     const targetScriptId = scriptData.id;
     const targetChapterId = selectedChapter.id;
-    setGeneratingOutline(true);
-    try {
-      await api.createScriptCandidate(targetScriptId, {
-        kind: 'outline',
-        expected_revision: scriptData.revision,
-        request_key: `fe_outline_${targetScriptId}_${Date.now()}`,
-      });
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast('已生成改编提纲候选，请在下方审核采纳', 'success');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
+    const expectedRevision = scriptData.revision;
+    const chapterTitle = selectedChapter.title || '';
+    const sceneIndex = sceneId ? (document?.scenes.findIndex((scene) => scene.id === sceneId) ?? -1) : -1;
+    const detail = sceneIndex >= 0
+      ? t('script_editor.scene_running_detail', { n: sceneIndex + 1 })
+      : undefined;
+    if (sceneId) setSelectedSceneId(sceneId);
+    const apiKind = kind === 'script_outline' ? 'outline' : kind === 'script_full' ? 'script' : 'scene';
+    const requestKey = sceneId
+      ? `fe_scene_${targetScriptId}_${sceneId}_${Date.now()}`
+      : `fe_${apiKind}_${targetScriptId}_${Date.now()}`;
+    const started = startProjectWork(
+      {
+        id: scriptWorkId(targetChapterId),
+        kind,
+        projectId: projectIdStr,
+        chapterId: targetChapterId,
+        chapterTitle,
+        detail,
+        sceneId,
+        scriptId: targetScriptId,
+        requestKey,
+        startedAt: Date.now(),
+      },
+      async () => {
+        try {
+          await api.createScriptCandidate(targetScriptId, {
+            kind: apiKind,
+            target_scene_id: sceneId,
+            expected_revision: expectedRevision,
+            request_key: requestKey,
+          });
+          if (isProjectWorkUnloading()) return;
+          const successKey = kind === 'script_outline'
+            ? 'script_editor.outline_ready'
+            : kind === 'script_full'
+              ? 'script_editor.script_ready'
+              : 'script_editor.scene_ready';
+          showToast(
+            t(successKey, detail ? { scene: detail } : undefined),
+            'success'
+          );
+        } catch (err: any) {
+          if (isProjectWorkUnloading()) return;
+          const failKey = kind === 'script_outline'
+            ? 'script_editor.outline_failed'
+            : kind === 'script_full'
+              ? 'script_editor.script_failed'
+              : 'script_editor.scene_failed';
+          showToast(err.message || t(failKey), 'error');
+        } finally {
+          if (isProjectWorkUnloading()) return;
+          window.dispatchEvent(
+            new CustomEvent('novastory-script-candidate-finished', {
+              detail: { projectId: projectIdStr, chapterId: targetChapterId },
+            })
+          );
+        }
       }
-    } catch (err: any) {
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast(err.message || '生成改编提纲失败', 'error');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } finally {
-      setGeneratingOutline(false);
+    );
+    if (!started) {
+      showToast(t('script_editor.script_already_running'), 'info');
     }
   };
 
-  const handleGenerateScript = async () => {
-    if (!scriptData || !selectedChapter) return;
-    if (isDirty) {
-      showToast('请先保存当前未保存的修改，再生成剧本候选', 'warning');
-      return;
-    }
-    const targetScriptId = scriptData.id;
-    const targetChapterId = selectedChapter.id;
-    setGeneratingScript(true);
-    try {
-      await api.createScriptCandidate(targetScriptId, {
-        kind: 'script',
-        expected_revision: scriptData.revision,
-        request_key: `fe_script_${targetScriptId}_${Date.now()}`,
-      });
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast('已生成完整分场短剧剧本候选，请在下方审核采纳', 'success');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } catch (err: any) {
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast(err.message || '生成剧本候选失败', 'error');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } finally {
-      setGeneratingScript(false);
-    }
-  };
-
-  const handleRewriteScene = async (sceneId: string) => {
-    if (!scriptData || !selectedChapter) return;
-    if (isDirty) {
-      showToast('请先保存当前未保存的修改，再改写此分场', 'warning');
-      return;
-    }
-    const targetScriptId = scriptData.id;
-    const targetChapterId = selectedChapter.id;
-    setSelectedSceneId(sceneId);
-    setRewritingSceneId(sceneId);
-    try {
-      await api.createScriptCandidate(targetScriptId, {
-        kind: 'scene',
-        target_scene_id: sceneId,
-        expected_revision: scriptData.revision,
-        request_key: `fe_scene_${targetScriptId}_${sceneId}_${Date.now()}`,
-      });
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast(`已生成分场 ${sceneId} 改写候选，请在下方审核采纳`, 'success');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } catch (err: any) {
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast(err.message || '改写分场失败', 'error');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } finally {
-      setRewritingSceneId(null);
-    }
-  };
-
-  const handleGenerateStoryboard = async () => {
-    if (!scriptData || !selectedChapter) return;
-    if (scriptData.status !== 'confirmed') {
-      showToast('只有已确认（confirmed）的剧本才能生成分镜候选', 'warning');
-      return;
-    }
-    if (scriptData.freshness?.sourceChanged) {
-      showToast('剧本来源已过期，请核对更新剧本后再生成分镜候选', 'warning');
-      return;
-    }
-    const targetScriptId = scriptData.id;
-    const targetChapterId = selectedChapter.id;
-    setGeneratingStoryboard(true);
-    try {
-      await api.createStoryboardCandidate(targetScriptId, {
-        expected_revision: scriptData.revision,
-        request_key: `fe_storyboard_${targetScriptId}_${Date.now()}`,
-      });
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast('已生成导演分镜候选，请在待审核候选区查看和提交', 'success');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } catch (err: any) {
-      if (
-        selectedChapterRef.current?.id === targetChapterId &&
-        scriptDataRef.current?.id === targetScriptId
-      ) {
-        showToast(err.message || '生成分镜候选失败', 'error');
-        await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-      }
-    } finally {
-      setGeneratingStoryboard(false);
-    }
-  };
+  const handleGenerateOutline = () => handleStartScriptWork('script_outline');
+  const handleGenerateScript = () => handleStartScriptWork('script_full');
+  const handleRewriteScene = (sceneId: string) => handleStartScriptWork('script_scene', sceneId);
 
   const handleApplyCandidate = async (candidate: any) => {
     if (!scriptData || !selectedChapter) return;
-    if (candidate.kind !== 'storyboard' && isDirty) {
+    if (isDirty) {
       const proceed = window.confirm('采纳候选将以候选内容更新正式剧本，当前未保存的临时输入将被覆盖。确定继续吗？');
       if (!proceed) return;
     }
@@ -629,26 +577,6 @@ export const ScriptEditor: React.FC = () => {
     const targetChapterId = selectedChapter.id;
     setApplyingChangeId(candidate.id);
     try {
-      if (candidate.kind === 'storyboard') {
-        if (timelineSceneCount !== null && timelineSceneCount > 0) {
-          showToast(t('script_editor.timeline_not_empty_warning'), 'warning');
-          return;
-        }
-        const res = await api.applyStoryboardCandidate(targetScriptId, candidate.id, {
-          expected_revision: scriptData.revision,
-          expected_candidate_revision: candidate.candidate_revision,
-        });
-        if (
-          selectedChapterRef.current?.id === targetChapterId &&
-          scriptDataRef.current?.id === targetScriptId
-        ) {
-          showToast(t('script_editor.candidate_submitted_success'), 'success');
-          setTimelineSceneCount(res.count);
-          await loadScriptForChapter(targetChapterId, { preserveUnsaved: true });
-        }
-        return;
-      }
-
       const res = await api.applyScriptCandidate(targetScriptId, candidate.id, {
         expected_revision: scriptData.revision,
         expected_candidate_revision: candidate.candidate_revision,
@@ -1034,6 +962,10 @@ export const ScriptEditor: React.FC = () => {
     }));
   };
 
+  const pendingReview = (scriptData?.pendingChanges || []).filter(
+    (change) => change.kind !== 'storyboard'
+  );
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-slate-50 dark:bg-[#090d16] text-slate-800 dark:text-slate-100">
       {/* Left Sidebar: Chapters Navigation */}
@@ -1145,8 +1077,9 @@ export const ScriptEditor: React.FC = () => {
               <>
                 <button
                   type="button"
+                  data-testid="script-generate-outline"
                   onClick={handleGenerateOutline}
-                  disabled={generatingOutline || generatingScript}
+                  disabled={scriptGenerationBusy}
                   className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 flex items-center gap-1.5 transition-all disabled:opacity-50"
                   title={t('script_editor.ai_generate_outline')}
                 >
@@ -1158,8 +1091,9 @@ export const ScriptEditor: React.FC = () => {
 
                 <button
                   type="button"
+                  data-testid="script-generate-full"
                   onClick={handleGenerateScript}
-                  disabled={generatingScript || generatingOutline}
+                  disabled={scriptGenerationBusy}
                   className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 flex items-center gap-1.5 transition-all disabled:opacity-50"
                   title={t('script_editor.ai_generate_script')}
                 >
@@ -1168,25 +1102,6 @@ export const ScriptEditor: React.FC = () => {
                     {generatingScript ? t('script_editor.generating_script') : t('script_editor.ai_generate_script')}
                   </span>
                 </button>
-
-                {scriptData.status === 'confirmed' && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateStoryboard}
-                    disabled={generatingStoryboard || scriptData.freshness?.sourceChanged}
-                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 flex items-center gap-1.5 transition-all disabled:opacity-50"
-                    title={
-                      scriptData.freshness?.sourceChanged
-                        ? '剧本来源已过期，请核对更新剧本后再生成分镜候选'
-                        : t('script_editor.ai_generate_storyboard')
-                    }
-                  >
-                    <Clapperboard size={14} className={generatingStoryboard ? 'animate-spin' : ''} />
-                    <span className="hidden xl:inline">
-                      {generatingStoryboard ? t('script_editor.generating_storyboard') : t('script_editor.ai_generate_storyboard')}
-                    </span>
-                  </button>
-                )}
 
                 <button
                   type="button"
@@ -1238,17 +1153,17 @@ export const ScriptEditor: React.FC = () => {
         </div>
 
         {/* Pending Candidate Review Cards */}
-        {scriptData?.pendingChanges && scriptData.pendingChanges.length > 0 && (
+        {pendingReview.length > 0 && (
           <div className="bg-indigo-50/80 dark:bg-indigo-950/40 border-b border-indigo-200 dark:border-indigo-900/60 p-3 sm:px-4 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-bold text-indigo-900 dark:text-indigo-200">
                 <GitPullRequest size={15} className="text-indigo-600 dark:text-indigo-400" />
-                <span>{t('script_editor.pending_candidate_title')} ({scriptData.pendingChanges.length})</span>
+                <span>{t('script_editor.pending_candidate_title')} ({pendingReview.length})</span>
               </div>
               <span className="text-[11px] text-indigo-600/80 dark:text-indigo-400/80">审核并确认后合并入正式剧本</span>
             </div>
 
-            {scriptData.pendingChanges.map((cand) => {
+            {pendingReview.map((cand) => {
               let parsedPayload: any = null;
               try {
                 parsedPayload = JSON.parse(cand.after_json);
@@ -1260,11 +1175,6 @@ export const ScriptEditor: React.FC = () => {
               const isApplying = applyingChangeId === cand.id;
               const isDiscarding = discardingChangeId === cand.id;
 
-              const isTimelineBlocked =
-                cand.kind === 'storyboard' &&
-                timelineSceneCount !== null &&
-                timelineSceneCount > 0;
-
               const kindLabel =
                 cand.kind === 'outline'
                   ? t('script_editor.candidate_kind_outline')
@@ -1272,8 +1182,6 @@ export const ScriptEditor: React.FC = () => {
                   ? t('script_editor.candidate_kind_script')
                   : cand.kind === 'scene'
                   ? t('script_editor.candidate_kind_scene')
-                  : cand.kind === 'storyboard'
-                  ? t('script_editor.candidate_kind_storyboard')
                   : cand.kind;
 
               return (
@@ -1283,11 +1191,7 @@ export const ScriptEditor: React.FC = () => {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded-full font-semibold text-[11px] ${
-                        cand.kind === 'storyboard'
-                          ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300'
-                          : 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300'
-                      }`}>
+                      <span className="px-2 py-0.5 rounded-full font-semibold text-[11px] bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
                         {kindLabel}
                       </span>
                       <span className="text-slate-500 font-mono text-[10px]">
@@ -1296,12 +1200,6 @@ export const ScriptEditor: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {isTimelineBlocked && (
-                        <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-                          ⚠️ 现有 {timelineSceneCount} 镜，受空时间线保护
-                        </span>
-                      )}
-
                       <button
                         type="button"
                         onClick={() => setExpandedCandidateId(isExpanded ? null : cand.id)}
@@ -1344,21 +1242,12 @@ export const ScriptEditor: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleApplyCandidate(cand)}
-                        disabled={isApplying || isDiscarding || isTimelineBlocked}
-                        className={`px-3 py-1 rounded-md text-[11px] font-medium flex items-center gap-1 shadow-xs transition-colors disabled:opacity-50 ${
-                          cand.kind === 'storyboard'
-                            ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                        }`}
-                        title={isTimelineBlocked ? t('script_editor.timeline_not_empty_warning') : ''}
+                        disabled={isApplying || isDiscarding}
+                        className="px-3 py-1 rounded-md text-[11px] font-medium flex items-center gap-1 shadow-xs transition-colors disabled:opacity-50 bg-emerald-600 hover:bg-emerald-700 text-white"
                       >
                         <Check size={13} />
                         <span>
-                          {cand.kind === 'storyboard'
-                            ? isApplying
-                              ? t('script_editor.submitting_to_timeline')
-                              : t('script_editor.submit_to_timeline')
-                            : isApplying
+                          {isApplying
                             ? t('script_editor.applying_candidate')
                             : t('script_editor.apply_candidate')}
                         </span>
@@ -1435,57 +1324,10 @@ export const ScriptEditor: React.FC = () => {
                         </div>
                       )}
 
-                      {cand.kind === 'storyboard' && parsedPayload && (
-                        <div className="text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-800/60 space-y-1.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="font-semibold text-slate-800 dark:text-slate-200">
-                              导演分镜契约：<span className="font-normal">{parsedPayload.shots?.length || 0} 镜（总时长约 {parsedPayload.totalDuration || 0} 秒）</span>
-                            </p>
-                            <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
-                              剧本预估时长: {parsedPayload.estimatedScriptDuration || 0} 秒
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap gap-4 text-[11px] text-slate-500">
-                            <span>已覆盖分场：{parsedPayload.coverageReport?.coveredSceneIds?.length || 0} / {parsedPayload.coverageReport?.totalScenes || 0} 场</span>
-                            <span>已覆盖有声内容块：{parsedPayload.coverageReport?.coveredBlockIds?.length || 0} / {parsedPayload.coverageReport?.totalAudibleBlocks || 0} 条</span>
-                            <span>核心保留事件：{parsedPayload.coverageReport?.coveredMustKeepEventIds?.length || 0} / {parsedPayload.coverageReport?.totalMustKeepEvents || 0} 项</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Expanded Detail view */}
                       {isExpanded && (
-                        cand.kind === 'storyboard' && parsedPayload?.shots ? (
-                          <div className="p-3 bg-slate-50 dark:bg-slate-950/60 rounded-lg border border-indigo-200 dark:border-indigo-900 mt-2 space-y-2">
-                            <span className="font-semibold text-xs text-indigo-600 dark:text-indigo-400 block mb-1">
-                              分镜镜头清单 ({parsedPayload.shots.length} 镜)
-                            </span>
-                            <div className="space-y-2 max-h-80 overflow-y-auto pr-1 custom-scrollbar">
-                              {parsedPayload.shots.map((shot: any, sIdx: number) => {
-                                let specIntent = '';
-                                try {
-                                  if (shot.shot_spec) specIntent = JSON.parse(shot.shot_spec).shot_intent;
-                                } catch {}
-                                return (
-                                  <div key={sIdx} className="bg-white dark:bg-slate-900 p-2.5 rounded-md border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
-                                    <div className="flex items-center justify-between font-semibold text-indigo-600 dark:text-indigo-400">
-                                      <span>镜头 #{shot.index} · {shot.shot_type || 'Medium Shot'} {specIntent ? `(${specIntent})` : ''}</span>
-                                      <span className="text-slate-400 font-normal">分场: {shot.script_scene_id} · {shot.duration}s</span>
-                                    </div>
-                                    <div className="text-slate-700 dark:text-slate-300"><span className="text-slate-400">画面:</span> {shot.location} · {shot.primary_action}</div>
-                                    {shot.dialogue && <div className="text-emerald-700 dark:text-emerald-400"><span className="text-slate-400">对白:</span> {shot.dialogue}</div>}
-                                    {shot.narration && <div className="text-blue-700 dark:text-blue-400"><span className="text-slate-400">画外音:</span> {shot.narration}</div>}
-                                    {shot.audio_prompt && <div className="text-amber-700 dark:text-amber-400"><span className="text-slate-400">音效:</span> {shot.audio_prompt}</div>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : (
-                          <pre className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-950 font-mono text-[11px] text-slate-700 dark:text-slate-300 overflow-x-auto max-h-60 custom-scrollbar border border-slate-200 dark:border-slate-800">
-                            {JSON.stringify(parsedPayload, null, 2)}
-                          </pre>
-                        )
+                        <pre className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-950 font-mono text-[11px] text-slate-700 dark:text-slate-300 overflow-x-auto max-h-60 custom-scrollbar border border-slate-200 dark:border-slate-800">
+                          {JSON.stringify(parsedPayload, null, 2)}
+                        </pre>
                       )}
                     </>
                   )}
@@ -1701,8 +1543,9 @@ export const ScriptEditor: React.FC = () => {
                               <div className="flex items-center gap-1 ml-2">
                                 <button
                                   type="button"
+                                  data-testid={`script-rewrite-scene-${scene.id}`}
                                   onClick={() => handleRewriteScene(scene.id)}
-                                  disabled={rewritingSceneId === scene.id}
+                                  disabled={scriptGenerationBusy}
                                   className="px-2 py-1 rounded-lg text-[11px] font-medium text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 flex items-center gap-1 transition-colors disabled:opacity-50"
                                   title={t('script_editor.ai_rewrite_scene')}
                                 >

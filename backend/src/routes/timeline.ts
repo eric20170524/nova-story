@@ -14,8 +14,11 @@ import { generateSceneNarrationForChapter } from '../services/scene_narration_se
 import { regenerateSceneVisualPromptsForChapter } from '../services/scene_visual_prompt_service';
 import { ShotContractFieldsSchema } from '../schemas/shot_contract';
 import { buildCharacterLockRefsForChapter } from '../services/timeline_generation_service';
-import { compilePonyPrompt } from '../services/pony_prompt_compiler';
+import { compileEnglishShotPrompt } from '../services/english_visual_prompt';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
+import { normalizeImageModelFamily } from '../services/image_generation_policy';
+import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
+import { SettingsManager } from '../core/settings_manager';
 
 export const timelineRoutes: FastifyPluginAsync = async (app) => {
   app.post('/prompts/regenerate', async (request, reply) => {
@@ -164,8 +167,27 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(409).send({ detail: 'Create a new scene version before changing a rendered shot contract' });
       }
       const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
+      const project = await db.get('SELECT settings FROM project WHERE id = ?', chapter.project_id);
+      const projectSettings = parseProjectSettings(project?.settings);
       const locks = await buildCharacterLockRefsForChapter(chapter.project_id, scene.chapter_id);
-      const compiled = compilePonyPrompt({ ...incoming, shot_type: data.shot_type || scene.shot_type }, locks);
+      let compiled;
+      try {
+        compiled = await compileEnglishShotPrompt(
+          { ...incoming, shot_type: data.shot_type || scene.shot_type },
+          locks,
+          {
+            modelFamily: normalizeImageModelFamily(getProjectImageSettings(projectSettings).model),
+            nsfwEnabled: resolveEffectiveNsfw({
+              systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
+              projectSettings,
+            }),
+          },
+        );
+      } catch (error: any) {
+        return reply.status(502).send({
+          detail: error?.message || 'English visual prompt failed',
+        });
+      }
       data.visual_prompt = compiled.visual_prompt;
       data.negative_prompt = compileNegativePrompt({
         shot_type: data.shot_type || scene.shot_type,

@@ -10,6 +10,8 @@ import {
   GeneratedSceneResponseSchema,
   matchProjectCharacter,
   isNarratorLabel,
+  anchorMissingVisibleBeats,
+  assignUnassignedMustKeepEvents,
 } from './script_generation_service';
 import { AgentExecutor } from './agent_executor';
 import type { AIProvider } from './base';
@@ -105,6 +107,14 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.equal(matchProjectCharacter('王总', chars)?.id, 3);
     assert.equal(matchProjectCharacter('张三', chars), null);
     assert.equal(matchProjectCharacter(null, chars), null);
+    const cast = [
+      { id: 4, name: '陆嘉静' },
+      { id: 5, name: '裴雨涵' },
+      { id: 6, name: '南宫雪' },
+    ];
+    assert.equal(matchProjectCharacter('雪儿', cast)?.id, 6);
+    assert.equal(matchProjectCharacter('“雨涵”', cast)?.id, 5);
+    assert.equal(matchProjectCharacter('雪儿', [...cast, { id: 7, name: '白雪' }]), null);
   });
 
   await t.test('SC03: Outline -> full script candidate -> apply idempotency without LLM re-run', async () => {
@@ -928,4 +938,199 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.deepEqual(parsed.scenes[1]?.eventIds, ['ev_2']);
     assert.ok(!parsed.scenes.some((s) => s.sourceParagraphIds.includes('p_999')));
   });
+
+  await t.test('visible clothing and contact stay in an action block even when dialogue repeats them', async () => {
+    const content = '她褪下外袍，跨坐在他身上。林轩入殿。';
+    const fix = await createFixture(content);
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    let scenePrompt = '';
+    const provider = createMockProvider({
+      onOutline: () => ({
+        logline: '核心梗概',
+        mustKeepEvents: [{ id: 'ev_1', text: '林轩入殿', sourceParagraphIds: ['p_1'] }],
+        beats: [{ id: 'b_1', purpose: '入殿', eventIds: ['ev_1'] }],
+        endingHook: '钩子',
+      }),
+      onScene: (prompt) => {
+        scenePrompt = prompt;
+        return {
+          location: { name: '青云大殿', description: '' },
+          interiorExterior: 'interior',
+          timeOfDay: 'day',
+          characterNames: [fix.char1.name],
+          coveredEventIds: ['ev_1'],
+          blocks: [
+            { id: 'b1', type: 'action', text: '林轩入殿' },
+            { id: 'b2', type: 'dialogue', characterName: '林轩', text: '她褪下外袍，跨坐在他身上' },
+          ],
+        };
+      },
+    });
+    const candidate = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_visible_beat',
+      provider,
+    });
+    const doc = JSON.parse(candidate.after_json);
+    assert.match(scenePrompt, /本场可见画面必须写入 action.text/);
+    assert.match(scenePrompt, /她褪下外袍，跨坐在他身上/);
+    assert.equal(doc.outline.visibleBeats[0].text, '她褪下外袍，跨坐在他身上');
+    const actionText = doc.scenes[0].blocks.filter((block: { type: string }) => block.type === 'action').map((block: { text: string }) => block.text);
+    assert.ok(actionText.includes('她褪下外袍，跨坐在他身上'));
+    assert.ok(candidate.generation_info_json);
+    assert.deepEqual(JSON.parse(candidate.generation_info_json).anchoredVisibleBeatIds, ['vb_1']);
+  });
+
+  await t.test('unassigned must-keep events stay with the nearest earlier beat', () => {
+    const assigned = assignUnassignedMustKeepEvents({
+      logline: '梗概',
+      endingHook: '钩子',
+      mustKeepEvents: [
+        { id: 'ev_1', text: '开门', sourceParagraphIds: ['p_1'] },
+        { id: 'ev_2', text: '解外袍', sourceParagraphIds: ['p_3', 'p_4'] },
+        { id: 'ev_3', text: '红衣', sourceParagraphIds: ['p_5'] },
+        { id: 'ev_4', text: '雪儿', sourceParagraphIds: ['p_6', 'p_7'] },
+      ],
+      beats: [
+        { id: 'beat_1', purpose: '开场', eventIds: ['ev_1'] },
+        { id: 'beat_2', purpose: '挑衅', eventIds: ['ev_3'] },
+      ],
+    });
+    assert.deepEqual(assigned.beats[0]?.eventIds, ['ev_1', 'ev_2']);
+    assert.deepEqual(assigned.beats[1]?.eventIds, ['ev_3', 'ev_4']);
+  });
+
+  await t.test('missing dialogue speaker is retried, then kept as action; a diminutive maps to the cast', async () => {
+    const fix = await createFixture('林轩踏入大殿。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const missingSpeaker = createMockProvider({
+      onOutline: () => ({
+        logline: '梗概',
+        mustKeepEvents: [{ id: 'ev_1', text: '林轩入殿', sourceParagraphIds: ['p_1'] }],
+        beats: [{ id: 'b1', purpose: '开场', eventIds: ['ev_1'] }],
+        endingHook: '钩子',
+      }),
+      onScene: () => ({
+        location: { name: '正厅', description: '' },
+        blocks: [
+          { type: 'action', text: '林轩入殿' },
+          { type: 'dialogue', text: '嗯……' },
+        ],
+      }),
+    });
+    const missingCand = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_missing_speaker',
+      provider: missingSpeaker,
+    });
+    const missingDoc = JSON.parse(missingCand.after_json);
+    assert.equal(missingDoc.scenes[0].blocks.some((block: { type: string }) => block.type === 'dialogue'), false);
+    assert.match(missingDoc.scenes[0].blocks.map((block: { text: string }) => block.text).join('\n'), /嗯……/);
+
+    const diminutive = createMockProvider({
+      onOutline: () => ({
+        logline: '梗概',
+        mustKeepEvents: [{ id: 'ev_1', text: '林轩入殿', sourceParagraphIds: ['p_1'] }],
+        beats: [{ id: 'b1', purpose: '开场', eventIds: ['ev_1'] }],
+        endingHook: '钩子',
+      }),
+      onScene: () => ({
+        location: { name: '正厅', description: '' },
+        blocks: [
+          { type: 'action', text: '林轩入殿' },
+          { type: 'dialogue', characterName: '雪儿', text: '别过来。' },
+        ],
+      }),
+    });
+    const nickCand = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_diminutive_speaker',
+      provider: diminutive,
+    });
+    const nickDoc = JSON.parse(nickCand.after_json);
+    const spoken = nickDoc.scenes[0].blocks.find((block: { type: string }) => block.type === 'dialogue');
+    assert.equal(spoken.characterId, fix.char2.id);
+    assert.equal(spoken.text, '别过来。');
+  });
+
+  await t.test('a skipped outline event is dramatized in the nearest scene', async () => {
+    const fix = await createFixture('甲段。\n乙段。\n丙段。\n丁段。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const prompts: string[] = [];
+    const provider = createMockProvider({
+      onOutline: () => ({
+        logline: '梗概',
+        mustKeepEvents: [
+          { id: 'ev_a', text: '甲段开门入殿', sourceParagraphIds: ['p_1'] },
+          { id: 'ev_b', text: '乙段解开外袍', sourceParagraphIds: ['p_2'] },
+          { id: 'ev_c', text: '丁段红衣晃动', sourceParagraphIds: ['p_4'] },
+        ],
+        beats: [
+          { id: 'b1', purpose: '开场', eventIds: ['ev_a'] },
+          { id: 'b2', purpose: '收束', eventIds: ['ev_c'] },
+        ],
+        endingHook: '钩子',
+      }),
+      onScene: (prompt) => {
+        prompts.push(prompt);
+        const required = prompt.match(/本场必保事件：(.+)/)?.[1] || '无';
+        return {
+          location: { name: '青云大殿', description: '' },
+          blocks: [{ type: 'action', text: required }],
+        };
+      },
+    });
+    const candidate = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_nearest_event',
+      provider,
+    });
+    const doc = JSON.parse(candidate.after_json);
+    assert.match(prompts[0] || '', /乙段解开外袍/);
+    assert.doesNotMatch(prompts[0] || '', /丁段红衣晃动/);
+    assert.match(prompts[1] || '', /丁段红衣晃动/);
+    assert.deepEqual(doc.scenes[0].eventIds, ['ev_a', 'ev_b']);
+    assert.deepEqual(doc.scenes[1].eventIds, ['ev_c']);
+  });
+});
+
+test('dialogue does not count as coverage for a visible beat', () => {
+  const scenes = [{
+    id: 'sc_1',
+    beatIds: [],
+    eventIds: [],
+    sourceParagraphIds: ['p_1'],
+    locationId: 'loc',
+    interiorExterior: 'interior' as const,
+    timeOfDay: 'day',
+    characterIds: [1],
+    propIds: [],
+    blocks: [
+      { id: 'b1', type: 'dialogue' as const, characterId: 1, text: '她褪下外袍，跨坐在他身上' },
+    ],
+  }];
+  const beats = [{ id: 'vb_1', text: '她褪下外袍，跨坐在他身上', sourceParagraphIds: ['p_1'] }];
+  assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), ['vb_1']);
+  assert.equal(scenes[0]?.blocks.at(-1)?.type, 'action');
+  assert.equal(scenes[0]?.blocks.at(-1)?.text, beats[0]?.text);
+  assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), []);
+});
+
+test('partial event coverage must not suppress a missing visible action', () => {
+  const scenes: ScriptDocument['scenes'] = [{
+    id: 'sc_1', beatIds: [], eventIds: [], sourceParagraphIds: ['p_1'], locationId: 'loc',
+    interiorExterior: 'interior', timeOfDay: 'day', characterIds: [], propIds: [],
+    blocks: [{ id: 'a1', type: 'action', text: '她走到窗前，推开木窗' }],
+  }];
+  const beats = [{ id: 'vb_1', text: '她摘下手套，走到窗前，推开木窗', sourceParagraphIds: ['p_1'] }];
+  assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), ['vb_1']);
+  assert.equal(scenes[0]!.blocks.at(-1)!.text, beats[0]!.text);
+  assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), []);
+  scenes[0]!.blocks.at(-1)!.text = '她走到窗前';
+  assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), ['vb_1']);
+  assert.equal(scenes[0]!.blocks.at(-1)!.text, beats[0]!.text);
 });

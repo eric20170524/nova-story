@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { NavLink, Outlet, useParams } from 'react-router-dom';
-import { BookOpen, Film, Users, Clapperboard, Settings, Sparkles, Sun, Moon } from 'lucide-react';
+import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
+import { BookOpen, Film, Users, Clapperboard, Settings, Sparkles, Sun, Moon, Loader2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
+import { useToast } from '../ToastContext';
 import { api } from '../services/api';
+import { resumePersistedProjectWork, useProjectWorkJobs, type ProjectWorkJob } from '../services/project_work_tracker';
 import { rememberLastProjectId } from '../services/characters_entry';
 import {
   ProjectAgentProvider,
@@ -14,8 +16,24 @@ import { ProjectAgentPanel } from '../components/agent/ProjectAgentPanel';
 export const ProjectLayout: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const { theme, toggleTheme } = useTheme();
   const [projectTitle, setProjectTitle] = useState<string>('');
+
+  useEffect(() => {
+    const onNotice = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        messageKey?: string;
+        tone?: 'success' | 'error' | 'info';
+        params?: Record<string, string | number>;
+      }>).detail;
+      if (!detail?.messageKey) return;
+      showToast(t(detail.messageKey, detail.params), detail.tone || 'info');
+    };
+    window.addEventListener('novastory-project-work-notice', onNotice);
+    resumePersistedProjectWork();
+    return () => window.removeEventListener('novastory-project-work-notice', onNotice);
+  }, [showToast, t]);
 
   useEffect(() => {
     if (id) {
@@ -92,6 +110,8 @@ export const ProjectLayout: React.FC = () => {
           </div>
         </div>
 
+        <ProjectWorkBanner projectId={id} />
+
         {/* Project Content Area */}
         <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col h-full w-full">
           <Outlet />
@@ -123,6 +143,68 @@ const ProjectAgentNavButton: React.FC = () => {
       <Sparkles size={14} />
       <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
     </button>
+  );
+};
+
+const ProjectWorkBanner: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { setActiveChapterId } = useProjectAgent();
+  const jobs = useProjectWorkJobs(projectId);
+  if (jobs.length === 0) return null;
+
+  const bannerText = (job: ProjectWorkJob) => {
+    const chapter = job.chapterTitle || t('project_nav.director');
+    const detail = job.detail ? ` · ${job.detail}` : '';
+    const params = { chapter, detail };
+    switch (job.kind) {
+      case 'script_outline':
+        return t('script_editor.outline_running_banner', params);
+      case 'script_full':
+        return t('script_editor.script_running_banner', params);
+      case 'script_scene':
+        return t('script_editor.scene_running_banner', params);
+      case 'narration':
+        return t('director.narration_running_banner', params);
+      case 'video':
+        return t('director.video_running_banner', params);
+      case 'video_batch':
+        return t('director.video_batch_running_banner', params);
+      default:
+        return t('director.storyboard_running_banner', params);
+    }
+  };
+
+  const openJob = (job: ProjectWorkJob) => {
+    setActiveChapterId(job.chapterId);
+    const scriptJob = job.kind === 'script_outline' || job.kind === 'script_full' || job.kind === 'script_scene';
+    window.dispatchEvent(
+      new CustomEvent(scriptJob ? 'novastory-script-open-chapter' : 'novastory-director-open-chapter', {
+        detail: { projectId, chapterId: job.chapterId },
+      })
+    );
+    navigate(scriptJob ? `/project/${projectId}/script` : `/project/${projectId}/director`);
+  };
+
+  return (
+    <div
+      data-testid="project-work-banner"
+      className="flex flex-wrap items-center gap-2 border-b border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 px-4 sm:px-6 py-2"
+    >
+      {jobs.map((job) => (
+        <button
+          key={job.id}
+          type="button"
+          data-testid={`project-work-banner-${job.id}`}
+          onClick={() => openJob(job)}
+          className="inline-flex items-center gap-2 rounded-full border border-amber-300 dark:border-amber-800 bg-white/80 dark:bg-slate-900/70 px-3 py-1 text-xs font-medium text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50"
+        >
+          <Loader2 size={13} className="animate-spin" />
+          <span>{bannerText(job)}</span>
+          <span className="text-amber-600 dark:text-amber-300">{t('director.storyboard_running_open')}</span>
+        </button>
+      ))}
+    </div>
   );
 };
 

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$NoWarmup
+    [switch]$NoWarmup,
+    [switch]$KeepComfy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,9 @@ if (-not (Test-Path -LiteralPath $script:ChatTemplateKwargs -PathType Leaf)) {
     throw "Chat template kwargs were not found at '$($script:ChatTemplateKwargs)'."
 }
 
-Stop-ComfyUiForLlm
+if (-not $KeepComfy) {
+    Stop-ComfyUiForLlm
+}
 
 if (Test-LocalLlmApi) {
     Write-Host "llama.cpp already serving $(Get-LocalLlmBaseUrl)/v1 ($($script:ModelAlias))" -ForegroundColor Green

@@ -30,7 +30,11 @@ interface DirectorTimelineProps {
   timeline: Scene[];
   loading: boolean;
   selectedChapterId: string;
-  onGenerateTimeline: () => void;
+  onGenerateStoryboard: () => void;
+  generatingStoryboard: boolean;
+  canGenerateStoryboard: boolean;
+  generateStoryboardTitle?: string;
+  storyboardPanel?: React.ReactNode;
   onGenerateNarration: () => void;
   generatingNarration: boolean;
   showRightPanel: boolean;
@@ -57,7 +61,11 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   loading,
   selectedChapterId,
   chapterScript,
-  onGenerateTimeline,
+  onGenerateStoryboard,
+  generatingStoryboard,
+  canGenerateStoryboard,
+  generateStoryboardTitle,
+  storyboardPanel,
   onGenerateNarration,
   generatingNarration,
   showRightPanel,
@@ -198,13 +206,17 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
             )}
             {/* Generate Timeline Button */}
 
-            <button 
-              onClick={onGenerateTimeline}
-              disabled={loading || !selectedChapterId}
-              className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white px-3.5 sm:px-4 py-1.5 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-semibold disabled:opacity-50 transition-all shadow-md shadow-indigo-500/20"
+            <button
+              type="button"
+              onClick={onGenerateStoryboard}
+              disabled={generatingStoryboard || !canGenerateStoryboard}
+              title={generateStoryboardTitle || t('director.generate_scenes')}
+              className="bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white px-3.5 sm:px-4 py-1.5 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-semibold disabled:opacity-50 transition-all shadow-md shadow-amber-500/20"
             >
-              {loading ? <Loader2 className="animate-spin" size={15} /> : <Film size={15} />}
-              <span className="hidden xs:inline sm:inline">{t('director.generate_scenes')}</span>
+              {generatingStoryboard ? <Loader2 className="animate-spin" size={15} /> : <Film size={15} />}
+              <span className="hidden xs:inline sm:inline">
+                {generatingStoryboard ? t('director.generating_storyboard') : t('director.generate_scenes')}
+              </span>
             </button>
             
             {/* Mobile Settings Toggle */}
@@ -216,6 +228,8 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
             </button>
          </div>
       </div>
+
+      {storyboardPanel}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar min-h-0">
@@ -230,7 +244,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                           <Film size={28} />
                         </div>
                         <p className="font-semibold text-slate-700 dark:text-slate-300 text-base">{t('director.no_scenes')}</p>
-                        <p className="text-xs text-slate-400 mt-1">点击上方“生成分镜”以自动拆解剧本镜头</p>
+                        <p className="text-xs text-slate-400 mt-1">{t('director.empty_generate_hint')}</p>
                     </div>
                     )}
                     
@@ -585,6 +599,31 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                                         onChange={(e) => onUpdateScene(scene.id, 'visual_prompt', e.target.value)}
                                         placeholder="Describe the scene..."
                                     />
+                                    {(() => {
+                                      const saved = scene.visual_prompt || '';
+                                      const hasCjk = /[\u3400-\u9fff]/.test(saved);
+                                      let englishSent = '';
+                                      try {
+                                        const spec = typeof scene.shot_spec === 'string' ? JSON.parse(scene.shot_spec) : scene.shot_spec;
+                                        englishSent = typeof spec?.english_visual_prompt === 'string' ? spec.english_visual_prompt : '';
+                                      } catch { /* shot_spec is not JSON */ }
+                                      if (!hasCjk && !englishSent) return null;
+                                      return (
+                                        <div className="mt-1 space-y-1">
+                                          {hasCjk && (
+                                            <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+                                              {t('director.visual_english_hint', '中文会在生图前译成英文，不会覆盖这里的原文。')}
+                                            </p>
+                                          )}
+                                          {englishSent && englishSent !== saved && (
+                                            <p className="max-h-16 overflow-auto whitespace-pre-wrap text-[10px] leading-snug text-indigo-700 dark:text-indigo-300">
+                                              <span className="font-bold">{t('director.visual_english_sent', '本次实际英文提示')}</span>
+                                              {' '}{englishSent}
+                                            </p>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                 </div>
 
                                 {/* Narration */}

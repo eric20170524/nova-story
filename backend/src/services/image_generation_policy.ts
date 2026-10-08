@@ -1280,7 +1280,7 @@ export const resolveGenerationPlan = (options: {
 
 /**
  * LLM instructions for storyboard beat contracts.
- * Policy points at the server-side Pony compiler — do NOT ask for long English visual_prompt prose.
+ * Policy points at the server compiler — do NOT ask the storyboard model for the final English visual_prompt.
  */
 export const buildTimelineVisualPromptPolicy = (
   nsfwEnabled: boolean,
@@ -1288,11 +1288,11 @@ export const buildTimelineVisualPromptPolicy = (
 ): string => {
   const contractOnly = options.responseFormat === 'script_storyboard';
   const visualPromptRule = contractOnly
-    ? '- Return only the requested shot contract fields. Do NOT output visual_prompt or negative_prompt; the server compilePonyPrompt compiles them.'
-    : '- Set visual_prompt to "" (empty). Do NOT write a Detailed English scene description; the server compilePonyPrompt compiles tags.';
+    ? '- Return only the requested shot contract fields. Do NOT output visual_prompt or negative_prompt; the server compiles the contract into an English image prompt.'
+    : '- Set visual_prompt to "" (empty). Do NOT write a Detailed English scene description; the server compiles the contract into an English image prompt.';
   if (nsfwEnabled) {
     return `
-### Shot Contract Policy (NSFW mode ENABLED) — compiler fills final Pony tags:
+### Shot Contract Policy (NSFW mode ENABLED) — compiler fills the English image prompt:
 - Fill location, primary_action, key_props (≤2), shot_intent, subject_scale. Chinese OK in contract fields.
 ${visualPromptRule}
 - When intimacy/adult content is in the source, encode it as concrete visible actions/props/clothing state in the contract — do not euphemize into empty poetry and do not refuse.
@@ -1303,10 +1303,10 @@ ${visualPromptRule}
   }
 
   return `
-### Shot Contract Policy (SFW / family-safe) — compiler fills final Pony tags:
+### Shot Contract Policy (SFW / family-safe) — compiler fills the English image prompt:
 - Fill location (paintable nouns only), primary_action (one visible verb), key_props (≤2), shot_intent, subject_scale${contractOnly ? '.' : ', uniqueness_key.'}
 ${contractOnly ? '- Chinese is allowed in contract fields. Return only the requested shot contract fields; do NOT output visual_prompt or negative_prompt.' : '- Chinese is allowed in contract fields. Set visual_prompt to "" (empty).'}
-- Do NOT write a Detailed English scene description or long Pony prose; the server compilePonyPrompt compiles tags from the contract + Character Visual Lock.
+- Do NOT write a Detailed English scene description or long Pony prose; the server compiles English tags from the contract + Character Visual Lock.
 - Never invent species tags absent from the Visual Lock (no kitten / 1girl / wolf / fox / dog paraphrases).
 - Keep content safe-for-work: no nudity, no sexual acts. Intimate emotions → blush, averted gaze, hand-holding only if story requires.
 - shot_intent enum: establish | wide-action | medium-action | insert | reaction | overhead-map | payoff.

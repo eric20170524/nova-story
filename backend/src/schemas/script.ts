@@ -76,6 +76,8 @@ export const ScriptOutlineSchema = z.object({
   mustKeepEvents: z.array(ScriptMustKeepEventSchema).default([]),
   beats: z.array(ScriptBeatSchema).default([]),
   endingHook: z.string().default(''),
+  // Source sentences for clothing, pose, and contact. Optional so older outlines still parse.
+  visibleBeats: z.array(ScriptMustKeepEventSchema).optional(),
 });
 
 export const ScriptSceneSchema = z.object({

@@ -32,10 +32,13 @@ related:
 Chapter.content + Character.visual_tags
         │
         ▼
-Beat / Shot Contract     ← 唯一允许 LLM 填写的层（中文可）
+Beat / Shot Contract     ← 唯一允许 LLM 填写的层（中文可，须保留可见服装、姿态、接触）
         │
         ▼
-compilePonyPrompt()      ← 纯函数，产出正向词
+compilePonyPrompt()      ← 纯函数，不调用模型
+        │
+        ▼
+compileEnglishShotPrompt() ← 正式分镜入库的 visual_prompt 必须全英文
         │
         ▼
 sanitizer                ← 删非视觉、落地隐喻、砍概念过载
@@ -53,7 +56,7 @@ scene.visual_prompt + scene.negative_prompt + scene.shot_spec
 generation_service       ← 只追加 style/quality suffix，不再前置地点模板
 ```
 
-LLM 可以填契约，不可以输出「Detailed English scene description」当作最终 visual_prompt。
+LLM 可以填中文契约，不可以输出「Detailed English scene description」当作最终 visual_prompt。英文由 `compileEnglishShotPrompt()` 从已采纳契约编译。用户若只在导演台改了中文 `visual_prompt`，生图前再优化一次英文，不回写原文。译文仍含中文，或丢掉可见服装、姿态、接触时，该镜头失败，不回退成中英混杂提示词。角色卡上的蛇形服装标签在本镜动作写明宽衣时让位给该动作。资产提示里的 `no people`、`isolated`、`16:9` 不进入人物镜头。
 
 ## 3. Shot Contract
 
@@ -167,7 +170,7 @@ silent atmosphere          ← 「无声」不是可画物；地点用 empty / m
 
 ### 6.3 入库禁词
 
-新写入的 `visual_prompt` 不得包含：
+新写入的分镜 `visual_prompt` 必须是英文，不得残留中文，也不得包含：
 
 ```text
 score_9

@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
 import { DEFAULT_LOCAL_LLM_BASE_URL, DEFAULT_LOCAL_LLM_MODEL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from './llm';
@@ -66,6 +69,126 @@ export type ReleaseLlmOptions = {
    */
   includeConfiguredModel?: boolean;
 };
+
+export type VramSwitchTarget = 'llamacpp' | 'comfyui';
+
+export type VramSwitchDecision =
+  | { action: 'already'; message: string; message_zh: string }
+  | { action: 'refuse'; message: string; message_zh: string }
+  | { action: 'start_llamacpp' }
+  | { action: 'start_comfy'; stopLocalLlm: boolean };
+
+const SWITCH_GPU_BUSY = {
+  message: 'An image or video job is using the GPU. Wait until it finishes before switching.',
+  message_zh: '生图或视频正在占用显卡，请等任务结束后再切换。',
+};
+
+/** Which process the badge may start. Remote endpoints and a busy GPU lease are refused. */
+export function decideVramSwitch(input: {
+  target: VramSwitchTarget;
+  llmLoopback: boolean;
+  llmOnline: boolean;
+  comfyRemote: boolean;
+  comfyOnline: boolean;
+  gpuBusy: boolean;
+}): VramSwitchDecision {
+  const localComfy = input.comfyOnline && !input.comfyRemote;
+  const localLlm = input.llmOnline && input.llmLoopback;
+
+  if (input.target === 'llamacpp') {
+    if (!input.llmLoopback) {
+      return {
+        action: 'refuse',
+        message: 'The configured text model is not a local llama.cpp server, so it cannot be started from this machine.',
+        message_zh: '当前文本模型不是本机 llama.cpp，无法从这里启动。',
+      };
+    }
+    if (input.llmOnline && !localComfy) {
+      return {
+        action: 'already',
+        message: 'llama.cpp is already running and local ComfyUI is not using VRAM.',
+        message_zh: 'llama.cpp 已在运行，本机 ComfyUI 未占用显存。',
+      };
+    }
+    if (input.gpuBusy) return { action: 'refuse', ...SWITCH_GPU_BUSY };
+    return { action: 'start_llamacpp' };
+  }
+
+  if (input.comfyRemote && !input.comfyOnline) {
+    return {
+      action: 'refuse',
+      message: 'ComfyUI is configured as a remote server and it is offline, so it cannot be started from this machine.',
+      message_zh: '当前 ComfyUI 是远端地址且未在线，无法从这里启动。',
+    };
+  }
+  if (input.comfyOnline && !localLlm) {
+    return {
+      action: 'already',
+      message: 'ComfyUI is already running and the local text model is not using VRAM.',
+      message_zh: 'ComfyUI 已在运行，本地文本模型未占用显存。',
+    };
+  }
+  if (input.gpuBusy) return { action: 'refuse', ...SWITCH_GPU_BUSY };
+  return { action: 'start_comfy', stopLocalLlm: localLlm };
+}
+
+export function localLlmStartScriptPath(): string {
+  return fileURLToPath(new URL('../../../start_local_llm.ps1', import.meta.url));
+}
+
+type VramSwitchDeps = {
+  runTextMode: () => Promise<void>;
+  releaseLlm: (options?: ReleaseLlmOptions) => Promise<VramActionResult>;
+  startComfy: () => Promise<boolean>;
+  getStatus: () => Promise<VramStatus>;
+  loadSettings: () => { llm?: { base_url?: string | null }; comfyui?: any };
+};
+
+let vramSwitchDepsForTests: Partial<VramSwitchDeps> | null = null;
+
+export function setVramSwitchDepsForTests(deps: Partial<VramSwitchDeps> | null): void {
+  vramSwitchDepsForTests = deps;
+}
+
+function switchDeps(): VramSwitchDeps {
+  return {
+    runTextMode: vramSwitchDepsForTests?.runTextMode ?? runBundledTextMode,
+    releaseLlm: vramSwitchDepsForTests?.releaseLlm ?? ((options) => VramService.releaseLlm(options)),
+    startComfy: vramSwitchDepsForTests?.startComfy ?? startBundledComfy,
+    getStatus: vramSwitchDepsForTests?.getStatus ?? (() => VramService.getStatus()),
+    loadSettings: vramSwitchDepsForTests?.loadSettings ?? (() => SettingsManager.loadSettings()),
+  };
+}
+
+function commandTail(err: unknown): string {
+  const anyErr = err as { stderr?: unknown; stdout?: unknown; message?: unknown };
+  const text = [anyErr?.stderr, anyErr?.stdout, anyErr?.message]
+    .map((part) => String(part || '').replace(/\s+/g, ' ').trim())
+    .find(Boolean) || '';
+  return text.length > 240 ? text.slice(-240) : text;
+}
+
+async function runBundledTextMode(): Promise<void> {
+  const script = localLlmStartScriptPath();
+  if (!fs.existsSync(script)) {
+    throw new Error(`llama.cpp start script was not found at ${script}`);
+  }
+  // start_local_llm.ps1 stops local ComfyUI, then starts llama-server with the
+  // Win32 environment block. -NoWarmup returns once /v1/models is up.
+  await execFileAsync('pwsh', ['-NoProfile', '-File', script, '-NoWarmup'], {
+    timeout: 150_000,
+    windowsHide: true,
+    cwd: path.dirname(script),
+  });
+}
+
+async function startBundledComfy(): Promise<boolean> {
+  const settings = SettingsManager.loadSettings();
+  const comfy = ComfyUIService.fromSettings(settings.comfyui);
+  if (comfy.isRemote) return false;
+  const installPath = settings.comfyui?.install_path || 'D:\\ComfyUI';
+  return comfy.ensureRunning(installPath, 120_000);
+}
 
 const WARNING_THRESHOLD = 60;
 const CRITICAL_THRESHOLD = 85;
@@ -816,6 +939,129 @@ export class VramService {
       status,
     };
   }
+
+  /**
+   * Exclusive local switch. llama.cpp and ComfyUI cannot share this GPU.
+   * Shares the image-prep queue so a handoff and a badge click cannot overlap.
+   */
+  static async switchTo(
+    target: VramSwitchTarget,
+    options: { gpuBusy?: boolean } = {},
+  ): Promise<VramActionResult> {
+    let releaseGate!: () => void;
+    const previous = this.prepareChain;
+    this.prepareChain = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    await previous;
+    try {
+      return await this.switchToUnlocked(target, options);
+    } finally {
+      releaseGate();
+    }
+  }
+
+  private static async switchToUnlocked(
+    target: VramSwitchTarget,
+    options: { gpuBusy?: boolean },
+  ): Promise<VramActionResult> {
+    const deps = switchDeps();
+    const settings = deps.loadSettings();
+    const ollamaBase = ollamaNativeBaseUrl(settings.llm?.base_url);
+    const comfy = ComfyUIService.fromSettings(settings.comfyui);
+    const before = await deps.getStatus();
+    const decision = decideVramSwitch({
+      target,
+      llmLoopback: isLoopbackBaseUrl(ollamaBase),
+      llmOnline: before.ollama.online,
+      comfyRemote: comfy.isRemote,
+      comfyOnline: before.comfyui.online,
+      gpuBusy: options.gpuBusy === true,
+    });
+
+    if (decision.action === 'already' || decision.action === 'refuse') {
+      return {
+        ok: decision.action === 'already',
+        message: decision.message,
+        message_zh: decision.message_zh,
+        status: before,
+      };
+    }
+
+    logger.info({ target }, 'VRAM badge switch started');
+    try {
+      if (decision.action === 'start_llamacpp') {
+        await deps.runTextMode();
+        const status = await deps.getStatus();
+        const localComfyStillUp = status.comfyui.online && !comfy.isRemote;
+        const ok = status.ollama.online && !localComfyStillUp;
+        return {
+          ok,
+          message: ok
+            ? 'Switched to llama.cpp. Local ComfyUI has released the GPU.'
+            : 'Failed to switch to llama.cpp.',
+          message_zh: ok
+            ? '已切换到 llama.cpp。本机 ComfyUI 已让出显存。'
+            : '未能切换到 llama.cpp。',
+          status,
+        };
+      }
+
+      if (decision.stopLocalLlm && before.ollama.online) {
+        const released = await deps.releaseLlm({ includeConfiguredModel: false });
+        const afterRelease = released.status ?? await deps.getStatus();
+        if (afterRelease.ollama.online) {
+          return {
+            ok: false,
+            message: 'The local text model is still running, so ComfyUI was not started.',
+            message_zh: '本地文本模型仍在运行，已取消启动 ComfyUI。',
+            details: released.details,
+            status: afterRelease,
+          };
+        }
+      }
+
+      let status = await deps.getStatus();
+      if (!status.comfyui.online) {
+        const started = await deps.startComfy();
+        status = await deps.getStatus();
+        if (!started || !status.comfyui.online) {
+          return {
+            ok: false,
+            message: 'ComfyUI did not become ready.',
+            message_zh: 'ComfyUI 未能在时限内启动。',
+            status,
+          };
+        }
+      }
+      const ok = status.comfyui.online && !status.ollama.online;
+      return {
+        ok,
+        message: ok
+          ? (decision.stopLocalLlm
+            ? 'Switched to ComfyUI. The local text model has stopped.'
+            : 'ComfyUI is running.')
+          : 'Failed to switch to ComfyUI.',
+        message_zh: ok
+          ? (decision.stopLocalLlm
+            ? '已切换到 ComfyUI。本地文本模型已停止。'
+            : '已启动 ComfyUI。')
+          : '未能切换到 ComfyUI。',
+        status,
+      };
+    } catch (err) {
+      logger.error({ err, target }, 'VRAM badge switch failed');
+      const tail = commandTail(err);
+      const status = await deps.getStatus().catch(() => before);
+      return {
+        ok: false,
+        message: tail ? `Switch failed: ${tail}` : 'Switch failed.',
+        message_zh: tail ? `显存切换失败：${tail}` : '显存切换失败。',
+        details: tail ? [tail] : [],
+        status,
+      };
+    }
+  }
 }
 
 // Exported for unit tests
@@ -826,6 +1072,8 @@ export const __vramTestables = {
   classifyLlmProbe,
   isLoopbackBaseUrl,
   isLlamaServerProcessImage,
+  decideVramSwitch,
+  localLlmStartScriptPath,
   buildSummaries,
   WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, LoaderCircle, RefreshCw, Sparkles, Zap } from 'lucide-react';
+import { Activity, Cpu, Image as ImageIcon, LoaderCircle, RefreshCw, Sparkles, Zap } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
@@ -119,7 +119,7 @@ export const VramHealthBadge: React.FC = () => {
   const [status, setStatus] = useState<VramStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<'llm' | 'comfy' | null>(null);
+  const [busy, setBusy] = useState<'llm' | 'comfy' | 'switch-llm' | 'switch-comfy' | null>(null);
   /** Plan 1 auto-scheduler phase (shown in the always-on status strip) */
   const [scheduler, setScheduler] = useState<VramSchedulerDetail | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -232,6 +232,25 @@ export const VramHealthBadge: React.FC = () => {
     }
   };
 
+  const handleSwitch = async (target: 'llamacpp' | 'comfyui') => {
+    setBusy(target === 'llamacpp' ? 'switch-llm' : 'switch-comfy');
+    try {
+      const res = target === 'llamacpp' ? await api.switchToLlamaCpp() : await api.switchToComfyUi();
+      applyStatusFromAction(res.status);
+      showToast(
+        language === 'zh' ? res.message_zh || res.message : res.message || res.message_zh,
+        res.ok ? 'success' : 'error'
+      );
+    } catch (err: any) {
+      showToast(
+        err?.message || t('vram.switch_failed', '显存切换失败'),
+        'error'
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleFreeComfy = async () => {
     setBusy('comfy');
     try {
@@ -283,6 +302,8 @@ export const VramHealthBadge: React.FC = () => {
   const comfyLabel = status?.comfyui.online
     ? t('vram.comfy_online', '在线')
     : t('vram.offline', '离线');
+  const textMode = Boolean(status?.ollama.online) && !status?.comfyui.online;
+  const imageMode = Boolean(status?.comfyui.online) && !status?.ollama.online;
 
   return (
     <div className="relative group/vram flex items-center gap-2" ref={rootRef}>
@@ -463,6 +484,58 @@ export const VramHealthBadge: React.FC = () => {
           </div>
 
           <div className="p-3 space-y-2">
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 text-center px-2 leading-relaxed">
+              {t('vram.switch_hint', '这张显卡只保留一边。切换会停掉另一边。')}
+            </p>
+            <button
+              type="button"
+              disabled={busy !== null || textMode}
+              title={t('vram.switch_llamacpp_title', '先停止本机 ComfyUI，再启动 llama.cpp')}
+              onClick={() => handleSwitch('llamacpp')}
+              className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-all disabled:cursor-not-allowed ${
+                textMode
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200'
+                  : 'bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 border-transparent text-white shadow-md shadow-indigo-500/20'
+              }`}
+            >
+              {busy === 'switch-llm' ? (
+                <LoaderCircle size={16} className="animate-spin" />
+              ) : (
+                <Cpu size={16} />
+              )}
+              <span>
+                {busy === 'switch-llm'
+                  ? t('vram.switching', '正在切换…')
+                  : textMode
+                    ? t('vram.switch_llamacpp_current', 'llama.cpp 运行中')
+                    : t('vram.switch_llamacpp', '切换到 llama.cpp')}
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={busy !== null || imageMode}
+              title={t('vram.switch_comfy_title', '先停止本机 llama.cpp，再启动 ComfyUI')}
+              onClick={() => handleSwitch('comfyui')}
+              className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-colors disabled:cursor-not-allowed ${
+                imageMode
+                  ? 'bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-700 text-sky-800 dark:text-sky-200'
+                  : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+              }`}
+            >
+              {busy === 'switch-comfy' ? (
+                <LoaderCircle size={15} className="animate-spin" />
+              ) : (
+                <ImageIcon size={15} />
+              )}
+              <span>
+                {busy === 'switch-comfy'
+                  ? t('vram.switching', '正在切换…')
+                  : imageMode
+                    ? t('vram.switch_comfy_current', 'ComfyUI 运行中')
+                    : t('vram.switch_comfy', '切换到 ComfyUI')}
+              </span>
+            </button>
+
             <button
               type="button"
               disabled={busy !== null}

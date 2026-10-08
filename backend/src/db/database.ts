@@ -726,6 +726,19 @@ const migrations: Migration[] = [
         growth_path: 'TEXT'
       });
     }
+  },
+  {
+    version: '021_scene_version_english_prompt',
+    up: async (database) => {
+      await ensureColumns(database, 'scene_version', { english_visual_prompt: 'TEXT' });
+      // Only the active version has a trustworthy legacy prompt. Historical
+      // versions remain unknown rather than inheriting another image's prompt.
+      await database.exec(`UPDATE scene_version SET english_visual_prompt = (
+        SELECT json_extract(scene.shot_spec, '$.english_visual_prompt') FROM scene
+        WHERE scene.id = scene_version.scene_id AND scene.active_version = scene_version.version
+          AND json_valid(scene.shot_spec)
+      ) WHERE english_visual_prompt IS NULL`);
+    }
   }
 ];
 

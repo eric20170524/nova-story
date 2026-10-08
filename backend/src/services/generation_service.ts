@@ -1,7 +1,7 @@
 import { ComfyUIService } from './ai/comfyui_service';
 import { MediaService } from './media_service';
 import { SettingsManager } from '../core/settings_manager';
-import { db } from '../db/database';
+import { db, withImmediateTransaction } from '../db/database';
 import Redis from 'ioredis';
 import path from 'path';
 import fs from 'fs';
@@ -48,6 +48,7 @@ import {
     createProgressPublisher,
     runVramHandoffForImageGen,
 } from './generation_progress';
+import { optimizeOutboundPrompt, assetPromptForShot } from './english_visual_prompt';
 import {
     normalizeGeneratedImage,
     resolveComfyLatentDimensions,
@@ -1025,8 +1026,9 @@ export class GenerationService {
                             }
                         }
                         if (assetRefs.length) {
-                            effectiveWorkflowData.prompt = [effectiveWorkflowData.prompt || sceneRow.visual_prompt,
-                                ...assetRefs.map(ref => ref.visual_prompt)].filter(Boolean).join(', ');
+                            const shotPrompt = String(effectiveWorkflowData.prompt || sceneRow.visual_prompt || '');
+                            effectiveWorkflowData.prompt = [shotPrompt,
+                                ...assetRefs.map(ref => assetPromptForShot(String(ref.visual_prompt || ''), effectiveWorkflowData.shot_spec || {}, shotPrompt))].filter(Boolean).join(', ');
                             effectiveWorkflowData.asset_references = assetRefs.map(ref => ({
                                 id: ref.id, revision: ref.revision, kind: ref.kind, image_url: ref.image_url,
                             }));
@@ -1160,6 +1162,19 @@ export class GenerationService {
                 || effectiveWorkflowData?.reference_model_type
                 || 'pony'
             );
+            const outboundPrompt = await optimizeOutboundPrompt(finalPrompt, {
+                modelFamily: outputModelFamily,
+                nsfwEnabled,
+            });
+            if (outboundPrompt !== finalPrompt) {
+                finalPrompt = outboundPrompt;
+                effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
+            }
+            try {
+                await progressHandler('english_prompt', { english_prompt: finalPrompt });
+            } catch (error) {
+                logger.warn(`[Task ${taskId}] Could not publish the English visual prompt: ${error}`);
+            }
             const outputTarget: ImageOutputTarget = resolveImageOutputTarget({
                 workflowData: effectiveWorkflowData,
                 generationParams,
@@ -1333,12 +1348,13 @@ export class GenerationService {
                             + `The snapshot keeps the inputs used for ${assetUrl}.`
                         );
                     }
-                    await db.run('UPDATE scene SET asset_status = ?, asset_url = ?, task_id = ? WHERE id = ?', "completed", assetUrl, taskId, sceneId);
-                    await ensureSceneVersionBaseline(sceneId);
-                    await syncActiveVersionAssets(sceneId, {
-                        asset_status: 'completed',
-                        asset_url: assetUrl,
-                        task_id: taskId
+                    await withImmediateTransaction(async () => {
+                        await syncActiveVersionAssets(sceneId, {
+                            asset_status: 'completed',
+                            asset_url: assetUrl,
+                            task_id: taskId,
+                            english_visual_prompt: finalPrompt,
+                        }, sceneVersion);
                     });
                 }
             }

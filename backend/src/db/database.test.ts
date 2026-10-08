@@ -102,8 +102,10 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 019_shot_master_character_versions
-    assert.equal(migrationCount.count, 19);
+    // 001_core through 021_scene_version_english_prompt
+    assert.equal(migrationCount.count, 21);
+    const versionColumns = await legacyDatabase.all('PRAGMA table_info("scene_version")');
+    assert.ok(versionColumns.some((column: any) => column.name === 'english_visual_prompt'));
 
     const characterColumns = new Set(
       (await legacyDatabase.all('PRAGMA table_info("character")'))
@@ -119,6 +121,30 @@ test('upgrades a legacy main database schema idempotently', async () => {
     }
   } finally {
     await legacyDatabase.close();
+  }
+});
+
+test('English prompt migration only backfills the active image version', async () => {
+  const database = await open({ filename: ':memory:', driver: sqlite3.Database });
+  try {
+    await runMigrations(database);
+    await database.exec(`
+      INSERT INTO project (id, title) VALUES (1, 'legacy prompts');
+      INSERT INTO chapter (id, project_id, "index", title) VALUES ('c', 1, 1, 'chapter');
+      INSERT INTO scene (id, chapter_id, "index", active_version, shot_spec)
+        VALUES (1, 'c', 1, 2, '{"english_visual_prompt":"Prompt B"}');
+      INSERT INTO scene_version (scene_id, version, asset_url) VALUES (1, 1, '/image-A.png'), (1, 2, '/image-B.png');
+      DELETE FROM schema_migration WHERE version = '021_scene_version_english_prompt';
+    `);
+    await runMigrations(database);
+    await runMigrations(database);
+    const rows = await database.all('SELECT * FROM scene_version ORDER BY version');
+    assert.equal(rows[0].english_visual_prompt, null);
+    assert.equal(rows[0].asset_url, '/image-A.png');
+    assert.equal(rows[1].english_visual_prompt, 'Prompt B');
+    assert.equal(rows[1].asset_url, '/image-B.png');
+  } finally {
+    await database.close();
   }
 });
 
@@ -139,6 +165,8 @@ test('011 adds coverage_shot contract columns when only 001-010 were applied', a
         version INTEGER DEFAULT 1,
         status VARCHAR(50) DEFAULT 'completed'
       );
+      CREATE TABLE scene (id INTEGER PRIMARY KEY, active_version INTEGER, shot_spec TEXT);
+      CREATE TABLE scene_version (id INTEGER PRIMARY KEY, scene_id INTEGER, version INTEGER);
       CREATE TABLE coverage_shot (
         id INTEGER PRIMARY KEY,
         coverage_group_id INTEGER NOT NULL,

@@ -473,6 +473,7 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 目标时长: 约 {{targetDurationSec}} 秒
 用户指示: {{instructions}}
 世界观约束: {{creativeConstraints}}
+服装、姿态、肢体接触这类可见画面，必须引用原文句子，不要写成主题概括。对白不能代替这些句子。
 
 --- 输出格式规范 ---
 请输出合法的纯 JSON 对象（禁止使用 markdown 代码块）：
@@ -506,10 +507,11 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 --- 规则与规范 ---
 1. 小说内向心理活动必须改编为可表演的外部动作 (action)、对白 (dialogue) 或画外音 (voiceover)。
 2. 严禁混入摄影机机位、景别或生成镜头英文 Prompt（视觉分镜由导演模式统一编译）。
-3. 对白的 characterName 必须是出场角色档案里的姓名，禁止凭空捏造未登场角色。叙述不要写成对白；使用 voiceover，characterName 填“旁白”。不要把“画外音”当作角色名。
+3. 对白的 characterName 必须是出场角色档案里的姓名，禁止凭空捏造未登场角色，也不要用昵称或职位代替姓名。没有明确说话人时不要写 dialogue，把那句改成 action。叙述不要写成对白；使用 voiceover，characterName 填“旁白”。不要把“画外音”当作角色名。
 4. props 列出本场动作中出现或实际使用的关键实物道具，给出准确名称和简短外观/用途；同一道具跨场沿用名称，不能把不同实物合并。没有道具才填空数组；不得把人物、声音或心理活动当道具。
 5. 本场必保事件的可见动作必须写进 action 文本，coveredEventIds 填写这些事件的原始 id。只改措辞、不写出事件本身，不能算覆盖。
-6. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
+6. action.text 必须保留原文里看得到的服装状态、姿态和身体接触。对白和画外音不能代替这些事实，也不要把它们改写成情绪、仙力或光影。
+7. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
 {
   "id": "scene_{{sceneIndex}}",
   "location": { "name": "地点名称", "description": "环境视觉特征" },
@@ -575,7 +577,7 @@ location 和 key_props 只能填写资产名称本身，不要添加“场景：
      ['establish', 'wide-action', 'medium-action', 'insert', 'reaction', 'overhead-map', 'payoff']
    - shot_type: 景别，如 'Wide Shot', 'Medium Shot', 'Close-up', 'Extreme Close-up'
    - location: 画面地点环境描述（2-240字）
-   - primary_action: 画面核心动作描述（2-240字；按上述内容策略填写源文中可见的动作、服装状态与姿态，不用抽象情绪替代）
+   - primary_action: 画面核心动作描述（2-240字）。必须沿用本镜头 action 内容块里的可见动作、服装和姿态，不要写成对白原句、情绪或“旁白响起”。服务端会用 action 块替换抄来的台词，并编译成全英文生图提示词。
    - primary_subject: 焦点主体（角色名或物体）
    - visible_subjects: 画面中可见的主体/角色列表（最多6个）
    - key_props: 关键道具列表（最多2个）

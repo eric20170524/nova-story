@@ -6,6 +6,7 @@ import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
+import { coversVisibleBeat, extractVisibleBeats, type VisibleBeat } from '../english_visual_prompt';
 import { ScriptService, ScriptServiceError } from '../script_service';
 import {
   ScriptDocumentSchema,
@@ -134,6 +135,33 @@ export function verifyEventContentCoverage(
   return false;
 }
 
+/** Action text is the only coverage that counts for clothing, pose, and contact. */
+export function anchorMissingVisibleBeats(
+  scenes: ScriptScene[],
+  beats: VisibleBeat[],
+): string[] {
+  const anchored: string[] = [];
+  if (!scenes.length) return anchored;
+  for (const beat of beats) {
+    const text = beat.text.trim();
+    if (!text) continue;
+    const covered = scenes.some((scene) => coversVisibleBeat(
+      text,
+      scene.blocks.filter((block) => block.type === 'action').map((block) => block.text).join('\n'),
+    ));
+    if (covered) continue;
+    const paragraphIds = new Set(beat.sourceParagraphIds || []);
+    const owner = scenes.find((scene) => scene.sourceParagraphIds.some((id) => paragraphIds.has(id)))
+      || scenes[scenes.length - 1]!;
+    const blockId = `vis_${beat.id}`;
+    const existingIndex = owner.blocks.findIndex((block) => block.id === blockId);
+    if (existingIndex >= 0) owner.blocks[existingIndex] = { id: blockId, type: 'action', text };
+    else owner.blocks.push({ id: blockId, type: 'action', text });
+    anchored.push(beat.id);
+  }
+  return anchored;
+}
+
 function configuredLlmModel(provider?: AIProvider): string | undefined {
   if (provider) return undefined;
   const model = String(SettingsManager.loadSettings().llm?.model || '').trim();
@@ -185,26 +213,13 @@ export function isNarratorLabel(name: string | null | undefined): boolean {
   return NARRATOR_LABELS.has(value);
 }
 
-function spokenBlock(
-  block: { type: string; characterName?: string | null; text: string; delivery?: string | null },
-  projectCharacters: Array<{ id: number; name: string }>,
-  unknownMessage: (name: string) => string,
-): Omit<Extract<ScriptBlock, { type: 'dialogue' }>, 'id'> | Omit<Extract<ScriptBlock, { type: 'voiceover' }>, 'id'> {
-  const charName = (block.characterName || '').trim();
-  const narration = block.type === 'voiceover' || isNarratorLabel(charName);
-  if (!charName || isNarratorLabel(charName)) {
-    if (!narration) throw new ScriptGenerationError(unknownMessage(charName), 400);
-    return { type: 'voiceover', characterId: null, text: block.text.trim() };
-  }
-  const matched = matchProjectCharacter(charName, projectCharacters);
-  if (!matched) throw new ScriptGenerationError(unknownMessage(charName), 400);
-  if (narration) return { type: 'voiceover', characterId: matched.id, text: block.text.trim() };
-  return {
-    type: 'dialogue',
-    characterId: matched.id,
-    text: block.text.trim(),
-    delivery: block.delivery?.trim() || undefined,
-  };
+export function normalizeLookupName(name: string | null | undefined): string {
+  return String(name || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/^[\s"'“”‘’「」『』]+|[\s"'“”‘’「」『』]+$/g, '')
+    .replace(/\s*[（(][^）)]*[）)]\s*$/u, '')
+    .trim();
 }
 
 /** Match a character name against project characters */
@@ -212,24 +227,142 @@ export function matchProjectCharacter(
   name: string | undefined | null,
   characters: Array<{ id: number; name: string }>
 ): { id: number; name: string } | null {
-  if (!name || !name.trim()) return null;
-  const target = name.trim().toLowerCase();
+  const target = normalizeLookupName(name).toLowerCase();
+  if (!target) return null;
+  const normalized = characters.map((character) => ({
+    character,
+    name: normalizeLookupName(character.name).toLowerCase(),
+  }));
 
   // 1. Exact match
-  const exact = characters.find((c) => c.name.trim().toLowerCase() === target);
-  if (exact) return exact;
+  const exact = normalized.find((item) => item.name === target);
+  if (exact) return exact.character;
 
-  // 2. Substring match
-  const matches = characters.filter(
-    (c) =>
-      c.name.trim().toLowerCase().includes(target) ||
-      target.includes(c.name.trim().toLowerCase())
+  // 2. Substring match, only when one name is strictly more specific
+  const matches = normalized.filter(
+    (item) => item.name.includes(target) || target.includes(item.name)
   );
-  matches.sort((a, b) => b.name.trim().length - a.name.trim().length);
+  matches.sort((a, b) => b.name.length - a.name.length);
   const best = matches[0];
-  if (best && (!matches[1] || best.name.trim().length > matches[1].name.trim().length)) return best;
+  if (best && (!matches[1] || best.name.length > matches[1].name.length)) return best.character;
+
+  // 3. Diminutive 儿: 雪儿 -> the one character whose name ends with 雪
+  if (target.endsWith('儿') && target.length > 1) {
+    const stem = target.slice(0, -1);
+    const ended = normalized.filter((item) => item.name.endsWith(stem));
+    if (ended.length === 1) return ended[0]!.character;
+  }
 
   return null;
+}
+
+function resolvePerformanceBlocks(
+  rawBlocks: GeneratedSceneResponse['blocks'],
+  projectCharacters: Array<{ id: number; name: string }>,
+  idFor: (index: number) => string,
+  convertMissingSpeakerToAction: boolean,
+): { blocks: ScriptBlock[]; unresolved: Array<{ name: string; type: 'dialogue' | 'voiceover' }> } {
+  const blocks: ScriptBlock[] = [];
+  const unresolved: Array<{ name: string; type: 'dialogue' | 'voiceover' }> = [];
+
+  for (const raw of rawBlocks) {
+    if (raw.type === 'action' || raw.type === 'sound') {
+      blocks.push({ id: idFor(blocks.length), type: raw.type, text: raw.text.trim() });
+      continue;
+    }
+    if (raw.type !== 'dialogue' && raw.type !== 'voiceover') continue;
+
+    const charName = normalizeLookupName(raw.characterName);
+    const narrator = raw.type === 'voiceover' || isNarratorLabel(charName);
+    if (!charName || isNarratorLabel(charName)) {
+      if (!narrator) {
+        if (convertMissingSpeakerToAction) {
+          blocks.push({ id: idFor(blocks.length), type: 'action', text: raw.text.trim() });
+        } else {
+          unresolved.push({ name: charName, type: raw.type });
+        }
+        continue;
+      }
+      blocks.push({ id: idFor(blocks.length), type: 'voiceover', characterId: null, text: raw.text.trim() });
+      continue;
+    }
+
+    const matched = matchProjectCharacter(charName, projectCharacters);
+    if (!matched) {
+      unresolved.push({ name: charName, type: raw.type });
+      continue;
+    }
+    if (narrator) {
+      blocks.push({ id: idFor(blocks.length), type: 'voiceover', characterId: matched.id, text: raw.text.trim() });
+      continue;
+    }
+    blocks.push({
+      id: idFor(blocks.length),
+      type: 'dialogue',
+      characterId: matched.id,
+      text: raw.text.trim(),
+      delivery: raw.delivery?.trim() || undefined,
+    });
+  }
+
+  return { blocks, unresolved };
+}
+
+function paragraphIndex(id: string): number | null {
+  const match = /^p_(\d+)$/.exec(id);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Events the outline model left off every beat still have to be dramatized.
+ * Attach each one to the beat whose source paragraphs are nearest, preferring
+ * the earlier beat on a tie, instead of pasting them all onto the last scene.
+ */
+export function assignUnassignedMustKeepEvents(outline: ScriptOutline): ScriptOutline {
+  const events = outline.mustKeepEvents;
+  const beats = outline.beats.map((beat) => ({ ...beat, eventIds: [...(beat.eventIds || [])] }));
+  if (!beats.length) return { ...outline, beats };
+
+  const assigned = new Set(beats.flatMap((beat) => beat.eventIds));
+  const unassigned = events.filter((event) => !assigned.has(event.id));
+  const anchorOf = (ids: string[]): number | null => {
+    const indexes = ids.map(paragraphIndex).filter((index): index is number => index != null);
+    return indexes.length ? Math.min(...indexes) : null;
+  };
+  const ordered = [...unassigned].sort((a, b) => {
+    const left = anchorOf(a.sourceParagraphIds || []);
+    const right = anchorOf(b.sourceParagraphIds || []);
+    if (left == null && right == null) return 0;
+    if (left == null) return 1;
+    if (right == null) return -1;
+    return left - right;
+  });
+
+  for (const event of ordered) {
+    const eventAnchor = anchorOf(event.sourceParagraphIds || []);
+    let chosen = beats[beats.length - 1]!;
+    if (eventAnchor != null) {
+      let bestDistance = Number.POSITIVE_INFINITY;
+      let bestAnchor = Number.POSITIVE_INFINITY;
+      for (const beat of beats) {
+        const beatParagraphs = beat.eventIds.flatMap((id) =>
+          events.find((item) => item.id === id)?.sourceParagraphIds || []
+        );
+        const beatAnchor = anchorOf(beatParagraphs);
+        if (beatAnchor == null) continue;
+        const distance = Math.abs(beatAnchor - eventAnchor);
+        const earlierTie = distance === bestDistance && beatAnchor <= eventAnchor && beatAnchor < bestAnchor;
+        if (distance < bestDistance || earlierTie) {
+          bestDistance = distance;
+          bestAnchor = beatAnchor;
+          chosen = beat;
+        }
+      }
+    }
+    chosen.eventIds.push(event.id);
+  }
+
+  return { ...outline, beats };
 }
 
 export class ScriptGenerationService {
@@ -388,6 +521,7 @@ export class ScriptGenerationService {
         eventIds: b.eventIds || [],
       })),
       endingHook: outlineResult.endingHook.trim(),
+      visibleBeats: extractVisibleBeats(paragraphs),
     };
 
     return { outline: validatedOutline, sourceSnapshot };
@@ -504,6 +638,9 @@ export class ScriptGenerationService {
       });
       outline = drafted.outline;
     }
+    if (!outline.visibleBeats?.length) {
+      outline = { ...outline, visibleBeats: extractVisibleBeats(paragraphs) };
+    }
 
     // Enforce budget limits
     if (outline.beats.length > 12) {
@@ -520,18 +657,11 @@ export class ScriptGenerationService {
     }
     const generatedScenes: ScriptScene[] = [];
     const anchoredEventIds: string[] = [];
+    const claimedVisibleIds = new Set<string>();
     const locations = [...(script.document.locations || [])];
     const props = [...script.document.props];
 
-    // Ensure all mustKeepEvents are allocated to beats so none are dropped
-    const assignedEventIds = new Set(outline.beats.flatMap((b) => b.eventIds || []));
-    const unassignedEvents = outline.mustKeepEvents.filter((e) => !assignedEventIds.has(e.id));
-    if (unassignedEvents.length > 0 && outline.beats.length > 0) {
-      outline.beats[outline.beats.length - 1]!.eventIds = [
-        ...(outline.beats[outline.beats.length - 1]!.eventIds || []),
-        ...unassignedEvents.map((e) => e.id),
-      ];
-    }
+    outline = assignUnassignedMustKeepEvents(outline);
 
     const charactersPrompt =
       projectCharacters.length > 0
@@ -597,6 +727,14 @@ export class ScriptGenerationService {
         : '剧集开端第一场，直接切入核心冲突或突发情境';
 
       const verbatimEvents = matchedEvents.map((event) => event.text.trim()).filter(Boolean);
+      const visibleForScene = (outline.visibleBeats || []).filter((beat) =>
+        (beat.sourceParagraphIds || []).some((pid) => sceneParagraphIds.has(pid))
+      );
+      for (const beat of visibleForScene) claimedVisibleIds.add(beat.id);
+      const promptBeats = sIdx === totalScenes - 1
+        ? [...visibleForScene, ...(outline.visibleBeats || []).filter((beat) => !claimedVisibleIds.has(beat.id))]
+        : visibleForScene;
+      const visibleSentences = promptBeats.map((beat) => beat.text.trim()).filter(Boolean);
       const scenePrompt = formatPrompt(getPrompt('script_scene_gen'), {
         chapterTitle: chapter.title || '第1章',
         outlineSummary: `一句话梗概: ${outline.logline}\n结尾钩子: ${outline.endingHook}`,
@@ -609,6 +747,8 @@ export class ScriptGenerationService {
         instructions: params.instructions || '将小说叙事转化为外部动作表演与高张力台词对白',
       }) + (verbatimEvents.length
         ? `\n\n本场至少一个 action.text 必须原样包含下列完整句子，不要改写：\n${verbatimEvents.join('\n')}`
+        : '') + (visibleSentences.length
+        ? `\n\n本场可见画面必须写入 action.text，对白和画外音不算覆盖。逐句保留服装、姿态和身体接触：\n${visibleSentences.join('\n')}`
         : '');
 
       let attemptPrompt = scenePrompt;
@@ -653,22 +793,17 @@ export class ScriptGenerationService {
         }
 
         const sceneCharacterIds = new Set<number>();
-        const sceneBlocks: ScriptBlock[] = [];
+        const performance = resolvePerformanceBlocks(
+          rawScene.blocks,
+          projectCharacters,
+          (index) => `b_${sIdx + 1}_${index + 1}`,
+          attempt === 1,
+        );
+        const sceneBlocks = performance.blocks;
 
-        for (let bIdx = 0; bIdx < rawScene.blocks.length; bIdx++) {
-          const b = rawScene.blocks[bIdx]!;
-          const blockId = `b_${sIdx + 1}_${bIdx + 1}`;
-
-          if (b.type === 'action') {
-            sceneBlocks.push({ id: blockId, type: 'action', text: b.text.trim() });
-          } else if (b.type === 'dialogue' || b.type === 'voiceover') {
-            const spoken = spokenBlock(b, projectCharacters, (charName) =>
-              `未知角色: 第 ${sIdx + 1} 场模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。请先在角色中心建立该角色档案。`
-            );
-            if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
-            sceneBlocks.push({ id: blockId, ...spoken });
-          } else if (b.type === 'sound') {
-            sceneBlocks.push({ id: blockId, type: 'sound', text: b.text.trim() });
+        for (const block of sceneBlocks) {
+          if ((block.type === 'dialogue' || block.type === 'voiceover') && block.characterId != null) {
+            sceneCharacterIds.add(block.characterId);
           }
         }
 
@@ -683,9 +818,24 @@ export class ScriptGenerationService {
           if (verifyEventContentCoverage(ev.text, sceneFullText)) verifiedSceneEventIds.add(ev.id);
         }
         const missingBeatEvents = matchedEvents.filter((event) => !verifiedSceneEventIds.has(event.id));
-        if (missingBeatEvents.length > 0 && attempt === 0) {
-          attemptPrompt = `${scenePrompt}\n\n上次草稿没有原样写入必保事件。请重写，并让 action.text 逐字包含这些完整句子：\n${missingBeatEvents.map((event) => event.text).join('\n')}`;
+        if ((performance.unresolved.length > 0 || missingBeatEvents.length > 0) && attempt === 0) {
+          const notes: string[] = [];
+          if (missingBeatEvents.length > 0) {
+            notes.push(`上次草稿没有原样写入必保事件。请重写，并让 action.text 逐字包含这些完整句子：\n${missingBeatEvents.map((event) => event.text).join('\n')}`);
+          }
+          if (performance.unresolved.length > 0) {
+            const roster = projectCharacters.map((character) => character.name).join('、') || '（当前无角色档案）';
+            const shown = performance.unresolved.map((item) => item.name || '（空）').join('、');
+            notes.push(`上次草稿的说话人无法对应角色库：${shown}。对白 characterName 只能填写这些姓名：${roster}。不要用昵称或职位。没有明确说话人时不要写 dialogue，把那句改成 action。旁白使用 voiceover，characterName 填“旁白”。`);
+          }
+          attemptPrompt = `${scenePrompt}\n\n${notes.join('\n\n')}`;
           continue;
+        }
+        if (performance.unresolved.length > 0) {
+          const first = performance.unresolved[0]!;
+          const message = `未知角色: 第 ${sIdx + 1} 场模型${first.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${first.name}"，但在项目角色库中未找到。请先在角色中心建立该角色档案。`;
+          logger.error(message);
+          throw new ScriptGenerationError(message, 400);
         }
         if (missingBeatEvents.length > 0) {
           for (const event of missingBeatEvents) {
@@ -724,6 +874,8 @@ export class ScriptGenerationService {
 
       generatedScenes.push(stableScene!);
     }
+
+    const anchoredVisibleBeatIds = anchorMissingVisibleBeats(generatedScenes, outline.visibleBeats || []);
 
     // Step 3: Full Document Assembly & Validation
     const fullDocument: ScriptDocument = {
@@ -768,6 +920,7 @@ export class ScriptGenerationService {
         targetDurationSec: params.targetDurationSec,
         scenesCount: generatedScenes.length,
         ...(anchoredEventIds.length ? { anchoredEventIds } : {}),
+        ...(anchoredVisibleBeatIds.length ? { anchoredVisibleBeatIds } : {}),
         ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
       },
     });
@@ -875,32 +1028,24 @@ export class ScriptGenerationService {
       );
     }
 
-    // Resolve cast and blocks
+    const performance = resolvePerformanceBlocks(
+      rawScene.blocks,
+      projectCharacters,
+      (index) => `b_rw_${index + 1}_${Date.now()}`,
+      true,
+    );
+    if (performance.unresolved.length > 0) {
+      const first = performance.unresolved[0]!;
+      throw new ScriptGenerationError(
+        `未知角色: 改写分场中模型${first.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${first.name}"，但在项目角色库中未找到。`,
+        400,
+      );
+    }
+    const sceneBlocks = performance.blocks;
     const sceneCharacterIds = new Set<number>();
-    const sceneBlocks: ScriptBlock[] = [];
-
-    for (let bIdx = 0; bIdx < rawScene.blocks.length; bIdx++) {
-      const b = rawScene.blocks[bIdx]!;
-      const blockId = `b_rw_${bIdx + 1}_${Date.now()}`;
-
-      if (b.type === 'action') {
-        sceneBlocks.push({
-          id: blockId,
-          type: 'action',
-          text: b.text.trim(),
-        });
-      } else if (b.type === 'dialogue' || b.type === 'voiceover') {
-        const spoken = spokenBlock(b, projectCharacters, (charName) =>
-          `未知角色: 改写分场中模型${b.type === 'voiceover' ? '画外音' : '对白'}引用了角色 "${charName}"，但在项目角色库中未找到。`
-        );
-        if (spoken.characterId != null) sceneCharacterIds.add(spoken.characterId);
-        sceneBlocks.push({ id: blockId, ...spoken });
-      } else if (b.type === 'sound') {
-        sceneBlocks.push({
-          id: blockId,
-          type: 'sound',
-          text: b.text.trim(),
-        });
+    for (const block of sceneBlocks) {
+      if ((block.type === 'dialogue' || block.type === 'voiceover') && block.characterId != null) {
+        sceneCharacterIds.add(block.characterId);
       }
     }
 

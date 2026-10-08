@@ -11,7 +11,10 @@ import {
   StoryboardGenerationError,
   normalizeStoryboardReferences,
   compactStoryboardShots,
+  resolvePrimaryAction,
+  validateStoryboardCoverage,
 } from './storyboard_generation_service';
+import { draftEnglishFromCues, setVisualPromptTranslatorForTests, setVisualPromptVerifierForTests } from '../english_visual_prompt';
 import type { AIProvider } from './base';
 import type { z } from 'zod';
 import {
@@ -21,6 +24,8 @@ import {
 
 // Helper to set up clean in-memory test database fixture
 async function setupTestFixture() {
+  setVisualPromptTranslatorForTests(async (prompt) => draftEnglishFromCues(prompt) || 'adult figures, visible action preserved');
+  setVisualPromptVerifierForTests(async (facts, english) => ({ facts: facts.map((_, id) => ({ id, status: 'preserved', evidence: english })) }));
   await db.exec(`
     DELETE FROM generation_task;
     DELETE FROM coverage_shot;
@@ -841,7 +846,10 @@ test('storyboard uses project NSFW policy, inherits the system default, and pres
     assert.equal(info.visual_prompt_policy_version, 1);
     const firstShot = JSON.parse(candidate.after_json).shots[0];
     assert.equal(JSON.parse(firstShot.shot_spec).primary_action, visibleAction);
-    assert.ok(firstShot.visual_prompt.includes(visibleAction));
+    assert.match(firstShot.visual_prompt, /robe/i);
+    assert.match(firstShot.visual_prompt, /glove/i);
+    assert.match(firstShot.visual_prompt, /embrace/i);
+    assert.doesNotMatch(firstShot.visual_prompt, /[\u3400-\u9fff]/);
   }
   // Only the effective mode changes the policy, not its source (project/system).
   assert.equal(new Set(receivedPrompts).size, 2);
@@ -878,6 +886,113 @@ test('storyboard uses project NSFW policy, inherits the system default, and pres
     scriptId: script.id, changeId: candidates[0]!.id, expectedRevision: confirmed.revision,
   });
   const firstScene = await db.get('SELECT visual_prompt, shot_spec FROM scene WHERE id=?', adopted.scene_ids[0]);
-  assert.ok(firstScene.visual_prompt.includes(visibleAction));
+  assert.match(firstScene.visual_prompt, /robe/i);
+  assert.match(firstScene.visual_prompt, /glove/i);
+  assert.match(firstScene.visual_prompt, /embrace/i);
+  assert.doesNotMatch(firstScene.visual_prompt, /[\u3400-\u9fff]/);
   assert.equal(JSON.parse(firstScene.shot_spec).primary_action, visibleAction);
+});
+
+test('primary_action keeps owned action text and does not paste one line onto neighboring shots', () => {
+  const doc = buildValidConfirmedScript(1, 2);
+  const owned = resolvePrimaryAction(doc, {
+    script_scene_id: 'scene_1',
+    block_ids: ['blk_1_act'],
+    primary_action: '旁白响起',
+    shot_type: 'Wide Shot',
+  });
+  assert.equal(owned, '陆尘持青锋古剑破风而立，白衣染血。');
+
+  const distinct = resolvePrimaryAction(doc, {
+    script_scene_id: 'scene_1',
+    block_ids: ['blk_1_dia1'],
+    primary_action: '两人在悬崖边相视对话',
+    shot_type: 'Medium Shot',
+  });
+  assert.equal(distinct, '两人在悬崖边相视对话');
+
+  const copied = resolvePrimaryAction(doc, {
+    script_scene_id: 'scene_1',
+    block_ids: ['blk_1_dia1', 'blk_1_dia2'],
+    primary_action: '九千级台阶，我终究是走上来了。',
+    shot_type: 'Medium Shot',
+  });
+  const narrated = resolvePrimaryAction(doc, {
+    script_scene_id: 'scene_1',
+    block_ids: ['blk_1_vo'],
+    primary_action: '旁白响起',
+    shot_type: 'Close-up',
+  });
+  assert.match(copied, /^Medium Shot: 陆尘持青锋古剑/);
+  assert.match(narrated, /^Close-up: 陆尘持青锋古剑/);
+  assert.notEqual(copied, narrated);
+});
+
+test('storyboard requires both anchored and already-covered visible actions', () => {
+  const doc = buildValidConfirmedScript(1, 2);
+  doc.outline.visibleBeats = [{ id: 'vb_1', text: '摘下手套并拥抱来客', sourceParagraphIds: ['p_1'] }];
+  doc.scenes[0]!.blocks.push({ id: 'vis_vb_1', type: 'action', text: '摘下手套并拥抱来客' });
+  const shots = doc.scenes.map(scene => ({ script_scene_id: scene.id, block_ids: scene.blocks.filter(b => !b.id.startsWith('vis_')).map(b => b.id) }));
+  assert.throws(() => validateStoryboardCoverage(doc, shots), /遗漏可见动作/);
+  shots[0]!.block_ids.push('vis_vb_1');
+  assert.doesNotThrow(() => validateStoryboardCoverage(doc, shots));
+  assert.match(resolvePrimaryAction(doc, { ...shots[0]!, primary_action: '人物站立' }), /摘下手套并拥抱来客/);
+  // Visible facts already present in ordinary action blocks are required too.
+  doc.scenes[0]!.blocks.at(-1)!.id = 'ordinary_visible';
+  shots[0]!.block_ids.pop();
+  assert.throws(() => validateStoryboardCoverage(doc, shots), /分镜遗漏可见事实/);
+});
+
+test('long owned actions fail explicitly instead of truncating a trailing visible beat', () => {
+  const doc = buildValidConfirmedScript(1, 2);
+  doc.scenes[0]!.blocks[0]!.text = '她沿着走廊缓缓前进。'.repeat(25);
+  doc.scenes[0]!.blocks.push({ id: 'vis_vb_1', type: 'action', text: '摘下手套并拥抱来客' });
+  assert.throws(() => resolvePrimaryAction(doc, {
+    script_scene_id: 'scene_1', block_ids: ['blk_1_act', 'vis_vb_1'], primary_action: '人物站立',
+  }), /超过 240 字.*不能截断/);
+});
+
+test('visible beat gates reject model omissions and tampered candidates before timeline writes', async () => {
+  const fixture = await setupTestFixture();
+  const script = await ScriptService.createOrGetScript(fixture.chapterId);
+  const doc = buildValidConfirmedScript(fixture.charId, fixture.char2Id);
+  doc.outline.visibleBeats = [{ id: 'vb_1', text: '她摘下手套并拥抱来客', sourceParagraphIds: ['p_1'] }];
+  doc.scenes[0]!.blocks.push({ id: 'vis_vb_1', type: 'action', text: doc.outline.visibleBeats[0]!.text });
+  await ScriptService.saveManualScript({ scriptId: script.id, document: doc, expectedRevision: 1 });
+  const confirmed = await ScriptService.confirmScript({ scriptId: script.id, expectedRevision: 2 });
+  const shots = [
+    { script_scene_id: 'scene_1', block_ids: ['blk_1_act', 'blk_1_snd'], shot_intent: 'establish', location: '万仞孤峰断崖', primary_action: '持剑站立', key_props: ['古剑'] },
+    { script_scene_id: 'scene_1', block_ids: ['blk_1_dia1', 'blk_1_dia2', 'blk_1_vo'], shot_intent: 'wide-action', location: '万仞孤峰断崖', primary_action: '两人在悬崖交谈' },
+    { script_scene_id: 'scene_2', block_ids: ['blk_2_act', 'blk_2_snd'], shot_intent: 'insert', location: '九龙天碑前', primary_action: '手掌按住石碑', key_props: ['古剑'] },
+    { script_scene_id: 'scene_2', block_ids: ['blk_2_dia', 'blk_2_vo'], shot_intent: 'payoff', location: '九龙天碑前', primary_action: '石碑爆发金色光芒' },
+  ];
+  const provider: AIProvider = {
+    async generateStructured(_prompt, schema) { return schema.parse({ shots }); },
+    async generateText() { throw new Error('Unexpected model call'); },
+    async generateImage() { throw new Error('Unexpected image call'); },
+  };
+  await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({
+    scriptId: script.id, expectedRevision: confirmed.revision, requestKey: 'visible-omitted', provider,
+  }), /遗漏可见动作/);
+  shots[0]!.block_ids.push('vis_vb_1');
+  const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
+    scriptId: script.id, expectedRevision: confirmed.revision, requestKey: 'visible-complete', provider,
+  });
+  const payload = JSON.parse(candidate.after_json);
+  assert.match(JSON.parse(payload.shots[0].shot_spec).primary_action, /摘下手套并拥抱来客/);
+  const tampered = structuredClone(payload);
+  const spec = JSON.parse(tampered.shots[0].shot_spec);
+  spec.primary_action = '陆尘持剑站立';
+  tampered.shots[0].shot_spec = JSON.stringify(spec);
+  await db.run('UPDATE script_change SET after_json = ? WHERE id = ?', JSON.stringify(tampered), candidate.id);
+  await assert.rejects(() => StoryboardGenerationService.applyStoryboardCandidate({
+    scriptId: script.id, changeId: candidate.id, expectedRevision: confirmed.revision,
+  }), /镜头动作遗漏/);
+  await db.run('UPDATE script_change SET after_json = ? WHERE id = ?', candidate.after_json, candidate.id);
+  setVisualPromptVerifierForTests(async (facts, english) => ({ facts: facts.map((_, id) => ({ id, status: 'missing', evidence: english })) }));
+  await assert.rejects(() => StoryboardGenerationService.applyStoryboardCandidate({
+    scriptId: script.id, changeId: candidate.id, expectedRevision: confirmed.revision,
+  }), /dropped visible facts/);
+  const count = await db.get('SELECT COUNT(*) AS n FROM scene WHERE chapter_id = ?', fixture.chapterId);
+  assert.equal(count.n, 0);
 });
