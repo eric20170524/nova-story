@@ -217,6 +217,9 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
 
         <form onSubmit={onSave} className="p-4 sm:p-6 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400">固定英文译名
+              <input maxLength={120} value={editingChar.english_name || ''} onChange={event => setEditingChar({ ...editingChar, english_name: event.target.value })} className="w-full mt-1 border rounded-xl px-3 py-2 dark:bg-slate-950" placeholder="未填写时使用音译" />
+            </label>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">{t('characters.name')}</label>
               <input

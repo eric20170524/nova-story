@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { db } from '../db/database';
+import { bindEntities, entityRoster, textHash, validateBinding, refreshActionBindings } from './entity_binding';
 import { parseProjectSettings } from './project_settings';
 import {
   ScriptDocumentSchema,
@@ -469,6 +470,14 @@ export class ScriptService {
       }
 
       const newRevision = row.revision + 1;
+      const chapter = await db.get('SELECT project_id FROM chapter WHERE id=?', row.chapter_id);
+      const roster = entityRoster(await db.all('SELECT id,name FROM character WHERE project_id=? ORDER BY id', chapter.project_id));
+      for (const event of document.outline.mustKeepEvents) {
+        if (!event.binding || event.binding.text_hash !== textHash(event.text)) event.binding = bindEntities(event.text, roster);
+        validateBinding(event.binding, event.text, roster);
+        for (const source of event.sourceBindings || []) validateBinding(source.binding, source.text, roster);
+      }
+      refreshActionBindings(document, roster);
       const docJson = JSON.stringify(document);
 
       await db.run(
@@ -546,10 +555,12 @@ export class ScriptService {
 
     // Query project characters for validation (SC02)
     const projectChars = (await db.all(
-      'SELECT id FROM character WHERE project_id = ?',
+      'SELECT id,name FROM character WHERE project_id = ?',
       currentScript.projectId
-    )) as Array<{ id: number }>;
+    )) as Array<{ id: number; name: string }>;
     const validProjectCharacterIds = new Set(projectChars.map((c) => c.id));
+    const roster = entityRoster(projectChars);
+    refreshActionBindings(currentScript.document, roster);
 
     // Validate completeness and references (SC02)
     const validation = validateScriptForConfirmation(currentScript.document, {
@@ -590,6 +601,7 @@ export class ScriptService {
 
       const newRevision = row.revision + 1;
       let snapshotJson = row.source_snapshot_json;
+      const confirmedJson = JSON.stringify(currentScript.document);
       let contentHash = row.source_content_hash;
       let contextHash = row.source_context_hash;
 
@@ -613,12 +625,13 @@ export class ScriptService {
       await db.run(
         `UPDATE chapter_script
          SET revision = ?, status = 'confirmed', source_snapshot_json = ?,
-             source_content_hash = ?, source_context_hash = ?, updated_at = CURRENT_TIMESTAMP
+             source_content_hash = ?, source_context_hash = ?, document_json = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         newRevision,
         snapshotJson,
         contentHash,
         contextHash,
+        confirmedJson,
         row.id
       );
 
@@ -640,10 +653,10 @@ export class ScriptService {
         newRevision,
         requestKey,
         row.document_json,
-        row.document_json,
+        confirmedJson,
         snapshotJson,
         newRevision,
-        row.document_json,
+        confirmedJson,
         refreshedShotIds.length ? JSON.stringify({ prop_enrichment_source_refresh: { shot_ids: refreshedShotIds } }) : null
       );
 
@@ -949,6 +962,11 @@ export class ScriptService {
       if (!res.success) {
         throw new ScriptServiceError(`Invalid storyboard payload: ${res.error.message}`, 400);
       }
+      const { StoryboardGenerationService } = await import('./ai/storyboard_generation_service');
+      const current = await this.getScriptById(params.scriptId);
+      if (current.revision !== params.expectedRevision || current.freshness.sourceChanged) throw new ScriptServiceError('剧本版本或来源已变化', 409);
+      // The shared validator audits edited content; previous hash records cannot authorize it.
+      await StoryboardGenerationService.auditPayload(res.data, current);
     }
 
     const updated = await db.run(

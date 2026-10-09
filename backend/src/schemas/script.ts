@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { ShotSourceReferenceSchema, type ShotSourceReference } from './shot_contract';
+import { StoryboardFactContractSchema } from './storyboard_facts';
+import { EntityBindingSchema } from './entity_binding';
 
 /**
  * ScriptDocument Schema & Types
@@ -17,6 +19,7 @@ export const ScriptActionBlockSchema = z.object({
   id: z.string().min(1),
   type: z.literal('action'),
   text: z.string().min(1),
+  binding: EntityBindingSchema.optional(),
 });
 
 export const ScriptDialogueBlockSchema = z.object({
@@ -69,6 +72,8 @@ export const ScriptMustKeepEventSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
   sourceParagraphIds: z.array(z.string()).default([]),
+  binding: EntityBindingSchema.optional(),
+  sourceBindings: z.array(z.object({ paragraph_id: z.string(), text: z.string(), binding: EntityBindingSchema })).optional(),
 });
 
 export const ScriptOutlineSchema = z.object({
@@ -399,12 +404,25 @@ export function validateScriptForConfirmation(
   doc: ScriptDocument,
   options?: {
     validProjectCharacterIds?: Set<number> | number[];
+    allowPendingBindings?: boolean;
   }
 ): {
   valid: boolean;
   errors: string[];
 } {
   const errors: string[] = [];
+  for (const event of doc.outline.mustKeepEvents) {
+    if (event.binding && event.binding.text_hash !== crypto.createHash('sha256').update(event.text).digest('hex')) errors.push(`提纲人物绑定与文本版本不符: ${event.id}`);
+    if (!options?.allowPendingBindings && [event.binding, ...(event.sourceBindings || []).map(s => s.binding)].some(binding => binding?.mentions.some(m => !m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain'))) errors.push(`提纲人物绑定待核对: ${event.id}`);
+  }
+  for (const scene of doc.scenes) for (const block of scene.blocks) {
+    if (block.type === 'action' && block.binding && block.binding.text_hash !== crypto.createHash('sha256').update(block.text).digest('hex')) errors.push(`人物绑定与文本版本不符: ${scene.id}/${block.id}`);
+  }
+  if (!options?.allowPendingBindings) {
+    for (const scene of doc.scenes) for (const block of scene.blocks) {
+      if (block.type === 'action' && block.binding?.mentions.some(m => !m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain')) errors.push(`人物绑定待核对: ${scene.id}/${block.id}`);
+    }
+  }
 
   if (!doc.scenes || doc.scenes.length === 0) {
     errors.push('剧本正文至少需要包含一场戏，仅有改编提纲无法确认剧本或交由导演制作');
@@ -681,6 +699,10 @@ export const ApplyScriptCandidateBodySchema = z.object({
 export type ApplyScriptCandidateBody = z.infer<typeof ApplyScriptCandidateBodySchema>;
 
 export const StoryboardCandidateShotSchema = z.object({
+  fact_ids: z.array(z.string()).optional(),
+  hold_fact_ids: z.array(z.string()).optional(),
+  audio_fact_ids: z.array(z.string()).optional(),
+  primary_fact_id: z.string().nullable().optional(),
   index: z.number().int().min(1),
   script_scene_id: z.string().min(1),
   block_ids: z.array(z.string()).default([]),
@@ -699,7 +721,8 @@ export const StoryboardCandidateShotSchema = z.object({
 export type StoryboardCandidateShot = z.infer<typeof StoryboardCandidateShotSchema>;
 
 export const StoryboardCandidatePayloadSchema = z.object({
-  schemaVersion: z.literal(1).default(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
+  fact_contract: StoryboardFactContractSchema.optional(),
   scriptId: z.number().int(),
   scriptRevision: z.number().int(),
   chapterId: z.string(),
@@ -718,6 +741,7 @@ export const StoryboardCandidatePayloadSchema = z.object({
 export type StoryboardCandidatePayload = z.infer<typeof StoryboardCandidatePayloadSchema>;
 
 export const CreateStoryboardCandidateBodySchema = z.object({
+  background: z.boolean().optional().default(false),
   expected_revision: z.number().int().min(1),
   request_key: z.string().min(1),
   instructions: z.string().optional(),
@@ -746,6 +770,16 @@ export function remapScriptDocumentCharacters<T = unknown>(
 ): T {
   if (!doc || typeof doc !== 'object') return doc;
   const cloned = JSON.parse(JSON.stringify(doc));
+  const remapBinding = (binding: any) => {
+    for (const mention of binding?.mentions || []) for (const entity of [mention.entity, ...(mention.candidates || [])]) {
+      const match = /^character:(\d+)$/u.exec(entity?.id || '');
+      if (match && charMap.has(Number(match[1]))) entity.id = `character:${charMap.get(Number(match[1]))}`;
+    }
+  };
+  for (const event of cloned.outline?.mustKeepEvents || []) {
+    remapBinding(event.binding);
+    for (const source of event.sourceBindings || []) remapBinding(source.binding);
+  }
 
   const scenes = Array.isArray(cloned.scenes) ? cloned.scenes
     : (Array.isArray(cloned.blocks) ? [cloned] : []);
@@ -759,6 +793,7 @@ export function remapScriptDocumentCharacters<T = unknown>(
     if (Array.isArray(scene.blocks)) {
       for (const block of scene.blocks) {
         if (block && typeof block === 'object') {
+          remapBinding(block.binding);
           if (typeof block.characterId === 'number' && charMap.has(block.characterId)) {
             block.characterId = charMap.get(block.characterId)!;
           }

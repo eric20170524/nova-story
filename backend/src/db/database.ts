@@ -739,6 +739,13 @@ const migrations: Migration[] = [
           AND json_valid(scene.shot_spec)
       ) WHERE english_visual_prompt IS NULL`);
     }
+  },
+  {
+    version: '022_asset_translation_names',
+    up: async database => {
+      await ensureColumns(database, 'library_asset', { english_name: "TEXT NOT NULL DEFAULT ''" });
+      await ensureColumns(database, 'character', { english_name: "TEXT NOT NULL DEFAULT ''" });
+    }
   }
 ];
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ContinuityStateSchema, VisualFactSchema, type VisualFact } from './storyboard_facts';
 
 export const SHOT_INTENTS = [
   'establish',
@@ -31,6 +32,7 @@ export const ShotSourceReferenceSchema = z.object({
   script_scene_id: z.string().optional().nullable(),
   block_ids: z.array(z.string()).optional().nullable(),
 });
+export const AudibleBlockSchema = z.object({ id: z.string(), type: z.enum(['dialogue', 'voiceover', 'sound']), text: z.string(), characterId: z.number().int().nullable().optional(), delivery: z.string().optional() });
 
 export type ShotSourceReference = z.infer<typeof ShotSourceReferenceSchema>;
 
@@ -39,6 +41,10 @@ export type ShotSourceReference = z.infer<typeof ShotSourceReferenceSchema>;
  * visual_prompt is intentionally NOT required here — compiler fills it.
  */
 export const ShotContractFieldsSchema = z.object({
+  scene_context: z.object({ location_description: z.string(), interior_exterior: z.enum(['interior', 'exterior']), time_of_day: z.string() }).optional(),
+  visual_facts: z.array(VisualFactSchema).optional(),
+  audible_blocks: z.array(AudibleBlockSchema).optional(),
+  continuity_states: z.array(ContinuityStateSchema).optional(),
   shot_intent: ShotIntentSchema.optional(),
   location: z.string().trim().min(2).max(240),
   primary_action: z.string().trim().min(2).max(240),
@@ -74,6 +80,10 @@ export const buildUniquenessKey = (input: {
 
 /** Pack contract JSON for scene.shot_spec TEXT column. */
 export const packShotSpec = (shot: {
+  scene_context?: { location_description: string; interior_exterior: 'interior' | 'exterior'; time_of_day: string };
+  visual_facts?: VisualFact[];
+  audible_blocks?: z.infer<typeof AudibleBlockSchema>[];
+  continuity_states?: z.infer<typeof ContinuityStateSchema>[];
   shot_intent?: string | null;
   location?: string | null;
   primary_action?: string | null;
@@ -111,6 +121,10 @@ export const packShotSpec = (shot: {
     : null;
 
   const payload = {
+    ...(shot.scene_context ? { scene_context: shot.scene_context } : {}),
+    ...(shot.visual_facts ? { visual_facts: shot.visual_facts } : {}),
+    ...(shot.audible_blocks ? { audible_blocks: shot.audible_blocks } : {}),
+    ...(shot.continuity_states ? { continuity_states: shot.continuity_states } : {}),
     shot_intent: shot.shot_intent || null,
     location: location || null,
     primary_action: primary_action || null,

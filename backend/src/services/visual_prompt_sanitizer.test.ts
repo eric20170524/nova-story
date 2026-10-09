@@ -19,6 +19,13 @@ test('deletes metallic ring echo and other sound / smell tokens', () => {
   assert.doesNotMatch(visual_prompt, /scraping sound/i);
   assert.match(visual_prompt, /claw tip touching surface/i);
   assert.match(visual_prompt, /ice pool|glass/i);
+  assert.doesNotMatch(visual_prompt, /glass-like/i);
+  const simile = sanitizeVisualPrompt('Clouds outside the window churn like boiling water.');
+  assert.match(simile.visual_prompt, /churn like boiling water/i);
+  const prose = sanitizeVisualPrompt('Pei Yuhan steadied her waist, while the other hand gently stroked the back of Nangong Xue\'s sweat-dampened neck. Nangong Xue trembled all over at the sound, strands of hair stuck to her cheek');
+  assert.match(prose.visual_prompt, /sweat-dampened neck/i);
+  assert.match(prose.visual_prompt, /trembled all over at the sound/i);
+  assert.match(prose.visual_prompt, /strands of hair/i);
   // sound phrase removed; optional scale negatives may be attached when phrase was seen
   void negative_extras;
 });
@@ -53,6 +60,15 @@ test('strips environmental storytelling and keeps visible music-note props', () 
   assert.doesNotMatch(visual_prompt, /silent atmosphere/i);
   assert.match(visual_prompt, /music-note button/i);
   assert.match(visual_prompt, /european arcade/i);
+});
+
+test('keeps the visible clause after a simile colon', () => {
+  const { visual_prompt } = sanitizeVisualPrompt('As if holding some ceremony: the moon-white undergarment half-open, claw tip touching surface');
+  assert.match(visual_prompt, /moon-white undergarment half-open/i);
+  assert.match(visual_prompt, /claw tip touching surface/i);
+  const stripped = sanitizeVisualPrompt('as if the room were only a mood, claw tip touching surface');
+  assert.doesNotMatch(stripped.visual_prompt, /\bas if\b/i);
+  assert.match(stripped.visual_prompt, /claw tip touching surface/i);
 });
 
 test('does not leave score_9 or dreamcore project prefixes', () => {

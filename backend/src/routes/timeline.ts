@@ -112,7 +112,7 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
       };
     } catch (error: any) {
       const message = error?.message || String(error);
-      return reply.status(500).send({
+      return reply.status(error.statusCode || 500).send({
         detail: message.startsWith('Failed')
           ? message
           : `Failed to generate timeline: ${message}`,

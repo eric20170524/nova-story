@@ -72,15 +72,28 @@ const METAPHOR_RULES: MetaphorRule[] = [
 ];
 
 /** Unlisted X-like / as if → drop rhetoric, keep noun if present. */
-const GENERIC_LIKE_PATTERN = /\b([\w][\w-]*)[- ]like\b/i;
+const GENERIC_LIKE_PATTERN = /\b([\w][\w-]*)-like\b/i;
 const AS_IF_PATTERN = /\bas if\b[^.|,]*/i;
+
+const proseRemainder = (token: string): string[] => token
+  .replace(/^\(+/, '')
+  .replace(/\)+$/, '')
+  .replace(/:\d+(?:\.\d+)?$/, '')
+  .replace(/\b(?:sound|sounds|echo|echoes|creak|creaking|scraping sound|music playing|scent|smell|aroma|fragrance|odour|odor|loneliness|determination)\b/gi, ' ')
+  .replace(/\bemptiness in the heart\b/gi, ' ')
+  .replace(/\bmetallic ring echo\b/gi, ' ')
+  .replace(/\bring echo\b/gi, ' ')
+  .split(/[^\p{L}\p{N}]+/u)
+  .filter(word => word.length > 1);
 
 const isNonVisualToken = (token: string): boolean => {
   const lower = token.toLowerCase().trim();
   if (!lower) return true;
   if (NON_VISUAL_EXACT_TOKENS.has(lower)) return true;
   if (PRESERVE_DESPITE_SOUND.test(token)) return false;
-  return NON_VISUAL_TOKEN_PATTERNS.some((pattern) => pattern.test(token));
+  if (!NON_VISUAL_TOKEN_PATTERNS.some(pattern => pattern.test(token))) return false;
+  // A comma chunk of a visible action can mention a sound. Drop only a tag that is the sound itself.
+  return proseRemainder(token).length < 3;
 };
 
 const applyMetaphorToToken = (
@@ -98,7 +111,8 @@ const applyMetaphorToToken = (
   }
 
   let next = token;
-  if (AS_IF_PATTERN.test(next)) {
+  // A colon marks a visible clause after the simile. Keep that clause in the image prompt.
+  if (AS_IF_PATTERN.test(next) && !/[：:]/.test(next)) {
     next = next.replace(AS_IF_PATTERN, '').replace(/\s+/g, ' ').trim();
   }
   if (GENERIC_LIKE_PATTERN.test(next) && !/\bcloud[- ]like\b/i.test(next)) {

@@ -102,7 +102,7 @@ test('AgentExecutor batch continues after error (non-atomic)', async () => {
   assert.equal(row.title, 'Still Works');
 });
 
-test('generateAndReplaceNarrativeTimeline is transactional with scene_version baseline', async () => {
+test('正文直写 API 服务和 Agent 均停用，原时间线不变且不调用模型', async () => {
   const { db } = await import('../../db/database');
   const { LLMService } = await import('../llm');
   const { generateAndReplaceNarrativeTimeline } = await import(
@@ -124,87 +124,36 @@ test('generateAndReplaceNarrativeTimeline is transactional with scene_version ba
   );
 
   const prev = LLMService.generateTimeline;
-  LLMService.generateTimeline = async () => [
-    {
-      visual_prompt: 'new shot',
-      audio_prompt: 'bgm',
-      dialogue: '',
-      duration: 3,
-      shot_type: 'medium',
-      camera_movement: 'static',
-      camera_angle: 'eye_level',
-      location: 'training yard',
-      primary_action: 'hero raises sword',
-      shot_intent: 'medium-action',
-      key_props: ['sword'],
-    },
-    {
-      visual_prompt: 'close up',
-      audio_prompt: '',
-      dialogue: 'Go!',
-      duration: 2.5,
-      shot_type: 'close_up',
-      camera_movement: 'static',
-      camera_angle: 'eye_level',
-      location: 'training yard',
-      primary_action: 'hero face reaction',
-      shot_intent: 'reaction',
-      key_props: [],
-    },
-  ];
+  let calls = 0;
+  LLMService.generateTimeline = async () => { calls++; throw new Error('直写不应调用模型'); };
 
   try {
-    const result = await generateAndReplaceNarrativeTimeline({
+    await assert.rejects(() => generateAndReplaceNarrativeTimeline({
       chapterId: 'tl-ch',
       projectId,
       content: 'Hero fights.',
-    });
-    assert.equal(result.count, 2);
+    }), (error: any) => error.statusCode === 410 && /直写时间线已停用/.test(error.message));
     const scenes = await db.all(
       'SELECT id, visual_prompt FROM scene WHERE chapter_id = ? ORDER BY "index"',
       'tl-ch'
     );
-    assert.equal(scenes.length, 2);
-    assert.match(String(scenes[0].visual_prompt), /hero raises sword|training yard/i);
-    const stored = await db.get(
-      'SELECT shot_spec FROM scene WHERE id = ?',
-      scenes[0].id
-    );
-    assert.match(String(stored?.shot_spec || ''), /training yard/i);
-    for (const s of scenes) {
-      const versions = await db.all(
-        'SELECT version FROM scene_version WHERE scene_id = ?',
-        s.id
-      );
-      assert.equal(versions.length, 1);
-      assert.equal(Number(versions[0].version), 1);
-    }
+    assert.equal(scenes.length, 1);
+    assert.equal(scenes[0].visual_prompt, 'old');
 
     // Agent path uses the same service
     const { AgentExecutor } = await import('./agent_executor');
-    LLMService.generateTimeline = async () => [
-      {
-        visual_prompt: 'from agent',
-        duration: 3,
-        shot_type: 'wide',
-        location: 'battlefield ridge',
-        primary_action: 'hero charges forward',
-        shot_intent: 'wide-action',
-        key_props: [],
-      },
-    ];
     const exec = await AgentExecutor.executeAll(
       [{ op: 'GENERATE_TIMELINE', chapterId: 'tl-ch' }],
       { projectId, chapterId: 'tl-ch', apply: true }
     );
-    assert.equal(exec[0]?.status, 'success');
-    assert.equal((exec[0]?.data as any)?.count, 1);
+    assert.equal(exec[0]?.status, 'error');
     const after = await db.all(
       'SELECT visual_prompt FROM scene WHERE chapter_id = ?',
       'tl-ch'
     );
     assert.equal(after.length, 1);
-    assert.match(String(after[0].visual_prompt), /hero charges|battlefield/i);
+    assert.equal(after[0].visual_prompt, 'old');
+    assert.equal(calls, 0);
   } finally {
     LLMService.generateTimeline = prev;
   }

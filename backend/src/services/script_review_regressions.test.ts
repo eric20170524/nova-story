@@ -63,6 +63,21 @@ function providerFor(value: unknown): AIProvider {
     generateStructured: async <T>(_prompt: string, schema: z.ZodSchema<T>) => schema.parse(value) };
 }
 
+async function validatedStoryboard(f: Awaited<ReturnType<typeof fixture>>) {
+  const provider: AIProvider = {
+    async generateText() { throw new Error('unexpected text'); }, async generateImage() { throw new Error('unexpected image'); },
+    async generateStructured(prompt, schema) {
+      const input = JSON.parse(prompt);
+      if (input.task === 'plan') return schema.parse({ primary_by_slot: Object.fromEntries(input.slots.map((s: any) => [s.id, null])) });
+      if (input.task === 'translate') return schema.parse({ translations: input.facts.map((fact: any) => ({ id: fact.id, english: `A warehouse. Fact ${fact.id}.` })) });
+      if (input.task === 'audit') return schema.parse({ faithful: true });
+      throw new Error(`unexpected task ${input.task}`);
+    },
+  };
+  const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ scriptId: f.script.id, expectedRevision: f.script.revision, requestKey: crypto.randomUUID(), provider });
+  return { candidate, payload: StoryboardCandidatePayloadSchema.parse(JSON.parse(candidate.after_json)) };
+}
+
 test('scene rewrite declares new props in the document and retains unrelated scenes', async () => {
   const f = await fixture();
   const candidate = await ScriptGenerationService.generateSceneRewriteCandidate({
@@ -123,7 +138,7 @@ test('SC04: simultaneous edits accept only one candidate version', async () => {
 
 test('SC08/09: edited storyboard must retain coverage, audio, identities and uniqueness', async () => {
   const f = await fixture();
-  const good = storyboard(f);
+  const good = (await validatedStoryboard(f)).payload;
   const cases = [
     (p: typeof good) => { p.shots.pop(); },
     (p: typeof good) => { p.shots[0]!.dialogue = ''; },
@@ -142,8 +157,10 @@ test('SC08/09: edited storyboard must retain coverage, audio, identities and uni
   for (const [index, mutate] of cases.entries()) {
     const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'storyboard', expectedRevision: f.script.revision, requestKey: `edited_${index}`, afterJson: JSON.stringify(good) });
     const bad = structuredClone(good); mutate(bad);
-    const edited = await ScriptService.updatePendingCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision, expectedCandidateRevision: candidate.candidate_revision, afterJson: JSON.stringify(bad) });
-    await assert.rejects(() => StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision, expectedCandidateRevision: edited.candidate_revision }));
+    await assert.rejects(() => ScriptService.updatePendingCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision, expectedCandidateRevision: candidate.candidate_revision, afterJson: JSON.stringify(bad) }));
+    // Bypassing the editor cannot bypass the same adoption gates.
+    await db.run('UPDATE script_change SET after_json=? WHERE id=?', JSON.stringify(bad), candidate.id);
+    await assert.rejects(() => StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision }));
     assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene WHERE chapter_id = ?', f.chapterId)).n, 0);
     assert.equal((await db.get('SELECT state FROM script_change WHERE id = ?', candidate.id)).state, 'pending');
   }
@@ -151,7 +168,7 @@ test('SC08/09: edited storyboard must retain coverage, audio, identities and uni
 
 test('SC09: script updated between preflight and transaction rejects storyboard', async () => {
   const f = await fixture();
-  const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'storyboard', expectedRevision: f.script.revision, requestKey: 'race', afterJson: JSON.stringify(storyboard(f)) });
+  const { candidate } = await validatedStoryboard(f);
   const originalExec = db.exec;
   let interrupted = false;
   db.exec = async (...args: Parameters<typeof db.exec>) => {
@@ -170,7 +187,7 @@ test('SC09: script updated between preflight and transaction rejects storyboard'
 
 test('SC09: partial storyboard insertion rolls back and can be retried', async () => {
   const f = await fixture();
-  const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'storyboard', expectedRevision: f.script.revision, requestKey: 'rollback', afterJson: JSON.stringify(storyboard(f)) });
+  const { candidate } = await validatedStoryboard(f);
   const originalRun = db.run;
   let inserts = 0;
   db.run = async (...args: Parameters<typeof db.run>) => {
@@ -189,7 +206,7 @@ test('SC09: partial storyboard insertion rolls back and can be retried', async (
 test('SC11: duplicate/import remap scene candidates, storyboard sources and applied result IDs', async () => {
   const f = await fixture();
   await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'scene', expectedRevision: f.script.revision, requestKey: 'scene-copy', afterJson: JSON.stringify(f.doc.scenes[0]), beforeJson: JSON.stringify(f.doc.scenes[0]), generationInfo: { target_scene_id: 'sc_1' } });
-  const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'storyboard', expectedRevision: f.script.revision, requestKey: 'story-copy', afterJson: JSON.stringify(storyboard(f)) });
+  const { candidate } = await validatedStoryboard(f);
   await StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision });
   const app = Fastify(); await app.register(projectRoutes, { prefix: '/api/projects' });
   try {

@@ -9,6 +9,7 @@ import { hashChapterContent } from '../schemas/story_plan';
 export const LibraryAssetInput = z.object({
   kind: z.enum(['location', 'prop']),
   name: z.string().trim().min(1).max(120),
+  english_name: z.string().trim().max(120).regex(/^[^\u3400-\u9fff]*$/).optional(),
   description: z.string().max(3000).default(''),
   visual_prompt: z.string().max(3000).default(''),
 });
@@ -67,16 +68,21 @@ export class AssetLibraryService {
   static async create(projectId: number, input: unknown) {
     await this.requireProject(projectId);
     const data = LibraryAssetInput.parse(input);
-    const result = await db.run('INSERT INTO library_asset (project_id, kind, name, description, visual_prompt) VALUES (?, ?, ?, ?, ?)',
-      projectId, data.kind, data.name, data.description, data.visual_prompt);
+    const result = await db.run('INSERT INTO library_asset (project_id, kind, name, description, visual_prompt, english_name) VALUES (?, ?, ?, ?, ?, ?)',
+      projectId, data.kind, data.name, data.description, data.visual_prompt, data.english_name || '');
     return this.requireAsset(Number(result.lastID));
   }
   static async update(id: number, expectedRevision: number, input: unknown) {
     const data = LibraryAssetInput.parse(input);
-    const result = await db.run(`UPDATE library_asset SET kind = ?, name = ?, description = ?, visual_prompt = ?,
-      image_url = NULL, status = 'idle', task_id = NULL, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+    const previous = await this.requireAsset(id);
+    const appearanceChanged = previous.kind !== data.kind || previous.name !== data.name || previous.description !== data.description || previous.visual_prompt !== data.visual_prompt;
+    const result = await db.run(`UPDATE library_asset SET kind = ?, name = ?, description = ?, visual_prompt = ?, english_name = COALESCE(?, english_name),
+      image_url = CASE WHEN ? THEN NULL ELSE image_url END,
+      status = CASE WHEN ? THEN 'idle' ELSE status END,
+      task_id = CASE WHEN ? THEN NULL ELSE task_id END, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND revision = ? AND status <> 'generating'`,
-      data.kind, data.name, data.description, data.visual_prompt, id, expectedRevision);
+      data.kind, data.name, data.description, data.visual_prompt, data.english_name ?? null,
+      Number(appearanceChanged), Number(appearanceChanged), Number(appearanceChanged), id, expectedRevision);
     if (!result.changes) throw new AssetLibraryError('Asset changed or is generating; refresh before editing');
     return this.requireAsset(id);
   }

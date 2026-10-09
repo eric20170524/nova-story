@@ -124,6 +124,23 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
   });
 });
 
+test('editing only an asset translation preserves its generated image and task; appearance edits invalidate them', async () => {
+  await initDb();
+  await db.run("INSERT INTO project(id,title) VALUES(81104,'译名回归')");
+  const visual = { kind: 'prop', name: '铜铃', description: '旧铜暗绿铜锈', visual_prompt: 'bronze bell' };
+  const asset = await AssetLibraryService.create(81104, visual);
+  await db.run("UPDATE library_asset SET image_url='/static/bell.png', status='completed', task_id='bell-task' WHERE id=?", asset.id);
+  const renamed = await AssetLibraryService.update(asset.id, asset.revision, { ...visual, english_name: 'Bronze Bell' });
+  assert.equal(renamed.english_name, 'Bronze Bell'); assert.equal(renamed.revision, asset.revision + 1);
+  assert.equal(renamed.image_url, '/static/bell.png'); assert.equal(renamed.status, 'completed'); assert.equal(renamed.task_id, 'bell-task');
+  await assert.rejects(() => AssetLibraryService.update(asset.id, asset.revision, { ...visual, english_name: 'Old Bell' }), /changed/);
+  const changed = await AssetLibraryService.update(asset.id, renamed.revision, { ...visual, visual_prompt: 'bronze bell with red tassel' });
+  assert.equal(changed.english_name, 'Bronze Bell');
+  assert.equal(changed.image_url, null); assert.equal(changed.status, 'idle'); assert.equal(changed.task_id, null);
+  await db.run("UPDATE library_asset SET status='generating' WHERE id=?", asset.id);
+  await assert.rejects(() => AssetLibraryService.update(asset.id, changed.revision, { ...visual, english_name: 'Bell' }), /generating/);
+});
+
 test('asset extraction keeps canonical names and drops characters or unknown kinds', () => {
   const existing = [
     { kind: 'location' as const, name: '琼明仙域云海' },

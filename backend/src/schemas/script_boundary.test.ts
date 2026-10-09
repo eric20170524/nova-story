@@ -423,7 +423,7 @@ test('S0 / SC12: Agent routing and execution boundary isolation between novel st
     generate: async () => '',
     generateStructured: async () => ({
       logline: '边界测试提纲',
-      mustKeepEvents: [{ id: 'e1', text: '事' }],
+      mustKeepEvents: [{ id: 'e1', text: '这是项目A的第一章小说正文。' }],
       beats: [{ id: 'b1', purpose: '节拍', eventIds: ['e1'] }],
       endingHook: '钩子',
     }),

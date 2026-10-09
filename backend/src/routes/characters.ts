@@ -250,15 +250,16 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await db.run(
       `INSERT INTO character
-        (project_id, name, role, description, visual_tags, voice_id, voice_label)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (project_id, name, role, description, visual_tags, voice_id, voice_label, english_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       data.project_id,
       data.name,
       data.role || null,
       data.description || null,
       tagsStr,
       voiceId,
-      voiceLabel
+      voiceLabel,
+      data.english_name || ''
     );
 
     const newChar = await db.get('SELECT * FROM character WHERE id = ?', result.lastID);
@@ -290,6 +291,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (data.name !== undefined) {
       updateFields.push('name = ?');
       params.push(data.name);
+    }
+    if (data.english_name !== undefined) {
+      updateFields.push('english_name = ?');
+      params.push(data.english_name);
     }
     if (data.role !== undefined) {
       updateFields.push('role = ?');

@@ -6,6 +6,7 @@ import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
+import { bindEntities, boundText, entityRoster, eventContentCovered, eventRelationConflict, needsBindingReview, proposeBindings, validateBinding, textHash } from '../entity_binding';
 import { coversVisibleBeat, extractVisibleBeats, type VisibleBeat } from '../english_visual_prompt';
 import { ScriptService, ScriptServiceError } from '../script_service';
 import {
@@ -92,47 +93,7 @@ export function verifyEventContentCoverage(
   eventText: string,
   sceneBlocksText: string
 ): boolean {
-  const normEvent = eventText.trim().toLowerCase();
-  const normScene = sceneBlocksText.trim().toLowerCase();
-  if (!normEvent || !normScene) return false;
-
-  // 1. Direct substring inclusion
-  if (normScene.includes(normEvent)) return true;
-
-  // 2. Token / keyword matching (split on punctuation and whitespace)
-  const cleanTokens = normEvent
-    .split(/[\s,，.。!！?？:：;；"“”'‘’()（）《》【】\[\]\-_/\\]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-
-  if (cleanTokens.length > 0) {
-    let matchedCount = 0;
-    for (const tok of cleanTokens) {
-      if (normScene.includes(tok)) {
-        matchedCount++;
-      }
-    }
-    if (matchedCount / cleanTokens.length >= 0.6) {
-      return true;
-    }
-  }
-
-  // 3. Sliding 2-gram overlap
-  const cleanChars = normEvent.replace(/[\s,，.。!！?？:：;；"“”'‘’()（）《》【】\[\]\-_/\\]+/g, '');
-  if (cleanChars.length >= 2) {
-    const ngrams: string[] = [];
-    for (let i = 0; i <= cleanChars.length - 2; i++) {
-      ngrams.push(cleanChars.slice(i, i + 2));
-    }
-    if (ngrams.length > 0) {
-      const matchedNgrams = ngrams.filter((ng) => normScene.includes(ng));
-      if (matchedNgrams.length / ngrams.length >= 0.6) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return eventContentCovered(eventText, sceneBlocksText);
 }
 
 /** Action text is the only coverage that counts for clothing, pose, and contact. */
@@ -501,18 +462,19 @@ export class ScriptGenerationService {
       mustKeepEvents: outlineResult.mustKeepEvents.map((e, idx) => {
         let validPids = (e.sourceParagraphIds || []).filter((pid) => validParagraphIds.has(pid));
         if (validPids.length === 0 && paragraphs.length > 0) {
-          const found = paragraphs.find((p) => p.text.includes(e.text) || e.text.includes(p.text));
+          const found = paragraphs.find((p) => verifyEventContentCoverage(e.text, p.text));
           if (found) {
             validPids = [found.id];
           } else {
-            const pIdx = Math.min(idx, paragraphs.length - 1);
-            validPids = [paragraphs[pIdx]!.id];
+            throw new ScriptGenerationError(`提纲事件 ${e.id} 没有可核对的来源段落，不能按序号回填`, 502);
           }
         }
+        if (validPids.some(pid => eventRelationConflict(e.text, paragraphs.find(p => p.id === pid)!.text))) throw new ScriptGenerationError(`提纲事件 ${e.id} 的施受关系与原文矛盾`, 502);
         return {
           id: e.id || `ev_${idx + 1}`,
           text: e.text.trim(),
           sourceParagraphIds: validPids,
+          binding: bindEntities(e.text.trim(), entityRoster(context.characters)),
         };
       }),
       beats: outlineResult.beats.map((b, idx) => ({
@@ -524,6 +486,23 @@ export class ScriptGenerationService {
       visibleBeats: extractVisibleBeats(paragraphs),
     };
 
+    const roster = entityRoster(context.characters);
+    for (const event of validatedOutline.mustKeepEvents) {
+      event.sourceBindings = [];
+      for (const pid of event.sourceParagraphIds) {
+        const index = paragraphs.findIndex(p => p.id === pid);
+        const paragraph = paragraphs[index]!;
+        const preceding = paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n');
+        let binding = bindEntities(paragraph.text, roster);
+        binding.context_hash = textHash(preceding);
+        if (needsBindingReview(binding) && preceding.length + paragraph.text.length <= 2200) binding = await proposeBindings(provider, binding, paragraph.text, preceding, roster);
+        event.sourceBindings.push({ paragraph_id: pid, text: paragraph.text, binding });
+      }
+      if (needsBindingReview(event.binding) && event.text.length + event.sourceBindings.map(s => s.text).join('\n').length <= 2200) event.binding = await proposeBindings(provider, event.binding!, event.text, event.sourceBindings.map(s => s.text).join('\n'), roster);
+      const sourceConfirmed = event.sourceBindings.every(source => !needsBindingReview(source.binding));
+      const grounded = sourceConfirmed && eventContentCovered(event.text, event.sourceBindings.map(source => boundText(source.text, source.binding)).join('\n'));
+      if (!grounded && event.binding?.mentions.length) event.binding = { ...event.binding, mentions: event.binding.mentions.map(m => ({ ...m, authority: 'model_proposal', confirmed: false, candidates: roster })) };
+    }
     return { outline: validatedOutline, sourceSnapshot };
   }
 
@@ -612,12 +591,11 @@ export class ScriptGenerationService {
         mustKeepEvents: script.document.outline.mustKeepEvents.map((e, idx) => {
           let validPids = (e.sourceParagraphIds || []).filter((pid) => validParagraphIds.has(pid));
           if (validPids.length === 0 && paragraphs.length > 0) {
-            const found = paragraphs.find((p) => p.text.includes(e.text) || e.text.includes(p.text));
+            const found = paragraphs.find((p) => verifyEventContentCoverage(e.text, p.text));
             if (found) {
               validPids = [found.id];
             } else {
-              const pIdx = Math.min(idx, paragraphs.length - 1);
-              validPids = [paragraphs[pIdx]!.id];
+              throw new ScriptGenerationError(`提纲事件 ${e.id} 没有可核对的来源段落`, 400);
             }
           }
           return {
@@ -640,6 +618,34 @@ export class ScriptGenerationService {
     }
     if (!outline.visibleBeats?.length) {
       outline = { ...outline, visibleBeats: extractVisibleBeats(paragraphs) };
+    }
+    const roster = entityRoster(projectCharacters);
+    for (const event of outline.mustKeepEvents) {
+      event.binding ||= bindEntities(event.text, roster);
+      validateBinding(event.binding, event.text, roster);
+      event.sourceBindings ||= event.sourceParagraphIds.map(pid => {
+        const paragraph = paragraphs.find(p => p.id === pid)!;
+        const index = paragraphs.indexOf(paragraph);
+        const binding = bindEntities(paragraph.text, roster);
+        binding.context_hash = textHash(paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'));
+        return { paragraph_id: pid, text: paragraph.text, binding };
+      });
+      if (event.sourceBindings.length !== event.sourceParagraphIds.length || new Set(event.sourceBindings.map(s => s.paragraph_id)).size !== event.sourceParagraphIds.length) throw new ScriptGenerationError('提纲原文绑定缺少来源段落', 400);
+      for (const source of event.sourceBindings) {
+        if (!event.sourceParagraphIds.includes(source.paragraph_id) || paragraphs.find(p => p.id === source.paragraph_id)?.text !== source.text) throw new ScriptGenerationError('提纲原文绑定与当前来源版本不符，请重新生成提纲', 409);
+        validateBinding(source.binding, source.text, roster);
+        const index = paragraphs.findIndex(p => p.id === source.paragraph_id);
+        if (source.binding.context_hash !== textHash(paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'))) throw new ScriptGenerationError('提纲人物绑定的前文已变化，请重新核对', 409);
+      }
+      if (needsBindingReview(event.binding) || event.sourceBindings.some(s => needsBindingReview(s.binding))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
+      const explicit = boundText(event.text, event.binding);
+      const grounded = eventContentCovered(explicit, event.sourceBindings.map(source => boundText(source.text, source.binding)).join('\n'));
+      if (!grounded && event.binding.mentions.length && !event.binding.mentions.every(m => m.authority === 'human' && m.confirmed)) throw new ScriptGenerationError(`提纲事件 ${event.id} 的改编人物关系没有可验证的原文对应，请在提纲中核对并确认`, 400);
+      if (event.sourceBindings.some(s => eventRelationConflict(explicit, boundText(s.text, s.binding)))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的施受关系与已核对原文矛盾`, 400);
+      // The downstream action is grounded in this outline text version. Originals
+      // remain in sourceBindings with their own offsets and hashes.
+      event.text = explicit;
+      event.binding = bindEntities(explicit, roster);
     }
 
     // Enforce budget limits
@@ -696,18 +702,14 @@ export class ScriptGenerationService {
       if (sceneParagraphIds.size === 0 && paragraphs.length > 0) {
         for (const ev of matchedEvents) {
           const found = paragraphs.find(
-            (p) => p.text.includes(ev.text) || ev.text.includes(p.text)
+            (p) => verifyEventContentCoverage(ev.text, p.text)
           );
           if (found) {
             sceneParagraphIds.add(found.id);
           }
         }
         if (sceneParagraphIds.size === 0) {
-          const pIndex = Math.min(
-            Math.floor((sIdx / totalScenes) * paragraphs.length),
-            paragraphs.length - 1
-          );
-          sceneParagraphIds.add(paragraphs[pIndex]!.id);
+          throw new ScriptGenerationError(`第 ${sIdx + 1} 场缺少可核对的来源段落，不能按场序回填`, 400);
         }
       }
 
@@ -818,6 +820,8 @@ export class ScriptGenerationService {
           if (verifyEventContentCoverage(ev.text, sceneFullText)) verifiedSceneEventIds.add(ev.id);
         }
         const missingBeatEvents = matchedEvents.filter((event) => !verifiedSceneEventIds.has(event.id));
+        const reversedEvents = matchedEvents.filter(event => eventRelationConflict(event.text, sceneFullText));
+        if (reversedEvents.length && attempt === 1) throw new ScriptGenerationError(`第 ${sIdx + 1} 场交换了必保事件的施受关系，不能用追加原句掩盖矛盾`, 502);
         if ((performance.unresolved.length > 0 || missingBeatEvents.length > 0) && attempt === 0) {
           const notes: string[] = [];
           if (missingBeatEvents.length > 0) {
@@ -857,6 +861,9 @@ export class ScriptGenerationService {
           });
         }
 
+        for (const block of sceneBlocks) if (block.type === 'action') {
+          block.binding = bindEntities(block.text, entityRoster(projectCharacters));
+        }
         stableScene = {
           id: `sc_${sIdx + 1}`,
           beatIds: [beat.id],
@@ -876,6 +883,7 @@ export class ScriptGenerationService {
     }
 
     const anchoredVisibleBeatIds = anchorMissingVisibleBeats(generatedScenes, outline.visibleBeats || []);
+    for (const scene of generatedScenes) for (const block of scene.blocks) if (block.type === 'action' && !block.binding) block.binding = bindEntities(block.text, entityRoster(projectCharacters));
 
     // Step 3: Full Document Assembly & Validation
     const fullDocument: ScriptDocument = {
@@ -900,7 +908,7 @@ export class ScriptGenerationService {
       );
     }
 
-    const validation = validateScriptForConfirmation(fullDocument);
+    const validation = validateScriptForConfirmation(fullDocument, { allowPendingBindings: true });
     if (!validation.valid) {
       throw new ScriptGenerationError(
         `生成的剧本未能通过完整性校验: ${validation.errors.join('; ')}。正式剧本未发生任何更改。`,
@@ -1042,6 +1050,7 @@ export class ScriptGenerationService {
       );
     }
     const sceneBlocks = performance.blocks;
+    for (const block of sceneBlocks) if (block.type === 'action') block.binding = bindEntities(block.text, entityRoster(projectCharacters));
     const sceneCharacterIds = new Set<number>();
     for (const block of sceneBlocks) {
       if ((block.type === 'dialogue' || block.type === 'voiceover') && block.characterId != null) {
@@ -1050,6 +1059,7 @@ export class ScriptGenerationService {
     }
 
     const rewrittenText = sceneBlocks.map((block) => block.text).join(' ');
+    if (requiredEvents.some(event => eventRelationConflict(event.text, rewrittenText))) throw new ScriptGenerationError('改写分场交换了必保事件的施受关系', 502);
     const sceneText = (scene: { blocks: Array<{ text: string }> }) =>
       scene.blocks.map((block) => block.text).join(' ');
     const keptEventIds = targetScene.eventIds.filter((eventId) => {

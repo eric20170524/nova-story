@@ -7,6 +7,20 @@ import { timelineRoutes } from './timeline';
 import { packShotSpec } from '../schemas/shot_contract';
 import { draftEnglishFromCues, setVisualPromptTranslatorForTests, setVisualPromptVerifierForTests } from '../services/english_visual_prompt';
 
+test('正文直写入口返回 410，保留现有镜头', async () => {
+  await initDb();
+  const project = await db.run("INSERT INTO project(title) VALUES('直写停用验收')");
+  const chapterId = 'direct-write-disabled';
+  await db.run('INSERT INTO chapter(id,project_id,"index",title,content) VALUES(?,?,1,?,?)', chapterId, project.lastID, '验收', '林岚离开，陈月留下。她举起蓝伞。');
+  const scene = await db.run('INSERT INTO scene(chapter_id,"index",visual_prompt) VALUES(?,1,?)', chapterId, 'Existing verified shot.');
+  const app = Fastify(); await app.register(timelineRoutes, { prefix: '/api/timeline' });
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/timeline/generate', payload: { chapter_id: chapterId } });
+    assert.equal(response.statusCode, 410); assert.match(response.json().detail, /直写时间线已停用/);
+    assert.equal((await db.get('SELECT visual_prompt FROM scene WHERE id=?', scene.lastID)).visual_prompt, 'Existing verified shot.');
+  } finally { await app.close(); }
+});
+
 test('Director scene edit canonicalizes a shot contract without changing screenplay provenance', async () => {
   await initDb();
   const projectId = 89901;

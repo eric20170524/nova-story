@@ -55,6 +55,7 @@ export interface CharacterVersionSummary {
 }
 
 export interface Character {
+  english_name?: string;
   id: number;
   project_id: number;
   name: string;

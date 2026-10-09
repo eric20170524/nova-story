@@ -118,7 +118,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('SC03: Outline -> full script candidate -> apply idempotency without LLM re-run', async () => {
-    const fix = await createFixture();
+    const fix = await createFixture('林轩进入青云大殿。\n长老当众发难质疑资质。\n林轩一拳碎灵石打脸众人。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
     assert.equal(script.revision, 1);
 
@@ -281,7 +281,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('SC06: Empty output, invalid JSON, unknown characters, and scene failure aborts cleanly', async () => {
-    const fix = await createFixture();
+    const fix = await createFixture('事。事2。事3。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
     // 1. LLM returns empty / null
@@ -388,7 +388,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     );
     assert.equal(leftover.length, 0);
 
-    const narratorFix = await createFixture();
+    const narratorFix = await createFixture('林轩踏入大殿。');
     const narratorScript = await ScriptService.createOrGetScript(narratorFix.chapterId);
     const narratorProvider = createMockProvider({
       onOutline: () => ({
@@ -576,7 +576,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('SC05: Source freshness check rejects applying candidates after novel text changes', async () => {
-    const fix = await createFixture();
+    const fix = await createFixture('事。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
     const provider = createMockProvider({
@@ -619,7 +619,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('SC12: AgentExecutor generates pending script candidates without touching novel prose', async () => {
-    const fix = await createFixture();
+    const fix = await createFixture('重要保留事件。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
     const provider = createMockProvider({
@@ -711,7 +711,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     );
 
     // 3. Change novel text again
-    const newerContent = '这是再次修改后的正文：林轩在演武场一鸣惊人。';
+    const newerContent = '这是再次修改后的正文：林轩剑骨觉醒一鸣惊人。';
     await db.run('UPDATE chapter SET content = ? WHERE id = ?', newerContent, fix.chapterId);
 
     // 4. Generate candidate against newer text
@@ -811,7 +811,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.equal(current.freshness.contentChanged, true);
   });
 
-  await t.test('Issue 4: Paragraph ID sanitization prevents p_999 hallucination and guarantees valid prompt paragraphs', async () => {
+  await t.test('无依据的事件不能把 p_999 按序号改成真实段落', async () => {
     const fix = await createFixture('第一段小说正文。\n第二段小说正文。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
@@ -831,21 +831,17 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
       },
     });
 
-    const outlineCand = await ScriptGenerationService.generateOutlineCandidate({
+    await assert.rejects(() => ScriptGenerationService.generateOutlineCandidate({
       scriptId: script.id,
       expectedRevision: 1,
       requestKey: 'req_sanitize_p999',
       provider,
-    });
-
-    const parsedOutline: ScriptOutline = JSON.parse(outlineCand.after_json);
-    // p_999 must NOT be in the saved outline! It must be sanitized to valid paragraph ID (p_1)
-    assert.ok(!parsedOutline.mustKeepEvents[0]?.sourceParagraphIds?.includes('p_999'));
-    assert.ok(parsedOutline.mustKeepEvents[0]?.sourceParagraphIds?.includes('p_1'));
+    }), /没有可核对的来源段落/);
+    assert.equal(await db.get('SELECT id FROM script_change WHERE request_key=?', 'req_sanitize_p999'), undefined);
   });
 
   await t.test('Issue 4: Must-keep events coverage validation rejects unfulfilled events and accepts genuine coverage', async () => {
-    const fix = await createFixture('第一段正文。\n第二段正文。');
+    const fix = await createFixture('林轩入殿。\n长老质疑与碎石打脸。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
 
     let receivedScenePrompt = '';
@@ -892,7 +888,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
 
     // Verify prompt included the source paragraph content
     assert.ok(receivedScenePrompt.includes('--- 对应小说原文段落 ---'));
-    assert.ok(receivedScenePrompt.includes('[p_1] 第一段正文。') || receivedScenePrompt.includes('[p_2] 第二段正文。'));
+    assert.ok(receivedScenePrompt.includes('[p_1] 林轩入殿。') || receivedScenePrompt.includes('[p_2] 长老质疑与碎石打脸。'));
     assert.ok(receivedScenePrompt.includes('药屋夜间的对质，禁止移到大殿或日间'));
 
     // 2. Model outputs genuine coverage for both ev_1 and ev_2 -> succeeds!
@@ -940,7 +936,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('visible clothing and contact stay in an action block even when dialogue repeats them', async () => {
-    const content = '她褪下外袍，跨坐在他身上。林轩入殿。';
+    const content = '苏沐雪褪下外袍，跨坐在林轩身上。林轩入殿。';
     const fix = await createFixture(content);
     const script = await ScriptService.createOrGetScript(fix.chapterId);
     let scenePrompt = '';
@@ -961,7 +957,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
           coveredEventIds: ['ev_1'],
           blocks: [
             { id: 'b1', type: 'action', text: '林轩入殿' },
-            { id: 'b2', type: 'dialogue', characterName: '林轩', text: '她褪下外袍，跨坐在他身上' },
+            { id: 'b2', type: 'dialogue', characterName: '林轩', text: '苏沐雪褪下外袍，跨坐在林轩身上' },
           ],
         };
       },
@@ -974,12 +970,36 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     });
     const doc = JSON.parse(candidate.after_json);
     assert.match(scenePrompt, /本场可见画面必须写入 action.text/);
-    assert.match(scenePrompt, /她褪下外袍，跨坐在他身上/);
-    assert.equal(doc.outline.visibleBeats[0].text, '她褪下外袍，跨坐在他身上');
+    assert.match(scenePrompt, /苏沐雪褪下外袍，跨坐在林轩身上/);
+    assert.equal(doc.outline.visibleBeats[0].text, '苏沐雪褪下外袍，跨坐在林轩身上');
     const actionText = doc.scenes[0].blocks.filter((block: { type: string }) => block.type === 'action').map((block: { text: string }) => block.text);
-    assert.ok(actionText.includes('她褪下外袍，跨坐在他身上'));
+    assert.ok(actionText.includes('苏沐雪褪下外袍，跨坐在林轩身上'));
     assert.ok(candidate.generation_info_json);
     assert.deepEqual(JSON.parse(candidate.generation_info_json).anchoredVisibleBeatIds, ['vb_1']);
+  });
+
+  await t.test('提纲拒绝反转递交关系；被动同关系可用；剧本反转重试后仍拒绝', async () => {
+    const fix = await createFixture('林轩把蓝伞递给苏沐雪。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const outline = (text: string) => ({ logline: '递伞', mustKeepEvents: [{ id: 'e1', text, sourceParagraphIds: ['p_1'] }], beats: [{ id: 'b1', purpose: '递伞', eventIds: ['e1'] }], endingHook: '门响' });
+    await assert.rejects(() => ScriptGenerationService.generateOutlineCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'swap_outline', provider: createMockProvider({ onOutline: () => outline('苏沐雪把蓝伞递给林轩。') }) }), /施受关系/);
+    const passive = await ScriptGenerationService.generateOutlineCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'passive_outline', provider: createMockProvider({ onOutline: () => outline('蓝伞被林轩递给苏沐雪。') }) });
+    assert.equal(JSON.parse(passive.after_json).mustKeepEvents[0].sourceBindings[0].text, fix.originalContent);
+    await assert.rejects(() => ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'swap_script', provider: createMockProvider({ onOutline: () => outline('林轩把蓝伞递给苏沐雪。'), onScene: () => ({ location: { name: '房间' }, blocks: [{ type: 'action', text: '苏沐雪把蓝伞递给林轩。' }] }) }) }), /交换.*施受关系/);
+    const faithful = await ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'passive_script', provider: createMockProvider({ onOutline: () => outline('林轩把蓝伞递给苏沐雪。'), onScene: () => ({ location: { name: '房间' }, blocks: [{ type: 'action', text: '蓝伞被林轩递给苏沐雪。' }] }) }) });
+    assert.equal(JSON.parse(faithful.after_json).scenes[0].blocks.length, 1);
+  });
+
+  await t.test('原文 ID 正确也不能把改编后的错误姓名确认为事实', async () => {
+    const fix = await createFixture('林轩举起蓝伞。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const provider = createMockProvider({ onOutline: () => ({ logline: '举伞', mustKeepEvents: [{ id: 'e1', text: '苏沐雪举起蓝伞。', sourceParagraphIds: ['p_1'] }], beats: [{ id: 'b1', purpose: '举伞', eventIds: ['e1'] }], endingHook: '门响' }) });
+    const candidate = await ScriptGenerationService.generateOutlineCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor', provider });
+    const event = JSON.parse(candidate.after_json).mustKeepEvents[0];
+    assert.equal(event.sourceBindings[0].binding.mentions[0].entity.name, '林轩');
+    assert.equal(event.binding.mentions[0].confirmed, false);
+    assert.equal(event.binding.mentions[0].authority, 'model_proposal');
+    await assert.rejects(() => ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor_script', provider }), /人物绑定待核对/);
   });
 
   await t.test('unassigned must-keep events stay with the nearest earlier beat', () => {
@@ -1002,7 +1022,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('missing dialogue speaker is retried, then kept as action; a diminutive maps to the cast', async () => {
-    const fix = await createFixture('林轩踏入大殿。');
+    const fix = await createFixture('林轩入殿。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
     const missingSpeaker = createMockProvider({
       onOutline: () => ({

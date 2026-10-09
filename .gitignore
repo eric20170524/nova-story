@@ -31,6 +31,8 @@ backend/scripts/**
 !backend/scripts/verify_dreamcore_ac.ts
 !backend/scripts/run-tests.ts
 !backend/scripts/video-benchmark.ts
+!backend/scripts/storyboard-regression.ts
+!backend/scripts/pronoun-binding-regression.ts
 !backend/scripts/download_l40_models.sh
 !backend/scripts/download_l40_models.py
 !backend/scripts/run_l40_benchmark.ts

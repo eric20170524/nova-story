@@ -15,6 +15,7 @@ export const VoiceIdSchema = z.union([
 );
 
 export const CharacterSchema = z.object({
+  english_name: z.string().optional(),
   id: z.number().int(),
   project_id: z.number().int(),
   name: z.string(),
@@ -31,6 +32,7 @@ export const CharacterSchema = z.object({
 });
 
 export const CharacterCreateSchema = z.object({
+  english_name: z.string().trim().max(120).regex(/^[^\u3400-\u9fff]*$/).optional(),
   project_id: z.number().int(),
   name: z.string(),
   role: z.string().nullable().optional(),
@@ -46,6 +48,7 @@ export const CharacterCreateSchema = z.object({
 });
 
 export const CharacterUpdateSchema = z.object({
+  english_name: z.string().trim().max(120).regex(/^[^\u3400-\u9fff]*$/).optional(),
   project_id: z.number().int().optional(),
   name: z.string().optional(),
   role: z.string().nullable().optional(),

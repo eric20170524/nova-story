@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import { db, initDb } from '../db/database';
 import { scriptRoutes } from './scripts';
 import type { ScriptDocument } from '../schemas/script';
+import { StoryboardGenerationService, StoryboardGenerationError } from '../services/ai/storyboard_generation_service';
 
 test('Track 5 S1-BE: Fastify /api/chapters/:id/script and /api/scripts routes', async (t) => {
   await initDb();
@@ -252,4 +253,33 @@ test('Track 5 S1-BE: Fastify /api/chapters/:id/script and /api/scripts routes', 
   });
 
   await app.close();
+});
+
+test('durable storyboard background API returns 202 after reservation and scopes task reads', async t => {
+  const app = Fastify(); await app.register(scriptRoutes, { prefix: '/api' }); await app.ready();
+  let finish!: () => void; const gate = new Promise<void>(resolve => { finish = resolve; });
+  t.mock.method(StoryboardGenerationService, 'generateStoryboardCandidate', async (params: any) => {
+    const taskId = StoryboardGenerationService.taskId(params.scriptId, params.requestKey);
+    await db.run("INSERT OR REPLACE INTO generation_task(task_id,scene_id,kind,status,progress_json) VALUES(?,?,'storyboard','queued',?)", taskId, -params.scriptId, JSON.stringify({ attempt: 2 }));
+    params.onReserved(2); await gate;
+    throw new StoryboardGenerationError('isolated failure');
+  });
+  try {
+    const res = await app.inject({ method: 'POST', url: '/api/scripts/98765/storyboard-candidates', payload: { expected_revision: 1, request_key: 'background', background: true } });
+    assert.equal(res.statusCode, 202);
+    const body = res.json(); const task = await app.inject({ method: 'GET', url: body.task_url });
+    assert.equal(task.statusCode, 200); assert.equal(task.json().status, 'queued');
+    assert.equal(body.attempt, 2); assert.equal(task.json().progress.attempt, body.attempt);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/scripts/98766/storyboard-tasks/${body.task_id}` })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'PATCH', url: `${body.task_url}/facts`, payload: {} })).statusCode, 400);
+  } finally { finish(); await app.close(); }
+});
+
+test('background storyboard validation errors are not disguised as accepted work', async t => {
+  const app = Fastify(); await app.register(scriptRoutes, { prefix: '/api' }); await app.ready();
+  t.mock.method(StoryboardGenerationService, 'generateStoryboardCandidate', async () => { throw new StoryboardGenerationError('source conflict', 409); });
+  try {
+    const res = await app.inject({ method: 'POST', url: '/api/scripts/98765/storyboard-candidates', payload: { expected_revision: 1, request_key: 'invalid', background: true } });
+    assert.equal(res.statusCode, 409);
+  } finally { await app.close(); }
 });

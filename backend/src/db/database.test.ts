@@ -102,8 +102,12 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 021_scene_version_english_prompt
-    assert.equal(migrationCount.count, 21);
+    // 001_core through 022_asset_translation_names
+    assert.equal(migrationCount.count, 22);
+    for (const table of ['character', 'library_asset']) {
+      const columns = await legacyDatabase.all(`PRAGMA table_info("${table}")`);
+      assert.ok(columns.some((column: any) => column.name === 'english_name'));
+    }
     const versionColumns = await legacyDatabase.all('PRAGMA table_info("scene_version")');
     assert.ok(versionColumns.some((column: any) => column.name === 'english_visual_prompt'));
 

@@ -330,6 +330,16 @@ async function resumeScriptLike(job: ProjectWorkJob): Promise<void> {
     : 'novastory-script-candidate-finished';
   while (jobStillCurrent(job)) {
     try {
+      if (job.kind === 'storyboard' && job.scriptId && job.requestKey) {
+        const result = await api.getStoryboardTasks(job.scriptId);
+        const task = result.tasks.find(item => item.progress?.request?.request_key === job.requestKey);
+        const updatedAt = task?.updated_at ? Date.parse(task.updated_at.endsWith('Z') ? task.updated_at : `${task.updated_at.replace(' ', 'T')}Z`) : NaN;
+        if (task && ['failed', 'interrupted', 'cancelled'].includes(task.status) && (!Number.isFinite(updatedAt) || updatedAt >= job.startedAt)) {
+          removeJob(job);
+          publishNotice('director.storyboard_candidate_failed', 'error');
+          return;
+        }
+      }
       const res = await api.getChapterScript(job.chapterId);
       const changes = (res.script?.pendingChanges || []) as Array<{ request_key?: string }>;
       if (job.requestKey && changes.some((change) => change.request_key === job.requestKey)) {

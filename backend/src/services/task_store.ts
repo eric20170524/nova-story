@@ -107,7 +107,7 @@ const persistTerminalIfProcessing = async (state: AssetTaskState) => {
          comfy_prompt_id = COALESCE(?, comfy_prompt_id),
          retry_count = ?,
          updated_at = ?
-       WHERE task_id = ? AND status = 'processing'`,
+       WHERE task_id = ? AND status IN ('processing', 'queued')`,
       state.scene_id,
       state.status,
       state.image_url ?? null,
@@ -298,7 +298,7 @@ export const AssetTaskStore = {
     try {
       const rows = await db.all(
         `SELECT task_id, scene_id FROM generation_task
-         WHERE status = 'processing'
+         WHERE (status = 'processing' OR (kind = 'storyboard' AND status = 'queued'))
            AND COALESCE(kind, 'image') <> 'video'`
       );
       let n = 0;

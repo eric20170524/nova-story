@@ -73,6 +73,10 @@ export class OpenAIProvider implements AIProvider {
             }
             const response = await this.openai.chat.completions.create(request);
 
+            if (response.choices[0]?.finish_reason !== 'stop') {
+                throw new Error(`Text generation incomplete: finish_reason=${response.choices[0]?.finish_reason || 'missing'}`);
+            }
+
             const content = response.choices[0]?.message?.content || '';
             logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
 
@@ -130,6 +134,9 @@ export class OpenAIProvider implements AIProvider {
 
             logger.info(`[OpenAI Structured Prompt Input]: ${truncateLog(prompt)}`);
             const response = await this.openai.chat.completions.create(request);
+            if (response.choices[0]?.finish_reason !== 'stop') {
+                throw new Error(`Structured generation incomplete: finish_reason=${response.choices[0]?.finish_reason || 'missing'}`);
+            }
 
             const content = response.choices[0]?.message?.content || '';
             logger.info(`[OpenAI Structured Output Raw]: ${truncateLog(content)}`);

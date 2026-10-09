@@ -101,7 +101,7 @@ test('Track 5 S1-BE: ScriptService database migrations, models, and freshness', 
           characterIds: [fixture.charId],
           propIds: [],
           blocks: [
-            { id: 'b_act_2', type: 'action', text: '抬头望见青云山门。' },
+            { id: 'b_act_2', type: 'action', text: '林轩抬头望见青云山门。' },
             { id: 'b_vo_1', type: 'voiceover', characterId: fixture.charId, text: '终于到了。' },
           ],
         },
@@ -156,12 +156,7 @@ test('Track 5 S1-BE: ScriptService database migrations, models, and freshness', 
     const fixture = await createTestFixture();
 
     // Insert characters
-    const c1 = await db.run(
-      `INSERT INTO character (project_id, name, role, visual_tags)
-       VALUES (?, '林轩', '男主', '{}')`,
-      fixture.projId
-    );
-    const char1Id = Number((c1 as any).lastID);
+    const char1Id = fixture.charId;
 
     const c2 = await db.run(
       `INSERT INTO character (project_id, name, role, visual_tags)

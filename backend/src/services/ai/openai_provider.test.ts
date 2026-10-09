@@ -27,6 +27,15 @@ function sendChunk(response: http.ServerResponse, content: string, finishReason:
     response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: finishReason }] })}\n\n`);
 }
 
+test('structured output rejects length termination even when the partial body is valid JSON', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: '{"ok":true}' }, finish_reason: 'length' }] }));
+    }, async provider => {
+        await assert.rejects(provider.generateStructured('check', z.object({ ok: z.boolean() })), /finish_reason=length/);
+    });
+});
+
 test('long text uses streaming and returns only the complete joined body', async () => {
     await withTextServer((response, body) => {
         assert.equal(body.stream, true);

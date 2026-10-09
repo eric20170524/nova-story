@@ -30,6 +30,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { EntityBindingReview } from '../components/story/EntityBindingReview';
 import { isProjectWorkUnloading, scriptWorkId, startProjectWork, useProjectWorkJobs } from '../services/project_work_tracker';
 import { Chapter } from '../types';
 import { useLanguage } from '../LanguageContext';
@@ -42,6 +43,7 @@ import type {
   ScriptStatus,
   SourceFreshnessResult,
   ScriptChangeRow,
+  ScriptSourceSnapshot,
 } from '../backend/src/schemas/script';
 
 interface ScriptData {
@@ -52,6 +54,7 @@ interface ScriptData {
   status: ScriptStatus;
   document: ScriptDocument;
   freshness: SourceFreshnessResult;
+  sourceSnapshot?: ScriptSourceSnapshot;
   pendingChanges?: ScriptChangeRow[];
   createdAt: string;
   updatedAt: string;
@@ -1757,11 +1760,12 @@ export const ScriptEditor: React.FC = () => {
                                     </div>
                                   </div>
 
+                                  {block.type === 'action' && block.binding && <EntityBindingReview binding={block.binding} onChange={binding => handleUpdateBlock(sIdx, bIdx, { binding })} />}
                                   {/* Block text input */}
                                   <textarea
                                     value={block.text}
                                     onChange={(e) =>
-                                      handleUpdateBlock(sIdx, bIdx, { text: e.target.value })
+                                      handleUpdateBlock(sIdx, bIdx, block.type === 'action' ? { text: e.target.value, binding: undefined } : { text: e.target.value })
                                     }
                                     rows={block.type === 'action' ? 3 : 2}
                                     className="w-full p-2 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none resize-y"
@@ -1882,7 +1886,7 @@ export const ScriptEditor: React.FC = () => {
 
                       <div className="space-y-2">
                         {document.outline.mustKeepEvents.map((ev, eIdx) => (
-                          <div key={ev.id} className="flex items-center gap-2">
+                          <div key={ev.id} className="flex flex-wrap items-center gap-2">
                             <span className="text-[11px] font-mono text-slate-400 w-12">
                               {ev.id}
                             </span>
@@ -1894,7 +1898,7 @@ export const ScriptEditor: React.FC = () => {
                                 updateDoc((doc) => {
                                   const events = [...doc.outline.mustKeepEvents];
                                   const item = events[eIdx];
-                                  if (item) events[eIdx] = { ...item, text };
+                                  if (item) events[eIdx] = { ...item, text, binding: undefined };
                                   return { ...doc, outline: { ...doc.outline, mustKeepEvents: events } };
                                 });
                               }}
@@ -1914,6 +1918,13 @@ export const ScriptEditor: React.FC = () => {
                             >
                               <Trash2 size={14} />
                             </button>
+                            {ev.binding && <EntityBindingReview binding={ev.binding} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, binding } : item) } }))} />}
+                            {ev.binding?.mentions.length ? <button type="button" className="text-xs rounded border px-2 py-1" onClick={() => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx && item.binding ? { ...item, binding: { ...item.binding, mentions: item.binding.mentions.map(m => m.status === 'resolved' && m.entity && m.visibility !== 'uncertain' ? { ...m, authority: 'human', confirmed: true } : m) } } : item) } }))}>已核对这条改编的人物关系</button> : null}
+                            {ev.sourceBindings?.map((source, sourceIndex) => source.binding.mentions.length ? <div key={source.paragraph_id} className="w-full p-2 rounded bg-slate-50 dark:bg-slate-800">
+                              {scriptData?.sourceSnapshot?.paragraphSnapshots && <p className="text-xs mb-1 text-slate-500">前文：{(() => { const paragraphs = scriptData.sourceSnapshot.paragraphSnapshots; const index = paragraphs.findIndex(p => p.id === source.paragraph_id); return paragraphs.slice(Math.max(0, index - 2), Math.max(0, index)).map(p => p.text).join(' '); })() || '无前文'}</p>}
+                              <p className="text-xs mb-1">原文：{source.text}</p>
+                              <EntityBindingReview binding={source.binding} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, sourceBindings: item.sourceBindings!.map((entry, j) => j === sourceIndex ? { ...entry, binding } : entry) } : item) } }))} />
+                            </div> : null)}
                           </div>
                         ))}
                       </div>

@@ -1,11 +1,9 @@
-import crypto from 'node:crypto';
 import { z } from 'zod';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
-import { formatPrompt, getPrompt } from './prompt_registry';
 import { ScriptService, ScriptServiceError, type ScriptWithDetails } from '../script_service';
 import {
   StoryboardCandidatePayloadSchema,
@@ -20,30 +18,24 @@ import {
   ShotIntentSchema,
   ShotContractFieldsSchema,
   SubjectScaleSchema,
-  packShotSpec,
-  type ShotIntent,
-  type SubjectScale,
-  type ShotSourceReference,
 } from '../../schemas/shot_contract';
-import {
-  buildCharacterLockRefsForChapter,
-  buildCharacterProfilesForChapter,
-} from '../timeline_generation_service';
-import { buildTimelineVisualPromptPolicy, normalizeImageModelFamily } from '../image_generation_policy';
-import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../project_settings';
-import { compileEnglishShotPrompt, coversVisibleBeat, assertEnglishFidelity } from '../english_visual_prompt';
-import { compileNegativePrompt } from '../negative_prompt_compiler';
+import { buildCharacterLockRefsForChapter } from '../timeline_generation_service';
+import { parseProjectSettings } from '../project_settings';
+import { coversVisibleBeat, assertEnglishFidelity, actionOverridesWardrobe, stripWardrobeTokens } from '../english_visual_prompt';
 import {
   assertChapterUniqueness,
   formatUniquenessFailure,
 } from '../visual_prompt_uniqueness';
 import {
   assertChapterShotQuota,
-  findChapterShotQuotaViolation,
   formatShotQuotaFailure,
 } from '../shot_intent_quota';
 import { ensureSceneVersionBaseline } from '../scene_versions';
 import { AssetLibraryService } from '../asset_library_service';
+import { auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, serialWorkflow, shotEvidenceIds, shotSoundText, continuityLiteral, visiblePropEvidence, validateFactPayload, validateFactSources, anchorSpans, stabilizeFactBeats, ExtractionSchema, stateCheckKey, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
+import { actionBindingSource, boundText, entityRoster, needsBindingReview, textHash, validateBinding } from '../entity_binding';
+import { sceneContextFacts, scopedWardrobeLock } from '../storyboard_fact_workflow';
 
 export class StoryboardGenerationError extends Error {
   constructor(
@@ -88,250 +80,13 @@ export const RawStoryboardResponseSchema = z.object({
 export type RawStoryboardShot = z.infer<typeof RawStoryboardShotSchema>;
 export type RawStoryboardResponse = z.infer<typeof RawStoryboardResponseSchema>;
 
-const stripAssetLabel = (value: string): string => value.replace(/^(?:场景|地点|道具|物品)\s*[：:]\s*/u, '').trim();
-
-function configuredLlmModel(provider?: AIProvider): string | undefined {
-  if (provider) return undefined;
+function configuredLlmModel(): string | undefined {
   const model = String(SettingsManager.loadSettings().llm?.model || '').trim();
   return model || undefined;
 }
+const currentModelFingerprint = () => `${configuredLlmModel() || 'configured-provider'}:${hash(SettingsManager.loadSettings().llm || {})}`;
 
-function audibleOrderBroken(
-  doc: ScriptDocument,
-  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
-): boolean {
-  for (const scene of doc.scenes) {
-    let lastIndex = -1;
-    for (const shot of shots.filter((item) => item.script_scene_id === scene.id)) {
-      for (const blockId of shot.block_ids) {
-        const index = scene.blocks.findIndex((block) => block.id === blockId);
-        const block = scene.blocks[index];
-        if (!block || (block.type !== 'dialogue' && block.type !== 'voiceover')) continue;
-        if (index < lastIndex) return true;
-        lastIndex = index;
-      }
-    }
-  }
-  return false;
-}
-
-export function repairAudibleOrder(
-  doc: ScriptDocument,
-  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
-): void {
-  const counts = new Map<string, number>();
-  for (const shot of shots) {
-    for (const blockId of shot.block_ids) counts.set(blockId, (counts.get(blockId) || 0) + 1);
-  }
-  if ([...counts.values()].some((count) => count > 1) || !audibleOrderBroken(doc, shots)) return;
-  for (const scene of doc.scenes) {
-    const sceneShots = shots.filter((shot) => shot.script_scene_id === scene.id);
-    if (!sceneShots.length) continue;
-    const audible = scene.blocks.filter((block) => block.type === 'dialogue' || block.type === 'voiceover').map((block) => block.id);
-    const audibleSet = new Set(audible);
-    for (const shot of sceneShots) shot.block_ids = shot.block_ids.filter((blockId) => !audibleSet.has(blockId));
-    const buckets = sceneShots.map(() => [] as string[]);
-    audible.forEach((blockId, index) => {
-      const slot = Math.min(sceneShots.length - 1, Math.floor((index * sceneShots.length) / audible.length));
-      buckets[slot]!.push(blockId);
-    });
-    sceneShots.forEach((shot, index) => shot.block_ids.push(...buckets[index]!));
-  }
-}
-
-export function attachMissingAudibleBlocks(
-  doc: ScriptDocument,
-  shots: Array<{ script_scene_id: string; block_ids: string[] }>,
-): void {
-  const allocated = new Set(shots.flatMap((shot) => shot.block_ids));
-  for (const scene of doc.scenes) {
-    const sceneShots = shots.filter((shot) => shot.script_scene_id === scene.id);
-    if (!sceneShots.length) continue;
-    scene.blocks.forEach((block, blockIndex) => {
-      if (!['dialogue', 'voiceover', 'sound'].includes(block.type) || allocated.has(block.id)) return;
-      let target = sceneShots[0]!;
-      let insertAt = 0;
-      for (const shot of sceneShots) {
-        shot.block_ids.forEach((blockId, index) => {
-          const existingIndex = scene.blocks.findIndex((item) => item.id === blockId);
-          if (existingIndex >= 0 && existingIndex < blockIndex) {
-            target = shot;
-            insertAt = index + 1;
-          }
-        });
-      }
-      target.block_ids.splice(insertAt, 0, block.id);
-      allocated.add(block.id);
-    });
-  }
-}
-
-const intentShotType: Record<string, string> = {
-  establish: 'Extreme Long Shot',
-  'wide-action': 'Wide Shot',
-  'medium-action': 'Medium Shot',
-  insert: 'Insert Shot',
-  payoff: 'Long Shot',
-};
-
-export function balanceShotQuota<T extends { shot_intent?: string | null; shot_type?: string | null; key_props?: string[] }>(
-  shots: T[],
-  hasKeyProps: boolean,
-): void {
-  if (findChapterShotQuotaViolation(shots, { hasKeyProps })) {
-    const total = shots.length;
-    const wideNeeded = Math.ceil(total * 0.35);
-    const insertIndex = hasKeyProps
-      ? Math.max(0, shots.findIndex((shot) => (shot.key_props || []).length > 0))
-      : -1;
-    const wideIndexes = new Set<number>();
-    for (let index = 0; index < total && wideIndexes.size < wideNeeded; index++) {
-      if (index !== insertIndex) wideIndexes.add(index);
-    }
-    shots.forEach((shot, index) => {
-      const intent = index === insertIndex
-        ? 'insert'
-        : wideIndexes.has(index)
-          ? (wideIndexes.values().next().value === index ? 'establish' : 'wide-action')
-          : 'medium-action';
-      shot.shot_intent = intent;
-      shot.shot_type = intentShotType[intent];
-    });
-    let seenEstablish = false;
-    for (const index of wideIndexes) {
-      const shot = shots[index]!;
-      shot.shot_intent = seenEstablish ? 'wide-action' : 'establish';
-      shot.shot_type = intentShotType[shot.shot_intent];
-      seenEstablish = true;
-    }
-  }
-}
-
-function copiesSpokenLine(model: string, line: string): boolean {
-  const left = model.replace(/\s+/g, '');
-  const right = line.replace(/\s+/g, '');
-  if (!left || !right) return false;
-  if (!left.includes(right) && !right.includes(left)) return false;
-  const shorter = Math.min(left.length, right.length);
-  const longer = Math.max(left.length, right.length);
-  return shorter >= 4 && shorter / longer >= 0.6;
-}
-
-function nearestActionText(scene: ScriptScene, blockIds: string[]): string {
-  const indexes = blockIds
-    .map((id) => scene.blocks.findIndex((block) => block.id === id))
-    .filter((index) => index >= 0);
-  const origin = indexes.length ? Math.min(...indexes) : 0;
-  for (let index = origin; index >= 0; index -= 1) {
-    const block = scene.blocks[index];
-    if (block?.type === 'action' && block.text.trim()) return block.text.trim();
-  }
-  for (let index = origin + 1; index < scene.blocks.length; index += 1) {
-    const block = scene.blocks[index];
-    if (block?.type === 'action' && block.text.trim()) return block.text.trim();
-  }
-  return '';
-}
-
-/** Keep a readable Chinese action. Owned action blocks win. Dialogue is not copied onto neighboring shots. */
-export function resolvePrimaryAction(
-  doc: ScriptDocument,
-  shot: { script_scene_id: string; block_ids: string[]; primary_action: string; shot_type?: string | null },
-): string {
-  const checked = (text: string) => {
-    if (text.length > 240) throw new StoryboardGenerationError('镜头动作超过 240 字，必须拆镜或保真压缩后重试；不能截断可见事实', 400);
-    return text;
-  };
-  const fallback = String(shot.primary_action || '').trim();
-  const scene = doc.scenes.find((item) => item.id === shot.script_scene_id);
-  if (!scene) return checked(fallback);
-  const owned = shot.block_ids
-    .map((id) => scene.blocks.find((block) => block.id === id))
-    .filter((block): block is Extract<ScriptBlock, { type: 'action' }> => block?.type === 'action')
-    .map((block) => block.text.trim())
-    .filter(Boolean);
-  if (owned.length) return checked(owned.join('；'));
-  const spoken = shot.block_ids
-    .map((id) => scene.blocks.find((block) => block.id === id))
-    .filter((block): block is Extract<ScriptBlock, { type: 'dialogue' | 'voiceover' }> =>
-      block?.type === 'dialogue' || block?.type === 'voiceover')
-    .map((block) => block.text.trim())
-    .filter(Boolean);
-  const model = String(shot.primary_action || '').trim();
-  const copiesSpeech = spoken.some((line) => copiesSpokenLine(model, line));
-  const narrationCue = /旁白|声音|低语|喊出|问道/.test(model);
-  if (!copiesSpeech && !narrationCue) return checked(model || fallback);
-  const nearest = nearestActionText(scene, shot.block_ids);
-  if (!nearest) return checked(model || fallback);
-  const shotType = String(shot.shot_type || 'shot').trim() || 'shot';
-  return checked(`${shotType}: ${nearest}`);
-}
-
-/** Merge adjacent shots in the same scene until the list fits the cap. Shots are not dropped, and block ids are kept. */
-export function compactStoryboardShots<T extends { script_scene_id: string; block_ids: string[]; primary_action: string }>(
-  shots: T[],
-  limit = 20,
-): T[] {
-  const next = shots.map((shot) => ({ ...shot, block_ids: [...shot.block_ids] }));
-  while (next.length > limit) {
-    const counts = new Map<string, number>();
-    for (const shot of next) counts.set(shot.script_scene_id, (counts.get(shot.script_scene_id) || 0) + 1);
-    let best = -1;
-    let bestCount = 1;
-    for (let index = 0; index < next.length - 1; index++) {
-      if (next[index]!.script_scene_id !== next[index + 1]!.script_scene_id) continue;
-      const count = counts.get(next[index]!.script_scene_id) || 0;
-      if (count > bestCount) {
-        best = index;
-        bestCount = count;
-      }
-    }
-    if (best < 0) break;
-    const current = next[best]!;
-    const following = next[best + 1]!;
-    current.block_ids = [...new Set([...current.block_ids, ...following.block_ids])];
-    if (following.primary_action && !current.primary_action.includes(following.primary_action)) {
-      current.primary_action = `${current.primary_action}；${following.primary_action}`;
-    }
-    next.splice(best + 1, 1);
-  }
-  return next;
-}
-
-/** Map prompt-example ids such as scene_1 / b_1 onto the screenplay's real ids when that mapping is unique. */
-export function normalizeStoryboardReferences<T extends { script_scene_id: string; block_ids: string[] }>(
-  doc: ScriptDocument,
-  shots: T[],
-): T[] {
-  const sceneIds = doc.scenes.map((scene) => scene.id);
-  const sceneIdSet = new Set(sceneIds);
-  const blocksByScene = new Map(doc.scenes.map((scene) => [scene.id, scene.blocks.map((block) => block.id)]));
-  const allBlockIds = new Set([...blocksByScene.values()].flat());
-  const resolveScene = (raw: string): string => {
-    const id = raw.trim();
-    if (sceneIdSet.has(id)) return id;
-    const normalized = id.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
-    const numeric = /^(?:分场|场景|scene|sc)[_-]?(\d+)$|^(\d+)$/.exec(normalized);
-    const number = numeric?.[1] || numeric?.[2];
-    if (!number) return id;
-    const matches = sceneIds.filter((sceneId) => /(?:^|[_-])(\d+)$/.exec(sceneId)?.[1] === String(Number(number)));
-    return matches.length === 1 ? matches[0]! : id;
-  };
-  return shots.map((shot) => {
-    const script_scene_id = resolveScene(shot.script_scene_id);
-    const sceneBlocks = blocksByScene.get(script_scene_id) || [];
-    const block_ids = shot.block_ids.map((raw) => {
-      const id = raw.trim();
-      if (allBlockIds.has(id)) return id;
-      const numeric = /^(?:内容块|block|b)[_-]?(\d+)$/i.exec(id.normalize('NFKC').toLowerCase());
-      const index = numeric ? Number(numeric[1]) - 1 : -1;
-      return index >= 0 && sceneBlocks[index] ? sceneBlocks[index]! : id;
-    }).filter((id) => allBlockIds.has(id));
-    return { ...shot, script_scene_id, block_ids };
-  });
-}
-
-export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>) {
+export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<Pick<RawStoryboardShot, 'script_scene_id' | 'block_ids'>>, factVersion = false) {
     // 8. Coverage and validation gates
     const sceneMap = new Map<string, ScriptScene>();
     for (const sc of doc.scenes) {
@@ -391,7 +146,7 @@ export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<
         if (info.sceneId !== shot.script_scene_id) {
           foreignBlockIds.push(blockId);
         }
-        if (allocatedBlockIds.has(blockId)) {
+        if (allocatedBlockIds.has(blockId) && !(factVersion && info.block.type === 'action')) {
           duplicateBlockIds.push(blockId);
         } else {
           allocatedBlockIds.add(blockId);
@@ -437,10 +192,10 @@ export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<
     const missingVisibleIds = doc.scenes.flatMap(scene => scene.blocks)
       .filter(block => block.type === 'action' && block.id.startsWith('vis_') && !allocatedBlockIds.has(block.id))
       .map(block => block.id);
-    if (missingVisibleIds.length) {
+    if (!factVersion && missingVisibleIds.length) {
       throw new StoryboardGenerationError(`遗漏可见动作内容块: [${missingVisibleIds.join(', ')}]`, 400);
     }
-    for (const beat of doc.outline.visibleBeats || []) {
+    for (const beat of factVersion ? [] : doc.outline.visibleBeats || []) {
       const covered = rawShots.some(shot => {
         const scene = sceneMap.get(shot.script_scene_id)!;
         const action = shot.block_ids.map(id => scene.blocks.find(block => block.id === id))
@@ -457,7 +212,7 @@ export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<
       for (const s of sceneShots) {
         for (const bId of s.block_ids) {
           const info = blockMap.get(bId);
-          if (info && (info.block.type === 'dialogue' || info.block.type === 'voiceover')) {
+          if (info && (info.block.type === 'dialogue' || info.block.type === 'voiceover' || info.block.type === 'sound')) {
             if (info.indexInScene < lastBlockIndex) {
               throw new StoryboardGenerationError(
                 `分场 "${sc.id}" 内对白或画外音内容块顺序颠倒 (block ${bId})`,
@@ -474,14 +229,201 @@ export function validateStoryboardCoverage(doc: ScriptDocument, rawShots: Array<
 }
 
 export class StoryboardGenerationService {
-  private static validatePayload(payload: StoryboardCandidatePayload, script: ScriptWithDetails) {
+  static taskId(scriptId: number, requestKey: string) { return `storyboard_${hash([scriptId, requestKey])}`; }
+
+  static async getTask(scriptId: number, taskId: string) {
+    const task = await db.get("SELECT * FROM generation_task WHERE task_id=? AND kind='storyboard'", taskId);
+    if (!task || Number(task.scene_id) !== -scriptId) throw new StoryboardGenerationError('分镜任务不存在', 404);
+    return { task_id: taskId, status: task.status, progress: JSON.parse(task.progress_json || '{}'), error: task.error, updated_at: task.updated_at };
+  }
+
+  static async listTasks(scriptId: number) {
+    await ScriptService.getScriptById(scriptId);
+    const rows = await db.all("SELECT task_id FROM generation_task WHERE kind='storyboard' AND scene_id=? ORDER BY created_at DESC LIMIT 10", -scriptId);
+    return Promise.all(rows.map(row => this.getTask(scriptId, row.task_id)));
+  }
+
+  static async reviewTaskFacts(scriptId: number, taskId: string, body: unknown) {
+    const input = z.object({ expected_input_hash: z.string(), spans: z.array(ExtractionSchema.shape.spans.element.extend({ scene_id: z.string(), block_id: z.string() })) }).parse(body);
+    const task = await this.getTask(scriptId, taskId);
+    const previousProgressJson = JSON.stringify(task.progress);
+    if (!['failed', 'interrupted'].includes(task.status) || task.progress.input_hash !== input.expected_input_hash || task.progress.candidate_id) throw new StoryboardGenerationError('任务已变化，不能修改事实', 409);
+    const script = await ScriptService.getScriptById(scriptId);
+    if (task.progress.request?.expected_revision !== script.revision) throw new StoryboardGenerationError('剧本版本已变化', 409);
+    const normalized = input.spans.map(span => ({ ...span, states: span.states.map(state => ({ ...state })) }));
+    stabilizeFactBeats(normalized);
+    const facts = script.document.scenes.flatMap(scene => scene.blocks.filter(b => b.type === 'action').flatMap(block => {
+      const spans = normalized.filter(s => s.scene_id === scene.id && s.block_id === block.id);
+      // Establish offsets first; verify submitted states after server-side binding validation.
+      return anchorSpans(scene.id, block.id, block.text, { spans: spans.map(span => ({ ...span, states: [] })) })
+        .map((fact, index) => ({ ...fact, states: spans[index]!.states }));
+    }));
+    if (input.spans.length !== facts.length) throw new StoryboardGenerationError('含跨场或未知来源片段', 400);
+    const roster = entityRoster(await db.all('SELECT id,name FROM character WHERE project_id=? ORDER BY id', script.projectId));
+    for (const fact of facts) {
+      if (!fact.binding) continue;
+      const original = (task.progress.facts || []).find((old: any) => old.scene_id === fact.scene_id && old.block_id === fact.block_id && old.start === fact.start && old.end === fact.end);
+      if (!original?.binding || fact.binding.text_hash !== textHash(fact.text) || fact.binding.context_hash !== original.binding.context_hash || fact.binding.mentions.length !== original.binding.mentions.length) throw new StoryboardGenerationError('核对人物绑定的来源版本已变化', 409);
+      if (fact.binding.context_hash !== actionBindingSource(script.document, fact.scene_id, fact.block_id, roster, fact.start, fact.end).automatic.context_hash) throw new StoryboardGenerationError('核对人物绑定的前文版本已变化', 409);
+      for (const [index, mention] of fact.binding.mentions.entries()) {
+        const old = original.binding.mentions[index];
+        if (mention.start !== old.start || mention.end !== old.end || mention.text !== old.text) throw new StoryboardGenerationError('不能修改人物提及的原文位置', 400);
+        if (mention.confirmed && hash([mention.entity, mention.status, mention.visibility, mention.confirmed]) !== hash([old.entity, old.status, old.visibility, old.confirmed])) mention.authority = 'human';
+      }
+      validateBinding(fact.binding, fact.text, roster);
+    }
+    validateFactSources(script.document, facts);
+    const progress = task.progress as WorkflowProgress;
+    // Keep original complete-source batch boundaries so resume never re-extracts reviewed facts.
+    const original = Object.values(progress.extracted).flat();
+    if (facts.some(f => !original.some(old => old.scene_id === f.scene_id && old.block_id === f.block_id && f.start >= old.start && f.end <= old.end))) throw new StoryboardGenerationError('核对时可拆分来源片段，不能跨越已有来源边界', 400);
+    progress.extracted = Object.fromEntries(Object.entries(progress.extracted).map(([key, old]) => [key, facts.filter(f => old.some(o => o.scene_id === f.scene_id && o.block_id === f.block_id && f.start >= o.start && f.end <= o.end))]));
+    progress.facts = facts; progress.phase = 'reviewed'; delete progress.error;
+    // A person confirmation does not certify states that have never been extracted.
+    const checks: Record<string, boolean> = {};
+    for (const fact of facts.filter(f => f.kind === 'visual')) {
+      const old = original.find(o => o.id === fact.id);
+      const key = stateCheckKey(fact);
+      const statesReviewed = old && (hash(old.states) !== hash(fact.states) || progress.state_review_pending?.includes(old.id));
+      if (!needsBindingReview(fact.binding) && (progress.state_checks?.[key] || statesReviewed)) checks[key] = true;
+    }
+    progress.state_checks = checks;
+    progress.state_review_pending = (progress.state_review_pending || []).filter(id => !facts.some(f => f.id === id && checks[stateCheckKey(f)]));
+    const updated = await db.run("UPDATE generation_task SET progress_json=?, error=NULL WHERE task_id=? AND status=? AND progress_json=?", JSON.stringify(progress), taskId, task.status, previousProgressJson);
+    if (updated.changes !== 1) throw new StoryboardGenerationError('任务在核对期间变化，请刷新', 409);
+    return this.getTask(scriptId, taskId);
+  }
+
+  /** Durable reservation precedes inference; matching retries resume failed scene/shot checkpoints. */
+  static async generateStoryboardCandidate(params: {
+    scriptId: number; expectedRevision: number; requestKey: string; instructions?: string; token?: string; provider?: AIProvider; onReserved?: (attempt?: number) => void;
+  }): Promise<ScriptChangeRow> {
+    const script = await ScriptService.getScriptById(params.scriptId);
+    if (script.revision !== params.expectedRevision) throw new StoryboardGenerationError('剧本版本冲突，请刷新后重试', 409);
+    if (script.status !== 'confirmed' || !script.document.scenes.length) throw new StoryboardGenerationError('只有已确认且包含分场的剧本才能生成分镜', 400);
+    if (script.freshness.sourceChanged) throw new StoryboardGenerationError('剧本来源已过期，请先核对更新', 409);
+    const taskId = this.taskId(script.id, params.requestKey);
+    const project = await db.get('SELECT settings FROM project WHERE id=?', script.projectId);
+    const settings = parseProjectSettings(project?.settings);
+    const assets = await AssetLibraryService.list(script.projectId);
+    const locks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
+    const characterNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId) as Array<{id: number; name: string; english_name: string}>;
+    const model = `${currentModelFingerprint()}:${hash([assets, locks, characterNames])}`;
+    const instructions = params.instructions?.trim() || '';
+    const glossary = Object.fromEntries([...assets, ...characterNames].filter(asset => asset.english_name).map(asset => [asset.name, asset.english_name!])) as Record<string, string>;
+    const inputHash = hash([script.id, script.revision, script.document, assets, locks, characterNames, settings, model, SettingsManager.loadSettings().llm, FACT_POLICY_VERSION, instructions]);
+    const initial: WorkflowProgress = { input_hash: inputHash, attempt: 1, phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [], request: { request_key: params.requestKey, expected_revision: script.revision, instructions } };
+    await db.run("INSERT OR IGNORE INTO generation_task(task_id,scene_id,kind,status,progress_json) VALUES(?,?,'storyboard','queued',?)", taskId, -script.id, JSON.stringify(initial));
+    let reserved = await this.getTask(script.id, taskId);
+    if (reserved.progress.input_hash !== inputHash) throw new StoryboardGenerationError('同一请求键对应不同剧本、资产、模型或指令，请使用新的请求键', 409);
+    if (['failed', 'interrupted', 'cancelled'].includes(reserved.status) && !reserved.progress.candidate_id) {
+      const next = { ...reserved.progress, attempt: (reserved.progress.attempt || 0) + 1, phase: 'queued' };
+      delete next.error;
+      const requeued = await db.run("UPDATE generation_task SET status='queued', error=NULL, progress_json=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=? AND status=? AND progress_json=?",
+        JSON.stringify(next), taskId, reserved.status, JSON.stringify(reserved.progress));
+      reserved = await this.getTask(script.id, taskId);
+      if (!requeued.changes && !['queued', 'processing', 'completed'].includes(reserved.status)) throw new StoryboardGenerationError('任务在恢复期间变化，请刷新后重试', 409);
+    }
+    // The acknowledged attempt is durably queued BEFORE clients can poll it.
+    params.onReserved?.(reserved.progress.attempt);
+    return serialWorkflow(`${taskId}:${reserved.progress.attempt || 0}`, async () => {
+      const stored = await this.getTask(script.id, taskId);
+      if (stored.progress.candidate_id) {
+        const candidate = await db.get('SELECT * FROM script_change WHERE id=? AND script_id=?', stored.progress.candidate_id, script.id);
+        if (candidate) return candidate as ScriptChangeRow;
+      }
+      // Covers a crash between saving the candidate and committing task completion.
+      const candidate = await db.get("SELECT * FROM script_change WHERE script_id=? AND request_key=? AND kind='storyboard'", script.id, params.requestKey);
+      if (candidate) {
+        stored.progress.phase = 'completed'; stored.progress.candidate_id = candidate.id;
+        await db.run("UPDATE generation_task SET status='completed', error=NULL, progress_json=? WHERE task_id=?", JSON.stringify(stored.progress), taskId);
+        return candidate as ScriptChangeRow;
+      }
+      const progress = stored.progress as WorkflowProgress;
+      const persist = async () => { await db.run("UPDATE generation_task SET progress_json=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?", JSON.stringify(progress), taskId); };
+      await db.run("UPDATE generation_task SET status='processing', error=NULL, updated_at=CURRENT_TIMESTAMP WHERE task_id=?", taskId);
+      try {
+        const provider = params.provider || LLMService.getLocalProvider();
+        const result = await runFactWorkflow({ doc: script.document, scriptId: script.id, revision: script.revision, provider, model, locks, glossary, characters: characterNames, instructions, progress, persist });
+        const coverage = validateStoryboardCoverage(script.document, result.shots, true);
+        const payload: StoryboardCandidatePayload = {
+          schemaVersion: 3, fact_contract: result.contract, scriptId: script.id, scriptRevision: script.revision, chapterId: script.chapterId,
+          totalDuration: result.shots.reduce((n, s) => n + s.duration, 0), estimatedScriptDuration: result.contract.budgets.reduce((n, b) => n + b.duration, 0),
+          coverageReport: { coveredSceneIds: [...coverage.coveredSceneIdSet], totalScenes: script.document.scenes.length,
+            coveredBlockIds: [...coverage.allocatedBlockIds], totalAudibleBlocks: coverage.allAudibleBlockIds.size,
+            coveredMustKeepEventIds: script.document.outline.mustKeepEvents.filter(e => script.document.scenes.some(s => s.eventIds.includes(e.id))).map(e => e.id),
+            totalMustKeepEvents: script.document.outline.mustKeepEvents.length }, shots: result.shots,
+        };
+        this.validatePayload(payload, script);
+        await saveAudit(`contract_${hash(result.contract)}`);
+        const latest = await ScriptService.getScriptById(script.id);
+        const latestAssets = await AssetLibraryService.list(script.projectId);
+        const latestLocks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
+        const latestNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId);
+        const latestProject = await db.get('SELECT settings FROM project WHERE id=?', script.projectId);
+        if (latest.revision !== script.revision || latest.status !== 'confirmed' || latest.freshness.sourceChanged ||
+            !model.startsWith(`${currentModelFingerprint()}:`) || hash([latestAssets, latestLocks, latestNames, parseProjectSettings(latestProject?.settings)]) !== hash([assets, locks, characterNames, settings])) throw new StoryboardGenerationError('生成期间剧本、资产或模型变化，候选未保存', 409);
+        const saved = await ScriptService.createPendingCandidate({ scriptId: script.id, kind: 'storyboard', expectedRevision: script.revision, requestKey: params.requestKey,
+          afterJson: JSON.stringify(payload), sourceSnapshot: script.sourceSnapshot,
+          generationInfo: { model, fact_policy_version: FACT_POLICY_VERSION, task_id: taskId, input_hash: inputHash, metrics: progress.metrics } });
+        progress.phase = 'completed'; progress.candidate_id = saved.id;
+        await persist();
+        await db.run("UPDATE generation_task SET status='completed', error=NULL WHERE task_id=?", taskId);
+        return saved;
+      } catch (error: any) {
+        progress.error = error?.message || String(error);
+        if (progress.phase !== 'needs_review') progress.phase = 'failed';
+        await persist();
+        await db.run("UPDATE generation_task SET status='failed', error=? WHERE task_id=?", progress.error, taskId);
+        if (error instanceof StoryboardGenerationError) throw error;
+        throw new StoryboardGenerationError(progress.error || '分镜生成失败', error?.statusCode || 502);
+      }
+    });
+  }
+
+  static async auditPayload(payload: StoryboardCandidatePayload, script: ScriptWithDetails) {
+    if (payload.schemaVersion < 3) throw new StoryboardGenerationError('旧候选缺少新版人物绑定，请重新生成分镜候选', 400);
+    this.validatePayload(payload, script);
+    const assets = await AssetLibraryService.list(script.projectId);
+    const locks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
+    const characterNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId);
+    const glossary = Object.fromEntries([...assets, ...characterNames].filter(a => a.english_name).map(a => [a.name, a.english_name]));
+    const model = `${currentModelFingerprint()}:${hash([assets, locks, characterNames])}`;
+    for (const shot of payload.shots) {
+      const spec = JSON.parse(shot.shot_spec);
+      if (payload.schemaVersion >= 2 && payload.fact_contract) {
+        if (!await hasAudit(`contract_${hash(payload.fact_contract)}`)) throw new StoryboardGenerationError('事实分类契约未经过服务器工作流确认，请重新生成或核对任务', 400);
+        // Only server-side records can authorize reuse. Client fields are never trusted.
+        const key = auditHash(shot, payload.fact_contract, model);
+        const generationAudit = await hasAudit(key);
+        if (generationAudit) continue;
+        const selected = payload.fact_contract.facts.filter(f => shotEvidenceIds(shot).includes(f.id));
+        const facts = selected.map(f => ({ id: f.id, text: boundText(f.text, f.binding) }));
+        facts.push(...continuityLiteral(spec.continuity_states || []));
+        facts.push({ id: 'location', text: spec.location });
+        facts.push(...sceneContextFacts(spec.scene_context));
+        const permittedLocks = locks.filter(l => spec.visible_subjects.includes(l.name)).map(l => ({ ...l, lock: scopedWardrobeLock(l.name!, l.lock, selected, spec.continuity_states || []) }));
+        await serialWorkflow(`audit_${key}`, async () => {
+          if (await hasAudit(key)) return;
+          await auditFacts(LLMService.getLocalProvider(), facts, shot.visual_prompt, { visible_names: spec.visible_subjects, bindings: selected.map(f => f.binding), original_facts: selected.map(f => ({ id: f.id, text: f.text })), locks: permittedLocks, glossary });
+          await saveAudit(key);
+        });
+      } else {
+        const originalActions = script.document.scenes.find(scene => scene.id === shot.script_scene_id)!.blocks.filter(block => block.type === 'action' && shot.block_ids.includes(block.id)).map(block => block.text);
+        await serialWorkflow(`legacy_audit_${hash([shot, originalActions])}`, () => assertEnglishFidelity([...(originalActions.length ? originalActions : [spec.primary_action]), spec.location, ...spec.key_props].join('，'), shot.visual_prompt));
+      }
+    }
+  }
+
+  static validatePayload(payload: StoryboardCandidatePayload, script: ScriptWithDetails) {
     if (payload.shots.length > 20) {
       throw new StoryboardGenerationError('候选分镜超过 20 镜预算上限', 400);
     }
     if (payload.scriptId !== script.id || payload.scriptRevision !== script.revision || payload.chapterId !== script.chapterId) {
       throw new StoryboardGenerationError('候选分镜的剧本来源版本或章节不匹配', 409);
     }
-    const { blockMap } = validateStoryboardCoverage(script.document, payload.shots);
+    if (payload.schemaVersion >= 2) validateFactPayload(script.document, payload);
+    const { blockMap } = validateStoryboardCoverage(script.document, payload.shots, payload.schemaVersion >= 2);
     const contracts = payload.shots.map((shot) => {
       let spec;
       try {
@@ -498,24 +440,25 @@ export class StoryboardGenerationService {
         }
       }
       const blocks = shot.block_ids.map((id) => blockMap.get(id)!.block);
-      for (const block of blocks.filter(block => block.type === 'action')) {
+      for (const block of payload.schemaVersion >= 2 ? [] : blocks.filter(block => block.type === 'action')) {
         if ((block.id.startsWith('vis_') || (script.document.outline.visibleBeats || []).some(beat => coversVisibleBeat(beat.text, block.text)))
           && !coversVisibleBeat(block.text, spec.primary_action)) {
           throw new StoryboardGenerationError(`镜头动作遗漏已分配的可见事实: ${block.id}`, 400);
         }
       }
       const text = (type: ScriptBlock['type'], separator: string) => blocks.filter((block) => block.type === type).map((block) => block.text.trim()).join(separator);
-      if (shot.dialogue !== text('dialogue', '\n') || shot.narration !== text('voiceover', '\n') || shot.audio_prompt !== text('sound', '; ')) {
+      const sound = payload.schemaVersion >= 2 && payload.fact_contract ? shotSoundText(script.document, shot, payload.fact_contract) : text('sound', '; ');
+      if (shot.dialogue !== text('dialogue', '\n') || shot.narration !== text('voiceover', '\n') || shot.audio_prompt !== sound) {
         throw new StoryboardGenerationError('镜头对白、旁白或音效与剧本内容块不一致', 400);
       }
       return { ...shot, shot_intent: spec.shot_intent, key_props: spec.key_props };
     });
-    for (const beat of script.document.outline.visibleBeats || []) {
+    for (const beat of payload.schemaVersion >= 2 ? [] : script.document.outline.visibleBeats || []) {
       if (!payload.shots.some(shot => coversVisibleBeat(beat.text, JSON.parse(shot.shot_spec).primary_action))) {
         throw new StoryboardGenerationError(`镜头契约遗漏可见事实: ${beat.id}`, 400);
       }
     }
-    for (let index = 1; index < contracts.length; index++) {
+    for (let index = 1; payload.schemaVersion < 2 && index < contracts.length; index++) {
       const previousPrompt = String(contracts[index - 1]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
       const currentPrompt = String(contracts[index]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
       if (previousPrompt && previousPrompt === currentPrompt) {
@@ -529,378 +472,15 @@ export class StoryboardGenerationService {
         ...shot.key_props].filter(Boolean).join(', '),
       uniqueness_key: JSON.parse(shot.shot_spec).uniqueness_key,
     })));
-    if (uniqueness.ok === false) throw new StoryboardGenerationError(formatUniquenessFailure(uniqueness.violation), 400);
-    const quota = assertChapterShotQuota(contracts, { hasKeyProps: script.document.props.length > 0 || contracts.some((shot) => shot.key_props.length > 0) });
-    if (quota.ok === false) throw new StoryboardGenerationError(formatShotQuotaFailure(quota.violation), 400);
-  }
-  /**
-   * Phase 1: Generate storyboard candidate from confirmed screenplay.
-   * Compiles contracts, sanitizes, uniqueness check, quota check, block coverage.
-   * Persists as kind='storyboard' candidate in script_change table.
-   */
-  static async generateStoryboardCandidate(params: {
-    scriptId: number;
-    expectedRevision: number;
-    requestKey: string;
-    instructions?: string;
-    token?: string;
-    provider?: AIProvider;
-  }): Promise<ScriptChangeRow> {
-    // 1. Idempotency check by script_id + request_key
-    const existing = (await db.get(
-      'SELECT * FROM script_change WHERE script_id = ? AND request_key = ?',
-      params.scriptId,
-      params.requestKey
-    )) as ScriptChangeRow | undefined;
-    if (existing) {
-      return existing;
-    }
-
-    // 2. Fetch script and verify confirmed status & revision
-    const script = await ScriptService.getScriptById(params.scriptId);
-    if (script.revision !== params.expectedRevision) {
-      throw new StoryboardGenerationError(
-        `Revision conflict: expected revision ${params.expectedRevision}, but current revision is ${script.revision}`,
-        409
-      );
-    }
-
-    if (script.status !== 'confirmed') {
-      throw new StoryboardGenerationError(
-        '只有已确认（confirmed）的剧本才能生成分镜候选',
-        400
-      );
-    }
-
-    // 3. Verify freshness of source snapshot
-    const freshness = script.freshness;
-    if (freshness.sourceChanged) {
-      throw new StoryboardGenerationError(
-        '剧本来源已过期，请核对更新剧本后再生成分镜候选',
-        409
-      );
-    }
-
-    const doc: ScriptDocument = script.document;
-    if (!doc.scenes || doc.scenes.length === 0) {
-      throw new StoryboardGenerationError(
-        '剧本不包含任何有效戏剧分场，无法生成分镜',
-        400
-      );
-    }
-
-    // 4. Load character profiles & locks
-    const characterProfiles = await buildCharacterProfilesForChapter(
-      script.projectId,
-      script.chapterId
-    );
-    const characterLocks = await buildCharacterLockRefsForChapter(
-      script.projectId,
-      script.chapterId
-    );
-
-    // 5. Build prompt
-    const project = await db.get('SELECT settings FROM project WHERE id = ?', script.projectId);
-    const projectSettings = parseProjectSettings(project?.settings);
-    const nsfwEnabled = resolveEffectiveNsfw({
-      systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
-      projectSettings,
-    });
-    const modelFamily = normalizeImageModelFamily(getProjectImageSettings(projectSettings).model);
-    const locationNames = new Map(doc.locations.map(location => [location.id, location.name]));
-    const propNames = new Map(doc.props.map(prop => [prop.id, prop.name]));
-    const libraryAssets = await AssetLibraryService.list(script.projectId);
-    const assetCatalog = libraryAssets.length
-      ? `场景名称：${libraryAssets.filter(asset => asset.kind === 'location').map(asset => asset.name).join('、')}\n道具名称：${libraryAssets.filter(asset => asset.kind === 'prop').map(asset => asset.name).join('、')}`
-      : '尚未建立资产库，请沿用剧本中声明的地点和道具名称。';
-    const scriptScenesSummary = doc.scenes.map((s, idx) => {
-      const blocksDesc = s.blocks
-        .map((b) => {
-          if (b.type === 'action') return `    [${b.id}] 动作: ${b.text}`;
-          if (b.type === 'dialogue') {
-            return `    [${b.id}] 对白 (角色ID=${b.characterId}${b.delivery ? `，情绪=${b.delivery}` : ''}): ${b.text}`;
-          }
-          if (b.type === 'voiceover') {
-            return `    [${b.id}] 画外音 (角色ID=${b.characterId ?? '旁白'}): ${b.text}`;
-          }
-          if (b.type === 'sound') return `    [${b.id}] 音效: ${b.text}`;
-          return '';
-        })
-        .join('\n');
-
-      return `分场 ${idx + 1} (id: ${s.id}):
-  地点ID: ${s.locationId}, 地点名称: ${locationNames.get(s.locationId) || ''}, 景别: ${s.interiorExterior === 'exterior' ? '外景' : '内景'}, 时间: ${s.timeOfDay}
-  道具名称: ${s.propIds.map(id => propNames.get(id) || id).join('、') || '无'}
-  出场角色ID: [${s.characterIds.join(', ')}]
-  内容块:
-${blocksDesc}`;
-    }).join('\n\n');
-
-    const prompt = formatPrompt(getPrompt('script_storyboard_gen'), {
-      chapterTitle: script.sourceSnapshot?.chapterTitle || `第 ${script.chapterId} 章`,
-      targetDurationSec: doc.targetDurationSec || 120,
-      characterProfiles: characterProfiles || '(无特定锁定标签)',
-      assetCatalog,
-      directorInstructions: params.instructions?.trim() || '遵循剧本，不增加无关地点和道具。',
-      visualPromptPolicy: buildTimelineVisualPromptPolicy(nsfwEnabled, { responseFormat: 'script_storyboard' }),
-      scriptContent: scriptScenesSummary,
-    });
-
-    // 6. Call Provider / LLM. One rewrite is allowed when the model exceeds the shot cap.
-    // The cap still fails closed: shots are never sliced.
-    const provider = params.provider || LLMService.getProvider(params.token);
-    let attemptPrompt = prompt;
-    let rawShots: RawStoryboardShot[] = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let rawResult: RawStoryboardResponse | null = null;
-      try {
-        rawResult = await provider.generateStructured(
-          attemptPrompt,
-          RawStoryboardResponseSchema,
-          '你是一位专业影视导演和分镜师，请严格按要求输出 JSON 格式分镜镜头列表。'
-        );
-      } catch (err: any) {
-        logger.error(`Failed to generate storyboard: ${err}`);
-        throw new StoryboardGenerationError(
-          `模型生成分镜候选失败: ${err.message || String(err)}。正式时间线未发生任何更改。`,
-          502
-        );
-      }
-      if (!rawResult || !rawResult.shots || rawResult.shots.length === 0) {
-        throw new StoryboardGenerationError(
-          '模型返回空结果，未能生成有效分镜镜头契约。',
-          502
-        );
-      }
-      rawShots = compactStoryboardShots(normalizeStoryboardReferences(doc, rawResult.shots.map(shot => ({
-        ...shot,
-        location: stripAssetLabel(shot.location).slice(0, 240),
-        primary_action: shot.primary_action,
-        key_props: (shot.key_props || []).map(stripAssetLabel),
-      }))), 20);
-      if (rawShots.length > 20 && attempt === 0) {
-        attemptPrompt = `${prompt}\n\n上次输出了 ${rawShots.length} 个镜头，超过 20 镜上限，不能截断。请重写为不超过 12 镜：每个分场最多 2 镜，每条对白和画外音仍只分配一次。不要把同一个动作拆成多镜。`;
-        continue;
-      }
-      break;
-    }
-
-    // 7. Hard cap gate: Max 20 shots budget (fail closed, do NOT slice)
-    if (rawShots.length > 20) {
-      throw new StoryboardGenerationError(
-        `镜头数量 (${rawShots.length} 镜) 超过 20 镜上限，请精简剧本分场或缩短内容`,
-        400
-      );
-    }
-
-    attachMissingAudibleBlocks(doc, rawShots);
-    repairAudibleOrder(doc, rawShots);
-    const hasPropsForQuota = (doc.props && doc.props.length > 0) || rawShots.some((shot) => shot.key_props && shot.key_props.length > 0);
-    balanceShotQuota(rawShots, hasPropsForQuota);
-    const { coveredSceneIdSet, allocatedBlockIds, blockMap, allAudibleBlockIds } = validateStoryboardCoverage(doc, rawShots);
-
-    // 9. Deterministic assembly of dialogue, narration, audio_prompt & compilation
-    const preparedCandidateShots: StoryboardCandidateShot[] = [];
-
-    for (let i = 0; i < rawShots.length; i++) {
-      const shot = rawShots[i]!;
-      const location = shot.location.trim();
-      const primary_action = resolvePrimaryAction(doc, shot);
-      const key_props = shot.key_props || [];
-      const shot_intent = shot.shot_intent || null;
-      const subject_scale = shot.subject_scale || null;
-      const primary_subject = shot.primary_subject || null;
-      const visible_subjects = shot.visible_subjects || [];
-
-      // Assemble dialogue, narration, audio_prompt deterministically from referenced blocks
-      const dialogueTexts: string[] = [];
-      const narrationTexts: string[] = [];
-      const soundTexts: string[] = [];
-
-      for (const bId of shot.block_ids) {
-        const info = blockMap.get(bId);
-        if (!info) continue;
-        if (info.block.type === 'dialogue') {
-          dialogueTexts.push(info.block.text.trim());
-        } else if (info.block.type === 'voiceover') {
-          narrationTexts.push(info.block.text.trim());
-        } else if (info.block.type === 'sound') {
-          soundTexts.push(info.block.text.trim());
-        }
-      }
-
-      const dialogue = dialogueTexts.join('\n');
-      const narration = narrationTexts.join('\n');
-      const audio_prompt = soundTexts.join('; ');
-
-      // English image prompt. The contract fields above stay Chinese.
-      let compiled;
-      try {
-        compiled = await compileEnglishShotPrompt(
-          {
-            shot_intent,
-            shot_type: shot.shot_type,
-            location,
-            primary_action,
-            primary_subject,
-            visible_subjects,
-            key_props,
-            subject_scale,
-            must_not: shot.must_not || [],
-          },
-          characterLocks,
-          { modelFamily, nsfwEnabled },
-        );
-      } catch (err: any) {
-        throw new StoryboardGenerationError(
-          `英文生图提示词未能保留可见画面：${err?.message || String(err)}`,
-          502,
-        );
-      }
-      const compiledNegative = compileNegativePrompt({
-        shot_type: shot.shot_type,
-        shot_intent: compiled.shot_intent || shot_intent,
-        visual_prompt: compiled.visual_prompt,
-        location,
-        key_props,
-        character_lock: characterLocks.map((ref) => ref.lock).join(', '),
-        identity_mode: 'auto',
-      });
-
-      const negative_prompt = [compiledNegative, ...compiled.negative_extras]
-        .filter(Boolean)
-        .join(', ');
-
-      const sourceRef: ShotSourceReference = {
-        type: 'script',
-        script_id: script.id,
-        script_revision: script.revision,
-        script_scene_id: shot.script_scene_id,
-        block_ids: shot.block_ids,
-      };
-
-      const shot_spec = packShotSpec({
-        shot_intent: compiled.shot_intent || shot_intent,
-        location,
-        primary_action,
-        primary_subject,
-        visible_subjects,
-        key_props,
-        subject_scale,
-        must_not: shot.must_not || [],
-        shot_type: shot.shot_type,
-        source: sourceRef,
-      });
-
-      preparedCandidateShots.push({
-        index: i + 1,
-        script_scene_id: shot.script_scene_id,
-        block_ids: shot.block_ids,
-        visual_prompt: compiled.visual_prompt,
-        audio_prompt,
-        dialogue,
-        narration,
-        duration: shot.duration || 5.0,
-        shot_type: shot.shot_type || 'Medium Shot',
-        camera_movement: shot.camera_movement || 'Static',
-        camera_angle: shot.camera_angle || 'Eye-level',
-        negative_prompt: negative_prompt || null,
-        shot_spec,
-        source: sourceRef,
-      });
-    }
-
-    // 10. Run compiler uniqueness & quota gates
-    const uniqueness = assertChapterUniqueness(preparedCandidateShots.map(s => {
-      const spec = JSON.parse(s.shot_spec);
-      return {
-        visual_prompt: [spec.shot_intent, spec.primary_action,
-          ...spec.key_props].filter(Boolean).join(', '),
-        uniqueness_key: spec.uniqueness_key,
-      };
-    }));
-    if (uniqueness.ok === false) {
-      throw new StoryboardGenerationError(
-        formatUniquenessFailure(uniqueness.violation),
-        502
-      );
-    }
-
-    const hasKeyProps =
-      (doc.props && doc.props.length > 0) ||
-      rawShots.some((s) => s.key_props && s.key_props.length > 0);
-
-    const quota = assertChapterShotQuota(
-      preparedCandidateShots.map((s) => ({
-        shot_type: s.shot_type,
-        shot_intent: JSON.parse(s.shot_spec).shot_intent,
-        visual_prompt: s.visual_prompt,
-      })),
-      { hasKeyProps }
-    );
+    if (payload.schemaVersion < 2 && uniqueness.ok === false) throw new StoryboardGenerationError(formatUniquenessFailure(uniqueness.violation), 400);
+    const visibleProps = payload.schemaVersion >= 2 && payload.fact_contract ? visiblePropEvidence(script.document, payload.fact_contract.facts) : [];
+    const hasKeyProps = payload.schemaVersion >= 2 ? visibleProps.length > 0 : script.document.scenes.some(s => s.propIds.length) || contracts.some(shot => shot.key_props.length > 0);
+    const quota = assertChapterShotQuota(contracts, { hasKeyProps });
     if (quota.ok === false) {
-      throw new StoryboardGenerationError(
-        formatShotQuotaFailure(quota.violation),
-        502
-      );
+      const detail = quota.violation.reason === 'missing_insert' && visibleProps.length ? `；可见道具: ${visibleProps.map(prop => `${prop.scene_id}/${prop.name}`).join('；')}` : '';
+      throw new StoryboardGenerationError(formatShotQuotaFailure(quota.violation) + detail, 400);
     }
-
-    // 11. Build payload & coverage report
-    const totalDuration = preparedCandidateShots.reduce(
-      (sum, s) => sum + s.duration,
-      0
-    );
-    const estimatedScriptDuration = doc.scenes.reduce(
-      (sum, s) => sum + (s.estimatedDurationSec || 0),
-      0
-    );
-
-    const coveredMustKeepEventIds = (doc.outline?.mustKeepEvents || [])
-      .filter((ev) => {
-        // Must-keep event covered if any covered scene contains it
-        return doc.scenes.some(
-          (sc) => coveredSceneIdSet.has(sc.id) && sc.eventIds?.includes(ev.id)
-        );
-      })
-      .map((ev) => ev.id);
-
-    const payload: StoryboardCandidatePayload = {
-      schemaVersion: 1,
-      scriptId: script.id,
-      scriptRevision: script.revision,
-      chapterId: script.chapterId,
-      totalDuration,
-      estimatedScriptDuration,
-      coverageReport: {
-        coveredSceneIds: Array.from(coveredSceneIdSet),
-        totalScenes: doc.scenes.length,
-        coveredBlockIds: Array.from(allocatedBlockIds),
-        totalAudibleBlocks: allAudibleBlockIds.size,
-        coveredMustKeepEventIds,
-        totalMustKeepEvents: doc.outline?.mustKeepEvents?.length || 0,
-      },
-      shots: preparedCandidateShots,
-    };
-
-    // 12. Save pending candidate in script_change
-    return ScriptService.createPendingCandidate({
-      scriptId: script.id,
-      kind: 'storyboard',
-      expectedRevision: params.expectedRevision,
-      requestKey: params.requestKey,
-      afterJson: JSON.stringify(payload),
-      sourceSnapshot: script.sourceSnapshot,
-      generationInfo: {
-        total_shots: preparedCandidateShots.length,
-        total_duration: totalDuration,
-        instructions: params.instructions,
-        nsfw_enabled: nsfwEnabled,
-        visual_prompt_policy_version: 1,
-        ...(configuredLlmModel(params.provider) ? { model: configuredLlmModel(params.provider) } : {}),
-      },
-    });
   }
-
   /**
    * Phase 2: Apply a pending storyboard candidate to the chapter timeline.
    * Safety rules:
@@ -1056,15 +636,8 @@ ${blocksDesc}`;
       );
     }
 
-    this.validatePayload(payload, script);
-    for (const shot of payload.shots) {
-      const spec = JSON.parse(shot.shot_spec);
-      try {
-        await assertEnglishFidelity([spec.primary_action, spec.location, ...spec.key_props].join('，'), shot.visual_prompt);
-      } catch (error: any) {
-        throw new StoryboardGenerationError(`候选英文提示词未通过保真核验：${error?.message || String(error)}`, 502);
-      }
-    }
+    try { await this.auditPayload(payload, script); }
+    catch (error: any) { throw new StoryboardGenerationError(`候选核验失败：${error?.message || String(error)}`, error?.statusCode || 502); }
 
     // 6. Atomic application in a short transaction
     await db.exec('BEGIN IMMEDIATE TRANSACTION');

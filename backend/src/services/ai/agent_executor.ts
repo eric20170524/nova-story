@@ -3,7 +3,7 @@ import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
 import { parseProjectSettings, serializeProjectSettings } from '../project_settings';
-import { generateAndReplaceNarrativeTimeline } from '../timeline_generation_service';
+import { TIMELINE_DIRECT_WRITE_DISABLED } from '../timeline_generation_service';
 import {
   AgentActionSchema,
   normalizeAgentAction,
@@ -649,38 +649,7 @@ export class AgentExecutor {
       }
 
       case 'GENERATE_TIMELINE': {
-        const chapterId = action.chapterId || ctx.chapterId;
-        if (!chapterId) {
-          return { op, status: 'error', message: 'No chapter for timeline' };
-        }
-        const chapter = await assertChapterInProject(chapterId, ctx.projectId);
-        if (!chapter.content) {
-          return { op, status: 'error', message: 'Chapter empty' };
-        }
-        if (!ctx.apply) {
-          return {
-            op,
-            status: 'success',
-            message: 'Would generate timeline',
-            data: { chapterId },
-          };
-        }
-        const result = await generateAndReplaceNarrativeTimeline({
-          chapterId,
-          projectId: ctx.projectId,
-          content: String(chapter.content),
-          mode: action.mode || 'narrative',
-        });
-        return {
-          op,
-          status: 'success',
-          message: `Generated ${result.count} scenes`,
-          data: {
-            chapterId,
-            count: result.count,
-            storyboard_mode: result.storyboard_mode,
-          },
-        };
+        return { op, status: 'error', message: TIMELINE_DIRECT_WRITE_DISABLED };
       }
 
       case 'ANALYZE_CHAPTER': {

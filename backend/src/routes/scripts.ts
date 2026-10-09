@@ -1,4 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { ZodError } from 'zod';
+import { FactWorkflowError } from '../services/storyboard_fact_workflow';
 import {
   ScriptService,
   ScriptServiceError,
@@ -26,6 +28,8 @@ import {
 export const scriptRoutes: FastifyPluginAsync = async (app) => {
   // Error handling helper
   const handleError = (error: unknown, reply: any) => {
+    if (error instanceof ZodError) return reply.status(400).send({ detail: error.message });
+    if (error instanceof FactWorkflowError) return reply.status(error.statusCode).send({ detail: error.message });
     if (
       error instanceof ScriptServiceError ||
       error instanceof ScriptGenerationError ||
@@ -459,6 +463,19 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      if (parsed.data.background) {
+        let attempt: number | undefined;
+        let notifyReserved!: () => void;
+        const reserved = new Promise<void>(resolve => { notifyReserved = resolve; });
+        const work = StoryboardGenerationService.generateStoryboardCandidate({ scriptId,
+          expectedRevision: parsed.data.expected_revision, requestKey: parsed.data.request_key,
+          instructions: parsed.data.instructions, onReserved: currentAttempt => { attempt = currentAttempt; notifyReserved(); } });
+        // Return only after durable reservation or an immediate validation failure.
+        await Promise.race([reserved, work.then(() => undefined)]);
+        void work.catch(() => undefined);
+        const taskId = StoryboardGenerationService.taskId(scriptId, parsed.data.request_key);
+        return reply.status(202).send({ task_id: taskId, attempt, task_url: `/api/scripts/${scriptId}/storyboard-tasks/${taskId}` });
+      }
       const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
         scriptId,
         expectedRevision: parsed.data.expected_revision,
@@ -470,6 +487,21 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       return handleError(error, reply);
     }
+  });
+
+  app.get<{ Params: { scriptId: string; taskId: string } }>('/scripts/:scriptId/storyboard-tasks/:taskId', async (request, reply) => {
+    try { return await StoryboardGenerationService.getTask(Number(request.params.scriptId), request.params.taskId); }
+    catch (error) { return handleError(error, reply); }
+  });
+
+  app.get<{ Params: { scriptId: string } }>('/scripts/:scriptId/storyboard-tasks', async (request, reply) => {
+    try { return { tasks: await StoryboardGenerationService.listTasks(Number(request.params.scriptId)) }; }
+    catch (error) { return handleError(error, reply); }
+  });
+
+  app.patch<{ Params: { scriptId: string; taskId: string } }>('/scripts/:scriptId/storyboard-tasks/:taskId/facts', async (request, reply) => {
+    try { return await StoryboardGenerationService.reviewTaskFacts(Number(request.params.scriptId), request.params.taskId, request.body); }
+    catch (error) { return handleError(error, reply); }
   });
 
   /**

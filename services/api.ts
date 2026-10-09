@@ -722,18 +722,33 @@ class ApiService {
       method: 'POST',
     });
 
-  createStoryboardCandidate = (
+  getStoryboardTasks = (scriptId: number) => this.request<{ tasks: any[] }>(`/scripts/${scriptId}/storyboard-tasks`);
+  getStoryboardTask = (scriptId: number, taskId: string) => this.request<any>(`/scripts/${scriptId}/storyboard-tasks/${encodeURIComponent(taskId)}`);
+  reviewStoryboardFacts = (scriptId: number, taskId: string, payload: unknown) => this.request<any>(`/scripts/${scriptId}/storyboard-tasks/${encodeURIComponent(taskId)}/facts`, { method: 'PATCH', body: payload });
+
+  createStoryboardCandidate = async (
     scriptId: number,
     payload: {
       expected_revision: number;
       request_key: string;
       instructions?: string;
     }
-  ) =>
-    this.request<{ candidate: any }>(`/scripts/${scriptId}/storyboard-candidates`, {
+  ) => {
+    const started = await this.request<{ candidate?: any; task_id?: string; attempt?: number }>(`/scripts/${scriptId}/storyboard-candidates`, {
       method: 'POST',
-      body: payload,
+      body: { ...payload, background: true },
     });
+    if (started.candidate) return { candidate: started.candidate };
+    if (!started.task_id) throw new Error('未收到分镜任务编号');
+    for (;;) {
+      const task = await this.getStoryboardTask(scriptId, started.task_id);
+      if (!started.attempt || (task.progress?.attempt || 0) >= started.attempt) {
+        if (task.status === 'completed') return { candidate: { id: task.progress.candidate_id } };
+        if (['failed', 'cancelled', 'interrupted'].includes(task.status)) throw new Error(task.error || '任务已中断，可从已完成场次继续');
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  };
 
   getStoryPlan = (projectId: number) =>
     this.request<any>(`/projects/${projectId}/story-plan`);

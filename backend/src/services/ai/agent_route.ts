@@ -115,7 +115,7 @@ function defaultResponseForIntent(intent: string, userMessage: string): string {
     ADD_CONFLICT: '将为本章注入戏剧冲突；确认后写入。',
     REVERSE_PLOT: '将设计情节反转；确认后写入。',
     RUN_CONSISTENCY_CHECK: '正在进行全书逻辑一致性体检。',
-    GENERATE_TIMELINE: '将基于本章生成分镜时间线；确认后写入。',
+    GENERATE_TIMELINE: '正文直写分镜已停用，请在剧本确认后生成并核对分镜候选。',
     ANSWER_QUESTION: '正在回答你的问题。',
     QUERY_DATABASE: '正在查询项目数据。',
     RENAME_CHAPTER: '将重命名章节；请确认。',

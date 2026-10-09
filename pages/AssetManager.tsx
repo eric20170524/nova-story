@@ -6,7 +6,7 @@ import { api } from '../services/api';
 import { useToast } from '../ToastContext';
 import { resolveMediaUrl, useImagePreview } from '../components/ImageLightbox';
 
-type Asset = { id: number; kind: 'location' | 'prop'; name: string; description: string; visual_prompt: string; image_url?: string; status: string; revision: number; task_id?: string };
+type Asset = { id: number; kind: 'location' | 'prop'; name: string; english_name?: string; description: string; visual_prompt: string; image_url?: string; status: string; revision: number; task_id?: string };
 export const AssetManager: React.FC = () => {
   const { id } = useParams();
   const projectId = Number(id);
@@ -69,12 +69,13 @@ export const AssetManager: React.FC = () => {
       {!assets.some(a => a.kind === tab) && <p className="text-slate-500 p-8 text-center">暂无{tab === 'location' ? '场景' : '道具'}。选择已有正文的章节提取，或手动添加。</p>}
     </div>}
     {editing && <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-5"><form onSubmit={e => { e.preventDefault(); void run(async () => {
-      const data = { kind: editing.kind, name: editing.name, description: editing.description, visual_prompt: editing.visual_prompt };
+      const data = { kind: editing.kind, name: editing.name, english_name: editing.english_name || '', description: editing.description, visual_prompt: editing.visual_prompt };
       if (editing.id) await api.updateLibraryAsset(editing.id, editing.revision!, data); else await api.createLibraryAsset(projectId, data);
       setEditing(null);
     }); }} className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-xl p-6 space-y-4">
       <div className="flex items-center"><h2 className="font-semibold flex-1">{editing.id ? '编辑资产' : '添加资产'}</h2><button type="button" aria-label="关闭" onClick={() => setEditing(null)}><X size={18} /></button></div>
       <label className="block text-sm">名称<input required maxLength={120} value={editing.name || ''} onChange={e => setEditing({ ...editing, name: e.target.value })} className="block border rounded p-2 w-full mt-1 dark:bg-slate-800" /></label>
+      <label className="block text-sm">固定英文译名<input maxLength={120} value={editing.english_name || ''} onChange={e => setEditing({ ...editing, english_name: e.target.value })} className="block border rounded p-2 w-full mt-1 dark:bg-slate-800" placeholder="未填写时使用音译" /></label>
       <label className="block text-sm">外观与连续性描述<textarea maxLength={3000} rows={3} value={editing.description || ''} onChange={e => setEditing({ ...editing, description: e.target.value })} className="block border rounded p-2 w-full mt-1 dark:bg-slate-800" /></label>
       <label className="block text-sm">英文视觉提示词<textarea maxLength={3000} rows={4} value={editing.visual_prompt || ''} onChange={e => setEditing({ ...editing, visual_prompt: e.target.value })} className="block border rounded p-2 w-full mt-1 dark:bg-slate-800" /></label>
       {editing.id && <p className="text-xs text-amber-600">保存外观修改会清空当前素材，引用该资产的镜头需要重新绑定。</p>}

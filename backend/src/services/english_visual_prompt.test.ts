@@ -98,7 +98,7 @@ test('compiled shot prompts are English and fail closed when visible facts disap
       '',
       { modelFamily: 'redcraft_krea2', nsfwEnabled: true },
     );
-    assert.match(seenSystem, /2 to 4 natural English sentences/);
+    assert.match(seenSystem, /literally into short English sentences/);
     assert.match(seenSystem, /NSFW: on/);
 
     setVisualPromptTranslatorForTests(async () => 'soft moonlight and poetic atmosphere');
@@ -163,7 +163,7 @@ test('semantic fidelity rejects reversed clothing and facts outside the glossary
   }
 });
 
-test('shot clothing and a half-open door survive an auditor that mislabels them', async () => {
+test('keyword hits never exempt compound facts from a failed auditor result', async () => {
   const source = '陆嘉静端坐如宫主般脊背挺直，月白里衣半敞，锁骨下仙纹随呼吸明灭，正解外袍举行仪式。 with 合欢香，清暮宫内殿 in soft background，门扉半掩隔绝尘世 in soft background，陆嘉静 appearance: long_silky_white';
   const english = 'She sits with her spine perfectly straight while partially unbuttoning her moon-white undergarment. She begins to remove her outer robe for a ritual while the scent of Joyous Union perfume lingers. The background is the inner hall, where half-open doors suggest the separation from the mortal world. long, silky white hair.';
   setVisualPromptVerifierForTests(async () => ({
@@ -178,7 +178,14 @@ test('shot clothing and a half-open door survive an auditor that mislabels them'
       { id: 7, status: 'contradicted', evidence: 'long, silky white hair' },
     ],
   }));
-  await assertEnglishFidelity(source, english);
+  await assert.rejects(() => assertEnglishFidelity(source, english), /dropped visible facts/);
+});
+
+test('synonymous door wording cannot hide omitted cats or project-specific props', async () => {
+  setVisualPromptVerifierForTests(async facts => ({ facts: facts.map((_, id) => ({ id, status: 'missing', evidence: '' })) }));
+  for (const source of ['门扉半掩且门外有三只白猫', '木门半开且门外有三只白猫', '合欢香旁边有三只白猫']) {
+    await assert.rejects(() => assertEnglishFidelity(source, 'A half-open door and incense.'), /dropped visible facts/);
+  }
 });
 
 test('production fidelity path audits every clause with relational instructions', async () => {
