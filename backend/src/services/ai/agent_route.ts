@@ -14,9 +14,12 @@ import { LLMService } from '../llm';
 import { formatPrompt, getPrompt, type PromptKey } from './prompt_registry';
 
 const ROUTE_SYSTEM = `You are a routing kernel for NovaStory. Output ONLY JSON matching the schema.
-Pick exactly one intent. Do not invent nested objects. Do not answer the user question in this step.
+Pick exactly one intent from the schema. If you cannot, return nothing. Do not invent an intent.
+Do not invent nested objects. Do not answer the user question in this step.
 chapterScope=current means use the active chapter; none means project-wide or N/A.
-focus = short parameter text (rename title, character name, rewrite focus) — keep under 200 chars.`;
+focus = short parameter text only. For RENAME_CHAPTER, focus is the new title and nothing else.
+When the user says not to write or persist, choose ANALYZE_CHAPTER_CHARACTERS.
+Keep focus under 200 chars.`;
 
 export type RouteDecideInput = {
   userMessage: string;
@@ -48,7 +51,7 @@ export function buildRoutePrompt(input: RouteDecideInput): string {
 }
 
 /**
- * Resolve route: preferred_op / keyword shortcut / strict LLM schema / null.
+ * Resolve route: an explicit UI chip, otherwise the route model. An intent outside the enum fails.
  */
 export async function resolveAgentRoute(
   input: RouteDecideInput

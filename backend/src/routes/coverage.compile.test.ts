@@ -19,10 +19,12 @@ test('compileCoverageCandidate fills empty visual_prompt from contract', () => {
     [{ name: '小兽', lock: 'small beige-and-white furry creature' }],
     6
   );
-  assert.match(compiled.visual_prompt, /music-note button|presses/i);
+  assert.equal(compiled.visual_prompt, '');
   assert.match(compiled.negative_prompt, /aerial|landscape/i);
+  assert.match(compiled.negative_prompt, /child, loli, shota/);
+  assert.doesNotMatch(compiled.negative_prompt, /\bwoman\b|\bgirl\b/i);
   assert.match(String(compiled.shot_spec), /insert/);
-  assert.ok(compiled.visual_prompt.length > 10);
+  assert.match(String(compiled.shot_spec), /paw presses music-note button/);
 });
 
 test('coverage fallback inherits source contract and fails closed without it', () => {

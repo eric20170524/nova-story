@@ -24,6 +24,13 @@ export type CharacterLockRef = {
   name?: string | null;
   aliases?: string[] | null;
   lock: string;
+  appearance?: {
+    hair?: string;
+    face?: string;
+    body?: string;
+    clothing?: string;
+    accessories?: string;
+  };
 };
 
 export type CompilePonyPromptResult = {

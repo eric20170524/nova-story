@@ -4,7 +4,7 @@
  * Must not copy one static string across a whole chapter.
  */
 
-import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
+import { type ShotIntent } from './shot_intent_quota';
 
 export type IdentityMode = 'nonhuman' | 'human' | 'mixed' | 'unknown' | 'auto';
 
@@ -85,76 +85,26 @@ const SHOT_INVERSE: Record<ShotIntent, string[]> = {
   'overhead-map': ['close-up face', 'facial close-up', 'studio portrait'],
 };
 
-const LOCATION_INVERSE_RULES: Array<{ match: RegExp; negatives: string[] }> = [
-  {
-    match: /\b(corridor|arcade|hallway|machine room|cockpit|cabin|interior|室内|长廊|机房|座舱)\b/i,
-    negatives: ['mountains', 'real sky vista', 'farmland', 'satellite photo', 'outdoor nature'],
-  },
-  {
-    match: /\b(cloud[- ]?(like|shaped)?\s*platform|candy-floss|spectator platform)\b/i,
-    negatives: ['real clouds', 'mountains', 'aerial landscape'],
-  },
-  {
-    match: /\b(plaza|square|establishing|welcome)\b/i,
-    negatives: ['indoor studio', 'empty void'],
-  },
-];
-
-const PROP_INVERSE_RULES: Array<{ match: RegExp; negatives: string[] }> = [
-  {
-    match: /\b(music box|gear|gears|core|mechanism|八音盒|齿轮|核心)\b/i,
-    negatives: ['mecha', 'robot head', 'helmet', 'vehicle', 'spaceship'],
-  },
-  {
-    match: /\b(miniature (park )?map|guide map|music-note button|button|导览|音符按钮)\b/i,
-    negatives: ['full park aerial', 'extra panels', 'text captions'],
-  },
-  {
-    match: /\b(ice pool|glass(?:-like)? (?:ice|water)|mirror pool|水池)\b/i,
-    negatives: ['metal scales', 'snake skin', 'abstract texture close-up'],
-  },
-];
-
-const NONHUMAN_CUE =
-  /\b(creature|furry|quadruped|kitten|cat|paw|animal|fox|wolf|dog|小兽)\b/i;
-const HUMAN_CUE = /\b(1girl|1boy|woman|man|girl|boy)\b/i;
-
 const normalize = (value: string): string => String(value || '').replace(/\s+/g, ' ').trim();
 
-const resolveIntent = (input: NegativeCompileInput): ShotIntent => {
+/** Shot-type words and prompt words do not choose an intent. Quota stats still guess. */
+const resolveExplicitIntent = (input: NegativeCompileInput): ShotIntent | null => {
   const explicit = normalize(String(input.shot_intent || '')).toLowerCase();
   if (explicit && explicit in SHOT_INVERSE) return explicit as ShotIntent;
-  return mapShotTypeToIntent(input.shot_type, input.visual_prompt);
+  return null;
 };
 
-const propHaystack = (input: NegativeCompileInput): string => {
-  const props = Array.isArray(input.key_props)
-    ? input.key_props.join(' ')
-    : String(input.key_props || '');
-  return [input.visual_prompt, input.location, props, input.character_lock]
-    .filter(Boolean)
-    .join(' ');
-};
-
-/** Exported for call sites that want to resolve before compile. */
+/** Identity comes only from an explicit mode. Auto does not scan the paragraph. */
 export const inferIdentityMode = (input: NegativeCompileInput): ResolvedIdentityMode => {
   const mode = input.identity_mode || 'auto';
   if (mode === 'human' || mode === 'nonhuman' || mode === 'mixed' || mode === 'unknown') {
     return mode;
   }
-  // auto
-  const hay = propHaystack(input).toLowerCase();
-  const hasNonhuman = NONHUMAN_CUE.test(hay);
-  const hasHuman = HUMAN_CUE.test(hay);
-  if (hasNonhuman && hasHuman) return 'mixed';
-  if (hasNonhuman) return 'nonhuman';
-  if (hasHuman) return 'human';
   return 'unknown';
 };
 
 export const compileNegativePrompt = (input: NegativeCompileInput): string => {
-  const intent = resolveIntent(input);
-  const hay = propHaystack(input);
+  const intent = resolveExplicitIntent(input);
   const parts: string[] = [];
 
   const identity = inferIdentityMode(input);
@@ -162,18 +112,7 @@ export const compileNegativePrompt = (input: NegativeCompileInput): string => {
     parts.push(...IDENTITY_LOCK_NONHUMAN);
   }
 
-  parts.push(...(SHOT_INVERSE[intent] || []));
-
-  for (const rule of LOCATION_INVERSE_RULES) {
-    if (rule.match.test(hay) || rule.match.test(String(input.location || ''))) {
-      parts.push(...rule.negatives);
-    }
-  }
-  for (const rule of PROP_INVERSE_RULES) {
-    if (rule.match.test(hay)) {
-      parts.push(...rule.negatives);
-    }
-  }
+  if (intent) parts.push(...SHOT_INVERSE[intent]);
 
   parts.push(...GLOBAL_QUALITY_NEGATIVE);
 

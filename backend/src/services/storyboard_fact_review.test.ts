@@ -38,7 +38,7 @@ function fixture(rejectCompiled = false) {
       if (r.task === 'state') return schema.parse({ states: r.facts[0].text.includes('蓝色外套') ? [{ entity: '陈月', attribute: 'wardrobe', item: '外套', value: '蓝色外套', operation: 'set' }] : [] });
       if (r.task === 'plan') return schema.parse({ primary_by_slot: Object.fromEntries(r.slots.map((s: any) => [s.id, s.fact_ids[0] || null])) });
       if (r.task === 'translate') return schema.parse({ translations: r.facts.map((f: any) => ({ id: f.id, english: f.id === 'location' ? 'A room.' : f.id === 'interior_exterior' ? 'Indoors.' : f.id === 'time_of_day' ? 'Daytime.' : f.text.includes('蓝色外套') ? 'Chen Yue wears a blue coat.' : Object.entries(glossary).filter(([name]) => f.text.includes(name)).map(([, en]) => en).join(' and ') + ' raises a blue umbrella.' })) });
-      if (r.task === 'audit') return schema.parse({ faithful: !(rejectCompiled && r.facts.length > 1) });
+      if (r.task === 'audit') return schema.parse({ faithful: !(rejectCompiled && r.facts.some((fact: any) => String(fact.text).includes('蓝色外套'))) });
       throw new Error(`Unexpected task: ${r.task}`);
     },
     async generateText() { throw new Error('Unexpected text generation'); },
@@ -183,15 +183,18 @@ test('实际状态核对接口接受跨块补回状态与删除错误状态，�
   }
 });
 
-test('服装事实覆盖同件资产锁，最终提示词通过后才缓存', async () => {
+test('服装变化留在镜头事实，外观锁原文保留，最终提示词通过后才缓存', async () => {
   const doc = document(['陈月穿蓝色外套。']);
   const mock = fixture();
   const result = await run(doc, mock, progress(), [{ name: '陈月', lock: 'red coat, white scarf, black hair' }]);
-  const prompt = result.shots[0]!.visual_prompt;
-  assert.match(prompt, /blue coat/); assert.doesNotMatch(prompt, /red coat/);
-  assert.match(prompt, /white scarf/); assert.match(prompt, /black hair/);
-  const compiledAudit = mock.calls.find(c => c.task === 'audit' && c.english === prompt);
-  assert.ok(compiledAudit); assert.ok(compiledAudit.facts.length > 1);
+  assert.equal(result.shots[0]!.visual_prompt, '');
+  const spec = JSON.parse(result.shots[0]!.shot_spec);
+  assert.match(spec.primary_action, /蓝色外套/);
+  const coatAudit = mock.calls.find(c => c.task === 'audit' && c.facts.some((fact: any) => String(fact.text).includes('蓝色外套')));
+  assert.ok(coatAudit);
+  assert.match(coatAudit.english, /blue coat/);
+  assert.equal(coatAudit.facts.length, 1);
+  assert.equal(scopedWardrobeLock('陈月', 'red coat, white scarf, black hair', result.contract.facts), 'red coat, white scarf, black hair');
   assert.equal(scopedWardrobeLock('林岚', 'red coat, black hair', result.contract.facts), 'red coat, black hair');
   const failed = progress();
   const before = (await db.get("SELECT COUNT(*) AS n FROM generation_task WHERE kind='storyboard_audit'")).n;

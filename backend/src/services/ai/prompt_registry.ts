@@ -54,7 +54,8 @@ Rules:
 - Full novel rewrite / remove 画面动作指令 → CINEMATIC_REWRITE or DRAFT_CONTENT
 - Page=script: 改编提纲 → GENERATE_SCRIPT_OUTLINE; 生成剧本 → GENERATE_SCRIPT; 改写指定场次 → REWRITE_SCRIPT_SCENE (never use CINEMATIC_REWRITE on script page)
 - chapterScope: "current" if needs active chapter, else "none"
-- focus: short params only (rename title, etc.)`,
+- focus: short params only. RENAME_CHAPTER focus is the new title alone.
+- If the user says not to write or persist, return ANALYZE_CHAPTER_CHARACTERS.`,
 
   analysis_chapter_characters: `你是章节角色分析器。只根据【本章正文】提取出场角色与性格，禁止把角色库旧设定当成事实。
 
@@ -63,6 +64,7 @@ Rules:
 {{content}}
 
 要求:
+- roleInChapter 只能是 protagonist、antagonist、supporting、extra 之一。无法判断就不要返回这个角色。
 - traits 必须带 evidence（来自正文的行为/对话/心理，可短引）
 - confidence 0~1
 - 未出场不要编造

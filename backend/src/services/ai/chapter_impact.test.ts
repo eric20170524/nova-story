@@ -40,7 +40,7 @@ async function mockAnalysis(t: test.TestContext, continuity = facts()) {
   };
   const generate = t.mock.method(LLMService, 'generateStructuredWithRetry', async (_prompt: string, schema: any) => schema.parse(payload));
   t.mock.method(WritingService, 'analyzeChapterCharacters', async () => ({ characters: [{
-    name: '阿岚', roleInChapter: '主角', motivation: '保护钥匙', relationships: [],
+    name: '阿岚', roleInChapter: 'protagonist', motivation: '保护钥匙', relationships: [],
     traits: [{ trait: '坚韧', evidence: '负伤后仍然夺回钥匙', confidence: 0.9 }],
   }] }));
   return { WritingService, LLMService, payload, generate };
@@ -86,7 +86,8 @@ test('finalization previews without writes; API and agent persist both settings 
   assert.equal(character.role, 'protagonist');
   assert.match(character.description, /状态：重伤/);
   assert.equal(character.personality, null);
-  assert.doesNotMatch(character.description, /性格特征/);
+  assert.match(character.description, /novastory:personality/);
+  assert.match(character.description, /性格特征：坚韧/);
   assert.equal(JSON.parse(character.visual_tags).hair, 'black hair');
   assert.equal((await db.get('SELECT term FROM glossary WHERE project_id = ?', projectId)).term, '星钥');
 

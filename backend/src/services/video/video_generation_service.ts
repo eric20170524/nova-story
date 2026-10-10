@@ -422,7 +422,7 @@ export class VideoGenerationService {
 
     let compiledSpec;
     if (blockers.length === 0 && scene) {
-      compiledSpec = VideoSpecCompiler.compile({ request, scene, character });
+      compiledSpec = await VideoSpecCompiler.compile({ request, scene, character });
     }
 
     const assetIds = [...new Set([request.keyframe_asset_id, ...(request.character_reference_asset_ids || []), request.motion_reference_asset_id, request.last_frame_asset_id, request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id)].filter(Boolean))];
@@ -522,7 +522,7 @@ export class VideoGenerationService {
       const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
       const projectId = Number(chapter.project_id);
       const character = await this.resolveCharacterForRequest(request, projectId);
-      const spec = VideoSpecCompiler.compile({ request, scene, character });
+      const spec = await VideoSpecCompiler.compile({ request, scene, character });
       const keyframe = await MediaAssetService.getAssetById(request.keyframe_asset_id);
       if (!keyframe) throw new Error('Grok video task has no keyframe');
       const references = await Promise.all(request.character_reference_asset_ids.map(id => MediaAssetService.getAssetById(id)));
@@ -906,7 +906,7 @@ export class VideoGenerationService {
         return;
       }
 
-      const spec = VideoSpecCompiler.compile({ request, scene, character });
+      const spec = await VideoSpecCompiler.compile({ request, scene, character });
       const compiledWorkflow = VideoWorkflowCompiler.compile({
         spec,
         stagedFiles: {

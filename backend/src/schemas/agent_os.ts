@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { extractExplicitSummary } from './story_plan';
 
 export const SurfaceSchema = z.enum(['story', 'script', 'director', 'characters', 'settings']);
 export type SurfaceType = z.infer<typeof SurfaceSchema>;
@@ -331,11 +330,11 @@ export function routeToActions(
       return [{ op: 'QUERY_DATABASE', query: focus || msg || 'list' }];
     case 'RENAME_CHAPTER': {
       if (!chapterId) return [{ op: 'ANSWER_QUESTION', answer: '请先选择要重命名的章节。' }];
-      const newTitle = extractRenameTitle(focus) || extractRenameTitle(msg);
+      const newTitle = String(route.focus || '').trim();
       if (!newTitle) {
         return [{
           op: 'ANSWER_QUESTION',
-          answer: '请明确新标题，例如：「把本章重命名为决战前夕」。',
+          answer: '请在路由结果的 focus 里给出新标题。',
         }];
       }
       return [{ op: 'RENAME_CHAPTER', chapterId, newTitle }];
@@ -406,61 +405,6 @@ export function routeToActions(
   }
 }
 
-/** True when user explicitly refuses write / finalize / persist. */
-export function hasWriteNegation(message: string): boolean {
-  const m = String(message || '');
-  return (
-    /不要\s*写入|别\s*写入|勿\s*写入|禁止\s*写入|不\s*要\s*入库|别\s*入库|不要\s*更新(角色|设定|世界观)|别\s*更新(角色|设定)|只\s*分析|仅\s*分析|只读|先\s*分析|还没\s*定稿|尚未\s*定稿|不要\s*定稿|别\s*定稿|不\s*写入\s*角色库|不要写进角色库|do\s*not\s*write|don't\s*write|read[\s-]*only|no\s*persist/i.test(
-      m
-    )
-  );
-}
-
-/** True when user explicitly wants to persist world/characters. */
-export function hasExplicitWriteIntent(message: string): boolean {
-  const m = String(message || '');
-  if (hasWriteNegation(m)) return false;
-  return /已定稿|本章定稿|定稿[：:]|写入角色库|写入设定|入库|更新到设定|更新世界观|持久化|APPLY_CHAPTER_IMPACT/i.test(
-    m
-  );
-}
-
-/**
- * Extract new chapter title from natural language.
- * e.g. "请把本章重命名为决战前夕" → "决战前夕"
- */
-export function extractRenameTitle(text: string): string | null {
-  const s = String(text || '').trim();
-  if (!s) return null;
-
-  const patterns = [
-    /重命名[为到至：:\s]+[《「『【\[]?([^》」』\]】\n]{1,80})/,
-    /改名[为到至：:\s]+[《「『【\[]?([^》」』\]】\n]{1,80})/,
-    /标题[改成改为为到至：:\s]+[《「『【\[]?([^》」』\]】\n]{1,80})/,
-    /rename(?:\s+\w+)?\s+(?:to|as)\s+["'“]?([^"'”\n]{1,80})/i,
-  ];
-  for (const re of patterns) {
-    const m = s.match(re);
-    if (m?.[1]) {
-      const title = cleanCharacterName(m[1].trim());
-      if (title && title.length <= 80 && !/^请|把本|本章|当前/.test(title)) {
-        return title;
-      }
-    }
-  }
-
-  // Bare short title only if message is almost just the title after a rename verb
-  const stripped = s
-    .replace(/^(请)?(帮我)?(把)?(当前)?(本章|这一章|章节)?/u, '')
-    .replace(/重命名[为到至：:\s]*/u, '')
-    .replace(/改名[为到至：:\s]*/u, '')
-    .trim();
-  if (stripped && stripped.length <= 40 && !/请|分析|提取|写入/.test(stripped)) {
-    return cleanCharacterName(stripped);
-  }
-  return null;
-}
-
 /** Strip book-title marks / brackets from character names or short titles. */
 export function cleanCharacterName(raw: string): string {
   return String(raw || '')
@@ -472,170 +416,28 @@ export function cleanCharacterName(raw: string): string {
 }
 
 /**
- * Keyword / chip shortcuts — skip LLM planner for high-confidence Chinese intents.
- * preferredOp from UI chips takes absolute priority when valid.
+ * UI chip only. Free text does not choose an intent here.
+ * A chip is the user's explicit choice, including APPLY_CHAPTER_IMPACT.
+ * Rename focus is the message text; the title is not parsed out of a sentence.
  */
 export function tryIntentShortcut(
   message: string,
   preferredOp?: string | null,
-  routeHint?: string | null
+  _routeHint?: string | null
 ): AgentRoute | null {
-  if (preferredOp && AgentRouteIntentSchema.safeParse(preferredOp).success) {
-    // preferred_op still respects explicit write negation for impact
-    if (
-      preferredOp === 'APPLY_CHAPTER_IMPACT'
-      && hasWriteNegation(message)
-    ) {
-      return {
-        intent: 'ANALYZE_CHAPTER_CHARACTERS',
-        chapterScope: 'current',
-        focus: message.slice(0, 400),
-      };
-    }
-    return {
-      intent: preferredOp as AgentRouteIntent,
-      chapterScope: preferredOp === 'RUN_CONSISTENCY_CHECK'
-        || preferredOp === 'PLAN_STORY'
-        || preferredOp === 'PLAN_CHAPTERS'
-        || preferredOp === 'CREATE_NEXT_CHAPTER'
-        ? 'none'
-        : 'current',
-      focus:
-        preferredOp === 'RENAME_CHAPTER'
-          ? (extractRenameTitle(message) || message.slice(0, 400))
-          : message.slice(0, 400),
-    };
-  }
-
-  const m = String(message || '').trim();
-  if (!m) return null;
-
-  const isScriptRoute = routeHint === 'script';
-
-  // Dedicated script surface shortcuts (SC12)
-  if (isScriptRoute) {
-    if (/改编提纲|生成提纲|短剧提纲|集纲/.test(m)) {
-      return { intent: 'GENERATE_SCRIPT_OUTLINE', chapterScope: 'current', focus: m.slice(0, 400) };
-    }
-    if (/生成剧本|改编剧本|整章剧本|短剧剧本|分场剧本/.test(m)) {
-      return { intent: 'GENERATE_SCRIPT', chapterScope: 'current', focus: m.slice(0, 400) };
-    }
-    const numberedScene = /第\s*[0-9一二三四五六七八九十]+\s*场/.test(m);
-    const sceneRewrite = /改写|重写/.test(m) && /场|分场|剧本/.test(m);
-    if (numberedScene || sceneRewrite) {
-      const sceneMatch = m.match(/第\s*([0-9一二三四五六七八九十]+)\s*场|这一场|当前场|当前分场|选定分场/);
-      const sceneTarget = sceneMatch ? sceneMatch[0] : '';
-      return {
-        intent: 'REWRITE_SCRIPT_SCENE',
-        chapterScope: 'current',
-        focus: sceneTarget,
-      };
-    }
-  }
-
-  if (!isScriptRoute) {
-    const explicitSummary = extractExplicitSummary(m);
-    if (explicitSummary) {
-      return {
-        intent: 'UPDATE_CHAPTER_SUMMARY',
-        chapterScope: 'current',
-        focus: explicitSummary.slice(0, 400),
-      };
-    }
-    if (/整理开书设定|整理成设定|生成开书设定|整理设定/.test(m)) {
-      return { intent: 'PLAN_STORY', chapterScope: 'none', focus: m.slice(0, 400) };
-    }
-    if (!/修改|修订|改写/.test(m) && /扩展.{0,8}章|后续.{0,8}章规划|后续规划|规划后续|生成章纲|章节规划/.test(m)) {
-      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'extend' };
-    }
-    if (/第\s*[0-9一二三四五六七八九十]+\s*章/.test(m) && /章纲|规划/.test(m) && /改写|修改|修订/.test(m)) {
-      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'revise' };
-    }
-    if (/规划前几章|初始化规划/.test(m) && !/修改|修订|改写/.test(m)) {
-      return { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'initial' };
-    }
-    if (/创建下一章|开始第一章|自动创建下一章/.test(m)) {
-      return { intent: 'CREATE_NEXT_CHAPTER', chapterScope: 'none', focus: m.slice(0, 400) };
-    }
-  }
-
-  const writeNegated = hasWriteNegation(m);
-  const wantsWrite = hasExplicitWriteIntent(m);
-
-  // Read-only character / personality analysis (explicit or when write is negated)
-  if (
-    /角色|人物|出场/.test(m)
-    && /性格|特征|分析|提取|梳理/.test(m)
-  ) {
-    // "提取…只分析不要写入" → always read-only
-    if (writeNegated || !wantsWrite) {
-      return {
-        intent: 'ANALYZE_CHAPTER_CHARACTERS',
-        chapterScope: 'current',
-        focus: m.slice(0, 400),
-      };
-    }
-  }
-
-  // Persist world / characters — only with explicit write intent AND no negation
-  if (wantsWrite && !writeNegated) {
-    return { intent: 'APPLY_CHAPTER_IMPACT', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  // Bare "术语/世界观" without 定稿 and without 角色分析 → do not force write
-  if (
-    !writeNegated
-    && /更新世界观|写入设定库|提取.*术语并更新/i.test(m)
-    && !/只|不要|别|尚未|还没/.test(m)
-  ) {
-    return { intent: 'APPLY_CHAPTER_IMPACT', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/逻辑体检|一致性|设定冲突|前后矛盾/.test(m)) {
-    return { intent: 'RUN_CONSISTENCY_CHECK', chapterScope: 'none', focus: m.slice(0, 400) };
-  }
-
-  if (/全文重写|小说写法|去掉.*画面|动作指令|电影化|感官重写|CINEMATIC/i.test(m)) {
-    if (/冲突|crisis|pressure/i.test(m) && !/重写|改写/.test(m)) {
-      return { intent: 'ADD_CONFLICT', chapterScope: 'current', focus: m.slice(0, 400) };
-    }
-    return { intent: 'CINEMATIC_REWRITE', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/注入冲突|增加冲突|ADD_CONFLICT/i.test(m)) {
-    return { intent: 'ADD_CONFLICT', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/反转|REVERSE_PLOT/i.test(m)) {
-    return { intent: 'REVERSE_PLOT', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/分镜|时间线|timeline|storyboard/i.test(m)) {
-    return { intent: 'GENERATE_TIMELINE', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/续写|继续写|DRAFT_CONTENT/i.test(m) && !/重写|改写/.test(m)) {
-    return { intent: 'DRAFT_CONTENT', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/剧情.*分析|新实体|ANALYZE_CHAPTER/i.test(m) && !/性格|角色特征/.test(m)) {
-    return { intent: 'ANALYZE_CHAPTER', chapterScope: 'current', focus: m.slice(0, 400) };
-  }
-
-  if (/重命名|改名/.test(m)) {
-    const title = extractRenameTitle(m);
-    // Only shortcut when title is reliably extracted; else fall through to LLM route
-    if (title) {
-      return {
-        intent: 'RENAME_CHAPTER',
-        chapterScope: 'current',
-        focus: title,
-      };
-    }
+  if (!preferredOp || !AgentRouteIntentSchema.safeParse(preferredOp).success) {
     return null;
   }
-
-  return null;
+  return {
+    intent: preferredOp as AgentRouteIntent,
+    chapterScope: preferredOp === 'RUN_CONSISTENCY_CHECK'
+      || preferredOp === 'PLAN_STORY'
+      || preferredOp === 'PLAN_CHAPTERS'
+      || preferredOp === 'CREATE_NEXT_CHAPTER'
+      ? 'none'
+      : 'current',
+    focus: String(message || '').slice(0, 400),
+  };
 }
 
 /**

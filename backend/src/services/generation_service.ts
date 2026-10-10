@@ -17,6 +17,7 @@ import {
 } from '../core/paths';
 import {
     applyPromptEnhancement,
+    CHILD_SAFETY_NEGATIVE,
     isAdultLookLoraName,
     mergeClipPositivePrompt,
     normalizeImageModelFamily,
@@ -24,6 +25,7 @@ import {
     sanitizeNegativePromptForSubject,
     sanitizePromptForSubject,
     stripSfwSuppressionFromNegative,
+    styleLightingMaterial,
     type ImageModelFamily
 } from './image_generation_policy';
 import {
@@ -48,7 +50,7 @@ import {
     createProgressPublisher,
     runVramHandoffForImageGen,
 } from './generation_progress';
-import { optimizeOutboundPrompt, assetPromptForShot } from './english_visual_prompt';
+import { optimizeOutboundPrompt, assetPromptForShot, composeShotImagePrompt, shotImageMaterialsFromSpec } from './english_visual_prompt';
 import {
     normalizeGeneratedImage,
     resolveComfyLatentDimensions,
@@ -114,6 +116,13 @@ const parseSceneShotSpec = (raw: unknown): Record<string, unknown> | null => {
     } catch {
         return null;
     }
+};
+
+/** Location plus a visible action. Portraits and library plates do not qualify. */
+export const shotHasImageContract = (shotSpec: unknown): boolean => {
+    const spec = parseSceneShotSpec(shotSpec);
+    if (!spec) return false;
+    return Boolean(String(spec.location || '').trim() && String(spec.primary_action || '').trim());
 };
 
 /** Restore scene-authored fields when a direct generation request only sends
@@ -536,11 +545,14 @@ export const compileComfyWorkflow = async (
         nsfw_enabled: nsfwEnabled
     };
 
-    // Unified policy: LoRA stack (character → style → nsfw) + SFW/NSFW prompt boosters
-    const subjectSafePrompt = sanitizePromptForSubject(
-        finalPrompt,
-        enrichedWorkflowData.subject_type
-    );
+    // A composed paragraph is already the positive prompt. Do not sanitize it or append style and environment suffixes.
+    const promptComposed = Boolean(workflowData?.prompt_composed);
+    const subjectSafePrompt = promptComposed
+        ? String(finalPrompt || '').trim()
+        : sanitizePromptForSubject(
+            finalPrompt,
+            enrichedWorkflowData.subject_type
+        );
     const plan = resolveGenerationPlan({
         modelFamily,
         nsfwEnabled,
@@ -553,24 +565,31 @@ export const compileComfyWorkflow = async (
         && String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'autismmix_artist'
         && String(enrichedWorkflowData.gen_type || '').toLowerCase() === 'scene'
         && mode === 'standard';
-    const effectivePrompt = applyPromptEnhancement(
-        subjectSafePrompt,
-        plan.enhancement,
-        { qualityFirst: autismMixScene }
-    );
+    const effectivePrompt = promptComposed
+        ? subjectSafePrompt
+        : applyPromptEnhancement(
+            subjectSafePrompt,
+            plan.enhancement,
+            { qualityFirst: autismMixScene }
+        );
     const preserveTemplateConditioning =
         modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
 
-    const negativeParts = [
-        sanitizeNegativePromptForSubject(
-            workflowData?.negative_prompt || '',
-            enrichedWorkflowData.subject_type
-        ),
-        plan.enhancement.negativeExtra,
-        autismMixScene
-            ? 'western comic, thick ink outlines, comic strip, triptych, split screen, multiple panels, 3d render, photorealistic'
-            : ''
-    ];
+    const negativeParts = promptComposed
+        ? [
+            String(workflowData?.negative_prompt || '').trim(),
+            CHILD_SAFETY_NEGATIVE,
+        ]
+        : [
+            sanitizeNegativePromptForSubject(
+                workflowData?.negative_prompt || '',
+                enrichedWorkflowData.subject_type
+            ),
+            plan.enhancement.negativeExtra,
+            autismMixScene
+                ? 'western comic, thick ink outlines, comic strip, triptych, split screen, multiple panels, 3d render, photorealistic'
+                : ''
+        ];
     // Saved shot negatives and the joined booster can still carry nsfw/nude from
     // an earlier SFW pass. Drop those blockers once adult mode is on.
     let negativePrompt = negativeParts.filter(Boolean).join(', ');
@@ -600,7 +619,9 @@ export const compileComfyWorkflow = async (
         if (positiveId && workflow[positiveId]?.inputs) {
             const templateText = String(workflow[positiveId].inputs.text || '').trim();
             // Keep template conditioning while applying the selected style's prompt order.
-            workflow[positiveId].inputs.text = preserveTemplateConditioning && templateText
+            workflow[positiveId].inputs.text = promptComposed
+                ? subjectSafePrompt
+                : preserveTemplateConditioning && templateText
                 ? mergeClipPositivePrompt({
                     scene: subjectSafePrompt,
                     framing: [
@@ -617,7 +638,7 @@ export const compileComfyWorkflow = async (
             if (nsfwEnabled) {
                 templateText = stripSfwSuppressionFromNegative(templateText);
             }
-            workflow[negativeId].inputs.text = preserveTemplateConditioning && templateText
+            workflow[negativeId].inputs.text = !promptComposed && preserveTemplateConditioning && templateText
                 ? (negativePrompt ? `${templateText}, ${negativePrompt}` : templateText)
                 : negativePrompt;
         }
@@ -1026,9 +1047,12 @@ export class GenerationService {
                             }
                         }
                         if (assetRefs.length) {
-                            const shotPrompt = String(effectiveWorkflowData.prompt || sceneRow.visual_prompt || '');
-                            effectiveWorkflowData.prompt = [shotPrompt,
-                                ...assetRefs.map(ref => assetPromptForShot(String(ref.visual_prompt || ''), effectiveWorkflowData.shot_spec || {}, shotPrompt))].filter(Boolean).join(', ');
+                            // Character shots keep the reference image. The plate sentence, including "no people", stays off the positive prompt.
+                            if (!shotHasImageContract(effectiveWorkflowData.shot_spec)) {
+                                const shotPrompt = String(effectiveWorkflowData.prompt || sceneRow.visual_prompt || '');
+                                effectiveWorkflowData.prompt = [shotPrompt,
+                                    ...assetRefs.map(ref => assetPromptForShot(String(ref.visual_prompt || ''), effectiveWorkflowData.shot_spec || {}, shotPrompt))].filter(Boolean).join(', ');
+                            }
                             effectiveWorkflowData.asset_references = assetRefs.map(ref => ({
                                 id: ref.id, revision: ref.revision, kind: ref.kind, image_url: ref.image_url,
                             }));
@@ -1086,89 +1110,119 @@ export class GenerationService {
                 `[Task ${taskId}] Effective NSFW=${nsfwEnabled}, style_preset=${effectiveWorkflowData.style_preset || 'none'}`
             );
 
-            if (mode === "cinematic_grid") {
-                const rawPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
-                finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
-            } else {
-                finalPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
-            }
-
-            const cameraDetails = [
-                effectiveWorkflowData?.shot_type,
-                effectiveWorkflowData?.camera_movement,
-                effectiveWorkflowData?.camera_angle
-            ].filter(Boolean).map(String);
-            if (
-                cameraDetails.length > 0
-                && !cameraDetails.every((detail) => finalPrompt.toLowerCase().includes(detail.toLowerCase()))
-            ) {
-                finalPrompt = `(${cameraDetails.join(', ')}), ${finalPrompt}`;
-            }
-
-            // Tier A: ensure character appearance tags survive even if a client omitted them
-            const appearanceSnippets: string[] = [];
-            if (effectiveWorkflowData?.character_appearance_prompt) {
-                appearanceSnippets.push(String(effectiveWorkflowData.character_appearance_prompt));
-            }
-            if (Array.isArray(effectiveWorkflowData?.character_appearance_snippets)) {
-                for (const s of effectiveWorkflowData.character_appearance_snippets) {
-                    if (s) appearanceSnippets.push(String(s));
-                }
-            }
-            // Script-backed storyboards already carry the chapter's character locks in
-            // their compiled visual prompt. Re-appending full database profiles here
-            // duplicates every visible character and can reintroduce later variants.
-            if (!workflowData?.library_asset_id && !effectiveWorkflowData?.shot_spec?.source?.type && appearanceSnippets.length === 0 && sceneProjectId != null) {
-                try {
-                    if (shouldSuppressAppearanceForDetailShot(
-                        effectiveWorkflowData?.shot_type,
-                        finalPrompt
-                    )) {
-                        logger.info(
-                            `[Task ${taskId}] Detail/insert shot: skipped full character appearance injection`
-                        );
-                    } else {
-                        const characters = await db.all(
-                            'SELECT id, name, role, description, visual_tags FROM character WHERE project_id = ?',
-                            sceneProjectId
-                        );
-                        const resolved = selectSceneCharacterAppearance(characters, finalPrompt, {
-                            chapterId: sceneChapterId,
-                            shotType: effectiveWorkflowData?.shot_type,
-                            characterId
-                        });
-                        appearanceSnippets.push(...resolved.snippets);
-                        if (!effectiveWorkflowData?.subject_type && resolved.subjectType) {
-                            effectiveWorkflowData.subject_type = resolved.subjectType;
-                        }
-                        if (resolved.snippets.length > 0) {
-                            logger.info(
-                                `[Task ${taskId}] Restored ${resolved.snippets.length} character appearance snippet(s) from project data`
-                            );
-                        }
-                    }
-                } catch (e) {
-                    logger.warn(`[Task ${taskId}] Could not restore character appearance data: ${e}`);
-                }
-            }
-            if (appearanceSnippets.length > 0) {
-                finalPrompt = mergeAppearanceIntoPrompt(finalPrompt, appearanceSnippets);
-                // Keep workflow.prompt in sync so policy heuristics see the full text
-                effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
-            }
-
             const outputModelFamily = normalizeImageModelFamily(
                 effectiveWorkflowData?.model_type
                 || effectiveWorkflowData?.reference_model_type
                 || 'pony'
             );
-            const outboundPrompt = await optimizeOutboundPrompt(finalPrompt, {
-                modelFamily: outputModelFamily,
-                nsfwEnabled,
-            });
-            if (outboundPrompt !== finalPrompt) {
-                finalPrompt = outboundPrompt;
-                effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
+            const contractShot = mode !== 'cinematic_grid' && shotHasImageContract(effectiveWorkflowData.shot_spec);
+
+            if (mode === "cinematic_grid") {
+                const rawPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
+                finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
+            } else if (contractShot) {
+                const characters = await db.all(
+                    'SELECT id, name, english_name, visual_tags FROM character WHERE project_id = ?',
+                    sceneProjectId
+                );
+                const materials = shotImageMaterialsFromSpec(
+                    effectiveWorkflowData.shot_spec,
+                    characters,
+                    {
+                        modelFamily: outputModelFamily,
+                        nsfwEnabled,
+                        styleLighting: styleLightingMaterial(effectiveWorkflowData.style_preset),
+                        shotType: effectiveWorkflowData.shot_type,
+                        chapterId: sceneChapterId,
+                    },
+                );
+                finalPrompt = await composeShotImagePrompt(materials);
+                const personVisible = materials.subject_scale !== 'absent'
+                    && (materials.characters.length > 0 || materials.facts.some((fact) => fact.binding.length > 0));
+                const currentType = String(effectiveWorkflowData.subject_type || '').toLowerCase().trim();
+                const keepExplicitType = Boolean(currentType) && !/environment|landscape|location|scenery/.test(currentType);
+                effectiveWorkflowData = {
+                    ...effectiveWorkflowData,
+                    prompt: finalPrompt,
+                    prompt_composed: true,
+                    subject_type: personVisible && !keepExplicitType ? 'human' : effectiveWorkflowData.subject_type,
+                };
+                logger.info(`[Task ${taskId}] Composed image prompt from the shot contract (${finalPrompt.length} chars)`);
+            } else {
+                finalPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
+
+                const cameraDetails = [
+                    effectiveWorkflowData?.shot_type,
+                    effectiveWorkflowData?.camera_movement,
+                    effectiveWorkflowData?.camera_angle
+                ].filter(Boolean).map(String);
+                if (
+                    cameraDetails.length > 0
+                    && !cameraDetails.every((detail) => finalPrompt.toLowerCase().includes(detail.toLowerCase()))
+                ) {
+                    finalPrompt = `(${cameraDetails.join(', ')}), ${finalPrompt}`;
+                }
+
+                // Tier A: ensure character appearance tags survive even if a client omitted them
+                const appearanceSnippets: string[] = [];
+                if (effectiveWorkflowData?.character_appearance_prompt) {
+                    appearanceSnippets.push(String(effectiveWorkflowData.character_appearance_prompt));
+                }
+                if (Array.isArray(effectiveWorkflowData?.character_appearance_snippets)) {
+                    for (const s of effectiveWorkflowData.character_appearance_snippets) {
+                        if (s) appearanceSnippets.push(String(s));
+                    }
+                }
+                // Script-backed storyboards already carry the chapter's character locks in
+                // their compiled visual prompt. Re-appending full database profiles here
+                // duplicates every visible character and can reintroduce later variants.
+                if (!workflowData?.library_asset_id && !effectiveWorkflowData?.shot_spec?.source?.type && appearanceSnippets.length === 0 && sceneProjectId != null) {
+                    try {
+                        if (shouldSuppressAppearanceForDetailShot(
+                            effectiveWorkflowData?.shot_type,
+                            finalPrompt
+                        )) {
+                            logger.info(
+                                `[Task ${taskId}] Detail/insert shot: skipped full character appearance injection`
+                            );
+                        } else {
+                            const characters = await db.all(
+                                'SELECT id, name, role, description, visual_tags FROM character WHERE project_id = ?',
+                                sceneProjectId
+                            );
+                            const resolved = selectSceneCharacterAppearance(characters, finalPrompt, {
+                                chapterId: sceneChapterId,
+                                shotType: effectiveWorkflowData?.shot_type,
+                                characterId
+                            });
+                            appearanceSnippets.push(...resolved.snippets);
+                            if (!effectiveWorkflowData?.subject_type && resolved.subjectType) {
+                                effectiveWorkflowData.subject_type = resolved.subjectType;
+                            }
+                            if (resolved.snippets.length > 0) {
+                                logger.info(
+                                    `[Task ${taskId}] Restored ${resolved.snippets.length} character appearance snippet(s) from project data`
+                                );
+                            }
+                        }
+                    } catch (e) {
+                        logger.warn(`[Task ${taskId}] Could not restore character appearance data: ${e}`);
+                    }
+                }
+                if (appearanceSnippets.length > 0) {
+                    finalPrompt = mergeAppearanceIntoPrompt(finalPrompt, appearanceSnippets);
+                    // Keep workflow.prompt in sync so policy heuristics see the full text
+                    effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
+                }
+
+                const outboundPrompt = await optimizeOutboundPrompt(finalPrompt, {
+                    modelFamily: outputModelFamily,
+                    nsfwEnabled,
+                });
+                if (outboundPrompt !== finalPrompt) {
+                    finalPrompt = outboundPrompt;
+                    effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
+                }
             }
             try {
                 await progressHandler('english_prompt', { english_prompt: finalPrompt });

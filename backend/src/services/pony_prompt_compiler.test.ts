@@ -40,9 +40,10 @@ test('G2 establish grounds cloud-like platform and adds nature negatives', () =>
     },
     FURRY_LOCK
   );
-  assert.doesNotMatch(compiled.visual_prompt, /cloud-like/i);
+  assert.match(compiled.visual_prompt, /cloud-like/i);
   assert.match(compiled.visual_prompt, /carousel|wooden horses|horses/i);
   assert.match(compiled.visual_prompt, /platform/i);
+  assert.deepEqual(compiled.negative_extras, []);
 
   const neg = compileNegativePrompt({
     shot_intent: 'establish',
@@ -50,9 +51,8 @@ test('G2 establish grounds cloud-like platform and adds nature negatives', () =>
     visual_prompt: compiled.visual_prompt,
     key_props: ['carved carousel horses', 'cloud-like platforms'],
   });
-  const mergedNeg = [neg, ...compiled.negative_extras].join(', ');
-  assert.match(mergedNeg, /mountains/i);
-  assert.match(mergedNeg, /real clouds|outdoor nature/i);
+  assert.doesNotMatch(neg, /mountains|real clouds|outdoor nature/i);
+  assert.match(neg, /close-up face|studio portrait/i);
 });
 
 test('G3 ice pool insert drops sound words and keeps texture negatives', () => {
@@ -74,7 +74,8 @@ test('G3 ice pool insert drops sound words and keeps texture negatives', () => {
     visual_prompt: compiled.visual_prompt,
     key_props: ['ice pool'],
   });
-  assert.match(neg, /abstract|scales|macro texture/i);
+  assert.match(neg, /landscape|aerial/i);
+  assert.doesNotMatch(neg, /metal scales|snake skin|abstract texture/i);
 });
 
 test('G4 music box insert keeps box/velvet and aerial/mecha negatives', () => {
@@ -99,7 +100,7 @@ test('G4 music box insert keeps box/velvet and aerial/mecha negatives', () => {
     location: 'cabin',
   });
   assert.match(neg, /aerial|satellite/i);
-  assert.match(neg, /spaceship|mecha/i);
+  assert.doesNotMatch(neg, /spaceship|mecha|mountains|outdoor nature/i);
 });
 
 test('G5 payoff core into groove keeps budget and mecha negatives', () => {

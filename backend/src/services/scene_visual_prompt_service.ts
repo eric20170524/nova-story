@@ -19,10 +19,7 @@ import {
   mapShotTypeToIntent,
 } from './shot_intent_quota';
 import { compileNegativePrompt } from './negative_prompt_compiler';
-import {
-  compilePonyPrompt,
-  type CharacterLockRef,
-} from './pony_prompt_compiler';
+import { type CharacterLockRef } from './pony_prompt_compiler';
 import { packShotSpec, ShotIntentSchema, SubjectScaleSchema } from '../schemas/shot_contract';
 
 /** LLM returns contracts only — server compiles visual_prompt. */
@@ -98,7 +95,7 @@ export const buildSceneVisualPromptRewritePrompt = (
   const characterBible = buildCharacterVisualLockBible(characters, chapter?.id);
 
   return `You are a storyboard contract editor. Fill a Shot Contract for every scene_id.
-The server compilePonyPrompt will build final Pony tags — do NOT write visual_prompt prose.
+The image step composes the picture from this contract. Do NOT write visual_prompt prose.
 
 Mandatory rules:
 1. Return exactly one item for every scene_id, same order. JSON only.
@@ -123,27 +120,6 @@ ${JSON.stringify(scenePayload, null, 2)}`;
 };
 
 const normalize = (value: string): string => String(value || '').replace(/\s+/g, ' ').trim();
-
-const PORTRAIT_NEGATIVE_TOKENS = [
-  'centered portrait', 'portrait', 'front view', 'looking at viewer', 'eye contact',
-  'close-up face', 'face close-up', 'close-up', 'headshot', 'studio background',
-  'gradient background', 'isolated animal', 'character sheet', 'fashion pose',
-  'symmetrical portrait', 'oversized animal', 'full-frame animal'
-];
-
-const normalizeNegativePrompt = (value: string): string => {
-  const tokens = normalize(value)
-    .split(',')
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .filter((token) => !PORTRAIT_NEGATIVE_TOKENS.includes(token.toLowerCase()));
-  const safeBase = [
-    '2animals', 'multiple animals', 'duplicate animal', 'extra cat',
-    'wolf', 'fox', 'dog', 'human', 'person', 'man', 'woman', 'boy', 'girl',
-    'humanoid', 'anthro', 'bipedal', 'clothes', 'text', 'caption', 'watermark'
-  ];
-  return [...new Set([...safeBase, ...tokens])].join(', ');
-};
 
 /**
  * Normalize a rewritten visual_prompt for DB storage.
@@ -181,7 +157,7 @@ const prepareCompiledScenes = (
   scenes: any[],
   contracts: z.infer<typeof SceneContractRewriteSchema>['scenes'],
   chapterContent: string,
-  characterLocks: CharacterLockRef[]
+  _characterLocks: CharacterLockRef[]
 ) => {
   const expectedIds = scenes.map((scene: any) => Number(scene.id));
   const byId = new Map(contracts.map((scene) => [scene.scene_id, scene]));
@@ -195,39 +171,22 @@ const prepareCompiledScenes = (
 
   const prepared = scenes.map((scene: any) => {
     const contract = byId.get(Number(scene.id))!;
-    const shot_intent =
-      contract.shot_intent || mapShotTypeToIntent(contract.shot_type, contract.primary_action);
+    const storedIntent = contract.shot_intent || null;
+    const quotaIntent = storedIntent || mapShotTypeToIntent(contract.shot_type, contract.primary_action);
     const visible_subjects =
       (contract as any).visible_subjects
       || parseShotSpec(scene.shot_spec)?.visible_subjects
       || [];
-    const compiled = compilePonyPrompt(
-      {
-        shot_intent,
-        shot_type: contract.shot_type,
-        location: contract.location,
-        primary_action: contract.primary_action,
-        primary_subject: contract.primary_subject,
-        visible_subjects,
-        key_props: contract.key_props,
-        subject_scale: contract.subject_scale,
-        must_not: contract.must_not,
-      },
-      characterLocks
-    );
-    const sanitized = sanitizeVisualPrompt(compiled.visual_prompt);
     const compiledNegative = compileNegativePrompt({
       shot_type: contract.shot_type,
-      shot_intent: compiled.shot_intent,
-      visual_prompt: sanitized.visual_prompt,
+      shot_intent: storedIntent,
       location: contract.location,
       key_props: contract.key_props,
-      character_lock: characterLocks.map((ref) => ref.lock).join(', '),
       identity_mode: 'auto',
     });
     const uniqueness_key = contract.uniqueness_key || null;
     const shot_spec = packShotSpec({
-      shot_intent: compiled.shot_intent,
+      shot_intent: storedIntent,
       location: contract.location,
       primary_action: contract.primary_action,
       primary_subject: contract.primary_subject,
@@ -238,26 +197,26 @@ const prepareCompiledScenes = (
       must_not: contract.must_not,
       shot_type: contract.shot_type,
     });
+    const contractLine = [contract.location, contract.primary_action, ...(contract.key_props || [])]
+      .filter(Boolean)
+      .join(' | ');
     return {
       scene_id: Number(scene.id),
       has_asset: Boolean(scene.asset_url),
-      visual_prompt: sanitized.visual_prompt,
-      negative_prompt: normalizeNegativePrompt(
-        [compiledNegative, ...compiled.negative_extras, ...sanitized.negative_extras]
-          .filter(Boolean)
-          .join(', ')
-      ),
+      visual_prompt: '',
+      contract_line: contractLine,
+      negative_prompt: compiledNegative,
       shot_type: normalize(contract.shot_type),
       camera_angle: normalize(contract.camera_angle || scene.camera_angle || 'Eye-level'),
       uniqueness_key,
       shot_spec,
-      shot_intent: compiled.shot_intent,
+      shot_intent: quotaIntent,
     };
   });
 
   const uniqueness = assertChapterUniqueness(
     prepared.map((row) => ({
-      visual_prompt: row.visual_prompt,
+      visual_prompt: row.contract_line,
       uniqueness_key: row.uniqueness_key,
     }))
   );

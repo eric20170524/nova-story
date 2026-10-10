@@ -13,7 +13,7 @@ import {
 } from './agent_route';
 import { AgentExecutor } from './agent_executor';
 import { StoryPlanningService } from './story_planning_service';
-import { extractExplicitSummary, resolvePlanOrdinal } from '../../schemas/story_plan';
+import { resolvePlanOrdinal } from '../../schemas/story_plan';
 import { StoryPlanService } from '../story_plan_service';
 
 function stripThink(text: string): string {
@@ -81,11 +81,6 @@ export class AgentService {
             instructions: request.message,
             requestKey: planning?.requestKey || action.requestKey,
           });
-          continue;
-        }
-        if (action.op === 'UPDATE_CHAPTER_SUMMARY') {
-          const explicit = extractExplicitSummary(request.message);
-          actions.push(explicit ? { ...action, newSummary: explicit } : action);
           continue;
         }
         actions.push(action);

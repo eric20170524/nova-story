@@ -9,7 +9,7 @@ import { createEmptyScriptDocument, StoryboardCandidatePayloadSchema, type Scrip
 import { SettingsManager } from '../../core/settings_manager';
 import { LLMService } from '../llm';
 import type { AIProvider } from './base';
-import { anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, evidencedContinuityStates, groupAdjacentClauseFragments, hash, promptContainsTranslation, splitSuccessionClause, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, evidencedContinuityStates, groupAdjacentClauseFragments, hash, promptContainsTranslation, verbatimActionSplit, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
 import { compileNegativePrompt } from '../negative_prompt_compiler';
 import { sanitizeVisualPrompt } from '../visual_prompt_sanitizer';
 
@@ -36,6 +36,7 @@ function providerFixture() {
       if (r.task === 'repair_kind') return schema.parse({ kind: 'visual' });
       if (r.task === 'beat_relation') return schema.parse({ relation: 'sequential' });
       if (r.task === 'atomicity') return schema.parse({ result: 'one_frame' });
+      if (r.task === 'split_actions') return schema.parse({ spans: [{ text: r.source }] });
       if (r.task === 'plan') {
         return schema.parse({ primary_by_slot: Object.fromEntries(r.slots.map((slot: any) => [slot.id, slot.fact_ids[0] || null])) });
       }
@@ -112,12 +113,14 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     assert.match(continuityEvidenceRepair(text, split.rejected), /无/);
     assert.match(continuityEvidenceRepair(text, split.rejected), /裴雨涵在陆嘉静身下微微战栗/);
     const block = '青禾解开外衣。里衣褪到腰间。';
-    const worn = anchorSpans('s', 'b', block, { spans: [
+    const lowered = [{ entity: '青禾', attribute: 'wardrobe', value: '里衣褪到腰间' }];
+    assert.throws(() => anchorSpans('s', 'b', block, { spans: [
       { text: '青禾解开外衣。', kind: 'visual', beat: 0, states: [{ entity: '青禾', attribute: 'wardrobe', value: '解开外衣' }] },
-      { text: '里衣褪到腰间。', kind: 'visual', beat: 1, states: [{ entity: '青禾', attribute: 'wardrobe', value: '里衣褪到腰间' }] },
-    ] });
-    assert.equal(worn[1]!.states[0]!.entity, '青禾');
-    assert.equal(evidencedContinuityStates('里衣褪到腰间。', worn[1]!.states, '青禾解开外衣。').accepted.length, 1);
+      { text: '里衣褪到腰间。', kind: 'visual', beat: 1, states: lowered },
+    ] }), /原文证据/);
+    assert.equal(evidencedContinuityStates('里衣褪到腰间。', lowered, '青禾解开外衣。').accepted.length, 0);
+    assert.equal(evidencedContinuityStates('里衣褪到腰间。', lowered, '青禾解开外衣。', ['青禾']).accepted.length, 1);
+    assert.equal(evidencedContinuityStates('她把里衣褪到腰间。', lowered).rejected.length, 1);
     assert.throws(() => anchorSpans('s', 'b', block, { spans: [{ text: '青禾解开外衣。', kind: 'visual', beat: 0, states: [{ entity: '后文的人', attribute: 'wardrobe', value: '解开外衣' }] }] }), /原文证据/);
   });
   await t.test('对白引号后的动作不把整段算成一条超长语音', () => {
@@ -343,12 +346,17 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const history = JSON.parse((await db.get('SELECT result_json FROM script_change WHERE id=?', candidate.id)).result_json);
     assert.equal(history.previous_timeline.scenes[0].asset_url, '/old.png');
   });
-  await t.test('句内连续动作由文本模型拆开，恢复时不再重分', async () => {
-    const doc = document(); doc.scenes[0]!.blocks[0]!.text = '阿岚打开门并走到屋外。';
-    assert.deepEqual(splitSuccessionClause('阿岚打开门并走到屋外。'), ['阿岚打开门', '并走到屋外。']);
+  await t.test('句内连续动作由文本模型拆开，模型不拆则保持一句', async () => {
+    const source = '阿岚打开门并走到屋外。';
+    assert.deepEqual(verbatimActionSplit(source, ['阿岚打开门', '并走到屋外。']), ['阿岚打开门', '并走到屋外。']);
+    assert.equal(verbatimActionSplit(source, ['阿岚推开门', '并走到屋外。']), null);
+    assert.equal(verbatimActionSplit('阿岚打开门然后走到屋外。', ['阿岚打开门然后走到屋外。']), null);
+    const doc = document(); doc.scenes[0]!.blocks[0]!.text = source;
     const f = await confirmed(doc); const m = providerFixture();
     const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
-      if (JSON.parse(prompt).task === 'atomicity') return schema.parse({ result: 'sequence' });
+      const request = JSON.parse(prompt);
+      if (request.task === 'atomicity') return schema.parse({ result: 'sequence' });
+      if (request.task === 'split_actions') return schema.parse({ spans: [{ text: '阿岚打开门' }, { text: '并走到屋外。' }] });
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
     const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
@@ -358,7 +366,18 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const before = m.calls.length;
     const resumed = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
     assert.equal(resumed.id, candidate.id);
-    assert.equal(m.calls.slice(before).filter(c => ['classify', 'repair_fact', 'repair_kind', 'state'].includes(c.task)).length, 0);
+    assert.equal(m.calls.slice(before).filter(c => ['classify', 'repair_fact', 'repair_kind', 'split_actions', 'state'].includes(c.task)).length, 0);
+    const whole = document(); whole.scenes[0]!.blocks[0]!.text = '阿岚打开门然后走到屋外。';
+    const keptSource = await confirmed(whole);
+    const keeping: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
+      const request = JSON.parse(prompt);
+      if (request.task === 'atomicity') return schema.parse({ result: 'sequence' });
+      if (request.task === 'split_actions') return schema.parse({ spans: [{ text: request.source }] });
+      return m.provider.generateStructured(prompt, schema, system, options);
+    } };
+    const kept = await StoryboardGenerationService.generateStoryboardCandidate({ ...keptSource.params, provider: keeping });
+    const keptFacts = JSON.parse(kept.after_json).fact_contract.facts.filter((fact: any) => fact.block_id === 'action_0');
+    assert.deepEqual(keptFacts.map((fact: any) => fact.text), ['阿岚打开门然后走到屋外。']);
   });
   await t.test('没有连词的单句动作即使被判成序列也留在当前镜头', async () => {
     const doc = document();
@@ -411,7 +430,7 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     assert.ok(audits >= 2);
     assert.ok(JSON.parse(candidate.after_json).shots.length >= 1);
   });
-  await t.test('逐条译文通过但最终组合失败时不缓存镜头通过结果', async () => {
+  await t.test('逐条译文通过后不拼成标签汤', async () => {
     const doc = document();
     const f = await confirmed(doc);
     const m = providerFixture();
@@ -424,10 +443,13 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
       }
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
-    await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider }), /译文待核对/);
-    assert.ok(audits.length >= 2);
-    assert.ok(audits.some(call => call.facts.length > 1 && call.english.includes('establishing shot')));
-    assert.equal((await db.get("SELECT COUNT(*) AS n FROM generation_task WHERE kind='storyboard_audit' AND status='completed'")).n, 0);
+    const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
+    const payload = JSON.parse(candidate.after_json);
+    assert.ok(audits.length >= 1);
+    assert.ok(audits.every(call => call.facts.length === 1));
+    assert.ok(audits.every(call => !String(call.english).includes('establishing shot')));
+    assert.equal(payload.shots[0].visual_prompt, '');
+    assert.match(payload.shots[0].shot_spec, /primary_action/);
   });
   await t.test('单条译文矛盾仍拒绝候选', async () => {
     const doc = document();
@@ -598,9 +620,12 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     await db.run('UPDATE character SET english_name=? WHERE id=?', 'He Qing', character.lastID);
     st.mock.method(LLMService, 'getLocalProvider', () => m.provider as any);
     const before = m.calls.filter(c => c.task === 'audit').length;
-    await StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision });
-    assert.ok(m.calls.filter(c => c.task === 'audit').length > before);
-    assert.equal(m.calls.filter(c => c.task === 'audit').at(-1).context.glossary['青禾'], 'He Qing');
+    await assert.rejects(
+      () => StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision }),
+      /重新生成分镜候选/,
+    );
+    assert.equal(m.calls.filter(c => c.task === 'audit').length, before);
+    assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene')).n, 0);
   });
   await t.test('连续状态没有原文证据时由文本模型重抽，不中断已通过进度', async () => {
     const doc = document();
@@ -677,9 +702,9 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const spec = JSON.parse(follow.shot_spec);
     assert.deepEqual(spec.visible_subjects, ['青禾']);
     assert.deepEqual(spec.continuity_states.map((state: any) => state.value).sort(), ['解开外衣', '里衣褪到腰间'].sort());
-    assert.match(follow.visual_prompt, /Qing He robe lowered to the waist/);
-    assert.match(follow.visual_prompt, /voluminous_crimson/);
-    assert.match(follow.visual_prompt, /calm eyes/);
+    assert.equal(follow.visual_prompt, '');
+    assert.equal(spec.primary_action, '她伸手。');
+    assert.doesNotMatch(JSON.stringify(follow), /voluminous_crimson|:1\.35/);
     StoryboardGenerationService.validatePayload(payload, f.script);
   });
 });

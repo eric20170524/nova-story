@@ -116,13 +116,75 @@ export const resolveReferenceUrls = (workflowData: any): ResolvedReferenceUrls =
   return { characterRefUrl, compositionRefUrl, legacyRefUrl, urlsToCopy };
 };
 
+const readRecord = (value: unknown): Record<string, any> | null => {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const NON_PERSON_SUBJECTS = new Set(['none', 'paw-only']);
+
+const addPersonName = (names: string[], value: unknown) => {
+  const name = String(value || '').trim();
+  if (!name || NON_PERSON_SUBJECTS.has(name.toLowerCase()) || names.includes(name)) return;
+  names.push(name);
+};
+
+/** People named on the shot contract. The finished paragraph is not read. */
+export const visiblePeopleFromWorkflow = (workflowData: any): string[] => {
+  const spec = readRecord(workflowData?.shot_spec);
+  const names: string[] = [];
+  const lists = [workflowData?.visible_subjects, spec?.visible_subjects];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const name of list) addPersonName(names, name);
+  }
+  const factLists = [workflowData?.visual_facts, spec?.visual_facts];
+  for (const facts of factLists) {
+    if (!Array.isArray(facts)) continue;
+    for (const fact of facts) {
+      const mentions = Array.isArray(fact?.binding?.mentions) ? fact.binding.mentions : [];
+      for (const mention of mentions) {
+        if (mention?.confirmed !== true || mention.visibility !== 'visible') continue;
+        addPersonName(names, mention?.entity?.name);
+      }
+    }
+  }
+  return names;
+};
+
+const contractText = (workflowData: any, key: string): string => {
+  const spec = readRecord(workflowData?.shot_spec);
+  return String(workflowData?.[key] || spec?.[key] || '').trim().toLowerCase();
+};
+
+const isEmptyPlate = (workflowData: any, people: string[]): boolean => {
+  if (contractText(workflowData, 'subject_scale') === 'absent') return true;
+  const intent = contractText(workflowData, 'shot_intent');
+  return (intent === 'establish' || intent === 'overhead-map') && people.length === 0;
+};
+
+const isSingleClose = (workflowData: any, people: string[]): boolean => {
+  if (people.length !== 1) return false;
+  return /\b(close-?up|portrait|medium close|upper body|face shot)\b/i.test(
+    contractText(workflowData, 'shot_type')
+  );
+};
+
 /**
- * Tier A img2img gate: portrait latents collapse multi-person / story shots
- * into solo portraits when denoise is moderate — so narrative scenes stay txt2img.
+ * Tier A img2img gate. Portrait latents collapse a multi-person shot into a
+ * solo portrait, so those shots stay txt2img. The decision reads the shot
+ * contract only: visible people, subject scale, shot intent, and shot type.
  */
 export const resolveReferenceImg2ImgPolicy = (
   workflowData: any,
-  finalPrompt: string = ''
+  _finalPrompt: string = ''
 ): Img2ImgPolicy => {
   const genType = String(workflowData?.gen_type || '').toLowerCase();
   const explicit = workflowData?.denoise;
@@ -152,45 +214,19 @@ export const resolveReferenceImg2ImgPolicy = (
     };
   }
 
-  const shotHint = [
-    workflowData?.shot_type,
-    workflowData?.camera_angle,
-    workflowData?.camera_movement
-  ]
-    .filter(Boolean)
-    .join(' ');
-  const prompt = `${finalPrompt} ${workflowData?.prompt || ''} ${workflowData?.visual_prompt || ''} ${shotHint}`;
-  const multiPerson =
-    /\b[23]girls?\b|\b[23]boys?\b|\bmultiple\b|\bgroup\b|yuri|threesome|sandwich|三人|两人|entwined|intertwined|two-?shot|2girls/i.test(
-      prompt
-    );
-  const storyWide =
-    /extreme long|establishing|wide shot|long shot|full body|environment|cloud sea|palace|inner hall|overview|bird.?s eye|high angle overview|empty latent arena|cliff stage/i.test(
-      prompt
-    );
-  // Intimate + combat/martial — both collapse under portrait identity locks
-  const storyAction =
-    /\b(embrac|kiss|sitting|lying|straddl|press|hold|whisper|kneel|behind|from behind|on (the )?(bed|couch)|between|climax|tendril|tentacle|cuddling|afterglow|walking toward|reaching|kick|throw|clash|combat|fight|martial|whip|grapple|defeat|mid-?air|battle damage|ripped|duel|punch|block|parry|slam|pinning)\b/i.test(
-      prompt
-    );
-  const singleClose =
-    /\b(close-?up|portrait|medium close|upper body|face shot)\b/i.test(prompt)
-    && !multiPerson
-    && /\b1girl\b|\b1boy\b|solo/i.test(prompt);
+  const people = visiblePeopleFromWorkflow(workflowData);
+  if (people.length >= 2) {
+    return { useImg2Img: false, denoise: 1, reason: 'multi_person_story' };
+  }
+  if (isEmptyPlate(workflowData, people)) {
+    return { useImg2Img: false, denoise: 1, reason: 'empty_plate' };
+  }
 
   if (hasExplicitDenoise && Number(explicit) >= 0.95) {
     return { useImg2Img: false, denoise: 1, reason: 'explicit_txt2img' };
   }
 
-  if (multiPerson || storyWide || storyAction) {
-    return {
-      useImg2Img: false,
-      denoise: 1,
-      reason: multiPerson ? 'multi_person_story' : storyWide ? 'wide_story' : 'action_story'
-    };
-  }
-
-  if (singleClose) {
+  if (isSingleClose(workflowData, people)) {
     return {
       useImg2Img: true,
       denoise: hasExplicitDenoise ? Number(explicit) : 0.62,
@@ -246,6 +282,7 @@ export const shouldAllowCharacterAdapter = (
   // Shared scene gates with img2img — do not identity-lock these
   if (
     policy.reason === 'multi_person_story'
+    || policy.reason === 'empty_plate'
     || policy.reason === 'wide_story'
     || policy.reason === 'action_story'
     || policy.reason === 'turnaround_panel_txt2img'

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { VideoSpecCompiler } from './video_spec_compiler';
 
-test('VideoWorkflowCompiler loads experimental Hybrid manifest correctly', () => {
+test('VideoWorkflowCompiler loads experimental Hybrid manifest correctly', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
   assert.equal(bundle.manifest.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
   assert.equal(bundle.manifest.stability, 'experimental');
@@ -12,8 +12,8 @@ test('VideoWorkflowCompiler loads experimental Hybrid manifest correctly', () =>
   assert.equal(bundle.workflow['30'].inputs.length, 124);
 });
 
-test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed into experimental Hybrid', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed into experimental Hybrid', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
@@ -68,8 +68,8 @@ test('VideoWorkflowCompiler injects explicit last frame, refs, spec and seed int
   assert.equal(compiled.appliedParams.workflow_id, 'minimax_h3_hongchao_a2a_12gb');
 });
 
-test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is omitted', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is omitted', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
@@ -98,8 +98,8 @@ test('VideoWorkflowCompiler keeps K -> K fallback when explicit last frame is om
   assert.equal(compiled.workflow['11'].inputs.image, 'same_anchor.png');
 });
 
-test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 2,
       scene_version: 1,
@@ -137,8 +137,8 @@ test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec
   assert.equal(compiled.workflow[compiled.workflow['10'].inputs.audio_vae[0]].inputs.vae_name, 'minimax_h3_audio_vae_fp32.safetensors');
 });
 
-test('Official Ref2VA omits the motion clip when the shot has no motion reference', () => {
-  const spec = VideoSpecCompiler.compile({
+test('Official Ref2VA omits the motion clip when the shot has no motion reference', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 2,
       scene_version: 1,
@@ -163,8 +163,8 @@ test('Official Ref2VA omits the motion clip when the shot has no motion referenc
   assert.equal(compiled.workflow[compiled.workflow['10'].inputs.audio_vae[0]].inputs.vae_name, 'minimax_h3_audio_vae_fp32.safetensors');
 });
 
-test('VideoWorkflowCompiler selects Official FL2VA and injects distinct boundary frames', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler selects Official FL2VA and injects distinct boundary frames', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 3,
       scene_version: 1,
@@ -198,7 +198,7 @@ test('VideoWorkflowCompiler selects Official FL2VA and injects distinct boundary
   assert.equal(compiled.workflow['11'].inputs.noise_seed, 9);
 });
 
-test('VideoWorkflowCompiler validates exact model availability from Comfy object_info', () => {
+test('VideoWorkflowCompiler validates exact model availability from Comfy object_info', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
   const classTypes = new Set(Object.values(bundle.workflow).map((node: any) => node.class_type));
   const objectInfo: Record<string, any> = {};
@@ -218,14 +218,14 @@ test('VideoWorkflowCompiler validates exact model availability from Comfy object
   assert.deepEqual(validation.missingModels, ['minimax_h3_video_vae_fp16.safetensors']);
 });
 
-test('VideoWorkflowCompiler throws when unknown slot node is referenced', () => {
+test('VideoWorkflowCompiler throws when unknown slot node is referenced', async () => {
   assert.throws(() => {
     VideoWorkflowCompiler.validateSlot({}, { node: '999', input: 'text' }, 'test_slot');
   }, /declared in slot 'test_slot' does not exist/);
 });
 
-test('VideoWorkflowCompiler compiles official Multi-Frame workflow with identity and anchored frame guide', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler compiles official Multi-Frame workflow with identity and anchored frame guide', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 39,
       scene_version: 1,
@@ -270,8 +270,8 @@ test('VideoWorkflowCompiler compiles official Multi-Frame workflow with identity
   assert.match(spec.positive_prompt, /frame 39/);
 });
 
-test('VideoWorkflowCompiler chains both guide_frame and last_frame when both are supplied', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoWorkflowCompiler chains both guide_frame and last_frame when both are supplied', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 50,
       scene_version: 1,
@@ -311,8 +311,8 @@ test('VideoWorkflowCompiler chains both guide_frame and last_frame when both are
   assert.match(spec.positive_prompt, /delivery frame 119/);
 });
 
-test('Official Multi-Frame chains multiple 24fps guides before the last-frame boundary', () => {
-  const spec = VideoSpecCompiler.compile({
+test('Official Multi-Frame chains multiple 24fps guides before the last-frame boundary', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 51, scene_version: 1, profile: 'narrative_clip',
       workflow_id: 'minimax_h3_multiframe_official_12gb',
@@ -341,8 +341,8 @@ test('Official Multi-Frame chains multiple 24fps guides before the last-frame bo
   }), /distinct frame indices/);
 });
 
-test('last-frame-only Multi-Frame uses the delivered end frame without a phantom guide', () => {
-  const spec = VideoSpecCompiler.compile({
+test('last-frame-only Multi-Frame uses the delivered end frame without a phantom guide', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 52, scene_version: 1, profile: 'narrative_clip',
       workflow_id: 'minimax_h3_multiframe_official_12gb',
@@ -359,7 +359,7 @@ test('last-frame-only Multi-Frame uses the delivered end frame without a phantom
   assert.deepEqual(compiled.workflow['14'].inputs.conditioning, ['23', 0]);
 });
 
-test('VideoWorkflowCompiler validates official Multi-Frame against Comfy object_info', () => {
+test('VideoWorkflowCompiler validates official Multi-Frame against Comfy object_info', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_multiframe_official_12gb');
   const classTypes = new Set(Object.values(bundle.workflow).map((node: any) => node.class_type));
   const objectInfo: Record<string, any> = {};
@@ -381,7 +381,7 @@ test('VideoWorkflowCompiler validates official Multi-Frame against Comfy object_
   assert.equal(validation.missingModels.length, 0);
 });
 
-test('VideoWorkflowCompiler rejects a graph loader model missing from the manifest and ComfyUI', () => {
+test('VideoWorkflowCompiler rejects a graph loader model missing from the manifest and ComfyUI', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_multiframe_official_12gb');
   bundle.workflow['2'].inputs.clip_name = 'different_clip.safetensors';
   const objectInfo: Record<string, any> = {};

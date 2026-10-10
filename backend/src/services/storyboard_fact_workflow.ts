@@ -6,7 +6,7 @@ import type { ScriptDocument, StoryboardCandidatePayload, StoryboardCandidateSho
 import { FACT_POLICY_VERSION, FactKindSchema, FactStateSchema, type VisualFact, type StoryboardFactContract } from '../schemas/storyboard_facts';
 import { EntityBindingSchema } from '../schemas/entity_binding';
 import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
-import { compilePonyPrompt, type CharacterLockRef } from './pony_prompt_compiler';
+import { type CharacterLockRef } from './pony_prompt_compiler';
 import { packShotSpec } from '../schemas/shot_contract';
 import { findChapterShotQuotaViolation } from './shot_intent_quota';
 import { containsCjk } from './english_visual_prompt';
@@ -167,35 +167,34 @@ export const PlanSchema = z.object({ shots: z.array(z.object({
   fact_ids: z.array(z.string()), primary_fact_id: z.string().nullable(),
 })).min(1).max(20) });
 export type FactPlan = z.infer<typeof PlanSchema>['shots'];
-/** Values/items stay source quotes; confirmed bindings can prove cross-block ownership. */
+/** A pronoun is not a name. Another confirmed person's name in the same clause blocks the binding fallback. */
+function ownsWardrobeOrHolding(clause: string, entity: string, owners: string[]): boolean {
+  if (entity && clause.includes(entity)) return true;
+  if (!entity || !owners.includes(entity)) return false;
+  return !owners.some(name => name !== entity && name.length > 0 && clause.includes(name));
+}
+
+/** Wardrobe and holding need the entity's name in the clause, or that entity as a confirmed binding. */
 export function evidencedContinuityStates<T extends { entity: string; attribute: string; value: string; item?: string; operation?: string }>(text: string, states: T[], context = '', owners: string[] = []) {
   const accepted: T[] = [];
   const rejected: T[] = [];
   for (const state of states) {
-    const currentNames = [...new Set(states.map(s => s.entity))].filter(name => text.includes(name));
-    const entitySeen = owners.includes(state.entity) || text.includes(state.entity) || (currentNames.length === 0 && context.includes(state.entity));
     if (!text.includes(state.value)) { rejected.push(state); continue; }
     if (state.item && !text.includes(state.item)) { rejected.push(state); continue; }
     if (state.attribute === 'wardrobe' && state.operation === 'remove' && !/脱下|脱掉|摘下|摘掉|褪下/u.test(text)) { rejected.push(state); continue; }
-    // Check the clause that contains this state, so two people's separate clothes
-    // don't acquire the first owner mentioned in the entire sentence.
-    const quotedValue = state.value.replace(/[，,。;；!?！？]+$/u, '');
-    const clauses = text.split(/[，,。;；!?！？]/u).filter(clause => quotedValue && clause.includes(quotedValue) && (!state.item || clause.includes(state.item)));
-    const owned = clauses.some(clause => {
-      let explicitOwner = /([\p{Script=Han}]{1,8})(?:穿|戴|握|持|脱下|解开|褪)(?:着)?/u.exec(clause)?.[1]
-        || /([\p{Script=Han}]{2,8})的(?:外套|围巾|衣|帽|伞|杯)/u.exec(clause)?.[1];
-      explicitOwner = explicitOwner?.split(/把|将/u)[0];
-      if (explicitOwner && /^(?:她|他|它|里衣|外衣|衣襟|衣领)$/u.test(explicitOwner)) explicitOwner = owners.length === 1 ? owners[0] : undefined;
-      if (!['wardrobe', 'holding'].includes(state.attribute)) return true;
-      if (explicitOwner) return explicitOwner.endsWith(state.entity);
-      return owners.length <= 1;
-    });
-    (entitySeen && owned ? accepted : rejected).push(state);
+    if (state.attribute === 'wardrobe' || state.attribute === 'holding') {
+      const quotedValue = state.value.replace(/[，,。;；!?！？]+$/u, '');
+      const clauses = text.split(/[，,。;；!?！？]/u).filter(clause => quotedValue && clause.includes(quotedValue) && (!state.item || clause.includes(state.item)));
+      (clauses.some(clause => ownsWardrobeOrHolding(clause, state.entity, owners)) ? accepted : rejected).push(state);
+      continue;
+    }
+    const currentNames = [...new Set(states.map(s => s.entity))].filter(name => text.includes(name));
+    const entitySeen = owners.includes(state.entity) || text.includes(state.entity) || (currentNames.length === 0 && context.includes(state.entity));
+    (entitySeen ? accepted : rejected).push(state);
   }
   return { accepted, rejected };
 }
 
-const SUCCESSION_JOIN = /(?<=.)(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
 const CLAUSE_EDGE = /[，,；;。！？!?、：:]$/u;
 const CLAUSE_JOIN = /^(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
 
@@ -217,13 +216,10 @@ export function groupAdjacentClauseFragments<T extends { text: string; beat: num
   return groups;
 }
 
-/** A succession inside one stored clause is two visible actions. Keep the join on the second clause. */
-export function splitSuccessionClause(text: string): [string, string] | null {
-  const joinAt = text.search(SUCCESSION_JOIN);
-  if (joinAt <= 0) return null;
-  const head = text.slice(0, joinAt);
-  const tail = text.slice(joinAt);
-  return head && tail ? [head, tail] : null;
+/** A model split counts only when the pieces are verbatim source quotes in order. */
+export function verbatimActionSplit(source: string, spans: string[]): string[] | null {
+  if (spans.length < 2 || spans.some(span => !span) || spans.join('') !== source) return null;
+  return spans;
 }
 
 /** A quoted comma is split into tags and rejoined. Compare the words, so that split still counts as the sentence. */
@@ -330,14 +326,9 @@ export const sceneContextFacts = (context: ReturnType<typeof sceneContext>) => [
   { id: 'interior_exterior', text: context.interior_exterior === 'interior' ? '室内' : '室外' },
   { id: 'time_of_day', text: ({ day: '白天', night: '夜间', dawn: '黎明', dusk: '黄昏' } as Record<string, string>)[context.time_of_day] || context.time_of_day },
 ];
-/** A wardrobe change is scoped to its bound wearer; unrelated locks are untouched. */
-export function scopedWardrobeLock(name: string, lock: string, facts: VisualFact[], inherited: State[] = []) {
-  const changes = [...facts.flatMap(f => f.states), ...inherited].filter(s => s.entity === name && s.attribute === 'wardrobe');
-  return lock.split(',').map(c => c.trim()).filter(clause => !changes.some(s => {
-    const item = s.item || s.value;
-    const category = /围巾/u.test(item) ? /scarf/i : /帽/u.test(item) ? /\bhat\b|\bcap\b/i : /手套/u.test(item) ? /glove/i : /里衣/u.test(item) ? /inner.*(?:robe|garment)|undershirt/i : /外套|外衣|外袍/u.test(item) ? /coat|jacket|outer.*robe/i : /robe|gown|dress|hanfu|fully_fastened_|half_unraveled_/i;
-    return category.test(clause);
-  })).join(', ');
+/** Clothing changes stay on the shot continuity state. Appearance text is not rewritten by garment class. */
+export function scopedWardrobeLock(_name: string, lock: string, _facts: VisualFact[] = [], _inherited: State[] = []) {
+  return lock.split(',').map(clause => clause.trim()).filter(Boolean).join(', ');
 }
 export function shotSoundText(doc: ScriptDocument, shot: StoryboardCandidateShot, contract: StoryboardFactContract) {
   const scene = doc.scenes.find(s => s.id === shot.script_scene_id)!;
@@ -483,10 +474,7 @@ export async function runFactWorkflow(input: {
     // Batch complete source sentences across blocks. Never ask for a JSON continuation.
     const units = scene.blocks.filter(b => b.type === 'action').flatMap(block => {
       const matches = [...block.text.matchAll(/[^，,；;。！？\n]+[，,；;。！？\n]*|[，,；;。！？\n]+/gu)];
-      return matches.filter(m => !punctuationOnly(m[0])).flatMap(m => {
-        const boundaries = [...new Set([0, ...[...m[0].matchAll(/然后|随后|接着|之后|继而/gu)].map(cut => cut.index!), m[0].length])].sort((a, b) => a - b);
-        return boundaries.slice(0, -1).map((start, i) => ({ id: `u_${hash([block.id, m.index! + start]).slice(0, 10)}`, block_id: block.id, start: m.index! + start, text: m[0].slice(start, boundaries[i + 1]) }));
-      });
+      return matches.filter(m => !punctuationOnly(m[0])).map(m => ({ id: `u_${hash([block.id, m.index!]).slice(0, 10)}`, block_id: block.id, start: m.index!, text: m[0] }));
     });
     const batches: Array<typeof units> = [];
     for (const unit of units) {
@@ -509,11 +497,13 @@ export async function runFactWorkflow(input: {
         for (const fact of Object.values(p.extracted).flat().filter(f => f.scene_id === scene.id)) {
           blockBeat.set(fact.block_id, Math.max(blockBeat.get(fact.block_id) ?? -1, fact.beat));
         }
-        const assigned = new Map<string, { text: string; beat: number; kind: z.infer<typeof FactKindSchema> }>();
-        const place = (source: typeof batch[number], beat: number, kind: z.infer<typeof FactKindSchema>) => {
+        const assigned = new Map<string, Array<{ text: string; beat: number; kind: z.infer<typeof FactKindSchema> }>>();
+        const place = (source: typeof batch[number], beat: number, kind: z.infer<typeof FactKindSchema>, text = source.text) => {
           const safe = Math.max(beat, blockBeat.get(source.block_id) ?? -1);
           blockBeat.set(source.block_id, safe);
-          assigned.set(source.id, { text: source.text, beat: safe, kind });
+          const parts = assigned.get(source.id) ?? [];
+          parts.push({ text, beat: safe, kind });
+          assigned.set(source.id, parts);
           return safe;
         };
         for (const source of batch) {
@@ -521,13 +511,25 @@ export async function runFactWorkflow(input: {
           if (kind === 'visual') {
             const atomic = await provider.generateStructured(JSON.stringify({ task: 'atomicity', source: source.text, repair }), z.object({ result: z.enum(['one_frame', 'sequence', 'uncertain']) }),
               'Can ALL visible details in this clause coexist in ONE still image? one_frame = compatible appearance, objects or one action at one moment. sequence = successive actions or before/after state changes require separate keyframes. uncertain = cannot decide. Multiple objects can coexist; successive actions cannot. Classify only, do not rewrite.', { temperature: 0.1, maxTokens: 48 });
-            const clauseNeedsSplit = atomic.result === 'sequence' && /然后|随后|接着|之后|继而|并(?![列排拢肩非且得])/.test(source.text);
-            if (atomic.result === 'uncertain' || source.text.length > 240 || clauseNeedsSplit) {
+            if (atomic.result === 'uncertain' || source.text.length > 240) {
               classified.items.find(i => i.id === source.id)!.kind = 'uncertain';
               place(source, lastVisualBeat >= 0 ? lastVisualBeat : 0, 'uncertain');
               continue;
             }
             if (atomic.result === 'sequence') {
+              const split = await provider.generateStructured(JSON.stringify({ task: 'split_actions', source: source.text, repair }), z.object({ spans: z.array(z.object({ text: z.string().min(1) })).min(1) }),
+                'Decide whether this one sentence is two successive visible actions. If it is, return each action as its own span. Every span must be a verbatim contiguous quote, and joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. If it is one action, return one span whose text equals the source.', { temperature: 0.1, maxTokens: 256 });
+              const quotes = verbatimActionSplit(source.text, split.spans.map(span => span.text));
+              if (quotes) {
+                let beat = lastVisualBeat < 0 ? 0 : lastVisualBeat + 1;
+                for (const text of quotes) {
+                  beat = place(source, beat, 'visual', text);
+                  lastVisualBeat = beat;
+                  beat += 1;
+                }
+                previousText = quotes.at(-1)!;
+                continue;
+              }
               lastVisualBeat = place(source, lastVisualBeat >= 0 ? lastVisualBeat : 0, 'visual');
               previousText = source.text;
               continue;
@@ -547,8 +549,8 @@ export async function runFactWorkflow(input: {
           place(source, lastVisualBeat >= 0 ? lastVisualBeat : 0, kind);
         }
         const facts = batch.flatMap(unit => {
-          const span = assigned.get(unit.id)!;
-          return anchorSpans(scene.id, unit.block_id, unit.text, { spans: [{ text: span.text, beat: span.beat, kind: span.kind, states: [] }] }, unit.start);
+          const parts = assigned.get(unit.id)!;
+          return anchorSpans(scene.id, unit.block_id, unit.text, { spans: parts.map(span => ({ text: span.text, beat: span.beat, kind: span.kind, states: [] })) }, unit.start);
         });
         if (facts.some(f => f.kind === 'visual' && f.beat < (prior.at(-1)?.beat ?? 0))) throw new FactWorkflowError('分场节拍编号不能倒退');
         return facts;
@@ -581,10 +583,7 @@ export async function runFactWorkflow(input: {
       const schema = z.object({ spans: z.array(z.object({ text: z.string().min(1), kind: z.enum(['visual', 'audio', 'internal', 'figurative']) })).min(1) });
       const result = await provider.generateStructured(JSON.stringify({ task: 'repair_fact', text: fact.text, kind: fact.kind, repair }), schema,
         'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with a thought, sound, or metaphor, return source-exact spans cut only after punctuation or before 然后、随后、接着、之后、继而 or 并. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.', { temperature: 0.1, maxTokens: 384 });
-      const succession = splitSuccessionClause(fact.text);
-      const spans = result.spans.length === 1 && succession
-        ? [{ text: succession[0], kind: 'visual' as const }, { text: succession[1], kind: 'visual' as const }]
-        : result.spans;
+      const spans = result.spans;
       try {
         for (let index = 0; index < spans.length - 1; index++) {
           if (!clauseBoundaryBetween(spans[index]!.text, spans[index + 1]!.text)) throw new FactWorkflowError('修复片段没有落在分句边界');
@@ -829,19 +828,8 @@ export async function runFactWorkflow(input: {
           }
         }
         const context = { visible_names: names, bindings: selected.map(f => f.binding), original_facts: selected.map(f => ({ id: f.id, text: f.text })), locks: permittedLocks, glossary: input.glossary };
-        const englishLocks = permittedLocks.map(lock => ({ ...lock, name: null, aliases: [...(lock.aliases || []), lock.name! ] }));
-        const preserved = (prompt: string) => {
-          for (const row of translations) {
-            if (!promptContainsTranslation(prompt, row.english)) throw new FactWorkflowError(`译文未进入画面提示: ${row.id}`, 502);
-          }
-        };
-        const compile = () => {
-          const englishAction = translations.filter(t => t.id !== 'location').map(t => t.english).join(' ');
-          return compilePonyPrompt({ ...sceneSlots[index]!, location: translations.find(t => t.id === 'location')!.english, primary_action: englishAction || translations.find(t => t.id === 'location')!.english, visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined }, englishLocks);
-        };
         const reviewEnglish = async () => {
-          const compiled = compile();
-          // One source sentence per audit. The local model returns faithful=false for a long explicit bundle.
+          // Each source sentence is audited on its own translation. The still is composed later.
           const failed: string[] = [];
           for (const fact of literal) {
             const english = translations.find(row => row.id === fact.id)?.english || '';
@@ -853,13 +841,10 @@ export async function runFactWorkflow(input: {
             }
           }
           if (failed.length) throw new FactWorkflowError(`译文待核对: ${failed.join(', ')} 存在遗漏、矛盾、新增或不确定性`, 502);
-          preserved(compiled.visual_prompt);
-          // The saved shot audit authorizes this exact final text, including asset locks.
-          await auditFacts(provider, literal, compiled.visual_prompt, context);
-          return compiled;
+          return { visual_prompt: '' };
         };
         p.phase = 'auditing'; await persist();
-        let compiled: ReturnType<typeof compile>;
+        let compiled: { visual_prompt: string };
         try {
           compiled = await reviewEnglish();
         } catch (error: any) {

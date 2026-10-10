@@ -13,7 +13,8 @@ import {
     TimelineResponseSchema,
     CharacterProfilesResponseSchema,
     CharacterEvolutionSchema,
-    ContentAnalysisSchema
+    ContentAnalysisSchema,
+    canonicalCharacterRole,
 } from '../schemas/llm';
 
 export const DEFAULT_LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
@@ -383,7 +384,7 @@ export class LLMService {
             primary_subject,
             visible_subjects,
             key_props,
-            // Empty — server compilePonyPrompt fills final tags.
+            // Empty — the image step composes from the stored contract.
             visual_prompt: '',
             audio_prompt: sceneData.audio_prompt || 'Cinematic BGM',
             dialogue: dialogue || sceneData.dialogue || null,
@@ -397,10 +398,17 @@ export class LLMService {
         const nsfwEnabled = Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
         const prompt = Prompts.extractCharacterProfiles(content, nsfwEnabled);
         const result = await LLMService.generateStructuredWithRetry(prompt, CharacterProfilesResponseSchema, token);
-        if (result) {
-            return result.profiles;
+        if (!result) return [];
+        const accepted = [];
+        for (const profile of result.profiles) {
+            const role = canonicalCharacterRole(profile.role);
+            if (!role) {
+                logger.warn(`Character extract rejected "${profile.name}": role "${profile.role}" is outside the enum`);
+                continue;
+            }
+            accepted.push({ ...profile, role });
         }
-        return [];
+        return accepted;
     }
 
     static async analyzeCharacterEvolution(

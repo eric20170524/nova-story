@@ -89,7 +89,7 @@ ${content}`;
         const charInstruction = buildCharacterLockInstruction(characterProfiles);
 
         return `You are a storyboard beat planner. Break the story into Independent Action Units and fill a Shot Contract for each beat.
-The server will compile Pony / SDXL tags via compilePonyPrompt — you must NOT author the final visual_prompt prose.
+The image step composes the picture from this Shot Contract. You must NOT author the final visual_prompt.
 
 ### Contract rules:
 1. Every shot MUST include location + primary_action. location = paintable nouns only (no mood words). primary_action = one visible verb.
@@ -175,19 +175,19 @@ ${scenePrompt}
 Dialogue: ${dialogue || 'None'}`;
     }
 
-    static extractCharacterProfiles(content: string, nsfwEnabled: boolean = false): string {
-        const tagLang = nsfwEnabled
-            ? `Write ALL visual_tags values in concise English image-model tags (Danbooru-style when possible). Characters are adults. Include distinctive costume colors and body type for consistency.`
-            : `Write ALL visual_tags values in concise English image-model tags (Danbooru-style when possible). Keep designs safe-for-work and fully clothed. Include distinctive costume colors and body type for consistency.`;
+    static extractCharacterProfiles(content: string, _nsfwEnabled: boolean = false): string {
+        return `Analyze the story text and extract characters that appear in it. Quote visible appearance from the chapter. Do not invent clothing, a face, or Danbooru tags. Do not add the words "fully clothed".
 
-        return `Analyze the story text and extract a list of characters. For each character, provide:
-- 'name': Name
-- 'role': 'main', 'supporting', or 'minor'
-- 'description': Brief biography and personality
-- 'visual_tags': A dictionary of visual traits for AI image generation. MUST include keys: 'hair', 'eyes', 'skin_tone', 'face_features', 'build', 'clothing', 'accessories' (e.g. glasses, jewelry). Make descriptions specific (e.g. 'scar on left cheek', 'round wire-rimmed glasses').
-${tagLang}
+For each character return:
+- name: the name as written in the chapter
+- role: exactly one of protagonist, antagonist, supporting, extra. If the chapter does not support one of these four, omit that character.
+- gender: female, male, or unspecified. Use unspecified when the chapter does not state a gender.
+- description: biography and personality supported by this chapter
+- visual_tags:
+  - hair, face, body, clothing, accessories: short quotes of what this chapter shows. Leave a field empty when the chapter does not show it.
+  - undressed: true only when the chapter states this character is not wearing clothes. Otherwise false. When true, put that stated condition in clothing. Do not replace it with garments.
 
-Return the result as a JSON object with a key 'profiles' containing the list of character objects.
+Return JSON { "profiles": [ ... ] }.
 
 Text: ${content}`;
     }

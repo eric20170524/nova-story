@@ -1,29 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3 } from './video_spec_compiler';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, type VideoMotionMaterials } from './video_spec_compiler';
 
-test('Grok narrative prompts preserve the screenplay speech and sound', () => {
+test('Grok narrative prompts preserve the screenplay speech and sound', async () => {
   const request = { scene_id: 64, scene_version: 1, profile: 'narrative_clip' as const,
     workflow_id: 'grok_imagine_browser' as const, keyframe_asset_id: 10, character_reference_asset_ids: [],
     preset: 'preview_480p_5s' as const, run_loop_closer: false };
-  const spec = VideoSpecCompiler.compile({ request, scene: { id: 64,
+  const spec = await VideoSpecCompiler.compile({ request, scene: { id: 64,
     dialogue: '别再抬。', narration: '铜铃尚未响。', audio_prompt: '木闸低沉的叩响' } });
   assert.match(spec.positive_prompt, /Spoken dialogue in Mandarin Chinese, verbatim: "别再抬。"/);
   assert.match(spec.positive_prompt, /voiceover, verbatim: "铜铃尚未响。"/);
   assert.match(spec.positive_prompt, /Sound: 木闸低沉的叩响/);
-  const silent = VideoSpecCompiler.compile({ request, scene: { id: 64 } });
+  const silent = await VideoSpecCompiler.compile({ request, scene: { id: 64 } });
   assert.match(silent.positive_prompt, /no invented dialogue or narration/);
 });
 
-test('H3 narrative prompts carry source sound effects while formal speech remains a separate track', () => {
-  const spec = VideoSpecCompiler.compile({ request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false }, scene: { id: 64, dialogue: '完整对白', audio_prompt: '远处钟声' } });
+test('H3 narrative prompts carry source sound effects while formal speech remains a separate track', async () => {
+  const spec = await VideoSpecCompiler.compile({ request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false }, scene: { id: 64, dialogue: '完整对白', audio_prompt: '远处钟声' } });
   assert.match(spec.positive_prompt, /Sound: 远处钟声/);
   assert.match(spec.positive_prompt, /no invented dialogue or narration/);
   assert.doesNotMatch(spec.positive_prompt, /verbatim/);
 });
 
-test('video identity uses stable cast appearance instead of later-chapter narrative status', () => {
-  const spec = VideoSpecCompiler.compile({
+test('video identity uses stable cast appearance instead of later-chapter narrative status', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'grok_imagine_browser',
       keyframe_asset_id: 10, character_reference_asset_ids: [1], preset: 'preview_480p_5s', run_loop_closer: false },
     scene: { id: 64, visual_prompt: '沈砚在井台修锄头' },
@@ -31,10 +31,11 @@ test('video identity uses stable cast appearance instead of later-chapter narrat
       visual_tags: { base_model: { tags: { hair: 'black low bun', clothing: 'gray linen work tunic' } } } },
   });
   assert.match(spec.subject_identity, /black low bun/);
-  assert.doesNotMatch(spec.positive_prompt, /青紫|第五章/);
+  assert.doesNotMatch(spec.subject_identity, /strictly consistent/);
+  assert.doesNotMatch(spec.positive_prompt, /青紫|第五章|strictly consistent/);
 });
 
-test('cleanPromptForH3 removes Pony scores and cleans whitespace', () => {
+test('cleanPromptForH3 removes Pony scores and cleans whitespace', async () => {
   const dirty = 'score_9, score_8_up, masterpiece, 1girl, lu xueqi, best quality, ice sword';
   const cleaned = cleanPromptForH3(dirty);
   assert.equal(cleaned.includes('score_9'), false);
@@ -42,17 +43,21 @@ test('cleanPromptForH3 removes Pony scores and cleans whitespace', () => {
   assert.equal(cleaned.includes('best quality'), false);
   assert.ok(cleaned.includes('lu xueqi'));
   assert.ok(cleaned.includes('ice sword'));
+  const clothed = cleanPromptForH3('score_9, masterpiece, source_anime, red robe half unraveled, she lets go');
+  assert.match(clothed, /red robe half unraveled/);
+  assert.match(clothed, /she lets go/);
+  assert.doesNotMatch(clothed, /score_9|masterpiece|source_anime/);
 });
 
-test('alignH3FrameCount follows the MiniMax H3 17k+5 frame grid', () => {
+test('alignH3FrameCount follows the MiniMax H3 17k+5 frame grid', async () => {
   assert.equal(alignH3FrameCount(5), 5);
   assert.equal(alignH3FrameCount(120), 124);
   assert.equal(alignH3FrameCount(121), 124);
   assert.equal(alignH3FrameCount(124), 124);
 });
 
-test('VideoSpecCompiler compiles experimental Hybrid character_loop with H3 tags', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoSpecCompiler compiles experimental Hybrid character_loop with H3 tags', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
@@ -86,13 +91,14 @@ test('VideoSpecCompiler compiles experimental Hybrid character_loop with H3 tags
   assert.ok(spec.positive_prompt.includes('<Video 1>'));
   assert.ok(spec.positive_prompt.includes('motion-timing and body-pose reference only'));
   assert.ok(spec.positive_prompt.includes('Locked camera'));
-  assert.ok(spec.positive_prompt.includes('Mouth remains gently closed'));
+  assert.doesNotMatch(spec.positive_prompt, /Mouth remains gently closed|strictly consistent|Subtle natural cloth/);
+  assert.match(spec.positive_prompt, /Short idle from the appearance fields/);
   assert.ok(spec.positive_prompt.includes('Lu Xueqi'));
   assert.ok(spec.negative_prompt.includes('mouth opening'));
 });
 
-test('Official Ref2VA reserves Picture 1 for the scene keyframe and starts identity refs at Picture 2', () => {
-  const spec = VideoSpecCompiler.compile({
+test('Official Ref2VA reserves Picture 1 for the scene keyframe and starts identity refs at Picture 2', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
@@ -113,8 +119,8 @@ test('Official Ref2VA reserves Picture 1 for the scene keyframe and starts ident
   assert.ok(spec.positive_prompt.includes('<Video 1>'));
 });
 
-test('Grok browser prompt names the uploaded keyframe and portrait without H3 picture tags', () => {
-  const spec = VideoSpecCompiler.compile({
+test('Grok browser prompt names the uploaded keyframe and portrait without H3 picture tags', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 3,
       scene_version: 1,
@@ -133,8 +139,8 @@ test('Grok browser prompt names the uploaded keyframe and portrait without H3 pi
   assert.doesNotMatch(spec.positive_prompt, /<Picture/);
 });
 
-test('Official FL2VA prompt uses keyframe boundary semantics instead of Ref2VA tags', () => {
-  const spec = VideoSpecCompiler.compile({
+test('Official FL2VA prompt uses keyframe boundary semantics instead of Ref2VA tags', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 1,
       scene_version: 1,
@@ -155,8 +161,8 @@ test('Official FL2VA prompt uses keyframe boundary semantics instead of Ref2VA t
   assert.ok(spec.positive_prompt.includes('hard visual boundary anchors'));
 });
 
-test('last-frame-only Multi-Frame prompt anchors the delivered final frame', () => {
-  const spec = VideoSpecCompiler.compile({
+test('last-frame-only Multi-Frame prompt anchors the delivered final frame', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 2, scene_version: 1, profile: 'narrative_clip',
       workflow_id: 'minimax_h3_multiframe_official_12gb',
@@ -169,8 +175,8 @@ test('last-frame-only Multi-Frame prompt anchors the delivered final frame', () 
   assert.doesNotMatch(spec.positive_prompt, /frame 120/);
 });
 
-test('VideoSpecCompiler compiles narrative_clip with camera movement', () => {
-  const spec = VideoSpecCompiler.compile({
+test('VideoSpecCompiler compiles narrative_clip with camera movement', async () => {
+  const spec = await VideoSpecCompiler.compile({
     request: {
       scene_id: 2,
       scene_version: 1,
@@ -200,4 +206,45 @@ test('VideoSpecCompiler compiles narrative_clip with camera movement', () => {
   assert.ok(spec.positive_prompt.includes('<Picture 1>'));
   assert.ok(spec.positive_prompt.includes('slow pan right'));
   assert.ok(spec.positive_prompt.includes('raising the Tianya sword'));
+  assert.doesNotMatch(spec.positive_prompt, /Subtle natural cloth and hair breeze/);
+});
+
+test('a narrative action stays in the motion paragraph and a loop does not replace it', async () => {
+  let seen: VideoMotionMaterials | null = null;
+  const spec = await VideoSpecCompiler.compile({
+      request: {
+        scene_id: 4, scene_version: 1, profile: 'character_loop',
+        workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10,
+        character_reference_asset_ids: [5], preset: 'standard_720p_5s', run_loop_closer: false,
+      },
+      scene: {
+        id: 4,
+        visual_prompt: 'Pei Yuhan in a half-open crimson robe, palace interior, wide shot.',
+        camera_movement: 'slow push',
+        shot_spec: JSON.stringify({
+          location: '清暮宫内殿',
+          primary_action: '裴雨涵却已经彻底放开。',
+          shot_type: 'Wide Shot',
+          visual_facts: [{ text: '裴雨涵却已经彻底放开。' }],
+        }),
+      },
+      character: {
+        name: '裴雨涵',
+        visual_tags: { base_model: { tags: { hair: 'voluminous_crimson', clothing: 'low_cut_crimson' } } },
+      },
+    }, async (materials) => {
+      seen = materials;
+      return 'Pei Yuhan lets go completely while the crimson robe stays half open.';
+    });
+    assert.equal(seen!.still_paragraph, 'Pei Yuhan in a half-open crimson robe, palace interior, wide shot.');
+    assert.equal(seen!.primary_action, '裴雨涵却已经彻底放开。');
+    assert.equal(seen!.location, '清暮宫内殿');
+    assert.equal(seen!.shot_type, 'Wide Shot');
+    assert.equal(seen!.camera_move, 'slow push');
+    assert.equal(seen!.appearance[0]!.hair, 'voluminous_crimson');
+    assert.equal(seen!.appearance[0]!.clothing, 'low_cut_crimson');
+    assert.match(spec.positive_prompt, /crimson robe stays half open/);
+    assert.equal(spec.primary_action, '裴雨涵却已经彻底放开。');
+    assert.doesNotMatch(spec.positive_prompt, /裴雨涵却已经彻底放开|Mouth remains gently closed|strictly consistent|Subtle natural cloth|Short idle/);
+    assert.doesNotMatch(spec.negative_prompt, /mouth opening/);
 });

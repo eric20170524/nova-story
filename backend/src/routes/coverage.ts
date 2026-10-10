@@ -10,10 +10,9 @@ import {
   syncActiveVersionFromScene,
 } from '../services/scene_versions';
 import { formatVisualLockTokens } from '../services/reference_generation_policy';
-import { compilePonyPrompt, type CharacterLockRef } from '../services/pony_prompt_compiler';
+import { type CharacterLockRef } from '../services/pony_prompt_compiler';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
 import { packShotSpec, type ShotSourceReference } from '../schemas/shot_contract';
-import { sanitizeVisualPrompt } from '../services/visual_prompt_sanitizer';
 
 const parseTags = (raw: unknown): any => {
   try {
@@ -52,7 +51,7 @@ const buildCharacterProfiles = (characters: any[], chapterId?: string | number |
 /** Compile one coverage candidate from contract fields (never trust LLM prose). */
 export const compileCoverageCandidate = (
   candidate: any,
-  characterLocks: CharacterLockRef[],
+  _characterLocks: CharacterLockRef[],
   index: number,
   sourceRef?: ShotSourceReference | null
 ) => {
@@ -72,32 +71,15 @@ export const compileCoverageCandidate = (
     : [];
   const subject_scale = candidate.subject_scale || null;
 
-  const compiled = compilePonyPrompt(
-    {
-      shot_intent,
-      shot_type,
-      location,
-      primary_action,
-      primary_subject,
-      visible_subjects,
-      key_props,
-      subject_scale,
-      must_not: candidate.must_not || [],
-    },
-    characterLocks
-  );
-  const sanitized = sanitizeVisualPrompt(compiled.visual_prompt);
   const negative = compileNegativePrompt({
     shot_type,
-    shot_intent: compiled.shot_intent || shot_intent,
-    visual_prompt: sanitized.visual_prompt,
+    shot_intent,
     location,
     key_props,
-    character_lock: characterLocks.map((ref) => ref.lock).join(', '),
     identity_mode: 'auto',
   });
   const shot_spec = packShotSpec({
-    shot_intent: compiled.shot_intent || shot_intent,
+    shot_intent,
     location,
     primary_action,
     primary_subject,
@@ -115,12 +97,10 @@ export const compileCoverageCandidate = (
     camera_angle: candidate.camera_angle || 'Eye-level',
     camera_movement: candidate.camera_movement || 'Static',
     narrative_purpose: candidate.narrative_purpose || '',
-    visual_prompt: sanitized.visual_prompt,
-    negative_prompt: [negative, ...compiled.negative_extras, ...sanitized.negative_extras]
-      .filter(Boolean)
-      .join(', '),
+    visual_prompt: '',
+    negative_prompt: negative,
     shot_spec,
-    shot_intent: compiled.shot_intent || shot_intent,
+    shot_intent,
   };
 };
 

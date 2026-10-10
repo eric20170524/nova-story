@@ -74,7 +74,7 @@ const STRIP_MULTI_VIEW =
 const STRIP_TURNAROUND_STAGING =
   /\b(portrait|upper body|bust shot|close-up|medium shot|front view|side view|back view|matching reference character design|consistent facial features|same outfit and hair across all views|character reference|standing|full body)\b/i;
 const STRIP_TURNAROUND_MOOD =
-  /\b(aroused|seductive|alluring|melting expression|softens under emotion|half-lidded|blushing|smile|gaze|half-open|loosely worn|lowered to waist|full breasts|cleavage|undressing|intimate|erotic|rating_explicit|rating_questionable)\b/i;
+  /\b(aroused|seductive|alluring|melting expression|softens under emotion|half-lidded|blushing|smile|gaze|intimate|erotic|rating_explicit|rating_questionable)\b/i;
 const STRIP_TURNAROUND_PROPS =
   /\b(mirror|sword|blade|staff|weapon|shield|orb|handheld prop)\b/i;
 
@@ -100,28 +100,18 @@ export function buildTurnaroundViewPrompt(
   modelFamily: ImageModelFamily
 ): { prompt: string; negative_prompt: string } {
   const appearance = extractAppearanceBase(basePrompt);
-  const subject = /\b(1boy|male|man|boy)\b/i.test(basePrompt)
-    && !/\b(1girl|female|woman|girl)\b/i.test(basePrompt)
-    ? '1boy, solo, male'
-    : '1girl, solo, female';
   const quality =
     modelFamily === 'pony'
       ? 'score_9, score_8_up, score_7_up, source_anime, masterpiece, best quality'
       : modelFamily === 'redcraft_krea2'
         ? 'masterpiece quality, highly detailed, clean studio render'
-        : 'masterpiece, best quality, highly detailed, anime style';
-  const layeredRobe = /\b(robes?|hanfu|long sleeves?)\b/i.test(appearance);
-  const outfitConstraint = layeredRobe
-    ? 'long-sleeved layered hanfu robes, shoulders and back fully covered by cloth, original outfit colors'
-    : 'original outfit colors and silhouette';
+        : 'masterpiece, best quality, highly detailed';
 
   const prompt = [
     quality,
-    subject,
     'one solitary figure, single isolated character, no duplicate',
     view.poseTags,
-    'neutral expression, natural body proportions, canonical outfit fully fastened, clear silhouette, solid white background, even flat studio lighting',
-    outfitConstraint,
+    'neutral expression, natural body proportions, clear silhouette, plain studio background, even flat studio lighting',
     appearance
   ]
     .filter(Boolean)
@@ -130,11 +120,10 @@ export function buildTurnaroundViewPrompt(
   const negative = [
     'low quality, worst quality, bad anatomy, extra limbs, extra fingers, deformed hands',
     'text, watermark, logo, signature, speech bubble',
-    'multiple girls, 2girls, 3girls, duplicate figure, second person, collage, split panel, comic panel, grid, turnaround sheet, multiple views',
+    'duplicate figure, second person, collage, split panel, comic panel, grid, turnaround sheet, multiple views',
     'child, loli, shota, underage',
     'blurry, cropped head, missing feet, floating limbs',
     'halo, glowing ring, moon backdrop, gradient background, gray background, architecture, archway, doorway, columns, scenery, props, floating objects',
-    layeredRobe ? 'strapless gown, bare shoulders, exposed back, sleeveless dress, plunging neckline' : '',
     view.negativeExtra
   ].filter(Boolean).join(', ');
 
@@ -162,7 +151,7 @@ export function buildTurnaroundPanelWorkflowData(
     prompt,
     negative_prompt: negativePrompt,
     gen_type: 'turnaround_panel',
-    nsfw_enabled: false,
+    nsfw_enabled: workflowData.nsfw_enabled === true,
     denoise: 1,
     character_ref_url: useFrontAdapter ? refUrl : undefined,
     ref_image_url: useFrontAdapter ? refUrl : undefined,

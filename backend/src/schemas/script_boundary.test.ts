@@ -253,16 +253,20 @@ test('S0 / SC12: Agent routing and execution boundary isolation between novel st
     projectBId
   );
 
-  // 1. Test Router under surface=script (routeHint='script'):
-  // A "改写第2场" or "改写这一场" or "改写" intent MUST route to REWRITE_SCRIPT_SCENE, NOT CINEMATIC_REWRITE or DRAFT_CONTENT!
+  // Free text does not pick an intent. A script-page chip does.
+  assert.equal(tryIntentShortcut('改写第2场，增强动作冲突', null, 'script'), null);
+  assert.equal(tryIntentShortcut('生成本章短剧改编提纲', null, 'script'), null);
+  assert.equal(tryIntentShortcut('生成完整分场短剧剧本', null, 'script'), null);
+  assert.equal(tryIntentShortcut('电影化感官改写本章', null, 'story'), null);
   const routeScriptRewrite = await resolveAgentRoute({
     userMessage: '改写第2场，增强动作冲突',
     chapterId: chAId,
     routeHint: 'script',
+    preferredOp: 'REWRITE_SCRIPT_SCENE',
   });
   assert.ok(routeScriptRewrite, 'Route must resolve');
+  assert.equal(routeScriptRewrite.source, 'preferred_op');
   assert.equal(routeScriptRewrite.route.intent, 'REWRITE_SCRIPT_SCENE');
-  assert.equal(routeScriptRewrite.route.focus, '第2场');
   const rewriteActions = routeToActions(routeScriptRewrite.route, {
     chapterId: chAId,
     userMessage: '改写第2场，增强动作冲突',
@@ -298,6 +302,7 @@ test('S0 / SC12: Agent routing and execution boundary isolation between novel st
     userMessage: '生成本章短剧改编提纲',
     chapterId: chAId,
     routeHint: 'script',
+    preferredOp: 'GENERATE_SCRIPT_OUTLINE',
   });
   assert.ok(routeScriptOutline);
   assert.equal(routeScriptOutline.route.intent, 'GENERATE_SCRIPT_OUTLINE');
@@ -306,16 +311,16 @@ test('S0 / SC12: Agent routing and execution boundary isolation between novel st
     userMessage: '生成完整分场短剧剧本',
     chapterId: chAId,
     routeHint: 'script',
+    preferredOp: 'GENERATE_SCRIPT',
   });
   assert.ok(routeScriptGenerate);
   assert.equal(routeScriptGenerate.route.intent, 'GENERATE_SCRIPT');
 
-  // 2. Test Router under surface=story (routeHint='story'):
-  // "改写" on story surface routes to CINEMATIC_REWRITE
   const routeStoryRewrite = await resolveAgentRoute({
     userMessage: '电影化感官改写本章',
     chapterId: chAId,
     routeHint: 'story',
+    preferredOp: 'CINEMATIC_REWRITE',
   });
   assert.ok(routeStoryRewrite);
   assert.equal(routeStoryRewrite.route.intent, 'CINEMATIC_REWRITE');

@@ -10,6 +10,7 @@ import {
   mergeSceneGenerationContext,
   selectSceneCharacterAppearance,
   selectCodexReferenceUrls,
+  shotHasImageContract,
   shouldSuppressAppearanceForDetailShot
 } from './generation_service';
 
@@ -211,6 +212,38 @@ test('AutismMix narrative scene places model tags first and scopes anti-panel ne
     { advanced: { nsfw_enabled: false }, comfyui: {} }
   );
   assert.doesNotMatch(String(grid['7'].inputs.text), /comic strip, triptych/);
+});
+
+test('a composed narrative prompt is sent unchanged, with child-safety negatives', async () => {
+  const paragraph = 'Pei Yuhan lowers her red robe in the Qingmu Palace hall. Lu Jiajing keeps a moon-white gown. Nangong Xue keeps a lavender gown.';
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      gen_type: 'scene',
+      subject_type: 'human',
+      shot_type: 'Wide Shot',
+      shot_intent: 'wide-action',
+      style_preset: 'sensual_gufeng',
+      prompt_composed: true,
+      negative_prompt: 'close-up face, studio portrait',
+      project_settings: { image_generation: {
+        model: 'pony', workflow_id: null, style: 'sensual_gufeng',
+        output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
+        nsfw_mode: 'on',
+      } },
+    },
+    paragraph,
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: true }, comfyui: {} }
+  );
+  assert.equal(compiled['6'].inputs.text, paragraph);
+  assert.match(compiled['7'].inputs.text, /child, loli, shota/);
+  assert.match(compiled['7'].inputs.text, /close-up face, studio portrait/);
+  assert.doesNotMatch(compiled['6'].inputs.text, /environment-dominant|luxurious silk|score_9|:1\.4/i);
+  assert.equal(shotHasImageContract({ location: '清暮宫', primary_action: '裴雨涵红衣半解' }), true);
+  assert.equal(shotHasImageContract({ shot_intent: 'insert' }), false);
+  assert.equal(shotHasImageContract({ location: '清暮宫', primary_action: '   ' }), false);
 });
 
 test('compiles the failed animal wide-shot case as landscape without female tags', async () => {
@@ -742,15 +775,30 @@ test('wires real img2img path when ref_image_url is set for turnaround', async (
   assert.deepEqual(compiled['3'].inputs.latent_image[1], 0);
 });
 
-test('skips img2img for multi-person story scenes even if ref is passed', async () => {
-  const compiled = await compileComfyWorkflow(
+test('skips img2img when the contract names two people, not when the paragraph does', async () => {
+  const wordsOnly = await compileComfyWorkflow(
     {
       ...ponyWorkflow(),
       ref_image_url: '/static/generated/avatar_test.png',
       gen_type: 'scene',
       denoise: 0.65
     },
-    '2girls, yuri, embracing on silk couch, story moment',
+    '2girls, yuri, embracing on silk couch, Qingmu Palace',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: true }, comfyui: {} }
+  );
+  assert.equal(wordsOnly['3'].inputs.denoise, 0.82);
+
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      ref_image_url: '/static/generated/avatar_test.png',
+      gen_type: 'scene',
+      denoise: 0.65,
+      shot_spec: { visible_subjects: ['裴雨涵', '陆嘉静'] },
+    },
+    'a quiet room',
     'standard',
     {},
     { advanced: { nsfw_enabled: true }, comfyui: {} }

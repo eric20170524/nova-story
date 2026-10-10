@@ -13,6 +13,7 @@ import {
 } from './chapter_impact_settings';
 import {
   ChapterCharacterAnalysisSchema,
+  canonicalCharacterRole,
   type ChapterCharacterAnalysis,
 } from '../../schemas/llm';
 import {
@@ -146,8 +147,9 @@ export function mergeChapterCharacterAnalyses(
   return { characters: [...byName.values()] };
 }
 
-/** Lines written into character.description for chapter personality. */
-const PERSONALITY_LINE_RE = /^\s*(性格特征|本章动机|【本章性格】)[:：]?/;
+/** Program-owned personality section. Author lines outside these markers stay. */
+export const PERSONALITY_SECTION_START = '<!-- novastory:personality -->';
+export const PERSONALITY_SECTION_END = '<!-- /novastory:personality -->';
 
 export type ImpactCharacterTrait = {
   trait: string;
@@ -294,13 +296,13 @@ export function mergeVisualTagsDocument(
   return next;
 }
 
-/** Remove previously merged personality lines so re-apply does not stack. */
+/** Remove only the program-owned personality section. Author lines stay. */
 export function stripPersonalitySections(text: string): string {
   if (!text) return '';
+  const start = PERSONALITY_SECTION_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const end = PERSONALITY_SECTION_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return text
-    .split('\n')
-    .filter((line) => !PERSONALITY_LINE_RE.test(line))
-    .join('\n')
+    .replace(new RegExp(`${start}[\\s\\S]*?${end}`, 'g'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -338,7 +340,8 @@ export function formatPersonalityBlock(
   }
   const mot = String(item.motivation || '').trim();
   if (mot) parts.push(`本章动机：${mot}`);
-  return parts.join('\n');
+  if (!parts.length) return '';
+  return `${PERSONALITY_SECTION_START}\n${parts.join('\n')}\n${PERSONALITY_SECTION_END}`;
 }
 
 /**
@@ -358,20 +361,17 @@ export function mergeCharacterDescription(
   return bio || personality || '';
 }
 
-/** Map free-text chapter role to character.role enum-ish values. */
+/**
+ * Use an explicit enum from the extract or analysis.
+ * A stored main/minor alias is accepted only as the fallback already on the character.
+ * Any other wording rejects the character.
+ */
 export function mapRoleInChapterToRole(
   roleInChapter?: string | null,
   fallback?: string | null
-): string {
-  const fb = String(fallback || '').trim().toLowerCase();
-  if (fb === 'protagonist' || fb === 'antagonist' || fb === 'supporting' || fb === 'extra') return fb;
-  if (fb === 'main') return 'protagonist';
-  if (fb === 'minor') return 'extra';
-  const r = String(roleInChapter || '');
-  if (/反派|antagonist|villain/i.test(r)) return 'antagonist';
-  if (/主[角色]?|protagonist|heroine?|\bmain\b/i.test(r)) return 'protagonist';
-  if (/观众|群众|群体|路人|次要|minor|extra|crowd/i.test(r)) return 'extra';
-  return 'supporting';
+): string | null {
+  return canonicalCharacterRole(roleInChapter)
+    ?? canonicalCharacterRole(fallback, { allowStoredAlias: true });
 }
 
 /**
@@ -415,7 +415,7 @@ export function mergeImpactWithCharacterAnalysis(
     if (Object.keys(visual_tags).length) visualTagsMerged = true;
     byName.set(keyOf(name), {
       name,
-      role: ch.role,
+      role: mapRoleInChapterToRole(ch.role, ch.role),
       impactBio: ch.description,
       traits: [],
       visual_tags,
@@ -450,23 +450,24 @@ export function mergeImpactWithCharacterAnalysis(
     });
   }
 
-  const newOrUpdatedCharacters: ImpactCharacterRow[] = [...byName.values()].map(
+  const newOrUpdatedCharacters: ImpactCharacterRow[] = [...byName.values()].flatMap(
     (c) => {
+      if (!c.role) return [];
       const personality = formatPersonalityBlock(c);
       const description = mergeCharacterDescription(
         null,
         c.impactBio,
         personality
       );
-      return {
+      return [{
         name: c.name,
-        role: c.role || 'supporting',
+        role: c.role,
         description: description || c.impactBio || '',
         traits: c.traits,
         motivation: c.motivation ?? null,
         roleInChapter: c.roleInChapter ?? null,
         visual_tags: Object.keys(c.visual_tags).length ? c.visual_tags : null,
-      };
+      }];
     }
   );
 
@@ -990,23 +991,30 @@ export class WritingService {
             projectId,
             ch.name
           );
-          const impactBio = stripPersonalitySections(ch.description || '');
-          const appearance = /依据[:：]|本章/.test(impactBio) ? '' : impactBio;
           const role = mapRoleInChapterToRole(ch.roleInChapter, ch.role);
+          if (!existing && !role) continue;
           const incomingVisual = normalizeVisualTags(ch.visual_tags);
           const mergedVisualDoc = mergeVisualTagsDocument(
             existing?.visual_tags,
             incomingVisual
           );
           const visualJson = JSON.stringify(mergedVisualDoc || {});
+          const description = mergeCharacterDescription(
+            existing?.description,
+            /依据[:：]/.test(stripPersonalitySections(ch.description || ''))
+              ? ''
+              : ch.description,
+            formatPersonalityBlock(ch)
+          );
 
           if (existing) {
             await db.run(
-              'UPDATE character SET visual_tags = ? WHERE id = ?',
+              'UPDATE character SET visual_tags = ?, description = ? WHERE id = ?',
               visualJson,
+              description,
               existing.id
             );
-            ch.description = existing.description || '';
+            ch.description = description;
             ch.role = existing.role || role;
             ch.visual_tags = Object.keys(incomingVisual).length
               ? incomingVisual
@@ -1017,10 +1025,10 @@ export class WritingService {
               projectId,
               ch.name,
               role,
-              appearance,
+              description,
               visualJson
             );
-            ch.description = appearance;
+            ch.description = description;
             ch.role = role;
           }
         }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sanitizeVisualPrompt } from './visual_prompt_sanitizer';
 
-test('deletes metallic ring echo and other sound / smell tokens', () => {
+test('keeps sound, smell, and simile wording', () => {
   const { visual_prompt, negative_extras } = sanitizeVisualPrompt(
     [
       'rigid glass-like ice pool',
@@ -13,35 +13,28 @@ test('deletes metallic ring echo and other sound / smell tokens', () => {
     ].join(', ')
   );
 
-  assert.doesNotMatch(visual_prompt, /metallic ring echo/i);
-  assert.doesNotMatch(visual_prompt, /\becho\b/i);
-  assert.doesNotMatch(visual_prompt, /\bscent\b/i);
-  assert.doesNotMatch(visual_prompt, /scraping sound/i);
+  assert.match(visual_prompt, /metallic ring echo/i);
+  assert.match(visual_prompt, /sweet scent/i);
+  assert.match(visual_prompt, /scraping sound/i);
   assert.match(visual_prompt, /claw tip touching surface/i);
-  assert.match(visual_prompt, /ice pool|glass/i);
-  assert.doesNotMatch(visual_prompt, /glass-like/i);
+  assert.match(visual_prompt, /glass-like ice pool/i);
+  assert.deepEqual(negative_extras, []);
   const simile = sanitizeVisualPrompt('Clouds outside the window churn like boiling water.');
   assert.match(simile.visual_prompt, /churn like boiling water/i);
   const prose = sanitizeVisualPrompt('Pei Yuhan steadied her waist, while the other hand gently stroked the back of Nangong Xue\'s sweat-dampened neck. Nangong Xue trembled all over at the sound, strands of hair stuck to her cheek');
   assert.match(prose.visual_prompt, /sweat-dampened neck/i);
   assert.match(prose.visual_prompt, /trembled all over at the sound/i);
   assert.match(prose.visual_prompt, /strands of hair/i);
-  // sound phrase removed; optional scale negatives may be attached when phrase was seen
-  void negative_extras;
 });
 
-test('grounds cloud-like platform and adds nature negatives', () => {
+test('keeps cloud-like and does not invent nature negatives', () => {
   const { visual_prompt, negative_extras } = sanitizeVisualPrompt(
     'establishing shot, cloud-like platforms, carved carousel horses, pastel park'
   );
 
-  assert.doesNotMatch(visual_prompt, /cloud-like/i);
-  assert.match(visual_prompt, /platform/i);
-  assert.match(visual_prompt, /walkable|flat/i);
+  assert.match(visual_prompt, /cloud-like platforms/i);
   assert.match(visual_prompt, /carousel horses/i);
-  assert.ok(negative_extras.some((t) => /real clouds/i.test(t)));
-  assert.ok(negative_extras.some((t) => /mountains/i.test(t)));
-  assert.ok(negative_extras.some((t) => /outdoor nature/i.test(t)));
+  assert.deepEqual(negative_extras, []);
 });
 
 test('strips environmental storytelling and keeps visible music-note props', () => {
@@ -66,9 +59,9 @@ test('keeps the visible clause after a simile colon', () => {
   const { visual_prompt } = sanitizeVisualPrompt('As if holding some ceremony: the moon-white undergarment half-open, claw tip touching surface');
   assert.match(visual_prompt, /moon-white undergarment half-open/i);
   assert.match(visual_prompt, /claw tip touching surface/i);
-  const stripped = sanitizeVisualPrompt('as if the room were only a mood, claw tip touching surface');
-  assert.doesNotMatch(stripped.visual_prompt, /\bas if\b/i);
-  assert.match(stripped.visual_prompt, /claw tip touching surface/i);
+  const kept = sanitizeVisualPrompt('as if the room were only a mood, claw tip touching surface');
+  assert.match(kept.visual_prompt, /\bas if the room were only a mood/i);
+  assert.match(kept.visual_prompt, /claw tip touching surface/i);
 });
 
 test('does not leave score_9 or dreamcore project prefixes', () => {

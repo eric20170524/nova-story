@@ -16,7 +16,7 @@ import { ShotContractFieldsSchema } from '../schemas/shot_contract';
 import { buildCharacterLockRefsForChapter } from '../services/timeline_generation_service';
 import { compileEnglishShotPrompt } from '../services/english_visual_prompt';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
-import { normalizeImageModelFamily } from '../services/image_generation_policy';
+import { normalizeImageModelFamily, styleLightingMaterial } from '../services/image_generation_policy';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import { SettingsManager } from '../core/settings_manager';
 
@@ -181,6 +181,9 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
               systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
               projectSettings,
             }),
+            styleLighting: styleLightingMaterial(getProjectImageSettings(projectSettings).style),
+            shotType: data.shot_type || scene.shot_type,
+            chapterId: scene.chapter_id,
           },
         );
       } catch (error: any) {

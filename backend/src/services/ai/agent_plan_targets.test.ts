@@ -32,6 +32,13 @@ test('a chapter ordinal becomes the current plan id before revise generation', a
   });
 
   const original = StoryPlanningService.generateChapters;
+  const { LLMService } = await import('../llm');
+  const originalRoute = LLMService.generateStructuredWithRetry;
+  LLMService.generateStructuredWithRetry = async () => ({
+    intent: 'PLAN_CHAPTERS',
+    chapterScope: 'none',
+    focus: 'revise',
+  });
   const captured: Array<{ mode?: string; targetPlanIds?: string[] }> = [];
   StoryPlanningService.generateChapters = async (request: any) => {
     captured.push({ mode: request.mode, targetPlanIds: request.targetPlanIds });
@@ -60,14 +67,16 @@ test('a chapter ordinal becomes the current plan id before revise generation', a
       history: [],
     });
     assert.deepEqual(captured[1]?.targetPlanIds, ['plan_b']);
+
+    StoryPlanningService.generateChapters = original;
+    const missing = await new AgentService().processRequest({
+      message: '改写第九十九章规划，增加悬念',
+      context: { project_id: projectId, surface: 'story', language: 'zh' },
+      history: [],
+    });
+    assert.equal(missing.results?.[0]?.data?.code, 'TARGET_SET_MISMATCH');
   } finally {
     StoryPlanningService.generateChapters = original;
+    LLMService.generateStructuredWithRetry = originalRoute;
   }
-
-  const missing = await new AgentService().processRequest({
-    message: '改写第九十九章规划，增加悬念',
-    context: { project_id: projectId, surface: 'story', language: 'zh' },
-    history: [],
-  });
-  assert.equal(missing.results?.[0]?.data?.code, 'TARGET_SET_MISMATCH');
 });

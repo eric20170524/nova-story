@@ -205,7 +205,7 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
     flux: `Chinese manhua thick painterly style, rich digital brushwork, dramatic rim light`
   },
   sensual_gufeng: {
-    // 魅惑古风：色调/材质/光影；alluring/sheer/intimate 在 action 镜会被自动剥离
+    // Non-composed path only. A composed still uses styleLightingMaterial and does not receive this booster.
     pony: `alluring ancient chinese guofeng fantasy illustration, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
     flux: `alluring ancient Chinese guofeng fantasy, sheer fabric rim light, luxurious silk texture, intimate atmospheric haze, cinematic lighting`
   },
@@ -214,7 +214,6 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
     flux: `elegant mature aesthetic, refined semi-realistic face, sophisticated proportions, soft cinematic key light`
   },
   alluring_portrait: {
-    // Portrait-oriented; on action/aftermath becomes lighting-only via strip
     pony: `alluring portrait, soft beauty lighting, skin highlights, shallow depth of field`,
     flux: `alluring portrait, soft beauty lighting, subtle skin highlights, shallow depth of field`
   },
@@ -252,9 +251,40 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   }
 };
 
-/** Tokens that describe narrative content / portrait lock — strip on action & aftermath */
+/** Tokens that describe narrative content / portrait lock. Not applied to a composed shot prompt. */
 const STYLE_NARRATIVE_STRIP_RE =
   /\b(alluring|intimate|sheer fabric(?: rim light)?|portrait|looking at viewer|beauty portrait|elegant portrait|fashion pose|fully clothed|artistic portrait|group portrait|splash-art pose)\b/gi;
+
+/** Light and material only. The text model may use this; it is not appended after the paragraph. */
+const STYLE_LIGHTING_MATERIAL: Record<string, string> = {
+  ancient_fantasy: 'volumetric light, semi-realistic material',
+  xianxia_immortal: 'soft volumetric godrays, cool mist light',
+  ethereal_glow: 'soft glow, dreamy backlighting',
+  guoman_painterly: 'strong rim light, painterly material',
+  sensual_gufeng: 'dramatic chiaroscuro, rim light, semi-realistic material',
+  elegant_mature: 'cinematic key light',
+  alluring_portrait: 'soft beauty lighting, shallow depth of field',
+  anime: 'cel-shaded light, clean color',
+  western_comic: 'bold rim light, graphic shading',
+  autismmix_artist: 'polished illustration light, rich color',
+  cinematic_photo: 'cinematic lighting, shallow depth of field',
+  aesthetic_romance: 'soft color grade, gentle depth of field',
+  game_illustration: 'cinematic character spotlight',
+  semi_realistic: 'cinematic lighting, soft blending',
+  ink_wash: 'ink wash light, negative space',
+};
+
+export const styleLightingMaterial = (stylePreset?: string | null): string => {
+  const key = String(stylePreset || '').toLowerCase().trim();
+  return key ? STYLE_LIGHTING_MATERIAL[key] || '' : '';
+};
+
+/** Atmosphere only. Appended after a composed paragraph; it does not replace that paragraph. */
+export const NSFW_ATMOSPHERE_SENTENCE =
+  'natural uncensored details, erotic sensual atmosphere, soft skin texture';
+
+export const CHILD_SAFETY_NEGATIVE =
+  'low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota, blurry face, mutated hands';
 
 export type StyleShotMode = 'portrait' | 'action' | 'aftermath' | 'environment' | 'general';
 
@@ -265,13 +295,21 @@ const FEMALE_HUMAN_RE =
 const MALE_HUMAN_RE =
   /\b(1boy|2boys|3boys|boy|boys|man|men|male|prince|swordsman|hero|gentleman)\b/i;
 const ENVIRONMENT_RE =
-  /\b(extreme long shot|establishing shot|wide shot|long shot|panoramic|landscape|environment|overview|cityscape|plaza|square|amusement park|theme park|corridor|hallway|ticket booth|palace|hall|room|street|forest|mountains?|cloud sea)\b/i;
+  /\b(establishing shot|panoramic|landscape|environment|overview|cityscape|no people)\b/i;
 const ENVIRONMENT_SHOT_RE =
   /\b(extreme long shot|establishing shot|wide shot|long shot|panoramic|landscape|overview|aerial shot|overhead shot|bird'?s[- ]eye)\b/i;
 const HUMAN_IDENTITY_CLAUSE_RE =
   /beautiful .*woman|chinese beauty|japanese anime beauty|east asian (?:facial|face)|delicate feminine face|soft jawline|pretty face|refined facial features|long flowing hair|fairy elegance|\b(?:1girl|2girls|3girls|female|woman|women|girl|girls)\b/i;
 const HUMAN_IDENTITY_NEGATIVE_RE =
   /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
+
+/** A finished sentence, not a tag list. Plate and identity suffixes stay off it. */
+export const isWrittenParagraph = (prompt: string): boolean => {
+  const text = String(prompt || '').trim();
+  if (!/[.!?。]/.test(text)) return false;
+  if (text.split(/\s+/).filter(Boolean).length >= 8) return true;
+  return /[\u3400-\u9fff]/.test(text) && text.length >= 12;
+};
 
 /** Infer subject semantics without inventing a gender or species. */
 export const inferPromptSubjectType = (
@@ -299,6 +337,9 @@ export const sanitizePromptForSubject = (
   prompt: string,
   subjectType?: string | null
 ): string => {
+  const explicit = String(subjectType || '').toLowerCase();
+  const explicitNonPerson = /animal|nonhuman|non-human|creature|furry|quadruped|environment|landscape|location|scenery/.test(explicit);
+  if (isWrittenParagraph(prompt) && !explicitNonPerson) return String(prompt || '');
   const inferred = inferPromptSubjectType(prompt, subjectType);
   if (inferred !== 'nonhuman' && inferred !== 'environment') return String(prompt || '');
   return String(prompt || '')
@@ -337,12 +378,15 @@ export const inferStyleShotMode = (
   const shot = String(opts?.shotType || '').toLowerCase();
 
   const subjectType = inferPromptSubjectType(p, opts?.subjectType);
+  const personSubject =
+    subjectType === 'female_human'
+    || subjectType === 'male_human'
+    || subjectType === 'human'
+    || subjectType === 'mixed';
 
-  // A wide/establishing camera instruction is a composition contract even when
-  // a character is present. Previously any detected animal/human prevented the
-  // shot from entering environment mode, so Pony received no small-subject or
-  // anti-portrait guidance and routinely turned wide shots into portraits.
-  if (ENVIRONMENT_SHOT_RE.test(shot)) {
+  // A wide camera on a person is still that person's shot. A place name such as
+  // palace does not make the subject an empty plate.
+  if (ENVIRONMENT_SHOT_RE.test(shot) && !personSubject) {
     return 'environment';
   }
 
@@ -926,12 +970,28 @@ export const buildPromptEnhancement = (options: {
     || /\b(insert shot|detail shot|macro shot|object close-up|prop close-up)\b/i.test(
       String(shotType || '')
     );
-  // Insert must never inherit environment-dominant framing even if the prompt mentions a park.
+  const inferredSubject = inferPromptSubjectType(existingPrompt, subjectType);
+  const explicitKind = String(subjectType || '').toLowerCase();
+  const explicitNonPerson = /animal|nonhuman|non-human|creature|furry|quadruped|environment|landscape|location|scenery/.test(explicitKind);
+  // A finished person paragraph keeps its own face, species, and composition.
+  const keepWrittenParagraph = isWrittenParagraph(existingPrompt) && !explicitNonPerson;
+  const personSubject =
+    hasVisiblePerson === true
+    || inferredSubject === 'female_human'
+    || inferredSubject === 'male_human'
+    || inferredSubject === 'human'
+    || inferredSubject === 'mixed';
+  // A character action, including wide-action, is not an empty plate. A blank
+  // intent plus the words "wide shot" or "palace" must not force one either.
   const isEnvironment =
     !isInsertShot
-    && (isEmptyShotIntent(intent) || intent === 'wide-action' || shotMode === 'environment');
+    && !personSubject
+    && intent !== 'wide-action'
+    && intent !== 'medium-action'
+    && intent !== 'reaction'
+    && intent !== 'payoff'
+    && (isEmptyShotIntent(intent) || shotMode === 'environment');
   const isNarrativeScene = String(genType || '').toLowerCase() === 'scene';
-  const inferredSubject = inferPromptSubjectType(existingPrompt, subjectType);
   const isExplicitFemale = inferredSubject === 'female_human';
 
   // Shot intent wins over location vocabulary. Composition cues belong in the
@@ -943,7 +1003,7 @@ export const buildPromptEnhancement = (options: {
     negativeParts.push(
       'animal portrait, full animal, full body character, face, eyes, looking at viewer, centered character, studio background, plain background'
     );
-  } else if (isEnvironment) {
+  } else if (isEnvironment && !keepWrittenParagraph) {
     suffixParts.push(
       'scenery, wide shot, establishing shot, (environment-dominant cinematic composition:1.4), (expansive detailed location:1.3), clear foreground middle ground and background'
     );
@@ -981,7 +1041,7 @@ export const buildPromptEnhancement = (options: {
   // East-Asian feminine beauty: skip environment; lighten on action/aftermath so combat wins
   // Never invent a female human subject. Beauty anchors are legal only when the
   // prompt or structured request explicitly says the subject is female.
-  if (isExplicitFemale && !isEnvironment) {
+  if (isExplicitFemale && !isEnvironment && !keepWrittenParagraph) {
     if (isActionLike) {
       // Identity only — no heavy beauty-portrait stack
       if (modelFamily === 'pony' || modelFamily === 'sd15') {
@@ -1068,7 +1128,7 @@ export const buildPromptEnhancement = (options: {
       // Cast sheets and any shot that shows a person get the unlock.
       // Empty scenery stays free of forced nudity.
       if (intimateCue || personShot) {
-        suffixParts.push('natural uncensored details, erotic sensual atmosphere, soft skin texture');
+        suffixParts.push(NSFW_ATMOSPHERE_SENTENCE);
       } else {
         suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
       }
@@ -1090,26 +1150,13 @@ export const buildPromptEnhancement = (options: {
   }
 
   // Shared quality / safety
-  negativeParts.push(
-    'low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota, blurry face, mutated hands'
-  );
+  negativeParts.push(CHILD_SAFETY_NEGATIVE);
 
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
-  const booster = presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined;
+  const booster = keepWrittenParagraph ? undefined : (presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined);
   if (booster) {
     // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
-    let boost = (modelFamily === 'flux' || modelFamily === 'redcraft_krea2') ? booster.flux : booster.pony;
-    // (2) Auto-strip alluring / intimate / portrait locks on action & aftermath
-    if (isActionLike) {
-      boost = stripStyleNarrativeTokens(boost);
-    }
-    // alluring_portrait on non-portrait scene shots: keep lighting only
-    if (presetKey === 'alluring_portrait' && !isPortraitLike) {
-      boost = stripStyleNarrativeTokens(boost);
-      if (!boost) {
-        boost = 'soft beauty lighting, shallow depth of field';
-      }
-    }
+    const boost = (modelFamily === 'flux' || modelFamily === 'redcraft_krea2') ? booster.flux : booster.pony;
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
     const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
     if (!already && boost) {
@@ -1121,7 +1168,8 @@ export const buildPromptEnhancement = (options: {
       );
     }
   } else if (
-    /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠)/i.test(existingPrompt)
+    !keepWrittenParagraph
+    && /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠)/i.test(existingPrompt)
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
     suffixParts.push(
@@ -1316,63 +1364,89 @@ ${contractOnly ? '- Adjacent shots must differ in visible action or key props.' 
 `;
 };
 
-/** Quality header for character portrait / turnaround build-prompt. */
+export type CharacterSheetGender = 'female' | 'male' | 'unspecified';
+
+export type CharacterAppearanceFields = {
+  hair?: string | null;
+  face?: string | null;
+  body?: string | null;
+  clothing?: string | null;
+  accessories?: string | null;
+  /** Structured flag from stored fields. True when those fields state the character is undressed. */
+  undressed?: boolean | null;
+};
+
+export class CharacterSheetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CharacterSheetError';
+  }
+}
+
+export function normalizeStoredGender(value: unknown): CharacterSheetGender {
+  const gender = String(value ?? '').trim().toLowerCase();
+  if (gender === 'female' || gender === 'male') return gender;
+  return 'unspecified';
+}
+
+const appearanceText = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : '';
+
+/** Stored gender and appearance. A missing gender stays unspecified. */
+export function readStoredCharacterSheet(tags: Record<string, any> | null | undefined): {
+  gender: CharacterSheetGender;
+  appearance: CharacterAppearanceFields;
+} {
+  const source = tags && typeof tags === 'object' ? tags : {};
+  const base = source.base_model?.tags && typeof source.base_model.tags === 'object'
+    ? source.base_model.tags
+    : {};
+  const gender = normalizeStoredGender(source.gender ?? base.gender);
+  const undressed = source.undressed === true || base.undressed === true;
+  return {
+    gender,
+    appearance: {
+      hair: appearanceText(base.hair || source.hair),
+      face: appearanceText(base.face || source.face || base.face_features || source.face_features),
+      body: appearanceText(base.body || source.body || base.build || source.build),
+      clothing: appearanceText(base.clothing || source.clothing),
+      accessories: appearanceText(base.accessories || source.accessories),
+      undressed,
+    },
+  };
+}
+
+/**
+ * Sheet layout plus the character's stored gender and appearance fields.
+ * Studio background is layout only. A missing gender is not filled in.
+ * When the stored fields say the character is undressed and NSFW is off, the sheet fails.
+ */
 export const buildCharacterPromptHeader = (
-  modelFamily: ImageModelFamily,
+  _modelFamily: ImageModelFamily,
   nsfwEnabled: boolean,
   genType: string,
-  gender: 'female' | 'male' = 'female'
+  gender: CharacterSheetGender | null = 'unspecified',
+  appearance?: CharacterAppearanceFields | null,
 ): { prefix: string; negative: string } => {
-  if (gender === 'male') {
-    const anime = modelFamily === 'pony';
-    const base = anime
-      ? `score_9, score_8_up, score_7_up, source_anime, ${genType === 'turnaround' ? 'full body character design, consistent character identity' : 'portrait, upper body, front view, masterpiece, detailed face and eyes'}`
-      : `masterpiece quality, ${genType === 'turnaround' ? 'full body character design, consistent character identity' : 'portrait, upper body, front view, detailed face and eyes'}, clean studio background`;
-    const negative = 'female, woman, girl, 1girl, feminine face, child, low quality, bad anatomy, extra limbs, mismatched clothing, inconsistent face, watermark, text';
-    return {
-      prefix: `${base}, 1boy, solo, adult East Asian man, masculine facial structure`,
-      negative: nsfwEnabled ? negative : `${negative}, nsfw, nude`,
-    };
+  if (appearance?.undressed === true && !nsfwEnabled) {
+    throw new CharacterSheetError('角色字段标明未着装，项目未开启 NSFW，定妆已停止。');
   }
-  if (modelFamily === 'pony') {
-    // turnaround prompt is appearance base only — pipeline generates front/side/back panels then stitches
-    const base =
-      genType === 'turnaround'
-        ? `score_9, score_8_up, score_7_up, source_anime, full body character design, consistent character identity, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`
-        : `score_9, score_8_up, score_7_up, source_anime, portrait, upper body, front view, masterpiece, detailed face and eyes, 1girl, solo, female, ${EAST_ASIAN_FEMALE_BEAUTY_PONY}`;
-    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, score_4, score_3, score_2, score_1, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
-    const neg = nsfwEnabled
-      ? negCore
-      : `${negCore}, nsfw, nude`;
-    return { prefix: base, negative: neg };
-  }
-
-  if (modelFamily === 'sd15') {
-    const base =
-      genType === 'turnaround'
-        ? `masterpiece, best quality, full body character design, consistent character identity, 1girl, solo, female, beautiful East Asian woman, delicate feminine face, clear skin`
-        : `masterpiece, best quality, portrait, upper body, front view, detailed face and eyes, 1girl, solo, female, beautiful East Asian woman, delicate feminine face`;
-    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, lowres, bad anatomy, low quality, worst quality, cropped head, blurry, extra limbs, mismatched clothing, inconsistent face, child, loli`;
-    const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
-    return { prefix: base, negative: neg };
-  }
-
-  if (modelFamily === 'redcraft_krea2') {
-    const base =
-      genType === 'turnaround'
-        ? `full body character design, consistent character identity, clean studio background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
-        : `high quality character portrait, front view, detailed face and eyes, clean studio background, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`;
-    const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, child`;
-    const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
-    return { prefix: base, negative: neg };
-  }
-
-  // Legacy custom FLUX graphs only
-  const base =
-    genType === 'turnaround'
-      ? `full body character design, consistent character identity, clean studio white background, masterpiece quality, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`
-      : `high quality character portrait, front view, detailed face and eyes, clean studio background, 1girl, female, ${EAST_ASIAN_FEMALE_BEAUTY_FLUX}`;
-  const negCore = `${EAST_ASIAN_FEMALE_NEGATIVE}, low quality, distorted face, bad anatomy, extra limbs, cluttered background, inconsistent costume, child`;
-  const neg = nsfwEnabled ? negCore : `${negCore}, nsfw, nude`;
-  return { prefix: base, negative: neg };
+  const storedGender = gender === 'female' || gender === 'male' ? gender : 'unspecified';
+  const layout = genType === 'turnaround'
+    ? 'full body character design, consistent character identity, plain studio background'
+    : 'high quality character portrait, front view, detailed face and eyes, plain studio background';
+  const look = [
+    appearance?.hair,
+    appearance?.face,
+    appearance?.body,
+    appearance?.clothing,
+    appearance?.accessories,
+  ].map(part => String(part || '').trim()).filter(Boolean);
+  const prefix = [layout, storedGender === 'unspecified' ? '' : storedGender, ...look]
+    .filter(Boolean)
+    .join(', ');
+  return {
+    prefix,
+    negative: `${CHILD_SAFETY_NEGATIVE}, distorted face, cluttered background, mismatched clothing, inconsistent face`,
+  };
 };

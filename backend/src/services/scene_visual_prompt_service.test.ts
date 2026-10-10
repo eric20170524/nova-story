@@ -88,7 +88,8 @@ test('rewrite prompt uses visual_tags lock and does not hardcode kitten', () => 
   assert.match(prompt, /Visual Lock/i);
   assert.match(prompt, /never invent kitten/i);
   assert.doesNotMatch(prompt, /current_visual_prompt/i);
-  assert.match(prompt, /compilePonyPrompt/i);
+  assert.match(prompt, /image step composes/i);
+  assert.doesNotMatch(prompt, /compilePonyPrompt/i);
 
   const bible = buildCharacterVisualLockBible([
     { name: '小兽', role: 'main', visual_tags: dreamcoreProtagonistTags },

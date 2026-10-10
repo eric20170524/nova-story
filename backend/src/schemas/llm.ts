@@ -17,9 +17,27 @@ export const CharacterTraitSchema = z.object({
   confidence: z.number().min(0).max(1).describe('0-1 confidence'),
 });
 
+export const CANONICAL_CHARACTER_ROLES = ['protagonist', 'antagonist', 'supporting', 'extra'] as const;
+export type CanonicalCharacterRole = (typeof CANONICAL_CHARACTER_ROLES)[number];
+
+/** Accept a stored enum. main/minor are older stored values, not a guess from free text. */
+export function canonicalCharacterRole(
+  value?: string | null,
+  options?: { allowStoredAlias?: boolean },
+): CanonicalCharacterRole | null {
+  const role = String(value || '').trim().toLowerCase();
+  if ((CANONICAL_CHARACTER_ROLES as readonly string[]).includes(role)) {
+    return role as CanonicalCharacterRole;
+  }
+  if (!options?.allowStoredAlias) return null;
+  if (role === 'main') return 'protagonist';
+  if (role === 'minor') return 'extra';
+  return null;
+}
+
 export const ChapterCharacterAnalysisItemSchema = z.object({
   name: z.string(),
-  roleInChapter: z.string().describe('Role in this chapter, e.g. protagonist / antagonist / witness'),
+  roleInChapter: z.string().describe('Exactly one of protagonist, antagonist, supporting, extra'),
   traits: z.array(CharacterTraitSchema).default([]),
   motivation: z.string().optional().nullable().describe('Motivation shown in this chapter'),
   relationships: z.array(z.string()).optional().default([]),
@@ -96,20 +114,32 @@ export const TimelineResponseSchema = z.object({
 });
 
 export const VisualTagsSchema = z.object({
-  hair: z.string(),
-  eyes: z.string(),
-  skin_tone: z.string(),
-  face_features: z.string(),
-  build: z.string(),
-  clothing: z.string(),
-  accessories: z.string()
+  hair: z.string().optional().default(''),
+  face: z.string().optional().default(''),
+  face_features: z.string().optional().default(''),
+  body: z.string().optional().default(''),
+  build: z.string().optional().default(''),
+  clothing: z.string().optional().default(''),
+  accessories: z.string().optional().default(''),
+  gender: z.enum(['female', 'male', 'unspecified']).optional().default('unspecified'),
+  undressed: z.boolean().optional().default(false),
 });
 
 export const CharacterProfileSchema = z.object({
   name: z.string(),
-  role: z.enum(["main", "supporting", "minor"]),
-  description: z.string(),
-  visual_tags: VisualTagsSchema
+  role: z.string(),
+  description: z.string().optional().default(''),
+  visual_tags: VisualTagsSchema.optional().default({
+    hair: '',
+    face: '',
+    face_features: '',
+    body: '',
+    build: '',
+    clothing: '',
+    accessories: '',
+    gender: 'unspecified',
+    undressed: false,
+  }),
 });
 
 export const CharacterProfilesResponseSchema = z.object({

@@ -21,7 +21,7 @@ import {
 } from '../../schemas/shot_contract';
 import { buildCharacterLockRefsForChapter } from '../timeline_generation_service';
 import { parseProjectSettings } from '../project_settings';
-import { coversVisibleBeat, assertEnglishFidelity, actionOverridesWardrobe, stripWardrobeTokens } from '../english_visual_prompt';
+import { coversVisibleBeat, assertEnglishFidelity } from '../english_visual_prompt';
 import {
   assertChapterUniqueness,
   formatUniquenessFailure,
@@ -397,6 +397,9 @@ export class StoryboardGenerationService {
         const key = auditHash(shot, payload.fact_contract, model);
         const generationAudit = await hasAudit(key);
         if (generationAudit) continue;
+        if (!String(shot.visual_prompt || '').trim()) {
+          throw new StoryboardGenerationError('镜头没有已审核的画面译文，请重新生成分镜候选', 400);
+        }
         const selected = payload.fact_contract.facts.filter(f => shotEvidenceIds(shot).includes(f.id));
         const facts = selected.map(f => ({ id: f.id, text: boundText(f.text, f.binding) }));
         facts.push(...continuityLiteral(spec.continuity_states || []));

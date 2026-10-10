@@ -13,7 +13,11 @@ import {
   resolveStaticAssetPath
 } from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
-import { buildCharacterPromptHeader } from '../services/image_generation_policy';
+import {
+  buildCharacterPromptHeader,
+  CharacterSheetError,
+  readStoredCharacterSheet,
+} from '../services/image_generation_policy';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import {
   activateCharacterVersion,
@@ -407,31 +411,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ detail: 'Character not found' });
     }
 
-    const desc = req.custom_description || dbChar.description || "";
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
-    const baseTags = tags?.base_model?.tags || {};
-
-    let tagStr = "";
-    if (typeof baseTags === 'object') {
-      tagStr = Object.values(baseTags).filter(v => typeof v === 'string').join(', ');
-    }
-
-    const combinedDesc = `${desc}, ${tagStr}`.replace(/,\s*$/, "");
-    // A design sheet needs stable identity and costume attributes, not the character's
-    // narrative description (which can contain expressions and scene actions).
-    const turnaroundTagKeys = ['hair', 'eyes', 'skin_tone', 'face_features', 'build', 'clothing', 'accessories'];
-    const turnaroundAppearance = turnaroundTagKeys
-      .flatMap((key) => typeof baseTags[key] === 'string' ? [baseTags[key]] : [])
-      .join(', ') || combinedDesc;
-
+    const stored = readStoredCharacterSheet(tags);
     const assets = tags?.assets || {};
     const refUrl = req.ref_image_url || assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url;
     const codexImage = SettingsManager.loadSettings().image_provider === 'codex';
-
-    const checkStr = `${desc} ${tagStr} ${dbChar.name || ''}`.toLowerCase();
-    const isMale = /\b(male|boy|man|1boy|gentleman)\b/i.test(checkStr)
-      || /男性|男子|男青年|少年|公子|老者|皇帝|国王/.test(checkStr);
-    const genderTag = isMale ? "1boy, solo, male" : "1girl, solo, female";
 
     const project = await db.get('SELECT settings FROM project WHERE id = ?', dbChar.project_id);
     const projectSettings = parseProjectSettings(project?.settings);
@@ -440,32 +424,39 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       projectSettings,
     });
     const effectiveModelType = getProjectImageSettings(projectSettings).model;
-    const header = buildCharacterPromptHeader(
-      effectiveModelType,
-      nsfwEnabled,
-      req.gen_type,
-      isMale ? 'male' : 'female'
-    );
+    let header: { prefix: string; negative: string };
+    try {
+      header = buildCharacterPromptHeader(
+        effectiveModelType,
+        nsfwEnabled,
+        req.gen_type,
+        stored.gender,
+        stored.appearance,
+      );
+    } catch (error) {
+      if (error instanceof CharacterSheetError) {
+        return reply.status(400).send({ detail: error.message });
+      }
+      throw error;
+    }
 
     let refHint = "";
     if (req.use_ref_portrait && refUrl) {
-      refHint =
-        ", (matching reference character design:1.2), consistent facial features, same outfit and hair across all views";
+      refHint = ", matching reference character design, consistent face hair and clothing across views";
     }
 
     let prompt = "";
     let negativePrompt = header.negative;
 
     if (req.gen_type === "turnaround") {
-      // ComfyUI composes three panels; the built-in image tool must draw the
-      // complete sheet in one generation while using the saved portrait reference.
+      // ComfyUI composes three panels; the built-in image tool draws the sheet in one generation.
       prompt = codexImage
-        ? `Three-view character design sheet of the SAME ${isMale ? 'adult male' : 'adult female'} character, three equal full-body panels side by side: FRONT view, LEFT PROFILE view, BACK view. Identical face, hairstyle, body proportions, outfit, colors and accessories in every panel. Neutral standing pose, arms relaxed, feet fully visible, plain warm-white background, soft even studio light, realistic rural Chinese period-drama costume, no labels, no letters, no watermark. Stable design: ${turnaroundAppearance}. ${refUrl ? 'Match the supplied portrait exactly for identity and clothing.' : ''}`
-        : `${header.prefix}, ${genderTag}, full body, standing, character reference, ${turnaroundAppearance}`;
+        ? `${header.prefix}. Three equal full-body panels side by side: front view, left profile, back view. Neutral standing pose, feet visible, plain studio background, no labels, no letters, no watermark.${refUrl ? ' Match the supplied portrait for identity.' : ''}`
+        : `${header.prefix}, full body, standing, character reference${refHint}`;
     } else {
       prompt = codexImage
-        ? `Photorealistic character casting portrait of one ${isMale ? 'adult East Asian man' : 'adult East Asian woman'} for a grounded ancient Chinese rural mystery drama. Waist-up, facing camera, neutral expression, both shoulders visible, consistent natural anatomy, plain warm-white studio background, soft even light. Everyday worn work clothes rather than immortal robes or fantasy armor. Stable identity and costume: ${req.custom_description || combinedDesc}. No writing, no watermark, no other people.`
-        : `${header.prefix}, ${genderTag}, simple background, white background, ${combinedDesc}`;
+        ? `${header.prefix}. Waist-up, facing camera, both shoulders visible, plain studio background, no writing, no watermark.`
+        : `${header.prefix}${refHint}`;
     }
 
     return {

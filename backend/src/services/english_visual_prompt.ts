@@ -1,7 +1,8 @@
 /**
  * English image prompts from a Chinese shot contract.
- * compilePonyPrompt stays pure. This module calls the local LLM only when
- * Chinese remains, and it fails closed if the English drops a visible cue.
+ * Every narrative still is composed once by the local text model from structured
+ * facts and appearance fields. The returned paragraph is the positive prompt.
+ * Visible facts that are dropped or reversed fail the shot.
  */
 
 import crypto from 'node:crypto';
@@ -10,18 +11,18 @@ import path from 'node:path';
 import { BACKEND_DIRECTORY } from '../core/paths';
 import { z } from 'zod';
 import { LLMService } from './llm';
+import { NSFW_ATMOSPHERE_SENTENCE } from './image_generation_policy';
 import {
-  compilePonyPrompt,
   type CharacterLockRef,
   type CompilePonyPromptResult,
   type PonyContract,
 } from './pony_prompt_compiler';
-import { sanitizeVisualPrompt } from './visual_prompt_sanitizer';
+import { flattenVisualTagMap } from './reference_generation_policy';
+import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
 
 const CJK = /[\u3400-\u9fff]/;
 const PEOPLE_BLOCKER = /^(?:no people|isolated|16:9)$/i;
-const SNAKE_WARDROBE = /\b(?:half_unraveled_[a-z0-9_]+|low_cut_[a-z0-9_]+|layered_[a-z0-9_]+|fully_fastened_[a-z0-9_]+|moon_white)\b/gi;
-const WARDROBE_OVERRIDE = /半敞|敞开|解开|褪|脱掉|裸|衣襟|赤裸|nude|naked|unfasten|robe lowered|open robe|bare /i;
+const SHOT_INTENTS = new Set(['insert', 'establish', 'wide-action', 'medium-action', 'reaction', 'overhead-map', 'payoff']);
 
 type CueGroup = { strong: boolean; zh: string[]; en: string[] };
 
@@ -56,6 +57,9 @@ export type EnglishPromptOptions = {
   modelFamily?: string | null;
   nsfwEnabled?: boolean;
   glossary?: Record<string, string>;
+  styleLighting?: string | null;
+  shotType?: string | null;
+  chapterId?: string | number | null;
 };
 
 export type VisualPromptTranslator = (prompt: string, systemInstruction?: string) => Promise<string>;
@@ -117,10 +121,79 @@ const FIDELITY_AUDIT_INSTRUCTION = [
   'Check subject, action, object, color, clothing state, pose, contact, props and location together.',
   'Shared keywords alone are insufficient: wearing a robe contradicts removing it; an open window does not preserve an open robe.',
   'Check every conjunction within each fact. Allow transliterated names.',
+  'Appearance lines name one person\'s hair, face, body, clothing, or accessories. Each appearance line is one fact. Natural wording preserves that field. The original snake_case token is not required. Hair written as hair preserves a hair field.',
+  'A visible fact that changes one person\'s clothing overrides only that person\'s clothing field. Preserving the fact is not a contradiction of the old field. Every other person\'s clothing field must remain.',
+  'A habit word such as often or usually is preserved when the English shows that state in this shot. Showing the state now is not the opposite of the habit.',
   'Mark contradicted only when the English asserts the opposite visible state. In-progress wording such as unfastens, half-open, unbuttoning, or slightly ajar preserves the source action.',
-  'Copy evidence verbatim from the english text. Do not use ellipsis, paraphrase, or Chinese in evidence.',
+  'Copy evidence verbatim from the english text. Evidence must be a continuous substring. Do not use ellipsis, paraphrase, or Chinese in evidence.',
   'If any detail is absent or uncertain mark missing. Return JSON only.',
 ].join(' ');
+
+const SameStateSchema = z.object({
+  facts: z.array(z.object({
+    id: z.number().int(),
+    relation: z.enum(['same', 'opposite', 'unrelated']),
+  })),
+});
+
+function splitAuditRejection(item: string): { id: number; status: string; fact: string } {
+  const first = item.indexOf(':');
+  const second = item.indexOf(':', first + 1);
+  return {
+    id: Number(item.slice(0, first)),
+    status: item.slice(first + 1, second),
+    fact: item.slice(second + 1),
+  };
+}
+
+/** The stored appearance value is already in the English when its own words are present. */
+function appearanceFieldCovered(fact: string, english: string): boolean {
+  const match = fact.match(/的(?:头发|五官|体型|服装|配饰)：(.+)$/);
+  if (!match) return false;
+  const haystack = english.toLowerCase();
+  const parts = match[1].split(/[、,，]/).map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return false;
+  return parts.every((part) => {
+    const words = part.replace(/[_-]+/g, ' ').toLowerCase().split(/\s+/).filter((word) => word.length >= 3);
+    if (!words.length) return false;
+    let from = 0;
+    for (const word of words) {
+      const at = haystack.indexOf(word, from);
+      if (at < 0) return false;
+      from = at + word.length;
+    }
+    return true;
+  });
+}
+
+async function contradictedButSameState(rejected: string[], english: string, report: FidelityReport): Promise<Set<number>> {
+  if (testVerifier) return new Set();
+  const evidenceById = new Map(report.facts.map((fact) => [fact.id, fact.evidence]));
+  const rows = rejected.map(splitAuditRejection).filter((row) => {
+    if (row.status !== 'contradicted') return false;
+    const evidence = String(evidenceById.get(row.id) || '').trim();
+    return evidence.length >= 8 && english.includes(evidence);
+  });
+  if (!rows.length) return new Set();
+  try {
+    const parsed = SameStateSchema.parse(await LLMService.getLocalProvider().generateStructured(
+      JSON.stringify({
+        items: rows.map((row) => ({ id: row.id, fact: row.fact, evidence: evidenceById.get(row.id) || '' })),
+      }),
+      SameStateSchema,
+      'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase or an action in progress. relation=opposite only when the quote asserts the reverse state. relation=unrelated when the quote does not show the fact. Return JSON only.',
+      { maxTokens: 1200 },
+    ));
+    const same = new Set<number>();
+    for (const row of rows) {
+      const matches = parsed.facts.filter((item) => item.id === row.id);
+      if (matches.length === 1 && matches[0]?.relation === 'same') same.add(row.id);
+    }
+    return same;
+  } catch {
+    return new Set();
+  }
+}
 
 export async function assertEnglishFidelity(source: string, english: string): Promise<void> {
   const text = String(english || '').trim();
@@ -131,16 +204,10 @@ export async function assertEnglishFidelity(source: string, english: string): Pr
   // another clause (e.g. an open window) is not evidence of a garment state.
   // Weight tokens such as :1.35 are compiler syntax, not visible facts.
   const facts = auditClauses(source);
-  const audit = async () => FidelityReportSchema.parse(testVerifier
-    ? await testVerifier(facts, text)
-    : await LLMService.getLocalProvider().generateStructured(
-      JSON.stringify({ sourceFacts: facts.map((fact, id) => ({ id, fact })), english: text }),
-      FidelityReportSchema,
-      FIDELITY_AUDIT_INSTRUCTION,
-    ));
-  const rejectedBy = (report: FidelityReport) => {
-    if (report.facts.length !== facts.length) return facts.map((fact, id) => `${id}:count:${fact}`);
-    return facts.flatMap((fact, id) => {
+  const batchSize = 12;
+  const rejectedBy = (report: FidelityReport, slice: string[]) => {
+    if (report.facts.length !== slice.length) return slice.map((fact, id) => `${id}:count:${fact}`);
+    return slice.flatMap((fact, id) => {
       const matches = report.facts.filter((item) => item.id === id);
       const result = matches[0];
       if (matches.length !== 1 || !result) return [`${id}:absent:${fact}`];
@@ -148,15 +215,37 @@ export async function assertEnglishFidelity(source: string, english: string): Pr
       return [`${id}:${result.status}:${fact}`];
     });
   };
-  let report = await audit();
-  let rejected = rejectedBy(report);
-  const missing = rejected.some((item) => item.includes(':missing:'));
-  if (rejected.length && !missing && !testVerifier) {
-    report = await audit();
-    rejected = rejectedBy(report);
-  }
-  if (rejected.length) {
-    throw new Error(`English visual prompt dropped visible facts or contradicted the source: ${rejected.join(' | ')}`);
+  for (let start = 0; start < facts.length; start += batchSize) {
+    const slice = facts.slice(start, start + batchSize);
+    const audit = async (repair = '') => FidelityReportSchema.parse(testVerifier
+      ? await testVerifier(slice, text)
+      : await LLMService.getLocalProvider().generateStructured(
+        JSON.stringify({ sourceFacts: slice.map((fact, id) => ({ id, fact })), english: text }),
+        FidelityReportSchema,
+        `${FIDELITY_AUDIT_INSTRUCTION}${repair}`,
+        { maxTokens: 4096 },
+      ));
+    let report = await audit();
+    let rejected = rejectedBy(report, slice);
+    const missing = rejected.some((item) => item.includes(':missing:'));
+    if (rejected.length && !missing && !testVerifier) {
+      const repair = rejected.some((item) => item.includes(':preserved:') || item.includes(':count:'))
+        ? ' The previous reply missed a fact id or quoted evidence that is not a continuous substring. Return one object for every source fact id. Quote a continuous span from the English and do not use ellipsis.'
+        : ' Reconsider each contradicted fact. Mark contradicted only when the English asserts the opposite visible state.';
+      report = await audit(repair);
+      rejected = rejectedBy(report, slice);
+    }
+    rejected = rejected.filter((item) => !appearanceFieldCovered(splitAuditRejection(item).fact, text));
+    if (rejected.some((item) => splitAuditRejection(item).status === 'contradicted')) {
+      const same = await contradictedButSameState(rejected, text, report);
+      rejected = rejected.filter((item) => {
+        const parsed = splitAuditRejection(item);
+        return parsed.status !== 'contradicted' || !same.has(parsed.id);
+      });
+    }
+    if (rejected.length) {
+      throw new Error(`English visual prompt dropped visible facts or contradicted the source: ${rejected.join(' | ')}`);
+    }
   }
 }
 
@@ -201,18 +290,6 @@ export function extractVisibleBeats(
   return picked;
 }
 
-export function actionOverridesWardrobe(value: string): boolean {
-  return WARDROBE_OVERRIDE.test(String(value || ''));
-}
-
-export function stripWardrobeTokens(prompt: string): string {
-  return String(prompt || '')
-    .split(',')
-    .map((part) => part.replace(SNAKE_WARDROBE, ' ').replace(/\s+/g, ' ').trim())
-    .filter((part) => part && !/^hanfu$/i.test(part))
-    .join(', ');
-}
-
 export function stripPeopleBlockers(prompt: string): string {
   return String(prompt || '')
     .split(',')
@@ -221,15 +298,25 @@ export function stripPeopleBlockers(prompt: string): string {
     .join(', ');
 }
 
-/** Only remove asset-only constraints when the receiving shot declares people. */
+const isPlateSubject = (value: unknown): boolean => {
+  const name = String(value || '').trim().toLowerCase();
+  return Boolean(name) && name !== 'none' && name !== 'paw-only';
+};
+
+/**
+ * A character shot does not copy the location or prop plate sentence.
+ * An empty plate keeps that sentence, including "no people", for its own job.
+ */
 export function assetPromptForShot(prompt: string, shot: {
   subject_scale?: string | null;
   visible_subjects?: string[];
   primary_subject?: string | null;
-}, shotPrompt: string): string {
-  const explicitlyEmpty = shot.subject_scale === 'absent' || /\bno people\b|\bempty (?:scene|room|courtyard)\b|空镜|无人/.test(shotPrompt.toLowerCase());
-  const hasSubjects = Boolean(shot.visible_subjects?.length || shot.primary_subject);
-  return hasSubjects && !explicitlyEmpty ? stripPeopleBlockers(prompt) : prompt;
+}, _shotPrompt: string): string {
+  if (shot.subject_scale === 'absent') return prompt;
+  const hasSubjects = Boolean(
+    (shot.visible_subjects || []).some(isPlateSubject) || isPlateSubject(shot.primary_subject)
+  );
+  return hasSubjects ? '' : prompt;
 }
 
 export function stripCjkSegments(prompt: string): string {
@@ -352,26 +439,343 @@ async function translateVisualFacts(source: string, options: EnglishPromptOption
   return { text, key };
 }
 
-function adjustLocks(
-  contract: PonyContract,
-  characterLock: string | CharacterLockRef[],
-): string | CharacterLockRef[] {
-  if (!actionOverridesWardrobe(contract.primary_action || '')) return characterLock;
-  if (Array.isArray(characterLock)) {
-    return characterLock.map((ref) => ({ ...ref, lock: stripWardrobeTokens(ref.lock) }));
+export type AppearanceFields = {
+  hair: string;
+  face: string;
+  body: string;
+  clothing: string;
+  accessories: string;
+};
+
+export type ShotCharacterAppearance = {
+  name: string;
+  appearance: AppearanceFields;
+  /** Original lock string when the card was not split into fields. Not rewritten. */
+  recorded_appearance?: string;
+};
+
+export type ShotImageFact = {
+  id: string;
+  text: string;
+  binding: Array<{ text: string; name: string }>;
+};
+
+export type ShotImageMaterials = {
+  facts: ShotImageFact[];
+  characters: ShotCharacterAppearance[];
+  location: string;
+  shot_intent: string | null;
+  shot_type: string | null;
+  subject_scale: string | null;
+  modelFamily: string;
+  nsfwEnabled: boolean;
+  styleLighting: string;
+  glossary: Record<string, string>;
+};
+
+const ShotPromptSchema = z.object({ prompt: z.string().min(1) }).strict();
+
+const emptyAppearance = (): AppearanceFields => ({
+  hair: '',
+  face: '',
+  body: '',
+  clothing: '',
+  accessories: '',
+});
+
+export function appearanceFieldsFromTags(
+  visualTags: unknown,
+  chapterId?: string | number | null,
+): AppearanceFields {
+  let parsed = visualTags;
+  if (typeof visualTags === 'string') {
+    try { parsed = JSON.parse(visualTags || '{}'); } catch { parsed = {}; }
   }
-  return stripWardrobeTokens(characterLock);
+  const tagMap = flattenVisualTagMap(parsed, { chapterId });
+  const faceKeys = ['face_features', 'facial_features', 'face', 'eyes', 'eyebrows', 'lashes', 'skin_tone'];
+  const face = faceKeys.map((key) => String(tagMap[key] || '').trim()).filter(Boolean).join(', ');
+  return {
+    hair: String(tagMap.hair || '').trim(),
+    face,
+    body: String(tagMap.build || '').trim(),
+    clothing: String(tagMap.clothing || '').trim(),
+    accessories: String(tagMap.accessories || '').trim(),
+  };
 }
 
-function finalizeEnglish(prompt: string, source: string) {
-  const stripped = actionOverridesWardrobe(source) || actionOverridesWardrobe(prompt)
-    ? stripWardrobeTokens(prompt)
-    : prompt;
-  const sanitized = sanitizeVisualPrompt(stripped);
-  if (containsCjk(sanitized.visual_prompt)) {
-    throw new Error('English visual prompt still contains Chinese characters');
+function confirmedVisibleMentions(binding: unknown): Array<{ text: string; name: string }> {
+  const mentions = Array.isArray((binding as { mentions?: unknown })?.mentions)
+    ? (binding as { mentions: Array<Record<string, unknown>> }).mentions
+    : [];
+  return mentions.flatMap((mention) => {
+    const entity = mention?.entity as { name?: string } | null | undefined;
+    if (!mention?.confirmed || mention.visibility !== 'visible' || !entity?.name) return [];
+    return [{ text: String(mention.text || ''), name: String(entity.name) }];
+  });
+}
+
+function pushFact(facts: ShotImageFact[], id: string, text: string, binding: ShotImageFact['binding'] = []) {
+  const cleaned = String(text || '').trim();
+  if (!cleaned || facts.some((fact) => fact.text === cleaned)) return;
+  facts.push({ id, text: cleaned, binding });
+}
+
+/** Chinese visible facts and confirmed bindings. Appearance fields are not rewritten here. */
+export function shotImageMaterialsFromSpec(
+  spec: Record<string, unknown> | null | undefined,
+  characters: Array<{ name?: string | null; english_name?: string | null; visual_tags?: unknown }> = [],
+  options: EnglishPromptOptions = {},
+): ShotImageMaterials {
+  const source = spec || {};
+  const facts: ShotImageFact[] = [];
+  const visualFacts = Array.isArray(source.visual_facts) ? source.visual_facts : [];
+  for (const fact of visualFacts) {
+    if (!fact || typeof fact !== 'object') continue;
+    const row = fact as { id?: string; kind?: string; text?: string; binding?: unknown };
+    if (row.kind && row.kind !== 'visual') continue;
+    pushFact(facts, String(row.id || `fact_${facts.length + 1}`), String(row.text || ''), confirmedVisibleMentions(row.binding));
   }
-  return sanitized;
+  pushFact(facts, 'primary_action', String(source.primary_action || ''));
+  const location = String(source.location || '').trim();
+  pushFact(facts, 'location', location);
+  const props = Array.isArray(source.key_props) ? source.key_props : [];
+  for (const prop of props) pushFact(facts, `prop:${String(prop)}`, String(prop || ''));
+  const states = Array.isArray(source.continuity_states) ? source.continuity_states : [];
+  for (const state of states) {
+    if (!state || typeof state !== 'object') continue;
+    const row = state as { fact_id?: string; entity?: string; attribute?: string; value?: string };
+    const value = String(row.value || '').trim();
+    if (!value || facts.some((fact) => fact.text.includes(value))) continue;
+    pushFact(facts, `state:${row.fact_id || value}`, [row.entity, row.attribute, value].filter(Boolean).join('：'));
+  }
+
+  const names: string[] = [];
+  const addName = (value: unknown) => {
+    const name = String(value || '').trim();
+    if (!name || name === 'none' || name === 'paw-only' || names.includes(name)) return;
+    names.push(name);
+  };
+  const listed = Array.isArray(source.visible_subjects) ? source.visible_subjects : [];
+  for (const name of listed) addName(name);
+  addName(source.primary_subject);
+  for (const fact of facts) for (const mention of fact.binding) addName(mention.name);
+
+  const byName = new Map(characters.map((character) => [String(character.name || '').trim(), character]));
+  const glossary = { ...(options.glossary || {}) };
+  const shotCharacters: ShotCharacterAppearance[] = names.map((name) => {
+    const row = byName.get(name);
+    const englishName = String(row?.english_name || '').trim();
+    if (englishName && !glossary[name]) glossary[name] = englishName;
+    return {
+      name,
+      appearance: row ? appearanceFieldsFromTags(row.visual_tags, options.chapterId) : emptyAppearance(),
+    };
+  });
+
+  const explicitIntent = String(source.shot_intent || '').trim().toLowerCase();
+  return {
+    facts,
+    characters: shotCharacters,
+    location,
+    shot_intent: explicitIntent || null,
+    shot_type: String(options.shotType || source.shot_type || '').trim() || null,
+    subject_scale: String(source.subject_scale || '').trim() || null,
+    modelFamily: options.modelFamily || 'pony',
+    nsfwEnabled: Boolean(options.nsfwEnabled),
+    styleLighting: String(options.styleLighting || '').trim(),
+    glossary,
+  };
+}
+
+function appearanceFactLines(characters: ShotCharacterAppearance[]): string[] {
+  const labels: Array<[keyof AppearanceFields, string]> = [
+    ['hair', '头发'],
+    ['face', '五官'],
+    ['body', '体型'],
+    ['clothing', '服装'],
+    ['accessories', '配饰'],
+  ];
+  const lines: string[] = [];
+  for (const character of characters) {
+    const name = character.name || '人物';
+    for (const [key, label] of labels) {
+      const value = String(character.appearance[key] || '').trim();
+      if (!value) continue;
+      lines.push(`${name}的${label}：${value}`);
+    }
+  }
+  return lines;
+}
+
+const SPOKEN_QUOTE_PAIRS: Array<[string, string]> = [
+  ['「', '」'],
+  ['『', '』'],
+  ['“', '”'],
+  ['‘', '’'],
+  ['"', '"'],
+  ["'", "'"],
+];
+
+/** Quoted speech stays on the audio track. The still keeps the surrounding action. */
+export function splitSpokenFromPicture(text: string): { picture: string; spoken: string[] } {
+  const spoken: string[] = [];
+  let picture = String(text || '');
+  for (const [open, close] of SPOKEN_QUOTE_PAIRS) {
+    let next = '';
+    let cursor = 0;
+    while (cursor < picture.length) {
+      const start = picture.indexOf(open, cursor);
+      if (start < 0) {
+        next += picture.slice(cursor);
+        break;
+      }
+      next += picture.slice(cursor, start);
+      const end = picture.indexOf(close, start + open.length);
+      if (end < 0) {
+        next += picture.slice(start);
+        break;
+      }
+      const inner = picture.slice(start + open.length, end).trim();
+      const straight = open === '"' || open === "'";
+      if (inner && (!straight || containsCjk(inner))) spoken.push(inner);
+      else next += picture.slice(start, end + close.length);
+      cursor = end + close.length;
+    }
+    picture = next;
+  }
+  return { picture: picture.replace(/\s+/g, ' ').trim(), spoken };
+}
+
+function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string {
+  const engine = modelFamily === 'redcraft_krea2' || modelFamily === 'flux'
+    ? 'Engine RedCraft: write natural English prose.'
+    : 'Write natural English prose.';
+  return [
+    'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
+    engine,
+    'Write every visible_facts text. Clothing, position, and action each stay visible. Use as many sentences as those facts need.',
+    'spoken_not_painted lists words for the audio track. Do not write those words into the picture.',
+    'No weight syntax and no booru tag soup.',
+    'Write hair as hair. A hair color is not clothing.',
+    'When clothing changes, name the person who changes. Keep every other person\'s clothing field.',
+    'Keep the location visible. Do not let the location overshadow the characters\' actions.',
+    'style_lighting is only light and material. Do not append a style sentence about silk, crimson accents, or an environment-dominant composition. A clothing color already present in the facts stays, including red clothing.',
+    'Do not drop or reverse any visible fact. Do not invent people, actions, or clothing. Leave empty appearance fields empty.',
+    'recorded_appearance is an original appearance string. Rewrite it into natural language, write hair as hair, and do not drop its clothing.',
+    'Use name_glossary when it has an entry. Otherwise transliterate the name. Do not replace a named person with he or she.',
+    'English only. No Chinese characters.',
+    `Model family: ${modelFamily}. NSFW: ${nsfwEnabled ? 'on' : 'off'}.`,
+    'Return JSON {"prompt":"<the paragraph>"} only.',
+  ].join(' ');
+}
+
+function visiblePerson(materials: ShotImageMaterials): boolean {
+  if (materials.subject_scale === 'absent') return false;
+  if (materials.characters.length > 0) return true;
+  return materials.facts.some((fact) => fact.binding.length > 0);
+}
+
+function composeCacheKey(materials: ShotImageMaterials): string {
+  return crypto.createHash('sha256').update(`compose-v1\n${JSON.stringify(materials)}`).digest('hex');
+}
+
+async function fidelityFailure(source: string, english: string): Promise<string | null> {
+  try {
+    await assertEnglishFidelity(source, english);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+export async function composeShotImagePrompt(materials: ShotImageMaterials): Promise<string> {
+  const modelFamily = materials.modelFamily || 'pony';
+  const nsfwEnabled = Boolean(materials.nsfwEnabled);
+  const baseSystem = composeInstructions(modelFamily, nsfwEnabled);
+  const splitFacts = materials.facts.map((fact) => ({ fact, ...splitSpokenFromPicture(fact.text) }));
+  const visibleFacts = splitFacts
+    .map(({ fact, picture }) => ({ id: fact.id, text: picture, binding: fact.binding }))
+    .filter((fact) => fact.text.length >= 2);
+  const spoken = splitFacts.flatMap((fact) => fact.spoken);
+  const user = JSON.stringify({
+    visible_facts: visibleFacts,
+    spoken_not_painted: spoken,
+    characters: materials.characters,
+    location: materials.location,
+    shot_intent: materials.shot_intent,
+    shot_type: materials.shot_type,
+    subject_scale: materials.subject_scale,
+    style_lighting: materials.styleLighting,
+    name_glossary: materials.glossary,
+  });
+  const source = [
+    ...visibleFacts.map((fact) => fact.text),
+    ...appearanceFactLines(materials.characters).map((line) => line.replace(/,\s*/g, '、')),
+  ].join('，');
+  const key = composeCacheKey(materials);
+  const ask = async (repair: string) => {
+    const system = repair ? `${baseSystem}${repair}` : baseSystem;
+    const paragraph = cleanModelEnglish(testTranslator
+      ? await testTranslator(user, system)
+      : (await LLMService.getLocalProvider().generateStructured(user, ShotPromptSchema, system, { temperature: 0.2, maxTokens: 1200 })).prompt);
+    if (!paragraph) throw new Error('English visual prompt translation was empty');
+    return paragraph;
+  };
+  // A stored paragraph was written only after this check passed, so a cache hit
+  // does not call the text model again. Image generation can then use the GPU.
+  const stored = translationCache.get(key) || readDiskOutbound(key);
+  let paragraph = stored || await ask('');
+  let failure = stored ? null : await fidelityFailure(source, paragraph);
+  if (failure) {
+    paragraph = await ask(` The previous paragraph failed the picture check: ${failure} Rewrite every picture fact so clothing, position, and action stay visible. Leave spoken_not_painted unpainted.`);
+    failure = await fidelityFailure(source, paragraph);
+  }
+  if (failure) throw new Error(failure);
+  const withAtmosphere = nsfwEnabled && visiblePerson(materials)
+    ? `${paragraph} ${NSFW_ATMOSPHERE_SENTENCE}`
+    : paragraph;
+  if (containsCjk(withAtmosphere)) throw new Error('English visual prompt still contains Chinese characters');
+  if (!stored) {
+    translationCache.set(key, paragraph);
+    writeDiskOutbound(key, paragraph);
+  }
+  return withAtmosphere;
+}
+
+function resolveContractIntent(contract: PonyContract): ShotIntent {
+  const explicit = String(contract.shot_intent || '').trim().toLowerCase();
+  if (SHOT_INTENTS.has(explicit)) return explicit as ShotIntent;
+  return mapShotTypeToIntent(contract.shot_type, contract.primary_action);
+}
+
+function charactersFromLocks(
+  characterLock: string | CharacterLockRef[],
+  visible: string[] | null | undefined,
+): ShotCharacterAppearance[] {
+  const refs: CharacterLockRef[] = Array.isArray(characterLock)
+    ? characterLock
+    : characterLock
+      ? [{ name: null, aliases: [], lock: characterLock }]
+      : [];
+  const wanted = (visible || []).map((name) => String(name || '').trim()).filter((name) => name && name !== 'none' && name !== 'paw-only');
+  const matches = (ref: CharacterLockRef, needle: string) => {
+    const name = String(ref.name || '').trim();
+    if (name && (name === needle || name.includes(needle) || needle.includes(name))) return true;
+    return (ref.aliases || []).some((alias) => {
+      const text = String(alias || '').trim();
+      return Boolean(text) && (text === needle || text.includes(needle) || needle.includes(text));
+    });
+  };
+  const chosen = wanted.length ? refs.filter((ref) => wanted.some((name) => matches(ref, name))) : refs.filter((ref) => ref.name || ref.appearance || ref.lock);
+  return chosen.map((ref) => {
+    const appearance = ref.appearance ? { ...emptyAppearance(), ...ref.appearance } : emptyAppearance();
+    const filled = Object.values(appearance).some(Boolean);
+    return {
+      name: String(ref.name || '').trim(),
+      appearance,
+      ...(filled ? {} : { recorded_appearance: String(ref.lock || '') }),
+    };
+  });
 }
 
 export async function compileEnglishShotPrompt(
@@ -379,29 +783,18 @@ export async function compileEnglishShotPrompt(
   characterLock: string | CharacterLockRef[] = '',
   options: EnglishPromptOptions = {},
 ): Promise<CompilePonyPromptResult> {
-  const facts = [contract.primary_action, contract.location, ...(contract.key_props || [])]
-    .map((part) => String(part || '').trim())
-    .filter(Boolean)
-    .join('，');
-  const compiled = compilePonyPrompt(contract, adjustLocks(contract, characterLock));
-  if (!containsCjk(facts) && !containsCjk(compiled.visual_prompt)) {
-    const visual = finalizeEnglish(compiled.visual_prompt, facts);
-    await assertEnglishFidelity(facts, visual.visual_prompt);
-    return {
-      visual_prompt: visual.visual_prompt,
-      negative_extras: [...compiled.negative_extras, ...visual.negative_extras],
-      shot_intent: compiled.shot_intent,
-    };
-  }
-  const translated = await translateVisualFacts(auditClauses(facts).map((text, id) => `${id + 1}. ${text}`).join('\n'), options);
-  const combined = joinUnique([translated.text, stripCjkSegments(compiled.visual_prompt)]);
-  const visual = finalizeEnglish(combined, facts);
-  await assertEnglishFidelity(facts, visual.visual_prompt);
-  translationCache.set(translated.key, translated.text);
+  const materials = shotImageMaterialsFromSpec({
+    ...contract,
+    visual_facts: (contract as { visual_facts?: unknown }).visual_facts,
+    continuity_states: (contract as { continuity_states?: unknown }).continuity_states,
+  } as Record<string, unknown>, [], options);
+  const locked = charactersFromLocks(characterLock, contract.visible_subjects);
+  if (locked.length) materials.characters = locked;
+  const visualPrompt = await composeShotImagePrompt(materials);
   return {
-    visual_prompt: visual.visual_prompt,
-    negative_extras: [...compiled.negative_extras, ...visual.negative_extras],
-    shot_intent: compiled.shot_intent,
+    visual_prompt: visualPrompt,
+    negative_extras: [],
+    shot_intent: resolveContractIntent(contract),
   };
 }
 
@@ -409,21 +802,19 @@ export async function optimizeOutboundPrompt(
   prompt: string,
   options: EnglishPromptOptions = {},
 ): Promise<string> {
-  const cleaned = String(prompt || '').trim().replace(/:\d+\.\d+/g, '');
-  const override = actionOverridesWardrobe(cleaned);
-  const withoutWardrobe = override ? stripWardrobeTokens(cleaned) : cleaned;
-  if (!containsCjk(withoutWardrobe)) return withoutWardrobe;
-  const facts = cjkFacts(withoutWardrobe);
-  const cacheKey = outboundCacheKey(withoutWardrobe, options);
+  const cleaned = String(prompt || '').trim();
+  if (!containsCjk(cleaned)) return cleaned;
+  const facts = cjkFacts(cleaned);
+  const cacheKey = outboundCacheKey(cleaned, options);
   const cached = readDiskOutbound(cacheKey);
   if (cached) return cached;
   const render = async (repairNote = '') => {
-    const translated = await translateVisualFacts(withoutWardrobe, options, repairNote);
-    const combined = joinUnique([translated.text, stripCjkSegments(withoutWardrobe)]);
-    const visual = finalizeEnglish(combined, facts || withoutWardrobe);
-    await assertEnglishFidelity(facts || withoutWardrobe, visual.visual_prompt);
+    const translated = await translateVisualFacts(cleaned, options, repairNote);
+    const combined = joinUnique([translated.text, stripCjkSegments(cleaned)]);
+    if (containsCjk(combined)) throw new Error('English visual prompt still contains Chinese characters');
+    await assertEnglishFidelity(facts || cleaned, combined);
     translationCache.set(translated.key, translated.text);
-    return visual.visual_prompt;
+    return combined;
   };
   const visualText = await render();
   writeDiskOutbound(cacheKey, visualText);

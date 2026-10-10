@@ -35,17 +35,79 @@ test('img2img policy: turnaround_panel is pure txt2img', () => {
   assert.equal(panel.denoise, 1);
 });
 
-test('img2img policy allows turnaround and skips multi-person story', () => {
+test('img2img policy allows turnaround and reads people from the contract', () => {
   const turn = resolveReferenceImg2ImgPolicy({ gen_type: 'turnaround' }, '');
   assert.equal(turn.useImg2Img, true);
   assert.equal(turn.denoise, 0.55);
 
-  const story = resolveReferenceImg2ImgPolicy(
+  const wordsOnly = resolveReferenceImg2ImgPolicy(
     { gen_type: 'scene', denoise: 0.65 },
-    '2girls, yuri, embracing on silk couch'
+    '2girls, yuri, embracing on silk couch, Qingmu Palace'
   );
-  assert.equal(story.useImg2Img, false);
-  assert.equal(story.reason, 'multi_person_story');
+  assert.equal(wordsOnly.reason, 'generic_scene_clamped');
+  assert.notEqual(wordsOnly.reason, 'multi_person_story');
+  assert.notEqual(wordsOnly.reason, 'wide_story');
+  assert.notEqual(wordsOnly.reason, 'action_story');
+
+  const twoPeople = resolveReferenceImg2ImgPolicy(
+    {
+      gen_type: 'scene',
+      shot_spec: { visible_subjects: ['裴雨涵', '陆嘉静'], shot_type: 'Wide Shot' },
+    },
+    'a quiet portrait in Qingmu Palace'
+  );
+  assert.equal(twoPeople.useImg2Img, false);
+  assert.equal(twoPeople.reason, 'multi_person_story');
+
+  const bound = resolveReferenceImg2ImgPolicy({
+    shot_spec: {
+      visible_subjects: ['南宫雪'],
+      visual_facts: [{
+        binding: {
+          mentions: [
+            { text: '她', confirmed: true, visibility: 'visible', entity: { name: '裴雨涵' } },
+            { text: '她', confirmed: false, visibility: 'visible', entity: { name: '陆嘉静' } },
+          ],
+        },
+      }],
+    },
+  }, 'embrace, kiss');
+  assert.equal(bound.reason, 'multi_person_story');
+
+  const widePerson = resolveReferenceImg2ImgPolicy({
+    gen_type: 'scene',
+    shot_type: 'Wide Shot',
+    shot_spec: {
+      visible_subjects: ['裴雨涵'],
+      shot_intent: 'wide-action',
+      subject_scale: 'dominant',
+    },
+  }, 'Qingmu Palace, embracing, kiss, wide shot');
+  assert.equal(widePerson.reason, 'scene_txt2img_default');
+
+  const empty = resolveReferenceImg2ImgPolicy({
+    gen_type: 'scene',
+    subject_scale: 'absent',
+    shot_spec: { visible_subjects: ['裴雨涵'], shot_intent: 'establish' },
+  }, '1girl, palace');
+  assert.equal(empty.useImg2Img, false);
+  assert.equal(empty.reason, 'empty_plate');
+
+  const establishEmpty = resolveReferenceImg2ImgPolicy({
+    gen_type: 'scene',
+    shot_intent: 'overhead-map',
+    visible_subjects: [],
+  }, 'palace interior');
+  assert.equal(establishEmpty.reason, 'empty_plate');
+
+  const close = resolveReferenceImg2ImgPolicy({
+    gen_type: 'scene',
+    shot_type: 'Close-Up',
+    visible_subjects: ['裴雨涵'],
+  }, 'palace');
+  assert.equal(close.useImg2Img, true);
+  assert.equal(close.reason, 'single_closeup');
+  assert.equal(close.denoise, 0.62);
 });
 
 test('planReferenceGeneration stays Tier A when adapters unavailable', () => {
@@ -64,42 +126,59 @@ test('planReferenceGeneration stays Tier A when adapters unavailable', () => {
   assert.ok(plan.notes.some((n) => /composition_ref present/i.test(n)));
 });
 
-test('IP-Adapter blocked on multi-person / wide / action even when adapter installed', () => {
+test('IP-Adapter follows the contract and ignores paragraph words', () => {
   const adapters = { characterAdapter: true, compositionControl: false };
+
+  const wordsOnly = planReferenceGeneration(
+    {
+      gen_type: 'scene',
+      character_ref_url: '/static/generated/face.png',
+    },
+    '2girls, martial arts clash, establishing shot, Qingmu Palace, kiss',
+    adapters
+  );
+  assert.equal(wordsOnly.useCharacterAdapter, false);
+  assert.equal(wordsOnly.img2img.reason, 'scene_txt2img_default');
+  assert.equal(wordsOnly.tier, 'A');
 
   const multi = planReferenceGeneration(
     {
       gen_type: 'scene',
       character_ref_url: '/static/generated/face.png',
-      denoise: 1.0
+      shot_spec: { visible_subjects: ['裴雨涵', '陆嘉静'] },
     },
-    '2girls, martial arts clash, white and red combat women',
+    'a quiet room',
     adapters
   );
   assert.equal(multi.useCharacterAdapter, false);
-  assert.equal(multi.tier, 'A');
-  assert.ok(multi.notes.some((n) => /adapter skipped/i.test(n)));
+  assert.equal(multi.img2img.reason, 'multi_person_story');
+  assert.ok(multi.notes.some((n) => /multi_person_story/i.test(n)));
 
-  const wide = planReferenceGeneration(
+  const widePerson = planReferenceGeneration(
     {
       gen_type: 'scene',
-      shot_type: 'Extreme Long Shot',
-      character_ref_url: '/static/generated/face.png'
+      shot_type: 'Wide Shot',
+      character_ref_url: '/static/generated/face.png',
+      shot_spec: { visible_subjects: ['裴雨涵'], shot_intent: 'wide-action' },
     },
-    'establishing shot, cloud sea cliff arena',
+    'establishing shot, cloud sea cliff arena, embrace',
     adapters
   );
-  assert.equal(wide.useCharacterAdapter, false);
+  assert.equal(widePerson.useCharacterAdapter, false);
+  assert.notEqual(widePerson.img2img.reason, 'wide_story');
+  assert.notEqual(widePerson.img2img.reason, 'empty_plate');
 
-  const action = planReferenceGeneration(
+  const empty = planReferenceGeneration(
     {
       gen_type: 'scene',
-      character_ref_url: '/static/generated/face.png'
+      character_ref_url: '/static/generated/face.png',
+      shot_spec: { subject_scale: 'absent', shot_intent: 'establish' },
     },
-    '1girl, whip kick battle damage, ripped fabric',
+    '1girl, palace',
     adapters
   );
-  assert.equal(action.useCharacterAdapter, false);
+  assert.equal(empty.useCharacterAdapter, false);
+  assert.equal(empty.img2img.reason, 'empty_plate');
 
   const portrait = planReferenceGeneration(
     {

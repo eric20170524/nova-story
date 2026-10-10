@@ -1,4 +1,5 @@
 import { db } from '../db/database';
+import { appearanceFieldsFromTags } from './english_visual_prompt';
 import { flattenVisualTagMap, formatVisualLockTokens } from './reference_generation_policy';
 import type { CharacterLockRef } from './pony_prompt_compiler';
 
@@ -13,12 +14,13 @@ export async function buildCharacterLockRefsForChapter(projectId: number, chapte
   return characters.map((c: any) => {
     const tags = parseCharacterTags(c.visual_tags);
     const values = flattenVisualTagMap(tags, { chapterId });
+    const appearance = appearanceFieldsFromTags(tags, chapterId);
     const stableKeys = ['species', 'hair', 'face_features', 'distinguishing_mark', 'build', 'clothing', 'accessories'];
     const compact = stableKeys.map(key => String(values[key] || '').trim().slice(0, 130)).filter(Boolean);
     const lock = compact.length ? compact.join(', ') : formatVisualLockTokens(tags, { chapterId });
     if (!lock || /^\(none/i.test(lock)) return null;
     const aliases = Array.isArray(tags?.aliases) ? tags.aliases.map((a: unknown) => String(a || '').trim()).filter(Boolean) : [];
-    return { name: String(c.name || '').trim() || null, aliases, lock } satisfies CharacterLockRef;
+    return { name: String(c.name || '').trim() || null, aliases, lock, appearance } satisfies CharacterLockRef;
   }).filter(Boolean) as CharacterLockRef[];
 }
 

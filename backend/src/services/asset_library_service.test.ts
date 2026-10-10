@@ -100,7 +100,14 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
     let release!: () => void;
     const wait = new Promise<void>(resolve => { release = resolve; });
     try {
-      GenerationService.generateAssets = async (taskId, _workflow, sceneId) => { await wait; await AssetTaskStore.completed(taskId, sceneId, '/static/generated/library-test.png'); };
+      let platePrompt = '';
+      GenerationService.generateAssets = async (taskId, workflow, sceneId) => {
+        platePrompt = String(workflow?.prompt || '');
+        assert.match(String(workflow?.negative_prompt || ''), /people, person, portrait/);
+        assert.equal(workflow?.gen_type, 'prop');
+        await wait;
+        await AssetTaskStore.completed(taskId, sceneId, '/static/generated/library-test.png');
+      };
       await AssetLibraryService.bind(81111, []);
       const started = await AssetLibraryService.generate(prop.id);
       await assert.rejects(() => AssetLibraryService.generate(prop.id), /already generating/);
@@ -110,6 +117,8 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
       const generated = await AssetLibraryService.requireAsset(prop.id);
       assert.equal(generated.status, 'completed'); assert.equal(generated.image_url, '/static/generated/library-test.png');
       assert.equal(generated.task_id, started.task_id); assert.equal(generated.revision, prop.revision + 1);
+      assert.match(platePrompt, /no people/);
+      assert.match(platePrompt, /isolated object/);
     } finally { release(); GenerationService.generateAssets = original; }
   });
   await t.test('HTTP routes validate requests and surface revision conflicts', async () => {

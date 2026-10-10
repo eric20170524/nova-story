@@ -309,8 +309,36 @@ test('insert shotIntent never stacks environment-dominant composition', () => {
     shotIntent: 'wide-action',
     subjectType: 'nonhuman',
   });
-  assert.match(wideEnh.suffix, /environment-dominant cinematic composition/i);
+  assert.doesNotMatch(wideEnh.suffix, /environment-dominant cinematic composition/i);
+  assert.match(wideEnh.suffix, /narrative scene composition/i);
   assert.doesNotMatch(wideEnh.suffix, /narrative insert shot/i);
+
+  const personPalace = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    existingPrompt: 'Qingmu Palace inner hall, an adult woman raises one hand',
+    genType: 'scene',
+    shotType: 'Wide Shot',
+    shotIntent: 'wide-action',
+    subjectType: 'human',
+    hasVisiblePerson: true,
+  });
+  assert.doesNotMatch(personPalace.suffix, /environment-dominant/i);
+
+  const written = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    stylePreset: 'sensual_gufeng',
+    existingPrompt: 'Pei Yuhan lowers her red robe in the Qingmu Palace hall. Lu Jiajing keeps a moon-white gown.',
+    genType: 'scene',
+    shotType: 'Wide Shot',
+    shotIntent: 'wide-action',
+  });
+  assert.doesNotMatch(written.suffix, /environment-dominant|animal far away|East Asian|chinese beauty|luxurious silk/i);
+  const kept = sanitizePromptForSubject(
+    'Pei Yuhan lowers her red robe in the Qingmu Palace hall. Lu Jiajing keeps a moon-white gown.',
+  );
+  assert.match(kept, /Pei Yuhan lowers her red robe/);
 });
 
 test('remote ComfyUI keeps canonical LoRA names when install_path is still set', () => {
@@ -526,7 +554,7 @@ test('SFW never injects fully clothed artistic portrait by default', () => {
   assert.match(glam.suffix, /alluring|guofeng|silk/i);
 });
 
-test('action/aftermath auto-strips alluring and blocks fashion portrait', () => {
+test('action and aftermath keep the style booster and block a fashion portrait', () => {
   const battle = buildPromptEnhancement({
     modelFamily: 'pony',
     nsfwEnabled: false,
@@ -536,8 +564,8 @@ test('action/aftermath auto-strips alluring and blocks fashion portrait', () => 
   });
   assert.doesNotMatch(battle.suffix, /fully clothed/);
   assert.doesNotMatch(battle.suffix, /artistic portrait/);
-  assert.doesNotMatch(battle.suffix, /\balluring\b/i);
-  assert.doesNotMatch(battle.suffix, /\bintimate\b/i);
+  assert.match(battle.suffix, /\balluring\b/i);
+  assert.match(battle.suffix, /\bintimate\b/i);
   assert.match(battle.suffix, /ripped fabric|combat aftermath|action still/i);
   assert.match(battle.negativeExtra, /intact pristine dress|fashion pose/i);
 });
@@ -785,26 +813,58 @@ test('RedCraft Krea2 prompt enhancement uses natural language and no score_9 tag
   assert.match(nsfw.suffix, /natural uncensored details|erotic sensual atmosphere/i);
 });
 
-test('RedCraft Krea2 buildCharacterPromptHeader generates natural language portrait headers', () => {
-  const portrait = buildCharacterPromptHeader('redcraft_krea2', false, 'portrait');
+test('character sheet header uses stored gender and appearance fields', () => {
+  const portrait = buildCharacterPromptHeader('redcraft_krea2', false, 'portrait', 'unspecified', {
+    hair: 'long white hair',
+    clothing: 'moon-white robe',
+  });
   assert.match(portrait.prefix, /high quality character portrait/i);
-  assert.match(portrait.prefix, /clean studio background/i);
+  assert.match(portrait.prefix, /plain studio background/i);
+  assert.match(portrait.prefix, /long white hair/);
+  assert.match(portrait.prefix, /moon-white robe/);
   assert.match(portrait.negative, /low quality/i);
-  assert.match(portrait.negative, /nsfw/i);
+  assert.match(portrait.negative, /child, loli, shota/i);
+  assert.doesNotMatch(portrait.prefix, /1girl|1boy|female|male|East Asian|fully clothed/i);
+  assert.doesNotMatch(portrait.negative, /nsfw|nude/i);
   assert.doesNotMatch(portrait.prefix, /score_9|source_anime/i);
 
-  const turnaround = buildCharacterPromptHeader('redcraft_krea2', true, 'turnaround');
+  const turnaround = buildCharacterPromptHeader('redcraft_krea2', true, 'turnaround', 'female', {
+    clothing: 'crimson robe',
+  });
   assert.match(turnaround.prefix, /full body character design|consistent character identity/i);
-  assert.doesNotMatch(turnaround.negative, /nsfw/i);
-  assert.doesNotMatch(turnaround.prefix, /score_9|source_anime/i);
+  assert.match(turnaround.prefix, /\bfemale\b/);
+  assert.match(turnaround.prefix, /crimson robe/);
+  assert.doesNotMatch(turnaround.prefix, /1girl|East Asian|fully clothed/i);
+  assert.doesNotMatch(turnaround.negative, /nsfw|nude/i);
+
+  const male = buildCharacterPromptHeader('pony', false, 'portrait', 'male');
+  assert.match(male.prefix, /\bmale\b/);
+  assert.doesNotMatch(male.prefix, /1boy|1girl|East Asian|female|woman/i);
+  assert.doesNotMatch(male.negative, /nsfw|nude/i);
+
+  assert.throws(
+    () => buildCharacterPromptHeader('redcraft_krea2', false, 'portrait', 'female', { undressed: true, clothing: 'unclothed' }),
+    /未着装/,
+  );
+  const allowed = buildCharacterPromptHeader('redcraft_krea2', true, 'portrait', 'female', {
+    undressed: true,
+    clothing: 'unclothed',
+  });
+  assert.match(allowed.prefix, /unclothed/);
+  assert.doesNotMatch(allowed.prefix, /fully clothed/);
 });
 
-test('male character headers do not contradict the requested identity', () => {
-  for (const model of ['pony', 'redcraft_krea2'] as const) {
-    const result = buildCharacterPromptHeader(model, false, 'portrait', 'male');
-    assert.match(result.prefix, /1boy, solo, adult East Asian man/);
-    assert.doesNotMatch(result.prefix, /1girl|female|woman/i);
-    assert.match(result.negative, /female|woman/);
-    assert.doesNotMatch(result.negative, /\bmale\b|\bman\b|\bboy\b/);
-  }
+test('character extract quotes stored appearance fields and rejects a role outside the enum', async () => {
+  const { Prompts } = await import('./prompts');
+  const { canonicalCharacterRole } = await import('../schemas/llm');
+  const prompt = Prompts.extractCharacterProfiles('裴雨涵解开外衣。', false);
+  assert.match(prompt, /hair, face, body, clothing, accessories/);
+  assert.match(prompt, /protagonist, antagonist, supporting, extra/);
+  assert.match(prompt, /undressed/);
+  assert.match(prompt, /Do not invent clothing/);
+  assert.doesNotMatch(prompt, /Danbooru-style|safe-for-work and fully clothed|MUST include keys/i);
+  assert.equal(canonicalCharacterRole('主角'), null);
+  assert.equal(canonicalCharacterRole('supporting'), 'supporting');
+  assert.equal(canonicalCharacterRole('main'), null);
+  assert.equal(canonicalCharacterRole('main', { allowStoredAlias: true }), 'protagonist');
 });

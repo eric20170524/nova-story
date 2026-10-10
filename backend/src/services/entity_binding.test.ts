@@ -80,7 +80,7 @@ test('交换施受关系不再靠词面通过，同关系被动句通过；英�
   await assert.rejects(() => auditFacts(provider, [{ id: 'f', text: '林岚用右手把蓝伞递给陈月。' }], "Lin Lan hands the blue umbrella to Chen Yue with Chen Yue's right hand.", { glossary }), /身体部位归属/);
 });
 
-test('衣着逐件继承和删除，人物变化不删除他人的服装或无关头发', () => {
+test('衣着状态逐件继承，外观锁不再按衣类删除', () => {
   const first = fact('林岚解开外衣。');
   first.states = [{ entity: '林岚', attribute: 'wardrobe', value: '解开外衣', item: '外衣' }, { entity: '林岚', attribute: 'wardrobe', value: '围巾', item: '围巾' }];
   const next = fact('林岚把里衣褪到腰间。', 'next');
@@ -91,10 +91,12 @@ test('衣着逐件继承和删除，人物变化不删除他人的服装或无�
   const after = continuityAfter(state, [removed]);
   assert.equal(after.filter(s => s.operation !== 'remove').length, 2);
   assert.ok(continuityLiteral(after).some(s => s.text === '林岚 已脱下衣物：围巾'));
-  assert.equal(scopedWardrobeLock('林岚', 'red scarf, gray coat, long hair', [], after), 'long hair');
+  assert.equal(scopedWardrobeLock('林岚', 'red scarf, gray coat, long hair', [], after), 'red scarf, gray coat, long hair');
   assert.equal(scopedWardrobeLock('陈月', 'gray coat, long hair', [first]), 'gray coat, long hair');
-  assert.equal(scopedWardrobeLock('林岚', 'gray coat, long hair', [first]), 'long hair');
+  assert.equal(scopedWardrobeLock('林岚', 'gray coat, long hair', [first]), 'gray coat, long hair');
   assert.equal(evidencedContinuityStates('陈月穿红外套。', [{ entity: '林岚', attribute: 'wardrobe', value: '红外套' }], '林岚站在门旁。').rejected.length, 1);
+  assert.equal(evidencedContinuityStates('她穿红外套。', [{ entity: '林岚', attribute: 'wardrobe', value: '红外套' }]).rejected.length, 1);
+  assert.equal(evidencedContinuityStates('她穿红外套。', [{ entity: '林岚', attribute: 'wardrobe', value: '红外套' }], '', ['林岚']).accepted.length, 1);
 });
 
 test('跨场代词确认后保留衣着；地点描述、内外景和昼夜都进入事实输入', () => {

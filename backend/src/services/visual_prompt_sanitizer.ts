@@ -33,125 +33,27 @@ const NON_VISUAL_EXACT_TOKENS = new Set([
   'source_anime',
 ]);
 
-/**
- * §6.1 pattern tokens — delete if the whole token matches (or is dominated by)
- * non-visual sense / meta / psychology vocabulary.
- */
-const NON_VISUAL_TOKEN_PATTERNS: RegExp[] = [
-  /\b(sound|sounds|echo|echoes|creak|creaking|scraping sound|music playing)\b/i,
-  /\b(scent|smell|aroma|fragrance|odour|odor)\b/i,
-  /\b(loneliness|determination)\b/i,
-  /\bemptiness in the heart\b/i,
-  /\bmetallic ring echo\b/i,
-  /\bring echo\b/i,
-];
-
-/** Visible music / melody props must survive sound scrubbing. */
-const PRESERVE_DESPITE_SOUND = /\b(music[- ]?note|musical note|melody|tuning fork|music box|note button)\b/i;
-
-type MetaphorRule = {
-  /** Match against a single comma token (lowercased). */
-  match: RegExp;
-  replace: string;
-  negative_extras: string[];
-};
-
-/** §6.2 metaphor → concrete visual + negative extras. */
-const METAPHOR_RULES: MetaphorRule[] = [
-  {
-    match: /\bcloud[- ]like platforms?\b|\bcloud platforms?\b/i,
-    replace:
-      'hard candy-floss spectator platform shaped like a cloud, flat walkable floor, pastel park lighting',
-    negative_extras: ['real clouds', 'mountains', 'blue sky vista', 'outdoor nature'],
-  },
-  {
-    match: /\bpurple[- ]gold light spreading\b|\bwarm purple[- ]gold light spreading\b/i,
-    replace: 'light traveling along engraved metal grooves / lamp bulbs lighting up',
-    negative_extras: ['mecha', 'helmet', 'spaceship', 'energy explosion sky'],
-  },
-];
-
-/** Unlisted X-like / as if → drop rhetoric, keep noun if present. */
-const GENERIC_LIKE_PATTERN = /\b([\w][\w-]*)-like\b/i;
-const AS_IF_PATTERN = /\bas if\b[^.|,]*/i;
-
-const proseRemainder = (token: string): string[] => token
-  .replace(/^\(+/, '')
-  .replace(/\)+$/, '')
-  .replace(/:\d+(?:\.\d+)?$/, '')
-  .replace(/\b(?:sound|sounds|echo|echoes|creak|creaking|scraping sound|music playing|scent|smell|aroma|fragrance|odour|odor|loneliness|determination)\b/gi, ' ')
-  .replace(/\bemptiness in the heart\b/gi, ' ')
-  .replace(/\bmetallic ring echo\b/gi, ' ')
-  .replace(/\bring echo\b/gi, ' ')
-  .split(/[^\p{L}\p{N}]+/u)
-  .filter(word => word.length > 1);
-
-const isNonVisualToken = (token: string): boolean => {
+const isEngineToken = (token: string): boolean => {
   const lower = token.toLowerCase().trim();
   if (!lower) return true;
-  if (NON_VISUAL_EXACT_TOKENS.has(lower)) return true;
-  if (PRESERVE_DESPITE_SOUND.test(token)) return false;
-  if (!NON_VISUAL_TOKEN_PATTERNS.some(pattern => pattern.test(token))) return false;
-  // A comma chunk of a visible action can mention a sound. Drop only a tag that is the sound itself.
-  return proseRemainder(token).length < 3;
-};
-
-const applyMetaphorToToken = (
-  token: string
-): { token: string | null; negatives: string[] } => {
-  for (const rule of METAPHOR_RULES) {
-    if (rule.match.test(token)) {
-      return { token: rule.replace, negatives: [...rule.negative_extras] };
-    }
-  }
-
-  // metallic ring echo: AC requires deletion (sound concept), not grounding.
-  if (/\bmetallic ring echo\b/i.test(token) || /^metallic ring echo$/i.test(token.trim())) {
-    return { token: null, negatives: ['abstract metal scales', 'macro texture only'] };
-  }
-
-  let next = token;
-  // A colon marks a visible clause after the simile. Keep that clause in the image prompt.
-  if (AS_IF_PATTERN.test(next) && !/[：:]/.test(next)) {
-    next = next.replace(AS_IF_PATTERN, '').replace(/\s+/g, ' ').trim();
-  }
-  if (GENERIC_LIKE_PATTERN.test(next) && !/\bcloud[- ]like\b/i.test(next)) {
-    // Drop "X-like" rhetoric; keep a bare noun when the token is mostly that phrase.
-    next = next.replace(GENERIC_LIKE_PATTERN, '$1').replace(/\s+/g, ' ').trim();
-  }
-  if (!next) return { token: null, negatives: [] };
-  return { token: next, negatives: [] };
+  return NON_VISUAL_EXACT_TOKENS.has(lower);
 };
 
 /**
- * Sanitize a visual_prompt for storage / compile.
- * Deletes non-visual tokens, grounds listed metaphors, strips leftover quality/abstract banned words.
+ * Drop engine and project-prefix tags. Sound, smell, psychology, and simile
+ * wording stays in the sentence for video and for the still auditor.
  */
 export const sanitizeVisualPrompt = (input: string): SanitizeVisualPromptResult => {
-  const negative_extras: string[] = [];
   const parts: string[] = [];
 
   for (const raw of normalize(input).split(',')) {
-    let token = raw.trim();
-    if (!token) continue;
-    if (isNonVisualToken(token)) continue;
-
-    const grounded = applyMetaphorToToken(token);
-    if (grounded.negatives.length) {
-      negative_extras.push(...grounded.negatives);
-    }
-    if (!grounded.token) continue;
-    token = grounded.token;
-
-    // Re-check after grounding / rewrite (replacement may be multi-token CSV).
-    for (const piece of token.split(',').map((p) => p.trim()).filter(Boolean)) {
-      if (isNonVisualToken(piece)) continue;
-      parts.push(piece);
-    }
+    const token = raw.trim();
+    if (!token || isEngineToken(token)) continue;
+    parts.push(token);
   }
 
   return {
     visual_prompt: parts.join(', '),
-    negative_extras: [...new Set(negative_extras.map((t) => t.trim()).filter(Boolean))],
+    negative_extras: [],
   };
 };

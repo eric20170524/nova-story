@@ -144,60 +144,42 @@ test('strict AgentRouteSchema rejects nested actions', () => {
   assert.equal(bad.success, false);
 });
 
-test('tryIntentShortcut maps character extract chip without write', () => {
-  const r = tryIntentShortcut('请提取并分析当前章节出现的所有角色与性格特征');
-  assert.ok(r);
-  assert.equal(r!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
-
-  const write = tryIntentShortcut('本章已定稿，请提取新增角色与世界观术语并更新到设定库');
-  assert.ok(write);
-  assert.equal(write!.intent, 'APPLY_CHAPTER_IMPACT');
+test('tryIntentShortcut keeps an explicit chip and leaves free text to the route model', () => {
+  assert.equal(tryIntentShortcut('请提取并分析当前章节出现的所有角色与性格特征'), null);
+  assert.equal(tryIntentShortcut('本章已定稿，请提取新增角色与世界观术语并更新到设定库'), null);
+  assert.equal(tryIntentShortcut('生成完整分场短剧剧本', null, 'script'), null);
+  assert.equal(tryIntentShortcut('改写第2场，增强动作冲突', null, 'script'), null);
+  assert.equal(tryIntentShortcut('请整理开书设定', null, 'story'), null);
+  assert.equal(tryIntentShortcut('改写第一章规划', null, 'story'), null);
+  assert.equal(tryIntentShortcut('请把本章重命名为决战前夕'), null);
 
   const preferred = tryIntentShortcut('anything', 'ANALYZE_CHAPTER_CHARACTERS');
   assert.equal(preferred!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
+
+  const chipWrite = tryIntentShortcut('不要写入角色库，只分析', 'APPLY_CHAPTER_IMPACT');
+  assert.equal(chipWrite!.intent, 'APPLY_CHAPTER_IMPACT');
 });
 
-test('tryIntentShortcut respects write negation for character analysis', async () => {
-  const { hasWriteNegation, hasExplicitWriteIntent, extractRenameTitle } =
-    await import('./agent_os');
-
-  assert.equal(hasWriteNegation('提取角色性格，只分析，不要写入角色库'), true);
-  assert.equal(hasExplicitWriteIntent('提取角色性格，只分析，不要写入角色库'), false);
-
-  const a = tryIntentShortcut('提取角色性格，只分析，不要写入角色库');
-  assert.ok(a);
-  assert.equal(a!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
-
-  const b = tryIntentShortcut('本章还没定稿，先分析一下出场人物性格');
-  assert.ok(b);
-  assert.equal(b!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
-
-  const c = tryIntentShortcut('还没定稿，不要更新世界观，只要角色梳理');
-  assert.ok(c);
-  assert.equal(c!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
-
-  // preferred_op APPLY forced but message forbids write → demote to analysis
-  const d = tryIntentShortcut('不要写入角色库，只分析', 'APPLY_CHAPTER_IMPACT');
-  assert.equal(d!.intent, 'ANALYZE_CHAPTER_CHARACTERS');
-});
-
-test('extractRenameTitle pulls title after 为', async () => {
-  const { extractRenameTitle, cleanCharacterName } = await import('./agent_os');
-  assert.equal(extractRenameTitle('请把本章重命名为决战前夕'), '决战前夕');
-  assert.equal(extractRenameTitle('重命名为《血色黎明》'), '血色黎明');
+test('rename title comes from route focus', async () => {
+  const { cleanCharacterName } = await import('./agent_os');
   assert.equal(cleanCharacterName('【林凡】'), '林凡');
 
-  const route = tryIntentShortcut('请把本章重命名为决战前夕');
-  assert.ok(route);
-  assert.equal(route!.intent, 'RENAME_CHAPTER');
-  assert.equal(route!.focus, '决战前夕');
+  const chip = tryIntentShortcut('请把本章重命名为决战前夕', 'RENAME_CHAPTER');
+  assert.equal(chip!.intent, 'RENAME_CHAPTER');
+  assert.equal(chip!.focus, '请把本章重命名为决战前夕');
 
-  const actions = routeToActions(route!, {
-    chapterId: 'ch-1',
-    userMessage: '请把本章重命名为决战前夕',
-  });
+  const actions = routeToActions(
+    { intent: 'RENAME_CHAPTER', chapterScope: 'current', focus: '决战前夕' },
+    { chapterId: 'ch-1', userMessage: '请把本章重命名为决战前夕' },
+  );
   assert.equal(actions[0]?.op, 'RENAME_CHAPTER');
   assert.equal(actions[0]?.newTitle, '决战前夕');
+
+  const missing = routeToActions(
+    { intent: 'RENAME_CHAPTER', chapterScope: 'current', focus: '' },
+    { chapterId: 'ch-1', userMessage: '请把本章重命名为决战前夕' },
+  );
+  assert.equal(missing[0]?.op, 'ANSWER_QUESTION');
 });
 
 test('routeToActions builds ANALYZE_CHAPTER_CHARACTERS without mutate', () => {
@@ -211,29 +193,28 @@ test('routeToActions builds ANALYZE_CHAPTER_CHARACTERS without mutate', () => {
   assert.equal(AgentActionSchema.safeParse(actions[0]).success, true);
 });
 
-test('planning shortcuts keep chapter body commands available', () => {
-  const premise = tryIntentShortcut('请整理开书设定', null, 'story');
+test('planning chips stay explicit and free text does not pick a mode', () => {
+  const premise = tryIntentShortcut('请整理开书设定', 'PLAN_STORY', 'story');
   assert.equal(premise?.intent, 'PLAN_STORY');
   assert.equal(premise?.chapterScope, 'none');
 
-  const revise = tryIntentShortcut('帮我改章纲', null, 'story');
-  assert.equal(revise, null);
-  const numbered = tryIntentShortcut('改写第一章规划', null, 'story');
-  assert.equal(numbered?.intent, 'PLAN_CHAPTERS');
-  assert.equal(numbered?.focus, 'revise');
-  const extend = tryIntentShortcut('规划后续', null, 'story');
-  assert.equal(extend?.intent, 'PLAN_CHAPTERS');
-  assert.equal(extend?.focus, 'extend');
+  assert.equal(tryIntentShortcut('帮我改章纲', null, 'story'), null);
+  assert.equal(tryIntentShortcut('改写第一章规划', null, 'story'), null);
+  assert.equal(tryIntentShortcut('规划后续', null, 'story'), null);
+  assert.equal(tryIntentShortcut('把章纲改为雨夜决战', null, 'story'), null);
+  assert.equal(tryIntentShortcut('为当前章节增加冲突', null, 'story'), null);
 
-  const explicit = tryIntentShortcut('把章纲改为雨夜决战', null, 'story');
-  assert.equal(explicit?.intent, 'UPDATE_CHAPTER_SUMMARY');
-  const summaryActions = routeToActions(explicit!, { chapterId: 'ch-1', userMessage: '把章纲改为雨夜决战' });
+  const summaryActions = routeToActions(
+    { intent: 'UPDATE_CHAPTER_SUMMARY', chapterScope: 'current', focus: '雨夜决战' },
+    { chapterId: 'ch-1', userMessage: '把章纲改为雨夜决战' },
+  );
   assert.equal(summaryActions[0]?.newSummary, '雨夜决战');
 
-  const conflict = tryIntentShortcut('为当前章节增加冲突', null, 'story');
-  assert.equal(conflict?.intent, 'ADD_CONFLICT');
-  assert.equal(tryIntentShortcut('根据章纲续写', null, 'story')?.intent, 'DRAFT_CONTENT');
-  assert.equal(tryIntentShortcut('按章纲注入冲突', null, 'story')?.intent, 'ADD_CONFLICT');
+  const revise = routeToActions(
+    { intent: 'PLAN_CHAPTERS', chapterScope: 'none', focus: 'revise' },
+    { chapterId: 'ch-1', userMessage: '改写第一章规划' },
+  );
+  assert.equal(revise[0]?.mode, 'revise');
   assert.equal(needsConfirmation([{ op: 'PLAN_CHAPTERS' }]), false);
   assert.equal(needsConfirmation([{ op: 'CREATE_NEXT_CHAPTER' }]), true);
 });
@@ -264,7 +245,7 @@ test('splitChapterIntoAnalysisChunks covers middle of long text', async () => {
       characters: [
         {
           name: '阿卡丽',
-          roleInChapter: '主角',
+          roleInChapter: 'protagonist',
           traits: [{ trait: '勇猛', evidence: '冲锋', confidence: 0.9 }],
           relationships: [],
         },
@@ -274,13 +255,13 @@ test('splitChapterIntoAnalysisChunks covers middle of long text', async () => {
       characters: [
         {
           name: '阿卡丽',
-          roleInChapter: '主角',
+          roleInChapter: 'protagonist',
           traits: [{ trait: '护短', evidence: '护友', confidence: 0.8 }],
           relationships: ['瑟拉'],
         },
         {
           name: '墨痕',
-          roleInChapter: '配角',
+          roleInChapter: 'supporting',
           traits: [{ trait: '冷静', evidence: '中段独白', confidence: 0.85 }],
           relationships: [],
         },
@@ -302,8 +283,11 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
     mapRoleInChapterToRole,
   } = await import('../services/ai/writing_service');
 
-  assert.equal(mapRoleInChapterToRole('主角/决斗者'), 'protagonist');
-  assert.equal(mapRoleInChapterToRole('观众（群体）'), 'extra');
+  assert.equal(mapRoleInChapterToRole('主角/决斗者'), null);
+  assert.equal(mapRoleInChapterToRole('观众（群体）'), null);
+  assert.equal(mapRoleInChapterToRole('minor'), null);
+  assert.equal(mapRoleInChapterToRole(null, 'minor'), 'extra');
+  assert.equal(mapRoleInChapterToRole(null, 'main'), 'protagonist');
   assert.equal(mapRoleInChapterToRole('对手', 'supporting'), 'supporting');
 
   const block = formatPersonalityBlock({
@@ -317,19 +301,18 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
   assert.match(block, /野性与力量\(95%\)/);
   assert.match(block, /本章动机：渴望胜利/);
 
-  const stripped = stripPersonalitySections(
-    '角斗场统治者。\n\n性格特征：冷静\n本章动机：操控'
-  );
-  assert.equal(stripped, '角斗场统治者。');
+  const authorLines = '角斗场统治者。\n\n性格特征：冷静\n本章动机：操控';
+  assert.equal(stripPersonalitySections(authorLines), authorLines);
 
   const remerged = mergeCharacterDescription(
-    '旧传记\n\n性格特征：过时',
+    '旧传记\n\n性格特征：作者原文\n\n<!-- novastory:personality -->\n性格特征：过时\n<!-- /novastory:personality -->',
     '',
     formatPersonalityBlock({
       traits: [{ trait: '冷静', evidence: '数据流', confidence: 0.9 }],
     })
   );
   assert.match(remerged, /旧传记/);
+  assert.match(remerged, /性格特征：作者原文/);
   assert.match(remerged, /性格特征：冷静/);
   assert.doesNotMatch(remerged, /过时/);
 
@@ -350,7 +333,7 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
     characters: [
       {
         name: '阿卡丽',
-        roleInChapter: '主角/决斗者',
+        roleInChapter: 'protagonist',
         traits: [
           { trait: '野性与力量', evidence: '豹尾扬起', confidence: 0.95 },
         ],
@@ -359,7 +342,7 @@ test('mergeImpactWithCharacterAnalysis keeps analysis cast and formats personali
       },
       {
         name: '瑟拉',
-        roleInChapter: '对手/决斗者',
+        roleInChapter: 'antagonist',
         traits: [
           { trait: '妖媚与危险', evidence: '冷笑', confidence: 0.9 },
         ],
@@ -450,7 +433,7 @@ test('normalize and merge visual_tags preserve assets and base_model', async () 
       characters: [
         {
           name: '阿卡丽',
-          roleInChapter: '主角',
+          roleInChapter: 'protagonist',
           traits: [{ trait: '野性', evidence: '冲刺', confidence: 0.9 }],
           relationships: [],
         },
