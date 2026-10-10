@@ -75,6 +75,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [novel_creation_backend_tasks_2026-09-30.md](./architecture/novel_creation_backend_tasks_2026-09-30.md) | 📝 后端交接 | DreamWaver 原始片段、Zod/SQL、规划候选、精确修订和幂等建章核心代码 |
 | [novel_creation_frontend_tasks_2026-09-30.md](./architecture/novel_creation_frontend_tasks_2026-09-30.md) | 📝 前端交接 | Agent 模式、规划与候选卡、类型/API、重试及编辑保护核心代码 |
 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) | ✅ S0–S4 已闭环 | 故事→改编提纲→分场剧本→安全交接导演分镜；支持备份往返、级联清理、项目复制与来源过期检测 |
+| [scene_continuity_workflow_2026-10-09.md](./architecture/scene_continuity_workflow_2026-10-09.md) | 📝 Track 5 S5 评审修订方案 | 确认状态契约、九机位接口边界、保留旧图的失效、独立夹具与 9B 建议验收；人工分轮制作不等待模型；任务状态见 0_TASKLIST.md 的 CT00–CT22 |
 
 ### 3. 生视频子系统 (`docs/video/`)
 | 文档 | 状态 | 核心说明 |
