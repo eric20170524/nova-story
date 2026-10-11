@@ -6,7 +6,8 @@ import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
 import type { AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
-import { bindEntities, boundText, entityRoster, eventContentCovered, eventRelationConflict, needsBindingReview, proposeBindings, validateBinding, textHash } from '../entity_binding';
+import { bindEntities, boundVisibleEntities, entityRoster, eventContentCovered, eventRelationConflict, materializeScriptReferences, needsBindingReview, resolveScriptBindings, validateBinding, textHash } from '../entity_binding';
+import type { EntityRef } from '../../schemas/entity_binding';
 import { coversVisibleBeat, extractVisibleBeats, type VisibleBeat } from '../english_visual_prompt';
 import { ScriptService, ScriptServiceError } from '../script_service';
 import {
@@ -127,6 +128,24 @@ function configuredLlmModel(provider?: AIProvider): string | undefined {
   if (provider) return undefined;
   const model = String(SettingsManager.loadSettings().llm?.model || '').trim();
   return model || undefined;
+}
+
+async function resolveSceneReferences(scene: Pick<ScriptScene, 'locationId' | 'interiorExterior' | 'timeOfDay' | 'blocks' | 'characterIds'>, provider: AIProvider, roster: EntityRef[], sourceContext: string, location: string, previous?: ScriptScene) {
+  for (const [index, block] of scene.blocks.entries()) {
+    if (block.type !== 'action') continue;
+    const preceding = [previous?.locationId === scene.locationId ? previous.blocks.slice(-2).map(b => b.text).join('\n') : '',
+      ...scene.blocks.slice(0, index).map(b => b.text)].filter(Boolean).join('\n');
+    const binding = await resolveScriptBindings(provider, bindEntities(block.text, roster), block.text,
+      [sourceContext, preceding].filter(Boolean).join('\n'), roster,
+      { location, interior_exterior: scene.interiorExterior, time_of_day: scene.timeOfDay });
+    const expanded = materializeScriptReferences(block.text, binding);
+    block.text = expanded.text;
+    block.binding = { ...expanded.binding, context_hash: textHash(expanded.binding.mentions.some(m => m.authority !== 'literal') ? preceding : '') };
+    for (const entity of boundVisibleEntities(block.binding)) {
+      const id = Number(entity.id.replace('character:', ''));
+      if (!scene.characterIds.includes(id)) scene.characterIds.push(id);
+    }
+  }
 }
 
 function allocateLocationId(locations: Array<{ id: string }>): string {
@@ -430,6 +449,7 @@ export class ScriptGenerationService {
       targetDurationSec: params.targetDurationSec || script.document.targetDurationSec || 120,
       instructions: params.instructions || '基于小说正文提取戏剧性核心事件与节拍，突出冲突和反转。',
       creativeConstraints: bibleSummary,
+      characters: context.characters.map(character => character.name).join('、') || '无预设角色',
     });
 
     const provider = params.provider || LLMService.getProvider(params.token);
@@ -495,13 +515,15 @@ export class ScriptGenerationService {
         const preceding = paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n');
         let binding = bindEntities(paragraph.text, roster);
         binding.context_hash = textHash(preceding);
-        if (needsBindingReview(binding) && preceding.length + paragraph.text.length <= 2200) binding = await proposeBindings(provider, binding, paragraph.text, preceding, roster);
+        if (needsBindingReview(binding)) binding = await resolveScriptBindings(provider, binding, paragraph.text, preceding, roster);
         event.sourceBindings.push({ paragraph_id: pid, text: paragraph.text, binding });
       }
-      if (needsBindingReview(event.binding) && event.text.length + event.sourceBindings.map(s => s.text).join('\n').length <= 2200) event.binding = await proposeBindings(provider, event.binding!, event.text, event.sourceBindings.map(s => s.text).join('\n'), roster);
+      if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding!, event.text, event.sourceBindings.map(s => materializeScriptReferences(s.text, s.binding).text).join('\n'), roster);
       const sourceConfirmed = event.sourceBindings.every(source => !needsBindingReview(source.binding));
-      const grounded = sourceConfirmed && eventContentCovered(event.text, event.sourceBindings.map(source => boundText(source.text, source.binding)).join('\n'));
+      const expanded = materializeScriptReferences(event.text, event.binding!);
+      const grounded = sourceConfirmed && eventContentCovered(expanded.text, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'));
       if (!grounded && event.binding?.mentions.length) event.binding = { ...event.binding, mentions: event.binding.mentions.map(m => ({ ...m, authority: 'model_proposal', confirmed: false, candidates: roster })) };
+      else if (grounded) { event.text = expanded.text; event.binding = expanded.binding; }
     }
     return { outline: validatedOutline, sourceSnapshot };
   }
@@ -636,16 +658,31 @@ export class ScriptGenerationService {
         validateBinding(source.binding, source.text, roster);
         const index = paragraphs.findIndex(p => p.id === source.paragraph_id);
         if (source.binding.context_hash !== textHash(paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'))) throw new ScriptGenerationError('提纲人物绑定的前文已变化，请重新核对', 409);
+        if (needsBindingReview(source.binding)) source.binding = await resolveScriptBindings(provider, source.binding, source.text, paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'), roster);
       }
+      if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'), roster);
       if (needsBindingReview(event.binding) || event.sourceBindings.some(s => needsBindingReview(s.binding))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
-      const explicit = boundText(event.text, event.binding);
-      const grounded = eventContentCovered(explicit, event.sourceBindings.map(source => boundText(source.text, source.binding)).join('\n'));
+      const explicit = materializeScriptReferences(event.text, event.binding).text;
+      const grounded = eventContentCovered(explicit, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'));
       if (!grounded && event.binding.mentions.length && !event.binding.mentions.every(m => m.authority === 'human' && m.confirmed)) throw new ScriptGenerationError(`提纲事件 ${event.id} 的改编人物关系没有可验证的原文对应，请在提纲中核对并确认`, 400);
-      if (event.sourceBindings.some(s => eventRelationConflict(explicit, boundText(s.text, s.binding)))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的施受关系与已核对原文矛盾`, 400);
+      if (event.sourceBindings.some(s => eventRelationConflict(explicit, materializeScriptReferences(s.text, s.binding).text))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的施受关系与已核对原文矛盾`, 400);
       // The downstream action is grounded in this outline text version. Originals
       // remain in sourceBindings with their own offsets and hashes.
       event.text = explicit;
       event.binding = bindEntities(explicit, roster);
+    }
+
+    // Normalize visual source sentences before exact coverage checks, so replacing
+    // a pronoun does not cause the same clothing/pose/contact action to be appended twice.
+    for (const beat of outline.visibleBeats || []) {
+      const paragraphIndex = paragraphs.findIndex(paragraph => beat.sourceParagraphIds.includes(paragraph.id) && paragraph.text.includes(beat.text));
+      if (paragraphIndex < 0) continue;
+      const paragraph = paragraphs[paragraphIndex]!;
+      const start = paragraph.text.indexOf(beat.text);
+      const prefix = paragraph.text.slice(0, start);
+      const context = [...paragraphs.slice(Math.max(0, paragraphIndex - 2), paragraphIndex).map(p => p.text), prefix].filter(Boolean).join('\n');
+      const binding = await resolveScriptBindings(provider, bindEntities(beat.text, roster, prefix), beat.text, context, roster);
+      beat.text = materializeScriptReferences(beat.text, binding).text;
     }
 
     // Enforce budget limits
@@ -814,6 +851,11 @@ export class ScriptGenerationService {
           if (matched) sceneCharacterIds.add(matched.id);
         }
 
+        const resolvedScene = { locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
+          blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds) };
+        await resolveSceneReferences(resolvedScene, provider, roster, matchedEvents.flatMap(event => event.sourceBindings || []).map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'), locName, previousScene);
+        for (const id of resolvedScene.characterIds) sceneCharacterIds.add(id);
+
         const sceneFullText = sceneBlocks.map((block) => [block.text, 'delivery' in block ? block.delivery : ''].filter(Boolean).join(' ')).join(' ');
         const verifiedSceneEventIds = new Set<string>();
         for (const ev of outline.mustKeepEvents) {
@@ -861,9 +903,6 @@ export class ScriptGenerationService {
           });
         }
 
-        for (const block of sceneBlocks) if (block.type === 'action') {
-          block.binding = bindEntities(block.text, entityRoster(projectCharacters));
-        }
         stableScene = {
           id: `sc_${sIdx + 1}`,
           beatIds: [beat.id],
@@ -883,7 +922,11 @@ export class ScriptGenerationService {
     }
 
     const anchoredVisibleBeatIds = anchorMissingVisibleBeats(generatedScenes, outline.visibleBeats || []);
-    for (const scene of generatedScenes) for (const block of scene.blocks) if (block.type === 'action' && !block.binding) block.binding = bindEntities(block.text, entityRoster(projectCharacters));
+    for (const [index, scene] of generatedScenes.entries()) {
+      const sources = [...new Map(outline.mustKeepEvents.flatMap(event => event.sourceBindings || []).map(source => [source.paragraph_id, source])).values()];
+      const sourceContext = sources.filter(source => scene.sourceParagraphIds.includes(source.paragraph_id)).map(source => materializeScriptReferences(source.text, source.binding).text).join('\n');
+      await resolveSceneReferences(scene, provider, roster, sourceContext, locations.find(location => location.id === scene.locationId)?.name || scene.locationId, generatedScenes[index - 1]);
+    }
 
     // Step 3: Full Document Assembly & Validation
     const fullDocument: ScriptDocument = {
@@ -1057,6 +1100,17 @@ export class ScriptGenerationService {
         sceneCharacterIds.add(block.characterId);
       }
     }
+    for (const name of rawScene.characterNames || []) {
+      const matched = matchProjectCharacter(name, projectCharacters);
+      if (matched) sceneCharacterIds.add(matched.id);
+    }
+
+    const sourceContext = requiredEvents.flatMap(event => event.sourceBindings || []).map(source => materializeScriptReferences(source.text, source.binding).text).join('\n') || originalSceneSummary;
+    const resolvedScene = { locationId: targetScene.locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
+      blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds) };
+    await resolveSceneReferences(resolvedScene, provider, entityRoster(projectCharacters), sourceContext, locationName,
+      script.document.scenes[script.document.scenes.indexOf(targetScene) - 1]);
+    for (const id of resolvedScene.characterIds) sceneCharacterIds.add(id);
 
     const rewrittenText = sceneBlocks.map((block) => block.text).join(' ');
     if (requiredEvents.some(event => eventRelationConflict(event.text, rewrittenText))) throw new ScriptGenerationError('改写分场交换了必保事件的施受关系', 502);

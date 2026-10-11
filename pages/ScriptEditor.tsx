@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Save,
@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { EntityBindingReview } from '../components/story/EntityBindingReview';
+import { editScriptReferences, scriptReviewCharacters } from '../services/scriptEntityReferences';
 import { isProjectWorkUnloading, scriptWorkId, startProjectWork, useProjectWorkJobs } from '../services/project_work_tracker';
 import { Chapter } from '../types';
 import { useLanguage } from '../LanguageContext';
@@ -84,6 +85,7 @@ export const ScriptEditor: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [document, setDocument] = useState<ScriptDocument | null>(null);
+  const reviewCharacters = useMemo(() => scriptReviewCharacters(document, characters), [document, characters]);
   const [isDirty, setIsDirty] = useState(false);
   const [dirtyBaseRevision, setDirtyBaseRevision] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'scenes' | 'outline' | 'locations_props'>('scenes');
@@ -1760,7 +1762,14 @@ export const ScriptEditor: React.FC = () => {
                                     </div>
                                   </div>
 
-                                  {block.type === 'action' && block.binding && <EntityBindingReview binding={block.binding} onChange={binding => handleUpdateBlock(sIdx, bIdx, { binding })} />}
+                                  {block.type === 'action' && block.binding && <EntityBindingReview binding={block.binding} characters={reviewCharacters} onChange={async binding => {
+                                    const edited = await editScriptReferences(block.text, binding);
+                                    if (scriptDataRef.current?.id !== scriptData?.id) return;
+                                    updateDoc(doc => ({ ...doc, scenes: doc.scenes.map(item => item.id === scene.id && item.blocks.some(entry => entry.id === block.id && entry.text === block.text) ? {
+                                      ...item, characterIds: [...new Set([...item.characterIds, ...edited.binding.mentions.filter(mention => mention.confirmed && mention.entity && mention.visibility === 'visible').map(mention => Number(mention.entity!.id.replace('character:', '')))])],
+                                      blocks: item.blocks.map(entry => entry.id === block.id ? { ...entry, ...edited } : entry),
+                                    } : item) }));
+                                  }} />}
                                   {/* Block text input */}
                                   <textarea
                                     value={block.text}
@@ -1918,12 +1927,16 @@ export const ScriptEditor: React.FC = () => {
                             >
                               <Trash2 size={14} />
                             </button>
-                            {ev.binding && <EntityBindingReview binding={ev.binding} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, binding } : item) } }))} />}
-                            {ev.binding?.mentions.length ? <button type="button" className="text-xs rounded border px-2 py-1" onClick={() => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx && item.binding ? { ...item, binding: { ...item.binding, mentions: item.binding.mentions.map(m => m.status === 'resolved' && m.entity && m.visibility !== 'uncertain' ? { ...m, authority: 'human', confirmed: true } : m) } } : item) } }))}>已核对这条改编的人物关系</button> : null}
+                            {ev.binding && <EntityBindingReview binding={ev.binding} characters={reviewCharacters} onChange={async binding => {
+                              const edited = await editScriptReferences(ev.text, binding);
+                              if (scriptDataRef.current?.id !== scriptData?.id) return;
+                              updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map(item => item.id === ev.id && item.text === ev.text ? { ...item, ...edited } : item) } }));
+                            }} />}
+                            {ev.binding?.mentions.some(mention => !mention.confirmed) ? <button type="button" className="text-xs rounded border px-2 py-1" onClick={() => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx && item.binding ? { ...item, binding: { ...item.binding, mentions: item.binding.mentions.map(m => m.status === 'resolved' && m.entity && m.visibility !== 'uncertain' ? { ...m, authority: 'human', confirmed: true } : m) } } : item) } }))}>已核对这条改编的人物关系</button> : null}
                             {ev.sourceBindings?.map((source, sourceIndex) => source.binding.mentions.length ? <div key={source.paragraph_id} className="w-full p-2 rounded bg-slate-50 dark:bg-slate-800">
                               {scriptData?.sourceSnapshot?.paragraphSnapshots && <p className="text-xs mb-1 text-slate-500">前文：{(() => { const paragraphs = scriptData.sourceSnapshot.paragraphSnapshots; const index = paragraphs.findIndex(p => p.id === source.paragraph_id); return paragraphs.slice(Math.max(0, index - 2), Math.max(0, index)).map(p => p.text).join(' '); })() || '无前文'}</p>}
                               <p className="text-xs mb-1">原文：{source.text}</p>
-                              <EntityBindingReview binding={source.binding} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, sourceBindings: item.sourceBindings!.map((entry, j) => j === sourceIndex ? { ...entry, binding } : entry) } : item) } }))} />
+                              <EntityBindingReview binding={source.binding} characters={reviewCharacters} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, sourceBindings: item.sourceBindings!.map((entry, j) => j === sourceIndex ? { ...entry, binding } : entry) } : item) } }))} />
                             </div> : null)}
                           </div>
                         ))}

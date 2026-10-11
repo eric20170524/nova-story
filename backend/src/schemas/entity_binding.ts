@@ -5,7 +5,7 @@ export const EntityMentionSchema = z.object({
   text: z.string(), start: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
   status: z.enum(['resolved', 'ambiguous', 'unknown']),
   entity: EntityRefSchema.nullable(), candidates: z.array(EntityRefSchema),
-  authority: z.enum(['literal', 'single_subject', 'model_proposal', 'human']),
+  authority: z.enum(['literal', 'single_subject', 'model_proposal', 'model_resolution', 'human']),
   confirmed: z.boolean(), visibility: z.enum(['visible', 'mentioned', 'uncertain']),
 });
 /** Embedded in the exact text version it interprets; never a mutable side table. */

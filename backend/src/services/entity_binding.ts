@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AIProvider } from './ai/base';
 import type { EntityBinding, EntityRef } from '../schemas/entity_binding';
 import type { ScriptDocument } from '../schemas/script';
+import { expandScriptReferences } from '../schemas/script_entity_references';
 
 export const textHash = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 export const entityRoster = (characters: Array<{ id: number; name: string }>): EntityRef[] => characters.map(c => ({ id: `character:${c.id}`, name: c.name }));
@@ -102,6 +103,55 @@ export async function proposeBindings(provider: AIProvider, binding: EntityBindi
   }) };
 }
 
+/** Script generation accepts a model's unambiguous resolution; fact review keeps its proposal-only policy. */
+export const SCRIPT_ENTITY_RESOLUTION_POLICY_VERSION = 'script-entity-resolution-2';
+
+function localSubjectForReference(text: string, mention: EntityBinding['mentions'][number], roster: EntityRef[]): EntityRef | undefined {
+  if (!/^[她他]$/u.test(mention.text) || !/[，,；;]\s*$/u.test(text.slice(0, mention.start))) return undefined;
+  const start = Math.max(text.lastIndexOf('。', mention.start - 1), text.lastIndexOf('！', mention.start - 1), text.lastIndexOf('？', mention.start - 1), text.lastIndexOf('\n', mention.start - 1)) + 1;
+  const prefix = text.slice(start, mention.start);
+  const named = namedMentions(prefix, roster);
+  const entities = [...new Map(named.filter(m => m.entity && m.visibility === 'visible').map(m => [m.entity!.id, m.entity!])).values()];
+  const masked = roster.reduce((value, entity) => value.replace(new RegExp(quote(entity.name), 'gu'), 'ENTITY'), prefix);
+  if (entities.length !== 1 || named.some(m => m.visibility !== 'visible') || unnamedParticipant.test(masked)
+    || /离开|离场|走出|退出|不在场|只剩|[“”「」『』‘’"']/u.test(prefix)) return undefined;
+  return entities[0];
+}
+
+export async function resolveScriptBindings(provider: AIProvider, binding: EntityBinding, text: string, context: string, roster: EntityRef[], scene?: { location: string; interior_exterior?: string; time_of_day?: string }): Promise<EntityBinding> {
+  validateBinding(binding, text, roster);
+  const pending = binding.mentions.map((mention, index) => ({ ...mention, index })).filter(m => !m.confirmed && !roster.some(entity => entity.name === m.text));
+  if (!pending.length || !roster.length) return binding;
+  const input = { task: 'script_entity_resolution', policy_version: SCRIPT_ENTITY_RESOLUTION_POLICY_VERSION, context, scene, entities: roster, text,
+    mentions: pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end, local_subject_id: localSubjectForReference(text, m, roster)?.id })) };
+  // Oversized or uncertain passages remain editable review items instead of being guessed.
+  if (JSON.stringify(input).length > 6000) return binding;
+  const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']), visibility: z.enum(['visible', 'mentioned', 'uncertain']) })) });
+  const result = schema.parse(await provider.generateStructured(JSON.stringify(input), schema,
+    '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。', { temperature: 0.1, maxTokens: 1024 }));
+  if (result.bindings.length !== pending.length || new Set(result.bindings.map(b => b.index)).size !== pending.length || result.bindings.some(b => !pending.some(m => m.index === b.index))) throw new Error('人物自动解析缺项或重复');
+  const resolved: EntityBinding = { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((mention, index) => {
+    const row = result.bindings.find(b => b.index === index);
+    if (!row) return mention;
+    const localSubject = localSubjectForReference(text, mention, roster);
+    if (row.status === 'resolved' && localSubject && localSubject.id !== row.entity_id) return { ...mention, entity: null, candidates: roster, status: 'ambiguous', visibility: 'uncertain', authority: 'model_proposal', confirmed: false };
+    const entity = row.status === 'resolved' ? roster.find(e => e.id === row.entity_id) || null : null;
+    const accepted = Boolean(entity && row.visibility !== 'uncertain' && roster.filter(e => e.name === entity.name).length === 1);
+    return { ...mention, entity, candidates: roster, status: entity ? 'resolved' : row.status === 'resolved' ? 'unknown' : row.status,
+      visibility: row.visibility, authority: accepted ? 'model_resolution' : 'model_proposal', confirmed: accepted };
+  }) };
+  validateBinding(resolved, text, roster);
+  return resolved;
+}
+
+/** Also expand references to people who are mentioned, without changing their visibility. */
+export function materializeScriptReferences(text: string, binding: EntityBinding): { text: string; binding: EntityBinding } {
+  if (binding.text_hash !== textHash(text)) throw new Error('人物绑定与文本版本不符');
+  const expanded = expandScriptReferences(text, binding);
+  return { text: expanded.text, binding: { ...binding, text_hash: textHash(expanded.text), mentions: expanded.mentions,
+    context_hash: expanded.mentions.every(m => m.authority === 'literal') ? textHash('') : binding.context_hash } };
+}
+
 export function validateBinding(binding: EntityBinding, text: string, roster: EntityRef[]) {
   if (binding.text_hash !== textHash(text)) throw new Error('人物绑定与文本版本不符');
   for (const mention of binding.mentions) {
@@ -109,6 +159,7 @@ export function validateBinding(binding: EntityBinding, text: string, roster: En
     if (mention.entity && !roster.some(e => e.id === mention.entity!.id && e.name === mention.entity!.name)) throw new Error('人物绑定引用未知实体');
     if (mention.confirmed && mention.entity && roster.filter(e => e.name === mention.entity!.name).length > 1) throw new Error('同名角色尚不能共用画面锁，请先为角色档案设置可区分的规范姓名');
     if (mention.authority === 'model_proposal' && mention.confirmed) throw new Error('模型人物建议未经人工确认');
+    if (mention.authority === 'model_resolution' && (!mention.confirmed || mention.status !== 'resolved' || mention.visibility === 'uncertain')) throw new Error('人物自动解析必须明确且无歧义');
     if (mention.status !== 'resolved' && mention.entity) throw new Error('歧义不能作为入镜人物');
     if (mention.status === 'resolved' && !mention.entity) throw new Error('已解析的绑定缺少人物');
     if (mention.authority === 'literal' && mention.entity?.name !== mention.text) throw new Error('原文姓名绑定不符');

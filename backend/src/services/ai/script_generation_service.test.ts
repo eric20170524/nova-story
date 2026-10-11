@@ -71,6 +71,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     onOutline?: (prompt: string) => any;
     onScene?: (prompt: string, callCount: number) => any;
     onSceneRewrite?: (prompt: string) => any;
+    onResolution?: (input: any) => any;
   }): AIProvider => {
     let sceneCount = 0;
     return {
@@ -79,11 +80,12 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
         return 'mock text';
       },
       async generateStructured(prompt: string, schema: any) {
+        if (prompt.startsWith('{') && handlers.onResolution) return schema.parse(handlers.onResolution(JSON.parse(prompt)));
         if (schema === GeneratedOutlineResponseSchema && handlers.onOutline) {
           return handlers.onOutline(prompt);
         }
         if (schema === GeneratedSceneResponseSchema) {
-          if (handlers.onSceneRewrite && prompt.includes('改写')) {
+          if (handlers.onSceneRewrite && prompt.startsWith('你是一位短剧剧本精修')) {
             return handlers.onSceneRewrite(prompt);
           }
           if (handlers.onScene) {
@@ -1000,6 +1002,57 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.equal(event.binding.mentions[0].confirmed, false);
     assert.equal(event.binding.mentions[0].authority, 'model_proposal');
     await assert.rejects(() => ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor_script', provider }), /人物绑定待核对/);
+  });
+
+  await t.test('跨段人物自动解析为姓名，原文保留且可直接采纳确认；改写及对白也保持正确', async () => {
+    const fix = await createFixture('林轩离开。苏沐雪留在房间。\n她解开外衣。她举起蓝伞。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const inputs: any[] = [];
+    const provider = createMockProvider({
+      onOutline: prompt => {
+        assert.ok(prompt.includes('人物规范姓名: 林轩、苏沐雪'));
+        return { logline: '举伞', mustKeepEvents: [
+          { id: 'e1', text: '林轩离开。苏沐雪留在房间。', sourceParagraphIds: ['p_1'] },
+          { id: 'e2', text: '她解开外衣。她举起蓝伞。', sourceParagraphIds: ['p_2'] },
+        ], beats: [{ id: 'beat', purpose: '房间里举伞', eventIds: ['e1', 'e2'] }], endingHook: '门响' };
+      },
+      onScene: () => ({ location: { name: '房间' }, interiorExterior: 'interior', timeOfDay: 'day', characterNames: [], blocks: [
+        { type: 'action', text: '林轩离开。苏沐雪留在房间。' },
+        { type: 'action', text: '她解开外衣。她举起蓝伞。' },
+        { type: 'action', text: '放下蓝伞。' },
+        { type: 'dialogue', characterName: '苏沐雪', text: '你把它交给我。' },
+      ] }),
+      onSceneRewrite: () => ({ location: { name: '房间' }, interiorExterior: 'interior', timeOfDay: 'day', characterNames: [], blocks: [
+        { type: 'action', text: '林轩离开。苏沐雪留在房间。' },
+        { type: 'action', text: '她解开外衣。她举起蓝伞。' },
+      ] }),
+      onResolution: input => {
+        inputs.push(input);
+        assert.equal(input.task, 'script_entity_resolution');
+        assert.ok(input.context.includes('苏沐雪'));
+        return { bindings: input.mentions.map((mention: any) => ({ index: mention.index, entity_id: `character:${fix.char2.id}`, status: 'resolved', visibility: 'visible' })) };
+      },
+    });
+    const outline = await ScriptGenerationService.generateOutlineCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'auto_names_outline', provider });
+    const event = JSON.parse(outline.after_json).mustKeepEvents[1];
+    assert.equal(event.text, '苏沐雪解开外衣。苏沐雪举起蓝伞。');
+    assert.equal(event.sourceBindings[0].text, '她解开外衣。她举起蓝伞。');
+    assert.equal(event.sourceBindings[0].binding.mentions[0].authority, 'model_resolution');
+    assert.equal(event.sourceBindings[0].binding.mentions[0].confirmed, true);
+    const adopted = await ScriptService.applyCandidate({ scriptId: script.id, changeId: outline.id, expectedRevision: 1, expectedCandidateRevision: outline.candidate_revision });
+    const candidate = await ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: adopted.revision, requestKey: 'auto_names_script', provider });
+    const doc: ScriptDocument = JSON.parse(candidate.after_json);
+    assert.equal(doc.scenes[0]!.blocks[1]!.text, '苏沐雪解开外衣。苏沐雪举起蓝伞。');
+    assert.equal(doc.scenes[0]!.blocks.filter(block => block.type === 'action' && block.text.includes('解开外衣')).length, 1);
+    assert.equal(doc.scenes[0]!.blocks[2]!.text, '苏沐雪放下蓝伞。');
+    assert.equal(doc.scenes[0]!.blocks[3]!.text, '你把它交给我。');
+    assert.deepEqual(new Set(doc.scenes[0]!.characterIds), new Set([fix.char1.id, fix.char2.id]));
+    const applied = await ScriptService.applyCandidate({ scriptId: script.id, changeId: candidate.id, expectedRevision: adopted.revision, expectedCandidateRevision: candidate.candidate_revision });
+    const confirmed = await ScriptService.confirmScript({ scriptId: script.id, expectedRevision: applied.revision });
+    assert.equal(confirmed.status, 'confirmed');
+    const rewritten = await ScriptGenerationService.generateSceneRewriteCandidate({ scriptId: script.id, targetSceneId: doc.scenes[0]!.id, expectedRevision: confirmed.revision, requestKey: 'auto_names_rewrite', provider });
+    assert.equal(JSON.parse(rewritten.after_json).blocks[1].text, '苏沐雪解开外衣。苏沐雪举起蓝伞。');
+    assert.ok(inputs.length >= 4);
   });
 
   await t.test('unassigned must-keep events stay with the nearest earlier beat', () => {

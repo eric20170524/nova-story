@@ -1,7 +1,7 @@
 import '../test_setup';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, needsBindingReview, proposeBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
+import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, materializeScriptReferences, needsBindingReview, proposeBindings, resolveScriptBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { auditFacts, continuityAfter, continuityForScene, continuityLiteral, evidencedContinuityStates, factSourceHash, sceneContext, sceneContextFacts, scopedWardrobeLock } from './storyboard_fact_workflow';
 import { createEmptyScriptDocument, validateScriptForConfirmation } from '../schemas/script';
 import type { AIProvider } from './ai/base';
@@ -9,6 +9,62 @@ import type { VisualFact } from '../schemas/storyboard_facts';
 
 const roster = entityRoster([{ id: 1, name: '林岚' }, { id: 2, name: '陈月' }]);
 const fact = (text: string, scene = 's'): VisualFact => ({ id: `f_${scene}`, scene_id: scene, block_id: 'b', text, start: 0, end: text.length, kind: 'visual', beat: 0, states: [], binding: bindEntities(text, roster) });
+
+test('剧本自动解析仅接受明确身份和出场状态，照片提及不变为本人入镜', async () => {
+  for (const visibility of ['visible', 'mentioned', 'uncertain'] as const) {
+    const text = '她举起蓝伞。';
+    const provider = { async generateStructured(_prompt: string, schema: any) {
+      return schema.parse({ bindings: [{ index: 0, entity_id: roster[1]!.id, status: 'resolved', visibility }] });
+    } } as AIProvider;
+    const binding = await resolveScriptBindings(provider, bindEntities(text, roster), text, '林岚离开，陈月留下。', roster);
+    assert.equal(needsBindingReview(binding), visibility === 'uncertain');
+    const expanded = materializeScriptReferences(text, binding);
+    assert.equal(expanded.text, visibility === 'uncertain' ? text : '陈月举起蓝伞。');
+    validateBinding(expanded.binding, expanded.text, roster);
+    assert.deepEqual(boundVisibleEntities(expanded.binding).map(e => e.name), visibility === 'visible' ? ['陈月'] : []);
+  }
+});
+
+test('剧本自动解析保留歧义复数，不接受缺项或重复结果', async () => {
+  const text = '他们坐下。';
+  const provider = { async generateStructured(_prompt: string, schema: any) {
+    return schema.parse({ bindings: [{ index: 0, entity_id: null, status: 'ambiguous', visibility: 'uncertain' }] });
+  } } as AIProvider;
+  const binding = await resolveScriptBindings(provider, bindEntities(text, roster), text, '林岚和陈月站着。', roster);
+  assert.equal(needsBindingReview(binding), true);
+  assert.equal(materializeScriptReferences(text, binding).text, text);
+  for (const rows of [[], [{ index: 0, entity_id: null, status: 'unknown', visibility: 'uncertain' }, { index: 0, entity_id: null, status: 'unknown', visibility: 'uncertain' }]]) {
+    const invalid = { async generateStructured(_prompt: string, schema: any) { return schema.parse({ bindings: rows }); } } as AIProvider;
+    await assert.rejects(() => resolveScriptBindings(invalid, bindEntities(text, roster), text, '', roster), /缺项或重复/);
+  }
+});
+
+test('她自己、他自己解析为同一人物时只写一次姓名并保留有效偏移', async () => {
+  for (const word of ['她', '他']) {
+    const text = `林岚看着镜中${word}自己的倒影。`;
+    const provider = { async generateStructured(prompt: string, schema: any) {
+      const input = JSON.parse(prompt);
+      return schema.parse({ bindings: input.mentions.map((mention: any) => ({ index: mention.index, entity_id: roster[0]!.id, status: 'resolved', visibility: 'visible' })) });
+    } } as AIProvider;
+    const resolved = await resolveScriptBindings(provider, bindEntities(text, roster), text, '', roster);
+    const expanded = materializeScriptReferences(text, resolved);
+    assert.equal(expanded.text, '林岚看着镜中林岚的倒影。');
+    validateBinding(expanded.binding, expanded.text, roster);
+  }
+});
+
+test('当前句连续动作主语优先于原文前文，模型矛盾结果保留核对', async () => {
+  const text = '林岚从花丛缓步走来，她望向陈月。';
+  let hint: string | undefined;
+  const provider = { async generateStructured(prompt: string, schema: any) {
+    const input = JSON.parse(prompt); hint = input.mentions[0].local_subject_id;
+    return schema.parse({ bindings: [{ index: input.mentions[0].index, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' }] });
+  } } as AIProvider;
+  const resolved = await resolveScriptBindings(provider, bindEntities(text, roster), text, '陈月走向花海。', roster);
+  assert.equal(hint, roster[0]!.id);
+  assert.equal(needsBindingReview(resolved), true);
+  assert.equal(materializeScriptReferences(text, resolved).text, text);
+});
 
 test('单人同块代词与省略主语自动继承；多人、离场和跨块不自动确认', () => {
   const single = bindEntities('林岚解开外衣。她把里衣褪到腰间。', roster);

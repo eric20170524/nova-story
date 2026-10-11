@@ -475,6 +475,8 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 目标时长: 约 {{targetDurationSec}} 秒
 用户指示: {{instructions}}
 世界观约束: {{creativeConstraints}}
+人物规范姓名: {{characters}}
+事件 text 中人物指代明确时，用规范人物姓名替换他、她、自己、前者、后者以及省略的动作主语；不改变动作、物品、施受关系和出场状态。指代有歧义时保留原句，不猜测。对白引文保留自然称呼。
 服装、姿态、肢体接触这类可见画面，必须引用原文句子，不要写成主题概括。对白不能代替这些句子。
 
 --- 输出格式规范 ---
@@ -513,6 +515,7 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 4. props 列出本场动作中出现或实际使用的关键实物道具，给出准确名称和简短外观/用途；同一道具跨场沿用名称，不能把不同实物合并。没有道具才填空数组；不得把人物、声音或心理活动当道具。
 5. 本场必保事件的可见动作必须写进 action 文本，coveredEventIds 填写这些事件的原始 id。只改措辞、不写出事件本身，不能算覆盖。
 6. action.text 必须保留原文里看得到的服装状态、姿态和身体接触。对白和画外音不能代替这些事实，也不要把它们改写成情绪、仙力或光影。
+   动作描述中指代明确的人物必须直接写出档案中的规范姓名，替换他、她、自己、前者、后者及省略主语；保留所有动作与归属关系。指代不明确时保留原句以供编辑。对白台词保留自然的人称代词。
 7. 返回合法的纯 JSON 对象（不要 markdown 代码块）：
 {
   "id": "scene_{{sceneIndex}}",
@@ -547,6 +550,7 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 3. 严禁混入摄影机机位或镜头参数。
 4. 若上面列出了本场必须保留的事件，改写后的正文仍要体现这些事件，不要把它们挪走或删掉。
 5. props 返回本场改写后仍出现或实际使用的关键道具，格式为 [{"name":"准确名称","description":"外观或用途"}]；沿用原稿道具名称，新增实物才新增名称，没有道具才填 []。
+   action.text 中明确的人物指代及省略主语直接写为出场角色的规范姓名，保持动作和归属关系；有歧义时保留原句。对白台词保留自然的人称代词。
 6. 输出合法的纯 JSON 对象，结构与分场生成相同，包含 location、interiorExterior、timeOfDay、characterNames、props、blocks 和 estimatedDurationSec。`,
 
   script_storyboard_gen: `你是一位专业影视导演和分镜师。你需要将以下结构化剧本（Screenplay）转换为导演分镜契约列表（Shot Contracts）。
