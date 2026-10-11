@@ -746,6 +746,94 @@ const migrations: Migration[] = [
       await ensureColumns(database, 'library_asset', { english_name: "TEXT NOT NULL DEFAULT ''" });
       await ensureColumns(database, 'character', { english_name: "TEXT NOT NULL DEFAULT ''" });
     }
+  },
+  {
+    version: '023_scene_continuity_ledger',
+    up: async database => {
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS continuity_entity (
+          entity_id TEXT PRIMARY KEY, project_id INTEGER NOT NULL, entity_json TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS ix_continuity_entity_project ON continuity_entity(project_id);
+        CREATE TABLE IF NOT EXISTS continuity_ledger (
+          script_id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
+          context_json TEXT NOT NULL, entry_json TEXT, changes_json TEXT NOT NULL DEFAULT '[]', overlays_json TEXT NOT NULL DEFAULT '[]',
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE,
+          FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_revision (
+          script_id INTEGER NOT NULL, revision INTEGER NOT NULL, request_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+          actor_id TEXT NOT NULL, reason TEXT NOT NULL, record_json TEXT NOT NULL, result_json TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY(script_id, revision), UNIQUE(script_id, request_key),
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_snapshot (
+          id TEXT PRIMARY KEY, script_id INTEGER NOT NULL, script_scene_id TEXT NOT NULL, ledger_revision INTEGER NOT NULL,
+          script_revision INTEGER NOT NULL, source_hash TEXT NOT NULL, state_hash TEXT NOT NULL, snapshot_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'current', UNIQUE(script_id, script_scene_id, ledger_revision),
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_shot_dependency (
+          scene_id INTEGER NOT NULL, scene_version INTEGER NOT NULL, script_id INTEGER NOT NULL, script_scene_id TEXT NOT NULL,
+          snapshot_id TEXT NOT NULL, ledger_revision INTEGER NOT NULL, moment_id TEXT NOT NULL, phase TEXT NOT NULL,
+          reads_json TEXT NOT NULL, dependency_hash TEXT NOT NULL, source_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'current',
+          reason_json TEXT, PRIMARY KEY(scene_id, scene_version),
+          FOREIGN KEY(scene_id) REFERENCES scene(id) ON DELETE CASCADE,
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE,
+          FOREIGN KEY(snapshot_id) REFERENCES continuity_snapshot(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_suggestion (
+          id TEXT PRIMARY KEY, script_id INTEGER NOT NULL, script_scene_id TEXT NOT NULL, raw_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending_review', created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_reference_version (
+          project_id INTEGER NOT NULL, asset_id INTEGER NOT NULL, asset_revision INTEGER NOT NULL, reference_json TEXT NOT NULL,
+          PRIMARY KEY(project_id, asset_id, asset_revision), FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS continuity_backup_key (id INTEGER PRIMARY KEY CHECK(id=1), secret TEXT NOT NULL);
+      `);
+      const columns = { continuity_status: "TEXT NOT NULL DEFAULT 'legacy'", continuity_reason_json: 'TEXT', continuity_snapshot_id: 'TEXT', continuity_revision: 'INTEGER' };
+      await ensureColumns(database, 'scene', columns);
+      await ensureColumns(database, 'scene_version', columns);
+    }
+  },
+  {
+    version: '024_scene_version_continuity_contract',
+    up: async database => {
+      await ensureColumns(database, 'scene_version', { shot_spec: 'TEXT' });
+      await database.exec(`UPDATE scene_version SET shot_spec=(SELECT s.shot_spec FROM scene s WHERE s.id=scene_version.scene_id)
+        WHERE shot_spec IS NULL AND version=(SELECT COALESCE(s.active_version,1) FROM scene s WHERE s.id=scene_version.scene_id);`);
+    }
+  },
+  {
+    version: '025_continuity_review_receipt',
+    up: async database => {
+      await ensureColumns(database, 'continuity_revision', { request_body_hash:'TEXT' });
+      await database.exec(`CREATE TABLE IF NOT EXISTS continuity_shot_recovery(script_id INTEGER NOT NULL,request_key TEXT NOT NULL,request_hash TEXT NOT NULL,scene_id INTEGER NOT NULL,
+        actor_id TEXT NOT NULL,reason TEXT NOT NULL,review_json TEXT NOT NULL,result_json TEXT NOT NULL,created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(script_id,request_key),FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE,FOREIGN KEY(scene_id) REFERENCES scene(id) ON DELETE CASCADE);`);
+    }
+  },
+  {
+    version: '026_continuity_suggestion_tasks',
+    up: async database => {
+      await database.exec(`CREATE TABLE IF NOT EXISTS continuity_suggestion_task(
+        id TEXT PRIMARY KEY,script_id INTEGER NOT NULL,request_key TEXT NOT NULL,request_hash TEXT NOT NULL,input_hash TEXT NOT NULL,
+        request_json TEXT NOT NULL,status TEXT NOT NULL,budget_json TEXT NOT NULL,reuse_json TEXT NOT NULL DEFAULT '[]',
+        result_json TEXT,error TEXT,attempt INTEGER NOT NULL DEFAULT 1,created_at DATETIME DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(script_id,request_key),FOREIGN KEY(script_id) REFERENCES chapter_script(id) ON DELETE CASCADE);`);
+    }
+  },
+  {
+    version: '027_scene_production',
+    up: async database => {
+      await database.exec(`CREATE TABLE IF NOT EXISTS scene_production_revision(script_id INTEGER PRIMARY KEY REFERENCES chapter_script(id) ON DELETE CASCADE,revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS scene_production_receipt(script_id INTEGER NOT NULL REFERENCES chapter_script(id) ON DELETE CASCADE,request_key TEXT NOT NULL,request_hash TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(script_id,request_key));
+        CREATE TABLE IF NOT EXISTS scene_production_frame(scene_id INTEGER NOT NULL REFERENCES scene(id) ON DELETE CASCADE,scene_version INTEGER NOT NULL,round TEXT NOT NULL,reference_versions_json TEXT NOT NULL DEFAULT '[]',image_review_json TEXT,PRIMARY KEY(scene_id,scene_version));`);
+    }
   }
 ];
 

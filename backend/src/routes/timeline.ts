@@ -33,9 +33,9 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/narration/generate', async (request, reply) => {
-    const { chapter_id } = z.object({ chapter_id: z.string().min(1) }).parse(request.body);
+    const { chapter_id, force_regenerate } = z.object({ chapter_id: z.string().min(1), force_regenerate: z.boolean().optional() }).parse(request.body);
     try {
-      return await generateSceneNarrationForChapter(chapter_id);
+      return await generateSceneNarrationForChapter(chapter_id, { forceRegenerate: force_regenerate });
     } catch (error: any) {
       const message = error?.message || String(error);
       const status = message === 'Chapter not found' ? 404 : 500;
@@ -113,6 +113,7 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
     } catch (error: any) {
       const message = error?.message || String(error);
       return reply.status(error.statusCode || 500).send({
+        ...(error.code === 'TIMELINE_DIRECT_WRITE_DISABLED' ? {code:error.code} : {}),
         detail: message.startsWith('Failed')
           ? message
           : `Failed to generate timeline: ${message}`,

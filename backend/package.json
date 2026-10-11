@@ -12,6 +12,8 @@
     "start": "node dist/server.js",
     "video:benchmark": "tsx scripts/video-benchmark.ts",
     "storyboard:benchmark": "tsx scripts/storyboard-regression.ts",
+    "continuity:baseline": "node --import tsx --test --test-force-exit src/test_fixtures/continuity_baseline.test.ts",
+    "formal:baseline": "tsx scripts/formal_storyboard_baseline.ts",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','logs','.pytest_cache']) { try { fs.rmSync(p,{recursive:true,force:true}); console.log('removed',p); } catch {} }\""
   },
   "keywords": [

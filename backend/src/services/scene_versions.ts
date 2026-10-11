@@ -40,6 +40,11 @@ export interface SceneVersionRow {
   task_id?: string | null;
   asset_url?: string | null;
   english_visual_prompt?: string | null;
+  continuity_status?: string;
+  continuity_reason_json?: string | null;
+  continuity_snapshot_id?: string | null;
+  continuity_revision?: number | null;
+  shot_spec?: string | null;
   created_at?: string;
 }
 
@@ -65,7 +70,17 @@ const snapshotFromScene = (scene: any, version: number, label?: string | null) =
   task_id: scene.task_id ?? null,
   asset_url: scene.asset_url ?? null,
   english_visual_prompt: englishPromptFromScene(scene),
+  continuity_status: scene.continuity_status || 'legacy',
+  continuity_reason_json: scene.continuity_reason_json ?? null,
+  continuity_snapshot_id: scene.continuity_snapshot_id ?? null,
+  continuity_revision: scene.continuity_revision ?? null,
+  shot_spec: scene.shot_spec ?? null,
 });
+
+async function copyContinuityMetadata(sceneId: number, version: number, source: any) {
+  await db.run('UPDATE scene_version SET continuity_status=?,continuity_reason_json=?,continuity_snapshot_id=?,continuity_revision=?,shot_spec=? WHERE scene_id=? AND version=?',
+    source.continuity_status || 'legacy', source.continuity_reason_json ?? null, source.continuity_snapshot_id ?? null, source.continuity_revision ?? null, source.shot_spec ?? null, sceneId, version);
+}
 
 export async function ensureSceneVersionBaseline(sceneId: number): Promise<void> {
   const scene = await db.get('SELECT * FROM scene WHERE id = ?', sceneId);
@@ -107,6 +122,7 @@ export async function ensureSceneVersionBaseline(sceneId: number): Promise<void>
     snap.asset_url,
     snap.english_visual_prompt
   );
+  await copyContinuityMetadata(sceneId, 1, snap);
   await db.run('UPDATE scene SET active_version = 1 WHERE id = ?', sceneId);
 }
 
@@ -137,8 +153,15 @@ export async function activateSceneVersion(
   );
   if (!ver) return null;
 
+  const dependency = await db.get(`SELECT d.*, l.revision AS current_revision FROM continuity_shot_dependency d LEFT JOIN continuity_ledger l ON l.script_id=d.script_id WHERE d.scene_id=? AND d.scene_version=?`, sceneId, version);
+  if (dependency && (dependency.status !== 'current' || dependency.ledger_revision !== dependency.current_revision || !ver.shot_spec)) {
+    ver.continuity_status = dependency.status === 'conflict' ? 'conflict' : 'stale';
+    ver.continuity_reason_json = dependency.reason_json || JSON.stringify({ code: 'CONTINUITY_STALE', old_revision: dependency.ledger_revision, new_revision: dependency.current_revision });
+    await copyContinuityMetadata(sceneId, version, ver);
+  }
+
   const current = await db.get('SELECT shot_spec FROM scene WHERE id = ?', sceneId);
-  const spec = JSON.parse(current?.shot_spec || '{}');
+  const spec = JSON.parse(ver.shot_spec || current?.shot_spec || '{}');
   delete spec.english_visual_prompt;
   if (ver.english_visual_prompt) spec.english_visual_prompt = ver.english_visual_prompt;
 
@@ -175,6 +198,8 @@ export async function activateSceneVersion(
     JSON.stringify(spec),
     sceneId
   );
+  await db.run('UPDATE scene SET continuity_status=?,continuity_reason_json=?,continuity_snapshot_id=?,continuity_revision=? WHERE id=?',
+    ver.continuity_status || 'legacy', ver.continuity_reason_json ?? null, ver.continuity_snapshot_id ?? null, ver.continuity_revision ?? null, sceneId);
 
   return db.get('SELECT * FROM scene WHERE id = ?', sceneId);
 }
@@ -218,6 +243,7 @@ export async function syncActiveVersionFromScene(sceneId: number): Promise<void>
     sceneId,
     active
   );
+  await copyContinuityMetadata(sceneId, active, scene);
 }
 
 /** Push asset status/url/task into active version (after generation) */
@@ -319,6 +345,9 @@ export async function createSceneVersion(
     clearAsset ? null : source.asset_url ?? null,
     clearAsset ? null : source.english_visual_prompt ?? null
   );
+  await copyContinuityMetadata(sceneId, nextVersion, source);
+  await db.run(`INSERT INTO continuity_shot_dependency(scene_id,scene_version,script_id,script_scene_id,snapshot_id,ledger_revision,moment_id,phase,reads_json,dependency_hash,source_hash,status,reason_json)
+    SELECT scene_id,?,script_id,script_scene_id,snapshot_id,ledger_revision,moment_id,phase,reads_json,dependency_hash,source_hash,status,reason_json FROM continuity_shot_dependency WHERE scene_id=? AND scene_version=?`, nextVersion, sceneId, fromVerNum);
 
   let resultScene = scene;
   if (shouldActivate) {
@@ -341,14 +370,25 @@ export async function annotateSceneWithVersions(scene: any): Promise<any> {
   return {
     ...scene,
     active_version: active,
-    versions: versions.map((v) => ({
-      version: v.version,
-      label: v.label || `v${v.version}`,
-      asset_status: v.asset_status,
-      asset_url: v.asset_url,
-      has_image: Boolean(v.asset_url),
-      created_at: v.created_at
-    }))
+    versions: versions.map((v) => {
+      let referenceHash: string | null = null;
+      try {
+        const spec = JSON.parse(v.shot_spec || '{}');
+        referenceHash = spec?.formal_request?.reference_hash || null;
+      } catch { /* Older versions have no formal request. */ }
+      return {
+        version: v.version,
+        label: v.label || `v${v.version}`,
+        asset_status: v.asset_status,
+        asset_url: v.asset_url,
+        has_image: Boolean(v.asset_url),
+        formal_stage: v.label === 'formal-candidate' ? 'production' : 'draft',
+        reference_hash: referenceHash,
+        continuity_status: v.continuity_status || 'legacy',
+        continuity_reason_json: v.continuity_reason_json,
+        created_at: v.created_at
+      };
+    })
   };
 }
 

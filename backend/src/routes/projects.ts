@@ -11,6 +11,7 @@ import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSource
 import { remapCopiedScriptChanges } from '../services/script_copy';
 import { StoryPlanDocumentSchema, newPlanEntryId } from '../schemas/story_plan';
 import { exportAssetLibrary, restoreAssetLibrary } from '../services/asset_library_backup';
+import { exportContinuity, restoreContinuity } from '../services/continuity_backup';
 
 const exportStoryPlan = async (projectId: number) => {
   if (!(await tableExists('story_plan'))) return null;
@@ -269,6 +270,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       glossary,
       story_plan: await exportStoryPlan(id),
       asset_library: await exportAssetLibrary(id),
+      continuity: await exportContinuity(id),
       summary: {
         chapters: chapters.length,
         characters: characters.length,
@@ -631,7 +633,8 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, [...scriptIdMap.values()]);
-      await restoreAssetLibrary(await exportAssetLibrary(id), newProjectId, chapterIdMap, sceneIdMap);
+      const continuityAssets = await restoreAssetLibrary(await exportAssetLibrary(id), newProjectId, chapterIdMap, sceneIdMap);
+      await restoreContinuity(await exportContinuity(id), newProjectId, { scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap, assets: continuityAssets });
       await db.exec('COMMIT');
       return reply.status(201).send({
         project: await db.get('SELECT * FROM project WHERE id = ?', newProjectId),

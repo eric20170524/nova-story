@@ -4,7 +4,6 @@ import {
   Film,
   PanelRight,
   ImageIcon,
-  RefreshCw,
   ChevronDown,
   ChevronUp,
   AlertCircle,
@@ -25,6 +24,7 @@ import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
 import { SceneVideoPlayer } from './SceneVideoPlayer';
 import { SceneAssetReferences } from './SceneAssetReferences';
+import { FormalShotActions, FormalStageStrip, storyboardStages, type FormalCapabilityGap } from './FormalShotActions';
 
 interface DirectorTimelineProps {
   timeline: Scene[];
@@ -39,7 +39,10 @@ interface DirectorTimelineProps {
   generatingNarration: boolean;
   showRightPanel: boolean;
   setShowRightPanel: (show: boolean) => void;
-  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio'] }) => void;
+  onGenerateAsset: (sceneId: number | string, options?: { newVersion?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio']; productionStage?: 'draft' | 'production' }) => void;
+  formalCapabilities?: FormalCapabilityGap[];
+  draftBusyIds?: Array<number | string>;
+  onDecideFormal?: (sceneId: number | string, version: number, verdict: 'accepted' | 'rejected', checks: Record<string, boolean>, note: string, referenceHash: string) => void;
   onGenerateKeyframe?: (sceneId: number | string) => void;
   onUpdateScene: (id: number | string, field: keyof Scene, value: any) => void;
   onRefreshTimeline?: () => void;
@@ -71,7 +74,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   showRightPanel,
   setShowRightPanel,
   onGenerateAsset,
-  onGenerateKeyframe,
+  formalCapabilities,
+  draftBusyIds = [],
+  onDecideFormal,
   onUpdateScene,
   onRefreshTimeline,
   onActivateVersion,
@@ -94,7 +99,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   const [coverageGroup, setCoverageGroup] = useState<CoverageGroup | null>(null);
   const [loadingCoverage, setLoadingCoverage] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const { openPreview, lightbox } = useImagePreview();
+  const { lightbox } = useImagePreview();
 
   const toggleExpand = (id: number | string) => {
     const newSet = new Set(expandedCards);
@@ -254,7 +259,6 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     const sceneTask = videoTasksByScene[scene.id];
                     const hasVideoAssets = sceneMedia.some((m) => m.media_type === 'video' || m.role === 'loop_master' || m.role === 'narrative_final' || m.role === 'raw_video');
                     const isVideoGenerating = sceneTask && (sceneTask.status === 'queued' || sceneTask.status === 'processing');
-                    const keyframeAsset = sceneMedia.find((m) => m.role === 'video_keyframe');
 
                     const currentTab = activeMediaTabs[scene.id] || (hasVideoAssets || isVideoGenerating ? 'video' : 'storyboard');
 
@@ -419,59 +423,29 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             onCancelTask={onCancelVideoTask}
                           />
                         ) : currentTab === 'keyframe' ? (
-                          <div className="aspect-video bg-black relative flex items-center justify-center group/keyframe h-48">
-                            {keyframeAsset?.url ? (
-                              <>
-                                <PreviewableImage
-                                  src={keyframeAsset.url}
-                                  alt={`Scene ${scene.id} 16:9 Keyframe`}
-                                  className="w-full h-full object-cover"
-                                />
-                                <ZoomHint className="group-hover/keyframe:opacity-100" />
-                                <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/keyframe:opacity-100 flex items-center justify-center gap-1.5 transition-opacity">
-                                  <button
-                                    type="button"
-                                    onClick={() => onGenerateKeyframe ? onGenerateKeyframe(scene.id) : onGenerateAsset(scene.id, { canvasAspectRatio: '16:9', newVersion: false })}
-                                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium shadow"
-                                    title="生成专用的 16:9 关键帧"
-                                  >
-                                    重新生成
-                                  </button>
-                                  {onGenerateVideo && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }));
-                                        onGenerateVideo(scene.id);
-                                      }}
-                                      className="bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium shadow"
-                                    >
-                                      以此帧生视频
-                                    </button>
-                                  )}
-                                </div>
-                              </>
-                            ) : (
-                              <div className="text-slate-500 flex flex-col items-center p-3 text-center">
-                                <Crop size={24} className="mb-1 opacity-50" />
-                                <span className="text-[11px]">暂无 16:9 关键帧</span>
-                                <button
-                                  type="button"
-                                  onClick={() => onGenerateKeyframe ? onGenerateKeyframe(scene.id) : onGenerateAsset(scene.id, { canvasAspectRatio: '16:9', newVersion: false })}
-                                  className="mt-2 bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors"
-                                >
-                                  生成 16:9 关键帧
-                                </button>
-                              </div>
+                          <div className="bg-black">
+                            <FormalStageStrip scene={scene} />
+                            {onGenerateVideo && storyboardStages(scene).adopted?.asset_url && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }));
+                                  onGenerateVideo(scene.id);
+                                }}
+                                className="m-2 bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium"
+                              >
+                                {t('director.media_tab_video', '视频')}
+                              </button>
                             )}
                           </div>
                         ) : (
                           /* Storyboard Image Area */
+                          <>
                           <div className="aspect-square bg-slate-900 relative flex items-center justify-center group/image h-64">
-                              {scene.asset_status === 'completed' && scene.asset_url ? (
+                              {storyboardStages(scene).draft?.asset_url ? (
                                   <>
                                     <PreviewableImage
-                                      src={scene.asset_url}
+                                      src={storyboardStages(scene).draft!.asset_url!}
                                       alt={`Scene ${scene.id}`}
                                       className="w-full h-full object-cover"
                                     />
@@ -491,46 +465,16 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                               )}
 
                               {/* Overlay: preview + regenerate */}
-                              <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover/image:opacity-100 flex flex-wrap items-center justify-center gap-1.5 transition-opacity pointer-events-none">
-                                  {scene.asset_status === 'completed' && scene.asset_url && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        openPreview(scene.asset_url);
-                                      }}
-                                      className="pointer-events-auto bg-slate-800/90 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 shadow-lg border border-slate-600"
-                                    >
-                                      放大
-                                    </button>
-                                  )}
-                                  <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onGenerateAsset(scene.id, { newVersion: false });
-                                  }}
-                                  disabled={scene.asset_status === 'generating'}
-                                  className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-                                  title="覆盖当前版本图片"
-                                  >
-                                  <RefreshCw size={12} className={scene.asset_status === 'generating' ? "animate-spin" : ""} />
-                                  {scene.asset_status === 'generating' ? t('director.status_generating') : '生成本版'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      onGenerateAsset(scene.id, { newVersion: true });
-                                    }}
-                                    disabled={scene.asset_status === 'generating'}
-                                    className="pointer-events-auto bg-amber-700 hover:bg-amber-600 text-white px-2.5 py-1.5 rounded-full font-medium text-[11px] flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
-                                    title="新建版本并生成（保留旧版文案与图片）"
-                                  >
-                                    +新版生成
-                                  </button>
-                              </div>
                           </div>
+                          <FormalShotActions
+                            scene={scene}
+                            capabilities={formalCapabilities}
+                            draftBusy={draftBusyIds.includes(scene.id)}
+                            onDraft={() => onGenerateAsset(scene.id, { productionStage: 'draft' })}
+                            onProduction={() => onGenerateAsset(scene.id, { productionStage: 'production' })}
+                            onDecide={(version, verdict, checks, note, referenceHash) => onDecideFormal?.(scene.id, version, verdict, checks, note, referenceHash)}
+                          />
+                          </>
                         )}
 
                         {/* Content (Editable) */}

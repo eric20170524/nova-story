@@ -15,6 +15,10 @@ import { createSceneVersion, ensureSceneVersionBaseline, syncActiveVersionAssets
 import { subscribeTaskProgress } from '../services/task_progress_bus';
 import { getProjectImageSettings, parseProjectSettings } from '../services/project_settings';
 import { isSyntheticCharacterSceneId, syntheticCharacterId } from '../services/synthetic_scene_id';
+import { prepareProductionImage, copyProductionImagePin } from '../services/scene_production_media';
+import { requireCurrentContinuityShot } from '../services/continuity_shot_gate';
+import { ContinuityStoreError } from '../services/continuity_store';
+import { beginDraftImage, beginFormalImage, decideFormalCandidate } from '../services/formal_storyboard_request';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -35,6 +39,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
   app.post('/generate', async (request, reply) => {
     const req = GenerateRequestSchema.parse(request.body);
     let launch: (() => void) | null = null;
+    try {
     const response = await withImmediateTransaction(async () => {
       if (req.request_key) {
         const previous = await db.get('SELECT * FROM image_generation_request WHERE request_key = ?', req.request_key);
@@ -52,7 +57,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(409).send({ detail: 'Image generation requires an enabled ComfyUI or Codex image provider' });
       }
 
-      logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'})`);
+      logger.info(`Received generation request for Scene ${req.scene_id} (Mode: ${req.mode || 'standard'}, stage: ${req.production_stage})`);
       const taskId = randomUUID();
 
       // Optional: fork a new scene version before generating (A/B test slot)
@@ -82,6 +87,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       const imageSettings = getProjectImageSettings(projectSettings);
       const projectWorkflow = {
         ...req.workflow,
+        inference_variant: asNewVersion ? (req.request_key || taskId) : req.workflow.inference_variant,
         project_settings: projectSettings,
         model_type: imageSettings.model,
         reference_model_type: imageSettings.model,
@@ -89,9 +95,26 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         workflow_id: undefined,
         selected_workflow_id: undefined,
         nsfw_enabled: undefined,
+        captured_production_pin: undefined as any,
+        formal_candidate: undefined as any,
       };
-      if (!isCharacterScene) {
-        // Skip synthetic character scene ids (99999xxx)
+      if (!isCharacterScene && req.production_stage === 'production') {
+        const formal = await beginFormalImage(req.scene_id, taskId, {
+          guard: req.workflow.production_guard,
+          mode: req.mode,
+          generationParams: req.generation_params ?? null,
+          model: imageSettings.model,
+          style: imageSettings.style,
+        });
+        projectWorkflow.formal_candidate = formal.marker;
+      } else if (!isCharacterScene && req.workflow.production_guard) {
+        const originalScene = await db.get('SELECT * FROM scene WHERE id=?', req.scene_id);
+        const originalSource = JSON.parse(originalScene.shot_spec || '{}').source;
+        let production;
+        if (originalSource?.script_scene_id) {
+          await requireCurrentContinuityShot(originalScene);
+          production = await prepareProductionImage(req.scene_id, req.workflow.production_guard, asNewVersion);
+        }
         if (asNewVersion) {
           await createSceneVersion(req.scene_id, {
             clearAsset: true,
@@ -101,6 +124,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         } else {
           await ensureSceneVersionBaseline(req.scene_id);
         }
+        if (production) projectWorkflow.captured_production_pin = await copyProductionImagePin(req.scene_id, production);
         await db.run(
           'UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?',
           'generating',
@@ -109,9 +133,17 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         );
         await syncActiveVersionAssets(req.scene_id, {
           asset_status: 'generating',
-          task_id: taskId,
-          asset_url: null
+          task_id: taskId
         });
+      } else if (!isCharacterScene) {
+        const marker = await beginDraftImage(req.scene_id, taskId, {
+          asNewVersion,
+          mode: req.mode,
+          generationParams: req.generation_params ?? null,
+          model: imageSettings.model,
+          style: imageSettings.style,
+        });
+        if (marker) projectWorkflow.formal_candidate = marker;
       }
 
       // Persist task row before fire-and-forget so status survives mid-flight
@@ -131,11 +163,31 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         task_id: taskId,
         status: 'processing',
         active_version: scene?.active_version ?? null,
+        candidate_version: projectWorkflow.formal_candidate?.scene_version ?? null,
+        production_stage: req.production_stage,
         new_version: asNewVersion
       };
     });
     if (launch) (launch as () => void)();
     return response;
+    } catch (error) {
+      if (error instanceof ContinuityStoreError) {
+        return reply.status(error.statusCode).send({ code: error.code, detail: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/formal-decision/:scene_id', async (request, reply) => {
+    const params = z.object({ scene_id: z.coerce.number().int().positive() }).parse(request.params);
+    try {
+      return await decideFormalCandidate(params.scene_id, request.body);
+    } catch (error) {
+      if (error instanceof ContinuityStoreError) {
+        return reply.status(error.statusCode).send({ code: error.code, detail: error.message });
+      }
+      throw error;
+    }
   });
 
   app.get('/status/:task_id', async (request, reply) => {

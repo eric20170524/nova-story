@@ -5,7 +5,7 @@ import { VramService } from './vram_service';
 export interface GpuLease {
   lease_id: string;
   owner_task_id: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'text';
   acquired_at: string;
   heartbeat_at: string;
   timeout_ms: number;
@@ -20,7 +20,7 @@ export class GpuLeaseCancelledError extends Error {
 
 type GpuLeaseWaiter = {
   taskId: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'text';
   timeoutMs: number;
   promise: Promise<GpuLease>;
   resolve: (lease: GpuLease) => void;
@@ -94,7 +94,7 @@ export class GpuLeaseService {
    */
   static async acquireLease(
     taskId: string,
-    kind: 'image' | 'video' = 'video',
+    kind: 'image' | 'video' | 'text' = 'video',
     timeoutMs?: number
   ): Promise<GpuLease> {
     const defaultTimeout = kind === 'video' ? 25 * 60 * 1000 : 5 * 60 * 1000;

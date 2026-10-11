@@ -134,7 +134,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
     } catch (error: any) { showToast(error.message || '事实核对未保存', 'error'); }
   };
 
-  const candidates = (script?.pendingChanges || []).filter((change) => change.kind === 'storyboard');
+  const candidates = (script?.pendingChanges || []).filter((change) => { if (change.kind !== 'storyboard') return false; try { return JSON.parse(change.after_json).production_version !== 1; } catch { return true; } });
   const confirmCandidate = candidates.find((candidate) => candidate.id === confirmCandidateId);
   const reviewTask = tasks.find((task) => task.task_id === reviewingTaskId) ?? null;
   useEffect(() => {

@@ -170,6 +170,47 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
   });
 });
 
+test('CT05 candidate fingerprint rejects continuity changes during generation and before chapter adoption', async () => {
+  const { script, params } = await confirmed(document());
+  const fixture = providerFixture();
+  const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...params, provider: fixture.provider });
+  await db.run("INSERT INTO continuity_ledger(script_id,project_id,revision,context_json,changes_json,overlays_json) VALUES(?,?,1,'{}','[]','[]')", script.id, script.projectId);
+  await assert.rejects(StoryboardGenerationService.applyStoryboardCandidate({ scriptId: script.id, changeId: candidate.id, expectedRevision: script.revision }), (error: any) => error.code === 'CONTINUITY_STALE');
+  assert.equal((await db.get('SELECT COUNT(*) n FROM scene WHERE chapter_id=?', script.chapterId)).n, 0);
+  const second = providerFixture(); let changed = false;
+  const original = second.provider.generateStructured.bind(second.provider);
+  second.provider.generateStructured = async (prompt, schema) => {
+    if (!changed) { changed = true; await db.run('UPDATE continuity_ledger SET revision=2 WHERE script_id=?', script.id); }
+    return original(prompt, schema);
+  };
+  await assert.rejects(StoryboardGenerationService.generateStoryboardCandidate({ ...params, requestKey: 'changed-during-generation', forceRegenerate: true, provider: second.provider }), (error: any) => error.code === 'CONTINUITY_STALE');
+  assert.equal((await db.get("SELECT COUNT(*) n FROM script_change WHERE script_id=? AND request_key='changed-during-generation'", script.id)).n, 0);
+});
+
+test('new storyboard requests reuse verified steps, source edits only recompute affected scenes, explicit alternatives infer again', async () => {
+  const doc = document(2);
+  const f = await confirmed(doc);
+  const model = providerFixture();
+  const first = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider: model.provider });
+  const before = model.calls.length;
+  const repeated = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, requestKey: 'same-input-new-request', provider: model.provider });
+  assert.equal(model.calls.length, before);
+  assert.deepEqual(JSON.parse(repeated.after_json).shots, JSON.parse(first.after_json).shots);
+  await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, requestKey: 'explicit-alternative', forceRegenerate: true, provider: model.provider });
+  assert.ok(model.calls.length > before);
+
+  const changed = structuredClone(doc);
+  changed.scenes[0]!.blocks[0]!.text = '第一场换成蓝灯亮起。';
+  const saved = await ScriptService.saveManualScript({ scriptId: f.script.id, expectedRevision: f.script.revision, document: changed });
+  const current = await ScriptService.confirmScript({ scriptId: f.script.id, expectedRevision: saved.revision });
+  const editsBefore = model.calls.length;
+  await StoryboardGenerationService.generateStoryboardCandidate({ scriptId: current.id, expectedRevision: current.revision, requestKey: 'edited-source', provider: model.provider });
+  const calls = model.calls.slice(editsBefore);
+  assert.ok(calls.some(call => call.task === 'classify' && call.sources.some((source: any) => source.text.includes('蓝灯'))));
+  assert.ok(!calls.some(call => call.task === 'classify' && call.sources.some((source: any) => source.text.includes('第2场'))));
+  assert.ok(!calls.some(call => call.task === 'translate' && call.facts.some((fact: any) => fact.text.includes('第2场'))));
+});
+
 test('逐场生成、持久化恢复与采纳闭环', async t => {
   t.mock.method(SettingsManager, 'loadSettings', () => ({ llm: { model: 'workflow-test' } }));
   for (const count of [1, 9, 12]) await t.test(`${count}场按本场规划，未改内容的采纳复用审核`, async st => {
@@ -300,10 +341,11 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
       if (r.task === 'repair_kind') { kinds += 1; return schema.parse({ kind: 'visual' }); }
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
-    const kept = await StoryboardGenerationService.generateStoryboardCandidate({ ...broken.params, provider: fallback });
-    assert.equal(kinds, 1);
-    assert.equal(kept.state, 'pending');
-    assert.equal(JSON.parse(kept.after_json).fact_contract.facts.find((fact: any) => fact.text.includes('红灯')).text, '第1场的第1盏红灯亮起。');
+    await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...broken.params, provider: fallback }), /来源片段/);
+    assert.equal(kinds, 0, 'CT09 forbids an additional kind repair after the one semantic attempt');
+    const rejectedTask = await StoryboardGenerationService.getTask(broken.script.id, StoryboardGenerationService.taskId(broken.script.id, broken.params.requestKey));
+    assert.equal(rejectedTask.progress.inference_budget.semantic_repairs, 1);
+    assert.equal(rejectedTask.progress.phase, 'needs_review');
     assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene')).n, 0);
     const fragments = [
       { text: '收紧', beat: 0, start: 0, end: 2, block_id: 'b', scene_id: 'sc' },
@@ -321,9 +363,7 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
       if (r.task === 'repair_kind') return schema.parse({ kind: 'visual' });
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
-    const whole = await StoryboardGenerationService.generateStoryboardCandidate({ ...cut.params, provider: cutter });
-    assert.equal(JSON.parse(whole.after_json).fact_contract.facts.find((fact: any) => fact.text.includes('红灯')).text, '第1场的第1盏红灯亮起。');
-    assert.equal(whole.state, 'pending');
+    await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...cut.params, provider: cutter }), /分句边界/);
     assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene')).n, 0);
   });
   await t.test('已有时间线、制作任务、已验收视频继续受到替换保护', async () => {
@@ -533,6 +573,10 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     assert.equal(JSON.parse(voiceShot.shot_spec).audible_blocks.find((b: any) => b.type === 'voiceover').characterId, null);
     assert.ok(payload.shots.every((s: any) => s.duration <= 15));
     StoryboardGenerationService.validatePayload(payload, f.script);
+    const heldFrame = structuredClone(payload);
+    heldFrame.shots[1].visual_prompt = heldFrame.shots[0].visual_prompt;
+    heldFrame.shots[1].negative_prompt = compileNegativePrompt({ ...JSON.parse(heldFrame.shots[1].shot_spec), visual_prompt: heldFrame.shots[1].visual_prompt, identity_mode: 'auto' });
+    StoryboardGenerationService.validatePayload(heldFrame, f.script);
     const broken = structuredClone(payload); JSON.parse(broken.shots[1].shot_spec);
     broken.shots[1].hold_fact_ids = [];
     assert.throws(() => StoryboardGenerationService.validatePayload(broken, f.script), /事实列表|主动作/);
@@ -595,7 +639,8 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const before = m.calls.length; m.failScene('');
     await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
     const sourceTexts = m.calls.slice(before).filter(c => c.task === 'translate').flatMap(c => c.facts.map((fact: any) => fact.text));
-    assert.ok(sourceTexts.includes('阿岚持红杯。')); assert.ok(sourceTexts.includes('阿岚穿灰衣。'));
+    // The first shot's literal translation is unchanged; only dependent inherited state needs inference.
+    assert.ok(!sourceTexts.includes('阿岚持红杯。')); assert.ok(sourceTexts.includes('阿岚穿灰衣。'));
     assert.ok(sourceTexts.includes('阿岚 持物：持红杯'));
     assert.ok(!sourceTexts.includes('无人港口红灯亮起。'));
     assert.ok(sourceTexts.includes('第4场的灯亮起。'));

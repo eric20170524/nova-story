@@ -179,7 +179,7 @@ test('BE-A1: 三类技能 Prompt 均包含用户指令、下一章边界、作�
     JSON.stringify({
       genre: '科幻悬疑',
       style: '硬核现实',
-      main_plot: '探索废弃空间站的秘密核心',
+      plot_direction: '探索废弃空间站的秘密核心',
       content_form: 'short_drama',
     }),
     'local_admin'

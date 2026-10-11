@@ -36,6 +36,7 @@ export async function buildCharacterProfilesForChapter(projectId: number, chapte
 export const TIMELINE_DIRECT_WRITE_DISABLED = '章节正文直写时间线已停用，请先确认分场剧本，再生成、核对并采纳分镜候选。';
 export class TimelineDirectWriteDisabledError extends Error {
   readonly statusCode = 410;
+  readonly code = 'TIMELINE_DIRECT_WRITE_DISABLED';
   constructor() { super(TIMELINE_DIRECT_WRITE_DISABLED); }
 }
 

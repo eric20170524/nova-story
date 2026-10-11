@@ -1,0 +1,15 @@
+{
+  "dataset_version": 1,
+  "labelled_at": "2026-10-10",
+  "basis": "scene_continuity_workflow_2026-10-09.md; frozen before production continuity implementation",
+  "labels_sha256": {
+    "F01": "124dceae705eb6d86989a6d5bf194cbf2bb9af58cec097791a93e1749c759556",
+    "F02": "b94e2e0d76b9729a84efd50e0ad29167ea318c57e4dcfe6a6f4cbc5955ed3f29",
+    "F03": "c9205873d6dc9efc85037db35647e7bff3f0ac5d90702148df1c851852a96e9c",
+    "F04": "25db0bf119f84e318732dd5b568d1ad1670c87f96ea0284a9b440583befdf840",
+    "F05": "ba3700a9cd277b991ced9c5bcf34e737960c233e77457678026b2d95529f4c49",
+    "F06": "51ef6f375680a0d3212264532cb7779dd7fd12353bbb8d63e83d51af84abe578",
+    "F07": "879b9dab88bb2ede1db0adf4313ba54431568125be1b51321aa1701dc92cbbaa",
+    "F08": "0dc3d72f2e2523c852dc52e518fe1f1b6ef6b80f8f2ad1019bda07c5f0e485a1"
+  }
+}

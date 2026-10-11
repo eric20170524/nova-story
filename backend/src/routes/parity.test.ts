@@ -192,31 +192,34 @@ test('initializes the complete schema and exposes the migrated parity routes', a
     method: 'POST',
     url: `/api/scenes/${scene.lastID}/coverage`
   });
-  assert.equal(coverageResponse.statusCode, 200, coverageResponse.body);
-  assert.equal(coverageResponse.json().shots.length, 9);
-  const firstShotId = coverageResponse.json().shots[0].id;
+  assert.equal(coverageResponse.statusCode, 409, coverageResponse.body);
+  assert.equal(coverageResponse.json().code, 'CONTINUITY_ENTRY_REQUIRED');
 
   const listResponse = await app.inject({
     method: 'GET',
     url: `/api/scenes/${scene.lastID}/coverage`
   });
   assert.equal(listResponse.statusCode, 200, listResponse.body);
-  assert.equal(listResponse.json()[0].shots.length, 9);
+  assert.deepEqual(listResponse.json(), []);
+  // A legacy candidate remains readable, but cannot authorize production without a confirmed moment.
+  const oldGroup = await db.run('INSERT INTO coverage_group(source_scene_id) VALUES(?)', scene.lastID);
+  const oldShot = await db.run("INSERT INTO coverage_shot(coverage_group_id,slot,shot_spec) VALUES(?,1,'{}')", oldGroup.lastID);
+  const firstShotId = oldShot.lastID;
 
   const applyResponse = await app.inject({
     method: 'POST',
     url: `/api/scenes/coverage/${firstShotId}/apply`
   });
-  assert.equal(applyResponse.statusCode, 200, applyResponse.body);
-  assert.equal(applyResponse.json().scene.shot_type, 'Extreme Long Shot');
+  assert.equal(applyResponse.statusCode, 409, applyResponse.body);
+  assert.equal(applyResponse.json().code, 'CONTINUITY_ENTRY_REQUIRED');
 
   const promoteResponse = await app.inject({
     method: 'POST',
     url: `/api/scenes/coverage/${firstShotId}/promote`,
     payload: { position: 'after' }
   });
-  assert.equal(promoteResponse.statusCode, 200, promoteResponse.body);
-  assert.ok(promoteResponse.json().scene_id);
+  assert.equal(promoteResponse.statusCode, 409, promoteResponse.body);
+  assert.equal(promoteResponse.json().code, 'CONTINUITY_ENTRY_REQUIRED');
 
   await db.run('UPDATE project SET settings = ? WHERE id = ?', JSON.stringify({
     image_generation: {

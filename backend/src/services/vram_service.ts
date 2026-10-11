@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { BACKEND_DIRECTORY } from '../core/paths';
 import { logger } from '../core/logging';
 import { SettingsManager } from '../core/settings_manager';
 import { DEFAULT_LOCAL_LLM_BASE_URL, DEFAULT_LOCAL_LLM_MODEL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from './llm';
@@ -133,7 +133,7 @@ export function decideVramSwitch(input: {
 }
 
 export function localLlmStartScriptPath(): string {
-  return fileURLToPath(new URL('../../../start_local_llm.ps1', import.meta.url));
+  return path.resolve(BACKEND_DIRECTORY, '../start_local_llm.ps1');
 }
 
 type VramSwitchDeps = {
@@ -187,7 +187,7 @@ async function startBundledComfy(): Promise<boolean> {
   const comfy = ComfyUIService.fromSettings(settings.comfyui);
   if (comfy.isRemote) return false;
   const installPath = settings.comfyui?.install_path || 'D:\\ComfyUI';
-  return comfy.ensureRunning(installPath, 120_000);
+  return comfy.ensureRunning(installPath, 300_000);
 }
 
 const WARNING_THRESHOLD = 60;

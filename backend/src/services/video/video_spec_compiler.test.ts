@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, type VideoMotionMaterials } from './video_spec_compiler';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, setVideoMotionTranslatorForTests, type VideoMotionMaterials } from './video_spec_compiler';
 
 test('Grok narrative prompts preserve the screenplay speech and sound', async () => {
   const request = { scene_id: 64, scene_version: 1, profile: 'narrative_clip' as const,
@@ -33,6 +33,19 @@ test('video identity uses stable cast appearance instead of later-chapter narrat
   assert.match(spec.subject_identity, /black low bun/);
   assert.doesNotMatch(spec.subject_identity, /strictly consistent/);
   assert.doesNotMatch(spec.positive_prompt, /青紫|第五章|strictly consistent/);
+});
+
+test('confirmed holding hand is compiled as anatomical handedness, not a screen direction', async () => {
+  setVideoMotionTranslatorForTests(async materials => (materials.continuity_states || []).join(' '));
+  try {
+    const spec = await VideoSpecCompiler.compile({
+      request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false },
+      scene: { id: 64, shot_spec: JSON.stringify({ continuity_states: [{ entity: 'umbrella', entity_id: 'u1', entity_kind: 'prop', attribute: 'holding_hand', value: 'physical_left', canonical_value: 'physical_left', fact_id: 'hand' }] }) },
+    });
+    assert.match(spec.positive_prompt, /anatomical left hand/);
+    assert.match(spec.positive_prompt, /independent of screen left\/right/);
+    assert.doesNotMatch(spec.positive_prompt, /physical_left/);
+  } finally { setVideoMotionTranslatorForTests(null); }
 });
 
 test('cleanPromptForH3 removes Pony scores and cleans whitespace', async () => {

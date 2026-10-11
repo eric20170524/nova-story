@@ -5,7 +5,8 @@ import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 import { mergeVerifyLlmConfig } from '../services/llm_presets';
-import { resolveTierBFromSettings } from '../services/tier_b_adapters';
+import { fetchComfyObjectInfo, probeTierBCapability } from '../services/tier_b_adapters';
+import { assessFormalInstall } from '../services/formal_storyboard_capability';
 import { VramService } from '../services/vram_service';
 import { ComfyUIService } from '../services/ai/comfyui_service';
 import { GpuLeaseService } from '../services/gpu_lease_service';
@@ -45,10 +46,33 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return VramService.switchTo('comfyui', { gpuBusy: localGpuBusy() });
   });
 
-  /** Probe ComfyUI install for Tier B (IP-Adapter + ControlNet) readiness */
+  /** Probe ComfyUI install for Tier B and the formal storyboard capability baseline. */
   app.get('/tier-b-status', async () => {
     const settings = SettingsManager.loadSettings();
-    const capability = await resolveTierBFromSettings(settings, { isFlux: false });
+    const comfy = settings.comfyui || {};
+    const installPath = comfy.install_path || null;
+    const tierB = comfy.tier_b || {};
+    const objectInfo = await fetchComfyObjectInfo(comfy.base_url || 'http://127.0.0.1:8188');
+    const capability = probeTierBCapability(installPath, {
+      objectInfo,
+      enabled: tierB.enabled !== false,
+      configured: {
+        ipadapter: tierB.ipadapter_model,
+        clipVision: tierB.clip_vision_model,
+        controlnet: tierB.controlnet_model,
+      },
+    });
+    const workflowFile = comfy.selected_workflow_file || comfy.default_workflow || 'pony_xl_12gb.json';
+    const formal = assessFormalInstall({
+      modelName: String(workflowFile).includes('krea') || String(workflowFile).includes('redcraft')
+        ? 'redcraft_krea2'
+        : 'pony',
+      workflowFile,
+      installPath,
+      runtime: objectInfo ? 'online' : 'offline',
+      objectInfo,
+      hashFiles: false,
+    });
     return {
       ready: capability.characterAdapter || capability.compositionControl,
       full_dual_ref: capability.characterAdapter && capability.compositionControl,
@@ -59,7 +83,26 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       models: capability.models,
       missing: capability.missing,
       notes: capability.notes,
-      install_path: settings.comfyui?.install_path || null
+      install_path: installPath,
+      formal: {
+        model_class: formal.model_class,
+        model_label: formal.model_label,
+        template: formal.template,
+        workflow_file: formal.workflow_file,
+        live_verified: false,
+        capabilities: formal.capabilities.map((row) => ({
+          id: row.id,
+          installed: row.installed,
+          nodes_loaded: row.nodes_loaded,
+          family_match: row.family_match,
+          shot_allowed: row.shot_allowed,
+          wired: row.wired,
+          live_verified: row.live_verified,
+          chain_ready: row.chain_ready,
+          reason: row.reason,
+          weights: row.weights.map((weight) => ({ role: weight.role, filename: weight.filename, sha256: weight.sha256 })),
+        })),
+      },
     };
   });
 

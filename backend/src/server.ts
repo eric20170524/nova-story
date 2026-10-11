@@ -25,6 +25,8 @@ import { assistantRoutes } from './routes/assistant';
 import { coverageRoutes } from './routes/coverage';
 import { videoRoutes } from './routes/videos';
 import { scriptRoutes } from './routes/scripts';
+import { continuityRoutes } from './routes/continuity';
+import { sceneProductionRoutes } from './routes/scene_production';
 import { ttsRoutes } from './routes/tts';
 import { AssetTaskStore } from './services/task_store';
 import { VideoGenerationService } from './services/video/video_generation_service';
@@ -134,6 +136,8 @@ export const buildApp = async (options: { logger?: boolean } = {}) => {
   await app.register(coverageRoutes, { prefix: '/api' });
   await app.register(videoRoutes, { prefix: '/api/videos' });
   await app.register(scriptRoutes, { prefix: '/api' });
+  await app.register(continuityRoutes, { prefix: '/api' });
+  await app.register(sceneProductionRoutes, { prefix: '/api' });
   await app.register(ttsRoutes, { prefix: '/api/tts' });
 
   // Recovery order is intentional:

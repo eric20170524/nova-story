@@ -54,3 +54,8 @@
 - **`buildPromptEnhancement` 对 narrative scene 叠 environment-dominant：** Insert 会被拉成风景。按 `shot_intent` 分支。
 - **测试不要碰开发库。** `DATABASE_URL=:memory:`。
 - **i18n：** 新 UI 字符串必须 `locales.ts` 的 en+zh 一起加。
+- **SDK 错误名称：** OpenAI 连接错误的 `.name` 可能是 `Error`，分类需结合实际构造器，保留调用记录；本机受限连接失败不能冒充模型输出。
+- **Comfy 冷启动：** 同一地址共享启动和就绪等待，超时后复用存活进程，死亡才重启；实际启动可能超过 120 秒，不用重复拉起进程掩盖未就绪。
+- **连续性实际依赖：** 全账本来源改变不等于本镜头状态改变；冻结参考用当前已验证的实际读取哈希校验。过期旧图仍保存其原状态/参考，图片拒绝不反写剧情。
+- **StrictMode 异步状态：** effect 再挂载时须恢复有效标志，避免预览返回却永久禁用按钮；before/after 同一 moment ID 必须用 ID+phase 选择和作为 React key。
+- **本机配置与测试：** `.env` 加载后再明确设置门禁测试值并恢复两个兼容标志；故事设定使用现行 `plot_direction`。显式测试文件只跑目标文件，不附加全套回归。

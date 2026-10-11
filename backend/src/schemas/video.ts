@@ -82,6 +82,8 @@ export type MediaAsset = z.infer<typeof MediaAssetSchema>;
 const VideoRequestBaseSchema = z.object({
   expected_input_signature: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   request_key: z.string().min(1).max(200).optional(),
+  /** Explicit new prompt version; send the same token in preflight and submission. */
+  inference_variant: z.string().min(1).max(200).optional(),
   scene_id: z.number().int().positive(),
   scene_version: z.number().int().positive().default(1),
   profile: VideoProfileSchema.default('narrative_clip'),

@@ -36,6 +36,8 @@ import { auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, seri
 import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
 import { actionBindingSource, boundText, entityRoster, needsBindingReview, textHash, validateBinding } from '../entity_binding';
 import { sceneContextFacts, scopedWardrobeLock } from '../storyboard_fact_workflow';
+import { continuitySourceFingerprint } from '../continuity_store';
+import { continuitySceneDocument, prepareContinuityWorkflowScope } from '../continuity_workflow_scope';
 
 export class StoryboardGenerationError extends Error {
   constructor(
@@ -296,23 +298,35 @@ export class StoryboardGenerationService {
 
   /** Durable reservation precedes inference; matching retries resume failed scene/shot checkpoints. */
   static async generateStoryboardCandidate(params: {
-    scriptId: number; expectedRevision: number; requestKey: string; instructions?: string; token?: string; provider?: AIProvider; onReserved?: (attempt?: number) => void;
+    scriptId: number; expectedRevision: number; requestKey: string; instructions?: string; token?: string; provider?: AIProvider; forceRegenerate?: boolean; onReserved?: (attempt?: number) => void;
+    scope?: 'chapter' | 'scene'; targetSceneId?: string; momentBindings?: unknown;
   }): Promise<ScriptChangeRow> {
     const script = await ScriptService.getScriptById(params.scriptId);
     if (script.revision !== params.expectedRevision) throw new StoryboardGenerationError('剧本版本冲突，请刷新后重试', 409);
     if (script.status !== 'confirmed' || !script.document.scenes.length) throw new StoryboardGenerationError('只有已确认且包含分场的剧本才能生成分镜', 400);
     if (script.freshness.sourceChanged) throw new StoryboardGenerationError('剧本来源已过期，请先核对更新', 409);
+    if (params.scope !== 'scene' && (params.targetSceneId || params.momentBindings)) throw new StoryboardGenerationError('单场生成须显式选择 scene scope', 400);
+    const continuityScope = params.scope === 'scene' ? await prepareContinuityWorkflowScope(script.id, script.document, params.targetSceneId || '', params.momentBindings) : undefined;
+    if (continuityScope) script.document = continuitySceneDocument(script.document, continuityScope.target_scene_id);
     const taskId = this.taskId(script.id, params.requestKey);
     const project = await db.get('SELECT settings FROM project WHERE id=?', script.projectId);
     const settings = parseProjectSettings(project?.settings);
-    const assets = await AssetLibraryService.list(script.projectId);
-    const locks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
-    const characterNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId) as Array<{id: number; name: string; english_name: string}>;
+    const allAssets = await AssetLibraryService.list(script.projectId);
+    const allLocks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
+    const allCharacterNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId) as Array<{id: number; name: string; english_name: string}>;
+    const readIds = new Set(continuityScope?.bindings.flatMap(binding => binding.reads.map(read => read.entity_id)));
+    if (continuityScope) for (const moment of continuityScope.snapshot.moments) for (const cell of moment.state) if (readIds.has(cell.entity_id) && cell.knowledge_status === 'confirmed' && cell.value) readIds.add(cell.value);
+    const relevantEntities = continuityScope?.entities.filter(entity => readIds.has(entity.entity_id)) ?? [];
+    const assets = continuityScope ? allAssets.filter(asset => relevantEntities.some(entity => entity.asset_id === asset.id) || [...script.document.props,...script.document.locations].some(item => item.name === asset.name)) : allAssets;
+    const characterNames = continuityScope ? allCharacterNames.filter(character => script.document.scenes[0]!.characterIds.includes(character.id) || relevantEntities.some(entity => entity.character_id === character.id)) : allCharacterNames;
+    const locks = continuityScope ? allLocks.filter(lock => characterNames.some(character => character.name === lock.name)) : allLocks;
     const model = `${currentModelFingerprint()}:${hash([assets, locks, characterNames])}`;
     const instructions = params.instructions?.trim() || '';
+    const continuityFingerprint = await continuitySourceFingerprint(script.id);
     const glossary = Object.fromEntries([...assets, ...characterNames].filter(asset => asset.english_name).map(asset => [asset.name, asset.english_name!])) as Record<string, string>;
-    const inputHash = hash([script.id, script.revision, script.document, assets, locks, characterNames, settings, model, SettingsManager.loadSettings().llm, FACT_POLICY_VERSION, instructions]);
-    const initial: WorkflowProgress = { input_hash: inputHash, attempt: 1, phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [], request: { request_key: params.requestKey, expected_revision: script.revision, instructions } };
+    const inputHash = hash([script.id, script.revision, script.document, assets, locks, characterNames, settings, model, SettingsManager.loadSettings().llm, FACT_POLICY_VERSION, instructions,
+      ...(continuityFingerprint ? [continuityFingerprint] : []), ...(continuityScope ? [{ target: continuityScope.target_scene_id, bindings: continuityScope.bindings, snapshot: continuityScope.snapshot_id }] : []), ...(params.forceRegenerate ? ['explicit-alternative'] : [])]);
+    const initial: WorkflowProgress = { input_hash: inputHash, attempt: 1, phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [], request: { request_key: params.requestKey, expected_revision: script.revision, instructions, force_regenerate: params.forceRegenerate } };
     await db.run("INSERT OR IGNORE INTO generation_task(task_id,scene_id,kind,status,progress_json) VALUES(?,?,'storyboard','queued',?)", taskId, -script.id, JSON.stringify(initial));
     let reserved = await this.getTask(script.id, taskId);
     if (reserved.progress.input_hash !== inputHash) throw new StoryboardGenerationError('同一请求键对应不同剧本、资产、模型或指令，请使用新的请求键', 409);
@@ -344,9 +358,12 @@ export class StoryboardGenerationService {
       await db.run("UPDATE generation_task SET status='processing', error=NULL, updated_at=CURRENT_TIMESTAMP WHERE task_id=?", taskId);
       try {
         const provider = params.provider || LLMService.getLocalProvider();
-        const result = await runFactWorkflow({ doc: script.document, scriptId: script.id, revision: script.revision, provider, model, locks, glossary, characters: characterNames, instructions, progress, persist });
+        const result = await runFactWorkflow({ doc: script.document, scriptId: script.id, revision: script.revision, provider, model, inferenceModel: currentModelFingerprint(), locks, glossary, characters: characterNames, instructions, progress, persist,
+          continuity_scope: continuityScope,
+          reuse: { variant: params.forceRegenerate ? params.requestKey : undefined } });
         const coverage = validateStoryboardCoverage(script.document, result.shots, true);
         const payload: StoryboardCandidatePayload = {
+          ...(continuityScope ? { scope: { kind: 'scene' as const, target_scene_id: continuityScope.target_scene_id, snapshot_id: continuityScope.snapshot_id, snapshot_revision: continuityScope.snapshot_revision, source_hash: continuityScope.snapshot.source_hash } } : {}),
           schemaVersion: 3, fact_contract: result.contract, scriptId: script.id, scriptRevision: script.revision, chapterId: script.chapterId,
           totalDuration: result.shots.reduce((n, s) => n + s.duration, 0), estimatedScriptDuration: result.contract.budgets.reduce((n, b) => n + b.duration, 0),
           coverageReport: { coveredSceneIds: [...coverage.coveredSceneIdSet], totalScenes: script.document.scenes.length,
@@ -361,11 +378,12 @@ export class StoryboardGenerationService {
         const latestLocks = await buildCharacterLockRefsForChapter(script.projectId, script.chapterId);
         const latestNames = await db.all('SELECT id,name,english_name FROM character WHERE project_id=? ORDER BY id', script.projectId);
         const latestProject = await db.get('SELECT settings FROM project WHERE id=?', script.projectId);
+        if (await continuitySourceFingerprint(script.id) !== continuityFingerprint) throw Object.assign(new StoryboardGenerationError('生成期间连续性修订变化，请核对后重试', 409), { code: 'CONTINUITY_STALE' });
         if (latest.revision !== script.revision || latest.status !== 'confirmed' || latest.freshness.sourceChanged ||
-            !model.startsWith(`${currentModelFingerprint()}:`) || hash([latestAssets, latestLocks, latestNames, parseProjectSettings(latestProject?.settings)]) !== hash([assets, locks, characterNames, settings])) throw new StoryboardGenerationError('生成期间剧本、资产或模型变化，候选未保存', 409);
+            !model.startsWith(`${currentModelFingerprint()}:`) || hash([latestAssets, latestLocks, latestNames, parseProjectSettings(latestProject?.settings)]) !== hash([allAssets, allLocks, allCharacterNames, settings])) throw new StoryboardGenerationError('生成期间剧本、资产或模型变化，候选未保存', 409);
         const saved = await ScriptService.createPendingCandidate({ scriptId: script.id, kind: 'storyboard', expectedRevision: script.revision, requestKey: params.requestKey,
           afterJson: JSON.stringify(payload), sourceSnapshot: script.sourceSnapshot,
-          generationInfo: { model, fact_policy_version: FACT_POLICY_VERSION, task_id: taskId, input_hash: inputHash, metrics: progress.metrics } });
+          generationInfo: { model, fact_policy_version: FACT_POLICY_VERSION, task_id: taskId, input_hash: inputHash, metrics: progress.metrics, ...(continuityFingerprint ? { continuity_fingerprint: continuityFingerprint } : {}) } });
         progress.phase = 'completed'; progress.candidate_id = saved.id;
         await persist();
         await db.run("UPDATE generation_task SET status='completed', error=NULL WHERE task_id=?", taskId);
@@ -376,7 +394,7 @@ export class StoryboardGenerationService {
         await persist();
         await db.run("UPDATE generation_task SET status='failed', error=? WHERE task_id=?", progress.error, taskId);
         if (error instanceof StoryboardGenerationError) throw error;
-        throw new StoryboardGenerationError(progress.error || '分镜生成失败', error?.statusCode || 502);
+        throw Object.assign(new StoryboardGenerationError(progress.error || '分镜生成失败', error?.statusCode || 502), error?.code ? { code: error.code } : {});
       }
     });
   }
@@ -419,6 +437,7 @@ export class StoryboardGenerationService {
   }
 
   static validatePayload(payload: StoryboardCandidatePayload, script: ScriptWithDetails) {
+    if (payload.scope) script = { ...script, document: continuitySceneDocument(script.document, payload.scope.target_scene_id) };
     if (payload.shots.length > 20) {
       throw new StoryboardGenerationError('候选分镜超过 20 镜预算上限', 400);
     }
@@ -461,10 +480,16 @@ export class StoryboardGenerationService {
         throw new StoryboardGenerationError(`镜头契约遗漏可见事实: ${beat.id}`, 400);
       }
     }
-    for (let index = 1; payload.schemaVersion < 2 && index < contracts.length; index++) {
+    for (let index = 1; index < contracts.length; index++) {
       const previousPrompt = String(contracts[index - 1]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
       const currentPrompt = String(contracts[index]!.visual_prompt || '').trim().replace(/\s+/g, ' ');
-      if (previousPrompt && previousPrompt === currentPrompt) {
+      const previous = contracts[index - 1]!, current = contracts[index]!;
+      // The fact validator has already verified an explicit same-scene hold against
+      // the preceding complete frame. It may repeat that image to carry more audio.
+      const verifiedHold = payload.schemaVersion >= 2 && current.script_scene_id === previous.script_scene_id
+        && Boolean(current.hold_fact_ids?.length)
+        && JSON.stringify(current.hold_fact_ids) === JSON.stringify(previous.fact_ids?.length ? previous.fact_ids : previous.hold_fact_ids);
+      if (previousPrompt && previousPrompt === currentPrompt && !verifiedHold) {
         throw new StoryboardGenerationError(`相邻镜头 ${index} 与 ${index + 1} 的视觉提示完全相同`, 400);
       }
     }
@@ -577,6 +602,15 @@ export class StoryboardGenerationService {
       );
     }
 
+    const verifyContinuity = async (row: ScriptChangeRow) => {
+      const expected = JSON.parse(row.generation_info_json || '{}').continuity_fingerprint ?? null;
+      if (await continuitySourceFingerprint(params.scriptId) !== expected) throw Object.assign(new StoryboardGenerationError('候选连续性来源已过期，请核对后重新生成', 409), { code: 'CONTINUITY_STALE' });
+    };
+    await verifyContinuity(candidate);
+    let scopedPreview = false;
+    try { scopedPreview = Boolean(JSON.parse(candidate.after_json).scope); } catch {}
+    if (scopedPreview) throw new StoryboardGenerationError('单场候选仅供预览，须使用独立分场采纳流程', 409);
+
     if (candidate.base_revision !== params.expectedRevision) {
       throw new StoryboardGenerationError(
         `Candidate base revision (${candidate.base_revision}) does not match current script revision (${params.expectedRevision})`,
@@ -632,6 +666,7 @@ export class StoryboardGenerationService {
       payload = StoryboardCandidatePayloadSchema.parse(
         JSON.parse(candidate.after_json)
       );
+      if (payload.scope) throw new StoryboardGenerationError('单场候选仅供预览，须使用独立分场采纳流程', 409);
     } catch (err: any) {
       throw new StoryboardGenerationError(
         `候选分镜载荷损坏或格式非法: ${err.message}`,
@@ -654,6 +689,7 @@ export class StoryboardGenerationService {
         throw new StoryboardGenerationError('Revision conflict: script or candidate changed before submission', 409);
       }
       this.validatePayload(payload, lockedScript);
+      await verifyContinuity(lockedCandidate);
       // Recheck the timeline and production gates after acquiring the write lock.
       const lockedScenes = await db.all(
         'SELECT * FROM scene WHERE chapter_id = ? ORDER BY "index", id',
@@ -662,6 +698,7 @@ export class StoryboardGenerationService {
       const idFloor = await db.get('SELECT MAX(value) AS maximum FROM (SELECT COALESCE(MAX(id),0) AS value FROM scene UNION ALL SELECT COALESCE(MAX(scene_id),0) AS value FROM media_asset)');
       let nextSceneId = Number(idFloor?.maximum || 0) + 1;
       verifyReplacement(lockedScenes);
+      if (lockedScenes.length && await continuitySourceFingerprint(params.scriptId)) throw new StoryboardGenerationError('已有连续性制作记录，请使用分场采纳保留镜头和旧图', 409);
       const lockedTasks = await db.get(`SELECT COUNT(*) AS count FROM generation_task gt INNER JOIN scene s ON s.id=gt.scene_id WHERE s.chapter_id=? AND gt.status='processing'`, script.chapterId);
       if (Number(lockedTasks?.count)) throw new StoryboardGenerationError('当前章节存在正在执行的制作任务，无法提交分镜', 409);
       const accepted = await db.get(`SELECT COUNT(*) AS count FROM media_asset m INNER JOIN scene s ON s.id=m.scene_id WHERE s.chapter_id=? AND m.role='narrative_final' AND m.status='ready'`, script.chapterId);

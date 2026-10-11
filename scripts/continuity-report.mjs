@@ -1,0 +1,22 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const area=path.join(root,'local/verification/continuity-ct14/c5786316dfa093b7');
+const full=JSON.parse(await fs.readFile(path.join(area,'summary.json'),'utf8'));
+const chainRoot=path.join(root,'local/verification/continuity-ct14/chain-v2'),chain=JSON.parse(await fs.readFile(path.join(chainRoot,'summary.json'),'utf8'));
+const rows=[];for(const category of full.grouped)for(const type of ['positive','negative','variant'])for(const seed of [41,97]){
+  const row=JSON.parse(await fs.readFile(path.join(area,`${category.category}-${type}-${seed}.json`),'utf8'));
+  if(row.model_fingerprint!==full.model_fingerprint||row.labels_sha256!==full.labels_sha256)throw new Error('Mixed evaluation inputs');rows.push(row);
+}
+const calls=rows.flatMap(row=>row.result.budget.calls),usage=calls.reduce((out,call)=>({prompt_tokens:out.prompt_tokens+(call.usage?.prompt_tokens||0),completion_tokens:out.completion_tokens+(call.usage?.completion_tokens||0)}),{prompt_tokens:0,completion_tokens:0});
+const chainRows=[];for(let run=0;run<2;run++)for(const index of [1,2,3])chainRows.push(JSON.parse(await fs.readFile(path.join(chainRoot,`chain-${run}-${index}.json`),'utf8')));
+const refs=row=>[...new Set(row.candidate.shots.map(shot=>JSON.stringify(JSON.parse(shot.shot_spec).source.continuity)))].sort();
+const orderSemantics=[1,2,3].every(index=>JSON.stringify(refs(chainRows.find(row=>row.id===`chain-0-${index}`)))===JSON.stringify(refs(chainRows.find(row=>row.id===`chain-1-${index}`))));
+const report={version:1,status:'complete_as_suggestion_only',automatic_acceptance_enabled:false,automatic_accepted:0,automatic_error_rate:null,human_confirmation_rate:null,model:full.model,model_fingerprint:full.model_fingerprint,weights_sha256:full.weights_sha256,policy_fingerprint:full.policy_fingerprint,labels_sha256:full.labels_sha256,seeds:[41,97],temperature:full.temperature,hardware:'RTX 3060 12 GB',logical_tasks:rows.length,actual_calls:calls.length,acceptable_against_frozen_labels:rows.filter(row=>row.adjudication.acceptable).length,required_changes:full.grouped.reduce((n,row)=>n+row.required_changes,0),recovered_changes:full.grouped.reduce((n,row)=>n+row.recovered_changes,0),unexpected_changes:full.grouped.reduce((n,row)=>n+row.unexpected_changes,0),false_blocks:full.grouped.reduce((n,row)=>n+row.false_blocks,0),grouped:full.grouped,usage,elapsed_inference_ms:calls.reduce((n,row)=>n+row.elapsed_ms,0),wall_ms:Date.parse(full.finished_at)-Date.parse(full.started_at),chain:{...chain,confirmed_reference_sets_match_between_orders:orderSemantics},critical_baselines:['local/verification/continuity-ct14/critical-summary.json','local/verification/continuity-ct14/1ea30c747ea1e135/critical-summary.json'],limitations:['Only E01/E02/E06/E09/E10 have an acceptable positive or variant; all still need human review.','Other classes fall back to manual confirmed inputs.','Frozen-label acceptability is not actual human confirmation.','The final-policy critical summary was retained, but its per-case filenames were reused by the full run; earlier-policy critical raw baselines remain separate.','No automatic acceptance qualification was run.','New capability baseline comparison is N/A.']};
+const evidence=await fs.readFile(path.join(area,'summary.json'));report.summary_sha256=createHash('sha256').update(evidence).digest('hex');
+const extra=JSON.parse(await fs.readFile(path.join(root,'local/verification/continuity-ct14/supplementary-v2/summary.json'),'utf8'));
+report.supplementary={logical_tasks:extra.logical_tasks,actual_calls:extra.actual_calls,acceptable:extra.acceptable,labels_hash:extra.labels_hash,cases:extra.cases.map(row=>({id:row.id,seed:row.seed,status:row.status,acceptable:row.acceptable}))};
+await fs.writeFile(path.join(root,'docs/archive/scene_continuity_real_model_2026-10-11.json'),JSON.stringify(report,null,2));
+console.log(JSON.stringify({logical_tasks:report.logical_tasks,actual_calls:report.actual_calls,acceptable:report.acceptable_against_frozen_labels,recovered:report.recovered_changes,required:report.required_changes,unexpected:report.unexpected_changes,false_blocks:report.false_blocks,usage,elapsed_ms:report.elapsed_inference_ms,chain_reference_sets_match:orderSemantics}));

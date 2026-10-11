@@ -13,6 +13,10 @@ import { formatVisualLockTokens } from '../services/reference_generation_policy'
 import { type CharacterLockRef } from '../services/pony_prompt_compiler';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
 import { packShotSpec, type ShotSourceReference } from '../schemas/shot_contract';
+import { ContinuityStoreError, bindContinuityShotInTransaction } from '../services/continuity_store';
+import { ContinuityConfirmationError } from '../services/continuity_confirmation';
+import { requireCurrentContinuityShot } from '../services/continuity_shot_gate';
+import { canonicalContinuityJson } from '../services/continuity_replay';
 
 const parseTags = (raw: unknown): any => {
   try {
@@ -88,7 +92,11 @@ export const compileCoverageCandidate = (
     subject_scale,
     must_not: candidate.must_not || [],
     shot_type,
-    source: candidate.source || sourceRef || null,
+    source: sourceRef || candidate.source || null,
+    continuity_states: candidate.continuity_states,
+    visual_facts: candidate.visual_facts,
+    audible_blocks: candidate.audible_blocks,
+    scene_context: candidate.scene_context,
   });
 
   return {
@@ -122,6 +130,20 @@ const promptsChanged = (before: any, after: {
   || String(before?.shot_spec || '') !== String(after.shot_spec || '');
 
 export const coverageRoutes: FastifyPluginAsync = async (app) => {
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ContinuityStoreError || error instanceof ContinuityConfirmationError) return reply.status(error instanceof ContinuityStoreError ? error.statusCode : 409).send({ code: error.code, detail: error.message });
+    // Preserve the parent handler's existing validation/media HTTP contracts.
+    throw error;
+  });
+  const lockedSource = async (original: any, candidate?: any) => {
+    const source = await db.get('SELECT * FROM scene WHERE id=?', original.id);
+    if (!source || canonicalContinuityJson(source) !== canonicalContinuityJson(original)) throw new ContinuityStoreError('CONTINUITY_REVISION_CONFLICT', 'Source shot changed during coverage operation');
+    if (candidate) {
+      const latest = await db.get('SELECT * FROM coverage_shot WHERE id=?', candidate.id);
+      if (!latest || latest.shot_spec !== candidate.shot_spec || latest.visual_prompt !== candidate.visual_prompt || latest.asset_url !== candidate.asset_url) throw new ContinuityStoreError('CONTINUITY_REVISION_CONFLICT', 'Coverage candidate changed');
+    }
+    return requireCurrentContinuityShot(source, candidate?.shot_spec);
+  };
   app.post('/scenes/:scene_id/coverage', async (request, reply) => {
     const { scene_id } = z.object({
       scene_id: z.coerce.number().int(),
@@ -130,6 +152,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
     if (!sourceScene) {
       return reply.status(404).send({ detail: 'Source scene not found' });
     }
+    const continuity = await requireCurrentContinuityShot(sourceScene);
 
     const chapter = await db.get(
       'SELECT project_id FROM chapter WHERE id = ?',
@@ -171,18 +194,12 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    let sourceRef: ShotSourceReference | null = null;
-    try {
-      if (sourceScene.shot_spec) {
-        const parsed = JSON.parse(sourceScene.shot_spec);
-        if (parsed.source) sourceRef = parsed.source;
-      }
-    } catch {}
-
     let compiledCandidates;
     try {
       compiledCandidates = candidates.map((candidate, index) =>
-        compileCoverageCandidate(candidate, characterLocks, index, sourceRef)
+        compileCoverageCandidate({ ...candidate, location: continuity.spec.location, primary_action: continuity.spec.primary_action, visible_subjects: continuity.spec.visible_subjects,
+          primary_subject: continuity.spec.primary_subject, key_props: continuity.spec.key_props, continuity_states: continuity.spec.continuity_states, visual_facts: continuity.spec.visual_facts,
+          audible_blocks: continuity.spec.audible_blocks, scene_context: continuity.spec.scene_context }, characterLocks, index, continuity.source)
       );
     } catch (error: any) {
       return reply.status(500).send({
@@ -190,15 +207,10 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const latestGroup = await db.get(
-      `SELECT version FROM coverage_group
-       WHERE source_scene_id = ?
-       ORDER BY version DESC LIMIT 1`,
-      scene_id
-    );
-
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      await lockedSource(sourceScene);
+      const latestGroup = await db.get('SELECT MAX(version) AS version FROM coverage_group WHERE source_scene_id=?', scene_id);
       const groupResult = await db.run(
         `INSERT INTO coverage_group (source_scene_id, version, status)
          VALUES (?, ?, 'completed')`,
@@ -279,9 +291,11 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       negative_prompt: candidate.negative_prompt ?? null,
       shot_spec: candidate.shot_spec || sourceScene.shot_spec || null,
     };
+    await requireCurrentContinuityShot(sourceScene, candidate.shot_spec);
 
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      const continuity = await lockedSource(sourceScene, candidate);
       if (promptsChanged(sourceScene, {
         visual_prompt: String(next.visual_prompt || ''),
         negative_prompt: next.negative_prompt,
@@ -320,6 +334,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
         candidate.source_scene_id
       );
       await syncActiveVersionFromScene(candidate.source_scene_id);
+      await bindContinuityShotInTransaction(candidate.source_scene_id, continuity.binding);
       await db.exec('COMMIT');
     } catch (error) {
       await db.exec('ROLLBACK');
@@ -363,9 +378,12 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
     if (!sourceScene) {
       return reply.status(404).send({ detail: 'Source scene no longer exists' });
     }
+    await requireCurrentContinuityShot(sourceScene, candidate.shot_spec);
+    if (candidate.promoted_scene_id && await db.get('SELECT id FROM scene WHERE id=?', candidate.promoted_scene_id)) return { status: 'success', scene_id: candidate.promoted_scene_id, already_promoted: true };
 
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      const continuity = await lockedSource(sourceScene, candidate);
       if (position === 'replace') {
         const next = {
           visual_prompt: candidate.visual_prompt || sourceScene.visual_prompt || '',
@@ -383,6 +401,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
             label: `coverage-replace-${candidate.slot || shot_id}`,
           });
         }
+        const keepLiveImage = !candidate.asset_url && !changed;
         await db.run(
           `UPDATE scene
            SET shot_type = ?, camera_angle = ?, camera_movement = ?,
@@ -395,8 +414,8 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
           next.visual_prompt,
           next.negative_prompt,
           next.shot_spec,
-          candidate.asset_url ? (candidate.asset_status || 'completed') : 'idle',
-          candidate.asset_url || null,
+          candidate.asset_url ? (candidate.asset_status || 'completed') : (keepLiveImage ? sourceScene.asset_status : 'idle'),
+          candidate.asset_url || (keepLiveImage ? sourceScene.asset_url : null),
           sourceScene.id
         );
         await db.run(
@@ -405,6 +424,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
           shot_id
         );
         await syncActiveVersionFromScene(sourceScene.id);
+        await bindContinuityShotInTransaction(sourceScene.id, continuity.binding);
         await db.exec('COMMIT');
         return {
           status: 'success',
@@ -431,9 +451,9 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
         sourceScene.chapter_id,
         insertIndex,
         candidate.visual_prompt || sourceScene.visual_prompt,
-        sourceScene.audio_prompt,
-        sourceScene.dialogue,
-        sourceScene.narration,
+        null,
+        null,
+        null,
         sourceScene.duration,
         candidate.shot_size,
         candidate.camera_movement,
@@ -445,6 +465,7 @@ export const coverageRoutes: FastifyPluginAsync = async (app) => {
       );
       const newSceneId = Number(result.lastID);
       await ensureSceneVersionBaseline(newSceneId);
+      await bindContinuityShotInTransaction(newSceneId, continuity.binding);
       await db.run(
         'UPDATE coverage_shot SET promoted_scene_id = ? WHERE id = ?',
         newSceneId,

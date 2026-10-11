@@ -45,12 +45,15 @@ import {
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { captureShotMasterSnapshot, recordShotMasterSnapshot, type ShotMasterInputSnapshot } from './video/shot_master_snapshot';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
+import { persistFormalCandidateResult } from './formal_storyboard_request';
+import { formalRenderAllowed } from './formal_storyboard_plan';
+import { requireProductionReferencePin, persistProductionImageResult, type ProductionReferencePin } from './scene_production_media';
 import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
 import {
     createProgressPublisher,
     runVramHandoffForImageGen,
 } from './generation_progress';
-import { optimizeOutboundPrompt, assetPromptForShot, composeShotImagePrompt, shotImageMaterialsFromSpec } from './english_visual_prompt';
+import { optimizeOutboundPrompt, assetPromptForShot, composeShotImagePrompt, containsCjk, shotImageMaterialsFromSpec } from './english_visual_prompt';
 import {
     normalizeGeneratedImage,
     resolveComfyLatentDimensions,
@@ -877,6 +880,7 @@ export const copyReferenceImageToComfy = (
 
 export class GenerationService {
     static async generateAssets(taskId: string, workflowData: any, sceneId: number, userToken?: string, mode: string = "standard", generationParams?: any) {
+        const productionPin = workflowData?.captured_production_pin as ProductionReferencePin | undefined;
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
         await AssetTaskStore.processing(taskId, sceneId);
 
@@ -885,7 +889,7 @@ export class GenerationService {
             const { shouldUseTurnaroundComposite, generateTurnaroundComposite } = await import(
                 './turnaround_composite'
             );
-            if (shouldUseTurnaroundComposite(workflowData) && SettingsManager.loadSettings().image_provider !== 'codex') {
+            if (!productionPin && shouldUseTurnaroundComposite(workflowData) && SettingsManager.loadSettings().image_provider !== 'codex') {
                 const settings = SettingsManager.loadSettings();
                 if (!settings.comfyui?.enabled) {
                     throw new Error('Turnaround composite requires ComfyUI enabled');
@@ -1022,8 +1026,15 @@ export class GenerationService {
                     sceneId
                 );
                 if (sceneRow) {
+                    if (productionPin) {
+                        const current = await db.get('SELECT * FROM scene WHERE id=?', sceneId);
+                        await requireProductionReferencePin(current, { expected_version: productionPin.scene_version, reference_hash: (await import('./continuity_replay')).continuityHash(productionPin) });
+                    }
                     if (sceneRow.active_version != null) {
                         sceneVersion = Number(sceneRow.active_version);
+                    }
+                    if (workflowData?.formal_candidate?.scene_version) {
+                        sceneVersion = Number(workflowData.formal_candidate.scene_version);
                     }
                     if (sceneRow.chapter_id) {
                         sceneChapterId = sceneRow.chapter_id;
@@ -1038,7 +1049,7 @@ export class GenerationService {
                         if (chapterRow?.project_id) {
                             sceneProjectId = Number(chapterRow.project_id);
                         }
-                        const assetRefs = await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+                        const assetRefs = productionPin ? productionPin.references.filter(ref => ref.kind === 'asset').map(ref => ({ id: ref.id, revision: ref.version, asset_revision: ref.version, project_id: sceneProjectId, status: 'completed', image_url: ref.image_url, name: ref.name, kind: ref.asset_kind, visual_prompt: '' })) : await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
                             JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ?`, sceneId);
                         for (const ref of assetRefs) {
                             if (ref.project_id !== sceneProjectId || ref.revision !== ref.asset_revision
@@ -1121,10 +1132,18 @@ export class GenerationService {
                 const rawPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
                 finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
             } else if (contractShot) {
-                const characters = await db.all(
+                const characters = productionPin ? productionPin.text_characters : await db.all(
                     'SELECT id, name, english_name, visual_tags FROM character WHERE project_id = ?',
                     sceneProjectId
                 );
+                for (const ref of productionPin?.references || []) if (ref.kind === 'character') {
+                    const character = characters.find(row => Number(row.id) === ref.id);
+                    if (character) character.visual_tags = ref.visual_tags;
+                }
+                if (productionPin) {
+                    effectiveWorkflowData.character_ref_urls = productionPin.references.filter(ref => ref.kind === 'character').map(ref => ref.image_url);
+                    effectiveWorkflowData.character_ref_url = effectiveWorkflowData.character_ref_urls[0];
+                }
                 const materials = shotImageMaterialsFromSpec(
                     effectiveWorkflowData.shot_spec,
                     characters,
@@ -1134,9 +1153,16 @@ export class GenerationService {
                         styleLighting: styleLightingMaterial(effectiveWorkflowData.style_preset),
                         shotType: effectiveWorkflowData.shot_type,
                         chapterId: sceneChapterId,
+                        cameraAngle: effectiveWorkflowData.camera_angle,
+                        cameraMovement: effectiveWorkflowData.camera_movement,
                     },
                 );
-                finalPrompt = await composeShotImagePrompt(materials);
+                await progressHandler('vram_tuning', {
+                    phase: 'vram_tuning',
+                    message: 'Writing the English image prompt. The text model may use the GPU briefly.',
+                    message_zh: '正在编写英文画面提示词，文本模型会短暂占用显存…',
+                });
+                finalPrompt = await composeShotImagePrompt(materials, { variant: effectiveWorkflowData.inference_variant });
                 const personVisible = materials.subject_scale !== 'absent'
                     && (materials.characters.length > 0 || materials.facts.some((fact) => fact.binding.length > 0));
                 const currentType = String(effectiveWorkflowData.subject_type || '').toLowerCase().trim();
@@ -1215,9 +1241,17 @@ export class GenerationService {
                     effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };
                 }
 
+                if (containsCjk(finalPrompt)) {
+                    await progressHandler('vram_tuning', {
+                        phase: 'vram_tuning',
+                        message: 'Writing the English image prompt. The text model may use the GPU briefly.',
+                        message_zh: '正在编写英文画面提示词，文本模型会短暂占用显存…',
+                    });
+                }
                 const outboundPrompt = await optimizeOutboundPrompt(finalPrompt, {
                     modelFamily: outputModelFamily,
                     nsfwEnabled,
+                    variant: effectiveWorkflowData.inference_variant,
                 });
                 if (outboundPrompt !== finalPrompt) {
                     finalPrompt = outboundPrompt;
@@ -1252,6 +1286,15 @@ export class GenerationService {
                     projectId: sceneProjectId,
                     characterIds: shotMasterCharacterIds,
                 });
+                if (productionPin) shotMasterInputs = {
+                    references: productionPin.references.filter(ref => ref.kind === 'asset').map(ref => ({ id: ref.id, revision: ref.version })),
+                    versions: productionPin.references.filter(ref => ref.kind === 'character').map(ref => ({ id: ref.id, version: ref.version })),
+                };
+            }
+
+            if (effectiveWorkflowData?.formal_candidate?.production_stage === 'production'
+                && !formalRenderAllowed(String(effectiveWorkflowData.formal_candidate.combination || 'sdxl_unverified'))) {
+                throw new Error('FORMAL_NOT_LIVE_VERIFIED');
             }
 
             if (useComfy) {
@@ -1373,6 +1416,9 @@ export class GenerationService {
                             filename
                         });
                     }
+                    if (fs.existsSync(pathResult.filepath)) {
+                        throw new Error(`Refusing to overwrite existing image file ${pathResult.url}`);
+                    }
                     fs.writeFileSync(pathResult.filepath, normalizedImage.buffer);
                     assetUrl = pathResult.url;
                     finalStatus = "completed";
@@ -1388,21 +1434,32 @@ export class GenerationService {
                     );
                 }
 
-                if (finalStatus === "completed" && sceneChapterId != null) {
-                    const recorded = await recordShotMasterSnapshot({
+                const holdCandidate = workflowData?.formal_candidate?.publish === false;
+                if (finalStatus === "completed" && sceneChapterId != null && holdCandidate) {
+                    await persistFormalCandidateResult(sceneId, sceneVersion, taskId, {
+                        asset_status: 'completed',
+                        asset_url: assetUrl,
+                        english_visual_prompt: finalPrompt,
+                    });
+                } else if (finalStatus === "completed" && sceneChapterId != null) {
+                    const recorded = !productionPin ? await recordShotMasterSnapshot({
                         sceneId,
                         projectId: sceneProjectId!,
                         imageUrl: assetUrl!,
                         characterIds: shotMasterCharacterIds,
                         captured: shotMasterInputs ?? undefined,
-                    });
+                    }) : { drifted:false };
                     if (recorded.drifted) {
                         logger.warn(
                             `[Task ${taskId}] Location, prop, or character versions changed while this Shot Master was generating. `
                             + `The snapshot keeps the inputs used for ${assetUrl}.`
                         );
                     }
-                    await withImmediateTransaction(async () => {
+                    if (productionPin) {
+                        const published = await persistProductionImageResult(sceneId, productionPin, taskId, { asset_status: 'completed', asset_url: assetUrl, task_id: taskId, english_visual_prompt: finalPrompt });
+                        if (published.current) await recordShotMasterSnapshot({sceneId,projectId:sceneProjectId!,imageUrl:assetUrl!,captured:shotMasterInputs!});
+                    }
+                    else await withImmediateTransaction(async () => {
                         await syncActiveVersionAssets(sceneId, {
                             asset_status: 'completed',
                             asset_url: assetUrl,
@@ -1426,7 +1483,10 @@ export class GenerationService {
                 const errMsg = result?.message || "Unknown error";
                 logger.error(`[Task ${taskId}] Generation failed: ${errMsg}`);
                 await AssetTaskStore.failed(taskId, sceneId, errMsg);
-                if (shouldPersistSceneAsset(sceneId)) {
+                if (workflowData?.formal_candidate?.publish === false) {
+                    await persistFormalCandidateResult(sceneId, Number(workflowData.formal_candidate.scene_version), taskId, { asset_status: 'failed' });
+                } else if (productionPin) await persistProductionImageResult(sceneId, productionPin, taskId, { asset_status: 'failed', task_id: taskId });
+                else if (shouldPersistSceneAsset(sceneId)) {
                     await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {
@@ -1444,7 +1504,10 @@ export class GenerationService {
             logger.error(`[Task ${taskId}] Unexpected error in async service: ${error.message}`);
             await AssetTaskStore.failed(taskId, sceneId, error.message);
             try {
-                if (shouldPersistSceneAsset(sceneId)) {
+                if (workflowData?.formal_candidate?.publish === false) {
+                    await persistFormalCandidateResult(sceneId, Number(workflowData.formal_candidate.scene_version), taskId, { asset_status: 'failed' });
+                } else if (productionPin) await persistProductionImageResult(sceneId, productionPin, taskId, { asset_status: 'failed', task_id: taskId });
+                else if (shouldPersistSceneAsset(sceneId)) {
                     await db.run('UPDATE scene SET asset_status = ?, task_id = ? WHERE id = ?', "failed", taskId, sceneId);
                     await ensureSceneVersionBaseline(sceneId);
                     await syncActiveVersionAssets(sceneId, {

@@ -1,0 +1,13 @@
+{
+  "version":"continuity-holding-hand-2-mini-1","labelled_before_inference":true,
+  "label_basis":"Frozen physical-hand extension; camera coordinates cannot establish handedness. Automatic confirmations zero.",
+  "seeds":[41,97],
+  "cases":[
+    {"id":"H01-right","base_fixture":"E05","source":"林岚把黑伞 U1 从自己的左手换到自己的右手。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"confirmed","value":"physical_left"}],"expected":[{"entity_id":"u1","attribute_id":"holding_hand","operation":"assign","value":"physical_right"}],"expected_pending":null},
+    {"id":"H02-left","base_fixture":"E05","source":"林岚把黑伞 U1 从自己的右手换到自己的左手。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"confirmed","value":"physical_right"}],"expected":[{"entity_id":"u1","attribute_id":"holding_hand","operation":"assign","value":"physical_left"}],"expected_pending":null},
+    {"id":"H03-both","base_fixture":"E05","source":"林岚改用自己的双手握住黑伞 U1。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"confirmed","value":"physical_left"}],"expected":[{"entity_id":"u1","attribute_id":"holding_hand","operation":"assign","value":"both"}],"expected_pending":null},
+    {"id":"H04-camera-left","base_fixture":"E05","source":"黑伞 U1 出现在画面左侧，看不见林岚的手。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"unknown"}],"expected":[],"expected_pending":null},
+    {"id":"H05-negated","base_fixture":"E05","source":"林岚并未把黑伞 U1 换到右手，仍用左手持伞。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"confirmed","value":"physical_left"}],"expected":[],"expected_pending":null},
+    {"id":"H06-intention","base_fixture":"E05","source":"林岚打算把黑伞 U1 换到右手，但尚未换手。","prior":[{"entity_id":"u1","attribute_id":"holder","knowledge_status":"confirmed","value":"lin"},{"entity_id":"u1","attribute_id":"holding_hand","knowledge_status":"confirmed","value":"physical_left"}],"expected":[],"expected_pending":null}
+  ]
+}

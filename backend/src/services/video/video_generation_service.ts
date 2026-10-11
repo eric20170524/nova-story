@@ -12,10 +12,13 @@ import {
   VideoGenerationRequest,
   VideoPreflightResponse,
   VideoQAReport,
+  VideoSpecSchema,
+  type VideoSpec,
   VideoTaskResponse,
   VideoTaskStage
 } from '../../schemas/video';
-import { VideoSpecCompiler, resolvePresetDimensions } from './video_spec_compiler';
+import { VideoSpecCompiler, resolvePresetDimensions, VIDEO_PROMPT_RULE_VERSION } from './video_spec_compiler';
+import { textModelFingerprint } from '../inference_cache';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
 import { VideoReferenceIdentityService } from './video_reference_identity_service';
@@ -28,6 +31,7 @@ import { LoopCloser, type ProcessVideoResult } from './loop_closer';
 import { createProgressPublisher, ProgressPublisher } from '../generation_progress';
 import { VramService } from '../vram_service';
 import { ScriptService } from '../script_service';
+import { requireCurrentContinuityShot } from '../continuity_shot_gate';
 import sharp from 'sharp';
 import { SettingsManager } from '../../core/settings_manager';
 
@@ -57,6 +61,7 @@ const TERMINAL_TASK_STAGES = new Set<VideoTaskStage>([
 
 export class VideoGenerationService {
   private static runningTasks = new Map<string, { abortController?: AbortController; promptId?: string }>();
+  private static creatingRequests = new Map<string, { hash: string; promise: Promise<{ task_id: string; queue_position: number }> }>();
 
   static isFeatureEnabled(): boolean {
     return process.env.NOVASTORY_ENABLE_VIDEO === 'true' || process.env.ENABLE_VIDEO_GENERATION === 'true';
@@ -229,7 +234,7 @@ export class VideoGenerationService {
     };
   }
 
-  static async preflight(request: VideoGenerationRequest): Promise<VideoPreflightResponse> {
+  static async preflight(request: VideoGenerationRequest, options: { compile?: boolean } = {}): Promise<VideoPreflightResponse> {
     const blockers: string[] = [];
     const warnings: string[] = [];
     const usesReferenceControl = request.workflow_id !== 'minimax_h3_fl2va_official_12gb';
@@ -239,6 +244,7 @@ export class VideoGenerationService {
     }
 
     const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
+    let sourceScene = scene;
     if (!scene) {
       blockers.push(`Scene ID ${request.scene_id} does not exist`);
     }
@@ -258,6 +264,7 @@ export class VideoGenerationService {
       if (!versionRow && targetVersion !== (scene.active_version || 1)) {
         blockers.push(`Scene version ${targetVersion} does not exist for scene ${request.scene_id}`);
       }
+      if (versionRow && targetVersion !== (scene.active_version || 1)) sourceScene = { ...scene, ...versionRow, id: scene.id };
       let source;
       try { source = JSON.parse(versionRow?.shot_spec || scene.shot_spec || '{}').source; } catch {}
       if (source?.type === 'script') {
@@ -270,6 +277,14 @@ export class VideoGenerationService {
           }
         } catch {
           blockers.push('Screenplay source is unavailable; review the storyboard source before generating video');
+        }
+        try {
+          await requireCurrentContinuityShot(sourceScene);
+        } catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+          const named = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+          if (!code.startsWith('CONTINUITY_') && named !== 'ZodError') throw error;
+          blockers.push(`Continuity gate: ${error instanceof Error ? error.message : 'review the confirmed moment before generating video'}`);
         }
       }
     }
@@ -420,11 +435,6 @@ export class VideoGenerationService {
       ? await this.resolveCharacterForRequest(request, projectId)
       : null;
 
-    let compiledSpec;
-    if (blockers.length === 0 && scene) {
-      compiledSpec = await VideoSpecCompiler.compile({ request, scene, character });
-    }
-
     const assetIds = [...new Set([request.keyframe_asset_id, ...(request.character_reference_asset_ids || []), request.motion_reference_asset_id, request.last_frame_asset_id, request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id)].filter(Boolean))];
     const inputs = await Promise.all(assetIds.map(async id => {
       const asset = await MediaAssetService.getAssetById(Number(id));
@@ -434,8 +444,18 @@ export class VideoGenerationService {
     }));
     const project = projectId ? await db.get('SELECT settings FROM project WHERE id = ?', projectId) : null;
     const { request_key: _key, expected_input_signature: _expected, input_signature: _stored, ...parameters } = request;
-    const inputSignature = hashCanonical({ parameters, scene: scene ? { id: scene.id, active_version: scene.active_version, shot_spec: scene.shot_spec, visual_prompt: scene.visual_prompt, motion_prompt: scene.motion_prompt, dialogue: scene.dialogue, narration: scene.narration, audio_prompt: scene.audio_prompt } : null, compiledSpec: compiledSpec || null, inputs, character: character ? { id: character.id, active_version: character.active_version, visual_tags: character.visual_tags } : null, projectSettings: project?.settings || null, systemAdvanced: SettingsManager.loadSettings().advanced, systemVideo: SettingsManager.loadSettings().video_generation });
+    // Sign source inputs and processing rules, never nondeterministic model output.
+    const inputSignature = hashCanonical({ parameters, scene: sourceScene ? { id: sourceScene.id, active_version: scene.active_version, shot_spec: sourceScene.shot_spec, visual_prompt: sourceScene.visual_prompt, negative_prompt: sourceScene.negative_prompt, shot_type: sourceScene.shot_type, camera_angle: sourceScene.camera_angle, camera_movement: sourceScene.camera_movement, motion_prompt: sourceScene.motion_prompt, dialogue: sourceScene.dialogue, narration: sourceScene.narration, audio_prompt: sourceScene.audio_prompt } : null, inputs, character: character ? { id: character.id, name: character.name, active_version: character.active_version, visual_tags: character.visual_tags } : null, projectSettings: project?.settings || null, systemAdvanced: SettingsManager.loadSettings().advanced, systemVideo: SettingsManager.loadSettings().video_generation, textModel: textModelFingerprint(), promptRules: VIDEO_PROMPT_RULE_VERSION });
     if (request.expected_input_signature && request.expected_input_signature !== inputSignature) blockers.push('Video inputs changed since preflight; refresh and review the current sources');
+    let compiledSpec;
+    if (blockers.length === 0 && sourceScene && options.compile !== false) {
+      let style: unknown = null;
+      try {
+        const image = JSON.parse(project?.settings || '{}').image_generation;
+        style = image ? { style: image.style, model: image.model, nsfw_mode: image.nsfw_mode } : null;
+      } catch { /* Default style. */ }
+      compiledSpec = await VideoSpecCompiler.compile({ request, scene: sourceScene, character, style });
+    }
 
     if (request.workflow_id === 'grok_imagine_browser') {
       warnings.push('Grok Imagine is browser assisted; a signed-in Chrome session must complete the queued request.');
@@ -456,6 +476,32 @@ export class VideoGenerationService {
 
   static async createTask(request: VideoGenerationRequest): Promise<{ task_id: string; queue_position: number }> {
     const requestHash = hashCanonical(request);
+    if (!request.request_key) return this.createTaskOnce(request, requestHash);
+    const key = request.request_key;
+    const pending = this.creatingRequests.get(key);
+    if (pending) {
+      if (pending.hash !== requestHash) throw new Error('Video request key was already used with different parameters');
+      return pending.promise;
+    }
+    const promise = this.createTaskOnce(request, requestHash);
+    this.creatingRequests.set(key, { hash: requestHash, promise });
+    try { return await promise; }
+    finally { if (this.creatingRequests.get(key)?.promise === promise) this.creatingRequests.delete(key); }
+  }
+
+  private static async createTaskOnce(request: VideoGenerationRequest, requestHash: string): Promise<{ task_id: string; queue_position: number }> {
+    if (request.request_key) {
+      const previous = await db.get('SELECT * FROM video_generation_request WHERE request_key = ?', request.request_key);
+      if (previous) {
+        if (previous.request_hash !== requestHash) throw new Error('Video request key was already used with different parameters');
+        return { task_id: String(previous.task_id), queue_position: GpuLeaseService.getQueuePosition(String(previous.task_id)) };
+      }
+    }
+    // Text inference can wait for an active GPU task. Keep that wait outside the
+    // write transaction so the active task can finish and persist its output.
+    const preflightRes = await this.preflight(request);
+    if (!preflightRes.ready) throw new Error(`Preflight failed: ${preflightRes.blockers.join('; ')}`);
+    request.input_signature = preflightRes.input_signature;
     const prepared = await withImmediateTransaction(async () => {
       if (request.request_key) {
         const previous = await db.get('SELECT * FROM video_generation_request WHERE request_key = ?', request.request_key);
@@ -464,22 +510,22 @@ export class VideoGenerationService {
           return { taskId: String(previous.task_id), replayed: true };
         }
       }
-      const preflightRes = await this.preflight(request);
-      if (!preflightRes.ready) {
-        throw new Error(`Preflight failed: ${preflightRes.blockers.join('; ')}`);
+      if (request.input_signature) {
+        const current = await this.preflight({ ...request, expected_input_signature: request.input_signature }, { compile: false });
+        if (!current.ready) throw new Error(`Video inputs changed during preparation: ${current.blockers.join('; ')}`);
       }
-      request.input_signature = preflightRes.input_signature;
 
       const taskId = `vtask_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
       const now = new Date().toISOString();
 
       await db.run(
         `INSERT INTO generation_task (
-          task_id, scene_id, status, kind, stage, request_json, created_at, updated_at
-        ) VALUES (?, ?, 'processing', 'video', 'queued', ?, ?, ?)`,
+          task_id, scene_id, status, kind, stage, request_json, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, 'processing', 'video', 'queued', ?, ?, ?, ?)`,
         taskId,
         request.scene_id,
         JSON.stringify(request),
+        JSON.stringify({ compiled_spec: preflightRes.compiled_spec, input_signature: preflightRes.input_signature }),
         now,
         now
       );
@@ -521,8 +567,7 @@ export class VideoGenerationService {
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id);
       const projectId = Number(chapter.project_id);
-      const character = await this.resolveCharacterForRequest(request, projectId);
-      const spec = await VideoSpecCompiler.compile({ request, scene, character });
+      const spec = await this.preparedSpec(taskId, request);
       const keyframe = await MediaAssetService.getAssetById(request.keyframe_asset_id);
       if (!keyframe) throw new Error('Grok video task has no keyframe');
       const references = await Promise.all(request.character_reference_asset_ids.map(id => MediaAssetService.getAssetById(id)));
@@ -739,6 +784,23 @@ export class VideoGenerationService {
     };
   }
 
+  private static async preparedSpec(taskId: string, request: VideoGenerationRequest): Promise<VideoSpec> {
+    const row = await db.get('SELECT metadata_json FROM generation_task WHERE task_id = ?', taskId);
+    let metadata: any = {};
+    try { metadata = JSON.parse(row?.metadata_json || '{}'); } catch { /* Invalid snapshot fails closed below. */ }
+    if (request.input_signature) {
+      const validation = await this.preflight({ ...request, expected_input_signature: request.input_signature }, { compile: false });
+      if (!validation.ready) throw new Error(`Video inputs changed before execution: ${validation.blockers.join('; ')}`);
+      if (metadata.input_signature !== request.input_signature) throw new Error('Video prepared spec does not match its input signature');
+    }
+    if (metadata.compiled_spec) return VideoSpecSchema.parse(metadata.compiled_spec);
+    if (request.input_signature) throw new Error('Video task has no saved compiled spec; submit a new request');
+    // Legacy jobs are prepared before any model unloading or GPU reservation.
+    const prepared = await this.preflight(request);
+    if (!prepared.ready || !prepared.compiled_spec) throw new Error(`Preflight failed: ${prepared.blockers.join('; ')}`);
+    return prepared.compiled_spec;
+  }
+
   private static async runTaskPipeline(taskId: string, request: VideoGenerationRequest): Promise<void> {
     const rawPublisher: ProgressPublisher = createProgressPublisher(taskId, null);
     let lease: GpuLease | null = null;
@@ -784,6 +846,7 @@ export class VideoGenerationService {
 
     try {
       this.runningTasks.set(taskId, {});
+      const spec = await this.preparedSpec(taskId, request);
 
       await emitEvent('queued', {
         message: 'Task enqueued waiting for GPU availability...',
@@ -808,6 +871,10 @@ export class VideoGenerationService {
         return;
       }
 
+      // Inputs may have changed while this task waited in the GPU queue. This is
+      // validation only: execution always retains the submitted prompt snapshot.
+      if (request.input_signature) await this.preparedSpec(taskId, request);
+
       await emitEvent('preflight', {
         message: 'Validating inputs and preparing model specs...',
         message_zh: '正在校验输入资产与编译生成规范...'
@@ -822,7 +889,6 @@ export class VideoGenerationService {
       const scene = await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id);
       const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;
       const projectId = Number(chapter?.project_id || 1);
-      const character = await this.resolveCharacterForRequest(request, projectId);
 
       if (await isCancelled()) {
         stopLeaseHeartbeat();
@@ -906,7 +972,6 @@ export class VideoGenerationService {
         return;
       }
 
-      const spec = await VideoSpecCompiler.compile({ request, scene, character });
       const compiledWorkflow = VideoWorkflowCompiler.compile({
         spec,
         stagedFiles: {
@@ -1111,6 +1176,13 @@ export class VideoGenerationService {
 
     } catch (err: any) {
       stopLeaseHeartbeat();
+      // createTask reserves before launching this pipeline. A failed source check
+      // can happen before acquireLease below has attached that reservation locally.
+      if (!lease) {
+        if (GpuLeaseService.isQueued(taskId)) GpuLeaseService.cancelQueuedTask(taskId);
+        const reservation = GpuLeaseService.getCurrentLease();
+        if (reservation?.owner_task_id === taskId) lease = reservation;
+      }
       const cancelled = err instanceof GpuLeaseCancelledError || await isCancelled();
       if (cancelled) {
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);

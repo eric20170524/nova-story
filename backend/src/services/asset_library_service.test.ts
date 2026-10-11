@@ -30,8 +30,10 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
   });
   await t.test('repeated extraction adds sources without replacing canonical appearances', async () => {
     const original = LLMService.generateStructuredWithRetry;
+    let calls = 0;
     try {
       LLMService.generateStructuredWithRetry = async (prompt: any, schema: any) => {
+        calls++;
         assert.match(prompt, /已有资产是名称和外观的准绳/);
         assert.match(prompt, /bronze bell, dark green patina/);
         assert.match(prompt, /old temple, stone steps/);
@@ -41,12 +43,15 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
         { kind: 'prop', name: '铜铃', description: '模型想改成银铃', visual_prompt: 'silver bell' },
       ] }); };
       await AssetLibraryService.extract('asset-ch');
+      await Promise.all([AssetLibraryService.extract('asset-ch'), AssetLibraryService.extract('asset-ch')]);
+      assert.equal(calls, 1);
       const baseMock = LLMService.generateStructuredWithRetry;
       LLMService.generateStructuredWithRetry = async (...args: any[]) => {
         assert.match(args[0], /本次提取补充要求：铜铃和红绳分别提取/);
         return (baseMock as any)(...args);
       };
       await AssetLibraryService.extract('asset-ch', '铜铃和红绳分别提取');
+      assert.equal(calls, 2);
       const rows = await AssetLibraryService.list(81101);
       assert.equal(rows.length, 2); assert.equal(rows.find(r => r.id === prop.id)?.visual_prompt, 'bronze bell, dark green patina');
       assert.deepEqual(JSON.parse(rows[0]!.source_chapter_ids), ['asset-ch']);
@@ -54,7 +59,7 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
         await db.run("UPDATE chapter SET content='改稿' WHERE id='asset-ch'");
         return schema.parse({ assets: [{ kind: 'prop', name: '不应保存' }] });
       };
-      await assert.rejects(() => AssetLibraryService.extract('asset-ch'), /changed/);
+      await assert.rejects(() => AssetLibraryService.extract('asset-ch', undefined, { forceRegenerate: true }), /changed/);
       assert.equal((await AssetLibraryService.list(81101)).length, 2);
     } finally { LLMService.generateStructuredWithRetry = original; }
   });

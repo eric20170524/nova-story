@@ -91,7 +91,7 @@ export function boundText(text: string, binding?: EntityBinding): string {
 export async function proposeBindings(provider: AIProvider, binding: EntityBinding, text: string, context: string, roster: EntityRef[], scene?: { location: string; interior_exterior?: string; time_of_day?: string }): Promise<EntityBinding> {
   const pending = binding.mentions.map((m, index) => ({ ...m, index })).filter(m => !m.confirmed);
   if (!pending.length || !roster.length) return binding;
-  if (context.length + text.length > 2200) throw new Error('人物指代上下文超过预算，请核对或按完整语句拆分');
+  if (context.length + text.length + JSON.stringify(roster).length + JSON.stringify(pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end }))).length > 2200) throw new Error('人物指代上下文超过预算，请核对或按完整语句拆分');
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']) })) });
   const result = await provider.generateStructured(JSON.stringify({ task: 'entity_binding', text, context, scene, entities: roster, mentions: pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end })) }), schema,
     '为当前动作的代词或省略主语建议人物绑定。按前文先判断谁离开、谁留下，再判断当前 scene 地点内谁能够执行动作。已离开当前地点的人，除非原文明确跟随、转场或画外，不作为当前现场动作的执行者。不要仅按最近人名选择，也不要根据姓名猜性别。只剩一名有明确现场依据的候选时，status=resolved，entity_id=该ID。确有多种有依据的解释时，status=ambiguous，entity_id=null。没有依据时，status=unknown，entity_id=null。照片、提及和画外声音不证明本人在现场。每个 index 返回一项，只有 resolved 可以填写 entity_id。结果仅为待核对建议，不能自行标记为已确认。', { temperature: 0.1, maxTokens: 256 });

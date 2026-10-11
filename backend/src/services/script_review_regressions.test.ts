@@ -143,7 +143,7 @@ test('SC08/09: edited storyboard must retain coverage, audio, identities and uni
     (p: typeof good) => { p.shots.pop(); },
     (p: typeof good) => { p.shots[0]!.dialogue = ''; },
     (p: typeof good) => { const spec = JSON.parse(p.shots[0]!.shot_spec); spec.source.script_id = 99999; p.shots[0]!.shot_spec = JSON.stringify(spec); },
-    (p: typeof good) => { p.shots[1]!.visual_prompt = p.shots[0]!.visual_prompt; },
+    (p: typeof good) => { p.shots[0]!.visual_prompt = 'identical warehouse frame'; p.shots[1]!.visual_prompt = p.shots[0]!.visual_prompt; },
     (p: typeof good) => {
       for (let i = 2; i < 5; i++) {
         const shot = structuredClone(p.shots[1]!);
@@ -157,7 +157,7 @@ test('SC08/09: edited storyboard must retain coverage, audio, identities and uni
   for (const [index, mutate] of cases.entries()) {
     const candidate = await ScriptService.createPendingCandidate({ scriptId: f.script.id, kind: 'storyboard', expectedRevision: f.script.revision, requestKey: `edited_${index}`, afterJson: JSON.stringify(good) });
     const bad = structuredClone(good); mutate(bad);
-    await assert.rejects(() => ScriptService.updatePendingCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision, expectedCandidateRevision: candidate.candidate_revision, afterJson: JSON.stringify(bad) }));
+    await assert.rejects(() => ScriptService.updatePendingCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision, expectedCandidateRevision: candidate.candidate_revision, afterJson: JSON.stringify(bad) }), (error:unknown)=>error instanceof Error, `edited variant ${index}`);
     // Bypassing the editor cannot bypass the same adoption gates.
     await db.run('UPDATE script_change SET after_json=? WHERE id=?', JSON.stringify(bad), candidate.id);
     await assert.rejects(() => StoryboardGenerationService.applyStoryboardCandidate({ scriptId: f.script.id, changeId: candidate.id, expectedRevision: f.script.revision }));

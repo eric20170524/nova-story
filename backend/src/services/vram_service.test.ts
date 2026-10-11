@@ -332,7 +332,7 @@ test('switchTo does not start ComfyUI when the text model stays resident or the 
     const busy = await VramService.switchTo('llamacpp', { gpuBusy: true });
     assert.equal(busy.ok, false);
     assert.match(busy.message_zh, /占用显卡/);
-    assert.deepEqual(calls, []);
+    assert.equal(calls.length, 0);
 
     const remote = await VramService.switchTo('comfyui');
     assert.equal(remote.ok, true);
@@ -349,7 +349,7 @@ test('switchTo does not start ComfyUI when the text model stays resident or the 
     const refused = await VramService.switchTo('comfyui');
     assert.equal(refused.ok, false);
     assert.match(refused.message_zh, /远端/);
-    assert.deepEqual(calls, []);
+    assert.equal(calls.length, 0);
   } finally {
     setVramSwitchDepsForTests(null);
   }

@@ -17,6 +17,8 @@ import {
   type ProjectWorkJob,
 } from '../services/project_work_tracker';
 import { normalizeProjectOutputSpec } from '../services/imageOutputSpec';
+import { formalProductionBlocked, nextSceneAfterImageEvent } from '../services/formalShotImage';
+import type { FormalCapabilityGap } from '../components/Director/FormalShotActions';
 import { defaultIdentityReferenceIds, readProjectVideoWorkflow, resolveProjectVideoWorkflow } from '../services/videoWorkflowPolicy';
 import {
   Chapter,
@@ -34,6 +36,8 @@ import {
 } from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
+import { ContinuityPanel } from '../components/Director/ContinuityPanel';
+import { SceneProductionPanel } from '../components/Director/SceneProductionPanel';
 import { useToast } from '../ToastContext';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
@@ -145,6 +149,7 @@ export const DirectorMode: React.FC = () => {
 
   useEffect(() => {
     return () => {
+      ignoreStreamErrorRef.current = true;
       if (activeEvtSourceRef.current) {
         activeEvtSourceRef.current.close();
         activeEvtSourceRef.current = null;
@@ -546,12 +551,46 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
+  const [formalCapabilities, setFormalCapabilities] = useState<FormalCapabilityGap[]>([]);
+  const [draftBusyIds, setDraftBusyIds] = useState<Array<number | string>>([]);
+  const imageInflightRef = React.useRef<Record<string, string>>({});
+  const ignoreStreamErrorRef = React.useRef(false);
+  useEffect(() => {
+    api.getTierBStatus()
+      .then((status) => setFormalCapabilities(status.formal?.capabilities || []))
+      .catch(() => setFormalCapabilities([]));
+  }, [projectId]);
+  const reattachedTasksRef = React.useRef(new Set<string>());
+  useEffect(() => {
+    for (const scene of timeline) {
+      if (scene.asset_status !== 'generating' || !scene.task_id || reattachedTasksRef.current.has(scene.task_id)) continue;
+      reattachedTasksRef.current.add(scene.task_id);
+      const chapterId = selectedChapterIdRef.current;
+      void api.getAssetTask(scene.task_id).then((task) => {
+        if (selectedChapterIdRef.current !== chapterId) return;
+        if (task?.status === 'completed' || task?.status === 'failed' || task?.status === 'cancelled') {
+          loadTimeline(chapterId, { silent: true });
+        }
+      }).catch(() => {});
+    }
+  }, [timeline]);
+
   const generateAsset = async (
     sceneId: number | string,
-    options: { newVersion?: boolean; preserveComposition?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio'] } = {}
+    options: { newVersion?: boolean; preserveComposition?: boolean; canvasAspectRatio?: ImageOutputSpec['aspect_ratio']; productionStage?: 'draft' | 'production' } = {}
   ) => {
     const scene = timeline.find(s => s.id === sceneId);
     if (!scene) return;
+    const stage = options.productionStage || 'draft';
+    const inflightId = `${sceneId}:${stage}`;
+    if (imageInflightRef.current[inflightId]) return;
+    if (stage === 'production') {
+      const gaps = formalProductionBlocked(formalCapabilities);
+      if (gaps.length > 0) {
+        showToast(gaps.map((gap) => t(`director.formal_gap_${gap}`, gap)).join('；'), 'error');
+        return;
+      }
+    }
 
     let availableProjectCharacters = projectCharacters;
     if (availableProjectCharacters.length === 0 && projectId) {
@@ -638,7 +677,16 @@ export const DirectorMode: React.FC = () => {
         finalNegative = finalNegative ? `${finalNegative}, ${scene.negative_prompt}` : scene.negative_prompt;
     }
 
-    setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'generating' } : s));
+    const requestKey = `${stage}:${sceneId}:${Date.now()}`;
+    imageInflightRef.current[inflightId] = requestKey;
+    setDraftBusyIds((prev) => prev.includes(sceneId) ? prev : [...prev, sceneId]);
+    const clearImageInflight = () => {
+      delete imageInflightRef.current[inflightId];
+      setDraftBusyIds((prev) => prev.filter((id) => id !== sceneId));
+    };
+    if (!scene.asset_url) {
+      setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'generating' } : s));
+    }
     emitVramSchedulerPhase({
       phase: 'vram_tuning',
       message: 'Optimizing VRAM for image generation…',
@@ -702,6 +750,8 @@ export const DirectorMode: React.FC = () => {
           gen_type: 'scene',
           reference_tier: characterRefUrl || compositionRefUrl ? 'A+B' : 'A',
           new_version: Boolean(options.newVersion),
+          production_stage: stage,
+          request_key: requestKey,
           output_spec: effectiveOutputSpec,
           generation_params: showAdvancedParams ? {
              steps: genSteps,
@@ -715,11 +765,12 @@ export const DirectorMode: React.FC = () => {
       const taskId = response.task_id;
       const activeVer = response.active_version;
 
+      const candidateVersion = response.candidate_version as number | null | undefined;
+      const startedChapter = selectedChapterIdRef.current;
       setTimeline(prev => prev.map(s => s.id === sceneId ? {
         ...s,
         task_id: taskId,
-        asset_status: 'generating',
-        asset_url: options.newVersion ? undefined : s.asset_url,
+        asset_status: s.asset_url ? s.asset_status : 'generating',
         active_version: activeVer ?? s.active_version
       } : s));
 
@@ -737,55 +788,45 @@ export const DirectorMode: React.FC = () => {
             
             evtSource.onmessage = (event) => {
               const data: StreamMessage = JSON.parse(event.data);
+              if (selectedChapterIdRef.current !== startedChapter) {
+                evtSource.close();
+                activeEvtSourceRef.current = null;
+                clearImageInflight();
+                resolve();
+                return;
+              }
               handleGenerationStreamForVram(data, taskId);
               
               if (data.status === 'completed' && data.image_url) {
-                setTimeline(prev => prev.map(s => {
-                  if (s.id !== sceneId) return s;
-                  const versions = (s.versions || []).map((v) =>
-                    v.version === (s.active_version || 1)
-                      ? { ...v, asset_url: data.image_url, asset_status: 'completed', has_image: true }
-                      : v
-                  );
-                  const active = s.active_version || 1;
-                  if (!versions.some((v) => v.version === active)) {
-                    versions.push({
-                      version: active,
-                      label: `v${active}`,
-                      asset_url: data.image_url,
-                      asset_status: 'completed',
-                      has_image: true
-                    });
-                    versions.sort((a, b) => a.version - b.version);
-                  }
-                  return {
-                    ...s,
-                    asset_status: 'completed',
-                    asset_url: data.image_url,
-                    versions
-                  };
-                }));
-
+                if (candidateVersion) {
+                  loadTimeline(startedChapter, { silent: true });
+                } else {
+                  setTimeline(prev => prev.map(s => s.id === sceneId ? nextSceneAfterImageEvent(s, 'completed', data.image_url, null) : s));
+                }
                 loadSceneMedia(sceneId);
                 evtSource.close();
                 activeEvtSourceRef.current = null;
+                clearImageInflight();
                 resolve();
               } else if (data.status === 'failed') {
                 const errorDetail = (data as any).error || ("Generation failed for scene " + sceneId);
                 showToast(errorDetail, 'error');
-                setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
+                setTimeline(prev => prev.map(s => s.id === sceneId ? nextSceneAfterImageEvent(s, 'failed') : s));
                 evtSource.close();
                 activeEvtSourceRef.current = null;
+                clearImageInflight();
                 resolve();
               }
             };
 
             evtSource.onerror = () => {
+              if (ignoreStreamErrorRef.current) return;
               evtSource.close();
               activeEvtSourceRef.current = null;
               clearVramSchedulerPhase();
-              setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
-              resolve(); 
+              showToast(t('director.stream_disconnected'), 'info');
+              clearImageInflight();
+              resolve();
             };
           }
       });
@@ -793,8 +834,38 @@ export const DirectorMode: React.FC = () => {
     } catch (e: any) {
       console.error(e);
       clearVramSchedulerPhase();
-      setTimeline(prev => prev.map(s => s.id === sceneId ? { ...s, asset_status: 'failed' } : s));
+      setTimeline(prev => prev.map(s => {
+        if (s.id !== sceneId || s.asset_url) return s;
+        return { ...s, asset_status: 'failed' };
+      }));
+      clearImageInflight();
       showToast(e.message || ("Generation failed for scene " + sceneId), 'error');
+    }
+  };
+
+  const handleDecideFormal = async (
+    sceneId: number | string,
+    version: number,
+    verdict: 'accepted' | 'rejected',
+    checks: Record<string, boolean>,
+    note: string,
+    referenceHash: string
+  ) => {
+    if (!note.trim()) {
+      showToast(t('director.formal_note'), 'error');
+      return;
+    }
+    try {
+      await api.decideFormalCandidate(sceneId, {
+        expected_version: version,
+        reference_hash: referenceHash,
+        verdict,
+        checks,
+        note,
+      });
+      if (selectedChapterIdRef.current) loadTimeline(selectedChapterIdRef.current, { silent: true });
+    } catch (e: any) {
+      showToast(e.message || t('director.status_failed'), 'error');
     }
   };
 
@@ -1442,6 +1513,9 @@ export const DirectorMode: React.FC = () => {
         canGenerateStoryboard={canGenerateStoryboard}
         generateStoryboardTitle={generateStoryboardTitle}
         storyboardPanel={
+          <>
+          <ContinuityPanel key={screenplayReady?screenplay?.id:'no-script'} script={screenplayReady?screenplay:null} projectId={projectId} onChanged={()=>{if(selectedChapterId){loadTimeline(selectedChapterId,{silent:true});void loadScreenplay(selectedChapterId);}}}/>
+          <SceneProductionPanel key={`production-${screenplayReady?screenplay?.id:'no-script'}`} script={screenplayReady?screenplay:null} onChanged={()=>{if(selectedChapterId){loadTimeline(selectedChapterId,{silent:true});void loadScreenplay(selectedChapterId);}}}/>
           <DirectorStoryboardCandidates
             script={screenplayReady ? screenplay : null}
             sceneIds={storyboardSceneIds}
@@ -1455,12 +1529,16 @@ export const DirectorMode: React.FC = () => {
               if (selectedChapterId) void loadScreenplay(selectedChapterId);
             }}
           />
+          </>
         }
         onGenerateNarration={handleGenerateNarration}
         generatingNarration={generatingNarration}
         showRightPanel={showRightPanel}
         setShowRightPanel={setShowRightPanel}
         onGenerateAsset={generateAsset}
+        formalCapabilities={formalCapabilities}
+        draftBusyIds={draftBusyIds}
+        onDecideFormal={handleDecideFormal}
         onGenerateKeyframe={handleGenerateKeyframe}
         onUpdateScene={handleUpdateScene}
         onRefreshTimeline={() => loadTimeline(selectedChapterId)}

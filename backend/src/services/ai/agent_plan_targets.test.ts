@@ -34,7 +34,7 @@ test('a chapter ordinal becomes the current plan id before revise generation', a
   const original = StoryPlanningService.generateChapters;
   const { LLMService } = await import('../llm');
   const originalRoute = LLMService.generateStructuredWithRetry;
-  LLMService.generateStructuredWithRetry = async () => ({
+  LLMService.generateStructuredWithRetry = async (_prompt, schema) => schema.parse({
     intent: 'PLAN_CHAPTERS',
     chapterScope: 'none',
     focus: 'revise',

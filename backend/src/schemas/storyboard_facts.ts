@@ -4,7 +4,7 @@ import { EntityBindingSchema, EntityRefSchema } from './entity_binding';
 export const FACT_POLICY_VERSION = 'storyboard-facts-3.1';
 export const FactKindSchema = z.enum(['visual', 'audio', 'internal', 'figurative', 'mixed', 'uncertain']);
 export const FactStateSchema = z.object({ entity: z.string().min(1), attribute: z.string().min(1), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() });
-export const ContinuityStateSchema = FactStateSchema.extend({ fact_id: z.string() });
+export const ContinuityStateSchema = FactStateSchema.extend({ fact_id: z.string(), entity_id: z.string().optional(), entity_kind: z.enum(['character', 'garment', 'prop', 'object', 'component', 'location']).optional(), parent_entity_id: z.string().optional(), canonical_value: z.unknown().optional(), target_entity_id: z.string().optional(), target_name: z.string().optional(), design_asset_id: z.number().int().positive().optional(), design_asset_revision: z.number().int().positive().optional() });
 export const VisualFactSchema = z.object({
   id: z.string().min(1), scene_id: z.string().min(1), block_id: z.string().min(1),
   start: z.number().int().nonnegative(), end: z.number().int().positive(), text: z.string().min(1),

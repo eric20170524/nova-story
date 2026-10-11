@@ -13,6 +13,8 @@ import {
 import { GpuLeaseService } from '../gpu_lease_service';
 import { AssetTaskStore } from '../task_store';
 import { getDataDirectory } from '../../core/paths';
+import { ComfyStartupCoordinator } from './comfy_startup';
+const startupCoordinator=new ComfyStartupCoordinator();
 
 export interface ComfyUIAuthConfig {
     username?: string;
@@ -289,7 +291,8 @@ export class ComfyUIService {
         }
     }
 
-    async ensureRunning(installPath?: string, timeoutMs: number = 45_000): Promise<boolean> {
+    // Cold start after the text model releases this 12GB GPU often takes longer than 45s.
+    async ensureRunning(installPath?: string, timeoutMs: number = 300_000): Promise<boolean> {
         if (await this.checkStatus()) return true;
 
         if (this.isRemote) {
@@ -319,7 +322,11 @@ export class ComfyUIService {
         }
 
         const parsedUrl = new URL(this.baseUrl);
-        const process = spawn(
+        return startupCoordinator.ensure(this.baseUrl,()=>this.checkStatus(),()=>{
+        const logDirectory=path.join(getDataDirectory(),'logs');fs.mkdirSync(logDirectory,{recursive:true});
+        const startupLog=path.join(logDirectory,'comfy-startup.log'), logFd=fs.openSync(startupLog,'a');
+        let process: ReturnType<typeof spawn>;
+        try { process = spawn(
             pythonExecutable,
             [
                 mainFile,
@@ -334,19 +341,14 @@ export class ComfyUIService {
             {
                 cwd: installPath,
                 detached: true,
-                stdio: 'ignore',
+                stdio: ['ignore',logFd,logFd],
                 windowsHide: true
             }
-        );
+        ); } finally { fs.closeSync(logFd); }
+        let failed=false;process.on('error',error=>{failed=true;logger.error({error,startupLog},'ComfyUI startup failed');});
         process.unref();
-
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            if (await this.checkStatus()) return true;
-        }
-        logger.error(`ComfyUI did not become ready within ${timeoutMs}ms`);
-        return false;
+        return {alive:()=>!failed&&process.exitCode===null&&process.signalCode===null};
+        },timeoutMs);
     }
 
     async generateImage(

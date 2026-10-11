@@ -2,15 +2,18 @@
  * English image prompts from a Chinese shot contract.
  * Every narrative still is composed once by the local text model from structured
  * facts and appearance fields. The returned paragraph is the positive prompt.
- * Visible facts that are dropped or reversed fail the shot.
+ * A failed fact check rewrites the paragraph once. A remaining miss is logged
+ * and the rewritten paragraph still goes to image generation without caching.
+ * Only a paragraph that passed the check can be reused. An empty
+ * paragraph, or Chinese left in the English, still fails the shot.
  */
 
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { BACKEND_DIRECTORY } from '../core/paths';
 import { z } from 'zod';
+import { logger } from '../core/logging';
 import { LLMService } from './llm';
+import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
+import { withLocalTextInference } from './local_text_inference';
+export { setLocalTextModelEnsureForTests } from './local_text_inference';
 import { NSFW_ATMOSPHERE_SENTENCE } from './image_generation_policy';
 import {
   type CharacterLockRef,
@@ -19,6 +22,7 @@ import {
 } from './pony_prompt_compiler';
 import { flattenVisualTagMap } from './reference_generation_policy';
 import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
+import { continuityVisualFact, charactersWithConfirmedWardrobe, type ContinuityVisualState } from './continuity_visual_state';
 
 const CJK = /[\u3400-\u9fff]/;
 const PEOPLE_BLOCKER = /^(?:no people|isolated|16:9)$/i;
@@ -53,19 +57,32 @@ export type VisibleBeat = {
   sourceParagraphIds: string[];
 };
 
-export type EnglishPromptOptions = {
+export type EnglishPromptOptions = InferenceReuseOptions & {
   modelFamily?: string | null;
   nsfwEnabled?: boolean;
   glossary?: Record<string, string>;
   styleLighting?: string | null;
   shotType?: string | null;
   chapterId?: string | number | null;
+  cameraAngle?: string | null;
+  cameraMovement?: string | null;
 };
 
 export type VisualPromptTranslator = (prompt: string, systemInstruction?: string) => Promise<string>;
 
-const translationCache = new Map<string, string>();
-const DISK_CACHE_PATH = path.resolve(BACKEND_DIRECTORY, '../local/production/english-visual-prompt-cache.json');
+const promptCache = new InferenceCache<string>('image-prompt');
+const outboundCache = new InferenceCache<string>('visual-translation');
+const fidelityCache = new InferenceCache<{ passed: true }>('visual-fidelity');
+export const FIDELITY_RULE_VERSION = 'visible-fidelity-v5';
+class UnverifiedVisualPrompt extends Error {
+  constructor(readonly prompt: string, failure: string) { super(failure); }
+}
+
+function continueWithUnverifiedPrompt(error: unknown): string {
+  if (!(error instanceof UnverifiedVisualPrompt)) throw error;
+  logger.warn(`English picture check still reports omitted or reversed facts. Image generation will continue without caching this prompt. ${error.message}`);
+  return error.prompt;
+}
 let testTranslator: VisualPromptTranslator | null = null;
 const FidelityReportSchema = z.object({
   facts: z.array(z.object({
@@ -80,12 +97,18 @@ let testVerifier: FidelityVerifier | null = null;
 
 export function setVisualPromptVerifierForTests(fn: FidelityVerifier | null): void {
   testVerifier = fn;
-  translationCache.clear();
+  clearPromptCaches();
 }
 
 export function setVisualPromptTranslatorForTests(fn: VisualPromptTranslator | null): void {
   testTranslator = fn;
-  translationCache.clear();
+  clearPromptCaches();
+}
+
+function clearPromptCaches(): void {
+  promptCache.clearMemory();
+  outboundCache.clearMemory();
+  fidelityCache.clearMemory();
 }
 
 export function containsCjk(value: string): boolean {
@@ -151,7 +174,7 @@ function appearanceFieldCovered(fact: string, english: string): boolean {
   const match = fact.match(/的(?:头发|五官|体型|服装|配饰)：(.+)$/);
   if (!match) return false;
   const haystack = english.toLowerCase();
-  const parts = match[1].split(/[、,，]/).map((part) => part.trim()).filter(Boolean);
+  const parts = match[1]!.split(/[、,，]/).map((part) => part.trim()).filter(Boolean);
   if (!parts.length) return false;
   return parts.every((part) => {
     const words = part.replace(/[_-]+/g, ' ').toLowerCase().split(/\s+/).filter((word) => word.length >= 3);
@@ -166,15 +189,15 @@ function appearanceFieldCovered(fact: string, english: string): boolean {
   });
 }
 
-async function contradictedButSameState(rejected: string[], english: string, report: FidelityReport): Promise<Set<number>> {
-  if (testVerifier) return new Set();
+async function contradictionRelations(rejected: string[], english: string, report: FidelityReport): Promise<Map<number, 'same' | 'opposite' | 'unrelated'>> {
+  if (testVerifier) return new Map();
   const evidenceById = new Map(report.facts.map((fact) => [fact.id, fact.evidence]));
   const rows = rejected.map(splitAuditRejection).filter((row) => {
     if (row.status !== 'contradicted') return false;
     const evidence = String(evidenceById.get(row.id) || '').trim();
     return evidence.length >= 8 && english.includes(evidence);
   });
-  if (!rows.length) return new Set();
+  if (!rows.length) return new Map();
   try {
     const parsed = SameStateSchema.parse(await LLMService.getLocalProvider().generateStructured(
       JSON.stringify({
@@ -184,18 +207,26 @@ async function contradictedButSameState(rejected: string[], english: string, rep
       'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase or an action in progress. relation=opposite only when the quote asserts the reverse state. relation=unrelated when the quote does not show the fact. Return JSON only.',
       { maxTokens: 1200 },
     ));
-    const same = new Set<number>();
+    const relations = new Map<number, 'same' | 'opposite' | 'unrelated'>();
     for (const row of rows) {
       const matches = parsed.facts.filter((item) => item.id === row.id);
-      if (matches.length === 1 && matches[0]?.relation === 'same') same.add(row.id);
+      const relation = matches.length === 1 ? matches[0]?.relation : undefined;
+      if (relation) relations.set(row.id, relation);
     }
-    return same;
+    return relations;
   } catch {
-    return new Set();
+    return new Map();
   }
 }
 
 export async function assertEnglishFidelity(source: string, english: string): Promise<void> {
+  await fidelityCache.run({ source, english, model: textModelFingerprint() }, `${FIDELITY_RULE_VERSION}:${FIDELITY_AUDIT_INSTRUCTION}`, async () => {
+    await auditEnglishFidelity(source, english);
+    return { passed: true as const };
+  }, {}, testVerifier ? undefined : withLocalTextInference);
+}
+
+async function auditEnglishFidelity(source: string, english: string): Promise<void> {
   const text = String(english || '').trim();
   if (!text) throw new Error('English visual prompt translation was empty');
   if (containsCjk(text)) throw new Error('English visual prompt still contains Chinese characters');
@@ -227,20 +258,23 @@ export async function assertEnglishFidelity(source: string, english: string): Pr
       ));
     let report = await audit();
     let rejected = rejectedBy(report, slice);
-    const missing = rejected.some((item) => item.includes(':missing:'));
-    if (rejected.length && !missing && !testVerifier) {
+    if (rejected.length && !testVerifier) {
       const repair = rejected.some((item) => item.includes(':preserved:') || item.includes(':count:'))
         ? ' The previous reply missed a fact id or quoted evidence that is not a continuous substring. Return one object for every source fact id. Quote a continuous span from the English and do not use ellipsis.'
-        : ' Reconsider each contradicted fact. Mark contradicted only when the English asserts the opposite visible state.';
+        : ' Re-read the English before marking a fact missing or contradicted. status=preserved when any continuous substring shows the fact, including a paraphrase. status=contradicted only when a continuous substring asserts the opposite visible state. status=missing only when the fact is absent.';
       report = await audit(repair);
       rejected = rejectedBy(report, slice);
     }
     rejected = rejected.filter((item) => !appearanceFieldCovered(splitAuditRejection(item).fact, text));
     if (rejected.some((item) => splitAuditRejection(item).status === 'contradicted')) {
-      const same = await contradictedButSameState(rejected, text, report);
+      const relations = await contradictionRelations(rejected, text, report);
       rejected = rejected.filter((item) => {
         const parsed = splitAuditRejection(item);
-        return parsed.status !== 'contradicted' || !same.has(parsed.id);
+        if (parsed.status !== 'contradicted') return true;
+        const relation = relations.get(parsed.id);
+        // Only evidence showing the same state certifies that the fact is present.
+        // Unrelated evidence rules out this contradiction but leaves the fact unverified.
+        return relation !== 'same';
       });
     }
     if (rejected.length) {
@@ -366,46 +400,6 @@ function cleanModelEnglish(raw: string): string {
     .trim();
 }
 
-function outboundCacheKey(source: string, options: EnglishPromptOptions): string {
-  const modelFamily = options.modelFamily || 'pony';
-  const nsfwEnabled = Boolean(options.nsfwEnabled);
-  return crypto.createHash('sha256').update(`literal-v2\n${modelFamily}\n${nsfwEnabled ? 1 : 0}\n${JSON.stringify(options.glossary || {})}\n${source}`).digest('hex');
-}
-
-function readDiskOutbound(key: string): string | null {
-  if (testTranslator || testVerifier) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DISK_CACHE_PATH, 'utf8')) as Record<string, unknown>;
-    const text = parsed?.[key];
-    return typeof text === 'string' && text.trim() && !containsCjk(text) ? text : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeDiskOutbound(key: string, text: string): void {
-  if (testTranslator || testVerifier || !text || containsCjk(text)) return;
-  try {
-    let parsed: Record<string, string> = {};
-    try {
-      const current = JSON.parse(fs.readFileSync(DISK_CACHE_PATH, 'utf8')) as Record<string, unknown>;
-      if (current && typeof current === 'object') {
-        parsed = Object.fromEntries(Object.entries(current).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-      }
-    } catch {
-      parsed = {};
-    }
-    parsed[key] = text;
-    fs.mkdirSync(path.dirname(DISK_CACHE_PATH), { recursive: true });
-    const tmp = `${DISK_CACHE_PATH}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(parsed));
-    fs.rmSync(DISK_CACHE_PATH, { force: true });
-    fs.renameSync(tmp, DISK_CACHE_PATH);
-  } catch {
-    // A cache write must not fail the image job. The next call can translate again.
-  }
-}
-
 function glossaryNote(source: string, glossary: Record<string, string> = {}): string {
   const lines = Object.entries(glossary).filter(([name]) => source.includes(name)).map(([name, english]) => `${name} = ${english}`);
   return lines.length ? `\nName glossary:\n${lines.join('\n')}` : '';
@@ -423,20 +417,17 @@ function translationInstructions(modelFamily: string, nsfwEnabled: boolean): str
   ].join(' ');
 }
 
-async function translateVisualFacts(source: string, options: EnglishPromptOptions, repairNote = ''): Promise<{ text: string; key: string }> {
+async function translateVisualFacts(source: string, options: EnglishPromptOptions): Promise<string> {
   const modelFamily = options.modelFamily || 'pony';
   const nsfwEnabled = Boolean(options.nsfwEnabled);
-  const key = outboundCacheKey(`${repairNote}\n${source}`, options);
-  const cached = translationCache.get(key);
-  if (cached) return { text: cached, key };
   const system = translationInstructions(modelFamily, nsfwEnabled);
-  const user = `Source:\n${source}${glossaryNote(source, options.glossary)}${repairNote}`;
+  const user = `Source:\n${source}${glossaryNote(source, options.glossary)}`;
   const raw = testTranslator
     ? await testTranslator(user, system)
     : await LLMService.getLocalProvider().generateText(user, system);
   const text = cleanModelEnglish(raw);
   if (!text) throw new Error('English visual prompt translation was empty');
-  return { text, key };
+  return text;
 }
 
 export type AppearanceFields = {
@@ -471,6 +462,11 @@ export type ShotImageMaterials = {
   nsfwEnabled: boolean;
   styleLighting: string;
   glossary: Record<string, string>;
+  camera_angle?: string;
+  camera_movement?: string;
+  continuity_states?: unknown[];
+  scene_context?: unknown;
+  must_not?: unknown[];
 };
 
 const ShotPromptSchema = z.object({ prompt: z.string().min(1) }).strict();
@@ -541,8 +537,14 @@ export function shotImageMaterialsFromSpec(
   const props = Array.isArray(source.key_props) ? source.key_props : [];
   for (const prop of props) pushFact(facts, `prop:${String(prop)}`, String(prop || ''));
   const states = Array.isArray(source.continuity_states) ? source.continuity_states : [];
+  const physicalStates = states.filter((state: any) => state?.entity_id && state?.entity_kind && Object.hasOwn(state, 'canonical_value')) as ContinuityVisualState[];
   for (const state of states) {
     if (!state || typeof state !== 'object') continue;
+    if (physicalStates.includes(state as ContinuityVisualState)) {
+      const physical = state as ContinuityVisualState;
+      pushFact(facts, `state:${physical.fact_id}`, continuityVisualFact(physical));
+      continue;
+    }
     const row = state as { fact_id?: string; entity?: string; attribute?: string; value?: string };
     const value = String(row.value || '').trim();
     if (!value || facts.some((fact) => fact.text.includes(value))) continue;
@@ -571,6 +573,11 @@ export function shotImageMaterialsFromSpec(
       appearance: row ? appearanceFieldsFromTags(row.visual_tags, options.chapterId) : emptyAppearance(),
     };
   });
+  const trackedWardrobe = charactersWithConfirmedWardrobe(physicalStates);
+  for (const character of shotCharacters) if (trackedWardrobe.has(character.name)) {
+    character.appearance.clothing = '';
+    character.appearance.accessories = '';
+  }
 
   const explicitIntent = String(source.shot_intent || '').trim().toLowerCase();
   return {
@@ -584,6 +591,11 @@ export function shotImageMaterialsFromSpec(
     nsfwEnabled: Boolean(options.nsfwEnabled),
     styleLighting: String(options.styleLighting || '').trim(),
     glossary,
+    camera_angle: String(options.cameraAngle || source.camera_angle || '').trim(),
+    camera_movement: String(options.cameraMovement || source.camera_movement || '').trim(),
+    continuity_states: states,
+    scene_context: source.scene_context || null,
+    must_not: Array.isArray(source.must_not) ? source.must_not : [],
   };
 }
 
@@ -598,6 +610,7 @@ function appearanceFactLines(characters: ShotCharacterAppearance[]): string[] {
   const lines: string[] = [];
   for (const character of characters) {
     const name = character.name || '人物';
+    if (character.recorded_appearance) lines.push(`${name}的外观：${character.recorded_appearance}`);
     for (const [key, label] of labels) {
       const value = String(character.appearance[key] || '').trim();
       if (!value) continue;
@@ -654,6 +667,7 @@ function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string 
     'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
     engine,
     'Write every visible_facts text. Clothing, position, and action each stay visible. Use as many sentences as those facts need.',
+    'Use shot_type, camera_angle and camera_movement for the framing. Respect scene_context, continuity_states and must_not.',
     'spoken_not_painted lists words for the audio track. Do not write those words into the picture.',
     'No weight syntax and no booru tag soup.',
     'Write hair as hair. A hair color is not clothing.',
@@ -675,10 +689,6 @@ function visiblePerson(materials: ShotImageMaterials): boolean {
   return materials.facts.some((fact) => fact.binding.length > 0);
 }
 
-function composeCacheKey(materials: ShotImageMaterials): string {
-  return crypto.createHash('sha256').update(`compose-v1\n${JSON.stringify(materials)}`).digest('hex');
-}
-
 async function fidelityFailure(source: string, english: string): Promise<string | null> {
   try {
     await assertEnglishFidelity(source, english);
@@ -688,7 +698,7 @@ async function fidelityFailure(source: string, english: string): Promise<string 
   }
 }
 
-export async function composeShotImagePrompt(materials: ShotImageMaterials): Promise<string> {
+export async function composeShotImagePrompt(materials: ShotImageMaterials, options: InferenceReuseOptions = {}): Promise<string> {
   const modelFamily = materials.modelFamily || 'pony';
   const nsfwEnabled = Boolean(materials.nsfwEnabled);
   const baseSystem = composeInstructions(modelFamily, nsfwEnabled);
@@ -707,12 +717,16 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials): Pro
     subject_scale: materials.subject_scale,
     style_lighting: materials.styleLighting,
     name_glossary: materials.glossary,
+    camera_angle: materials.camera_angle || '',
+    camera_movement: materials.camera_movement || '',
+    continuity_states: materials.continuity_states || [],
+    scene_context: materials.scene_context || null,
+    must_not: materials.must_not || [],
   });
   const source = [
     ...visibleFacts.map((fact) => fact.text),
     ...appearanceFactLines(materials.characters).map((line) => line.replace(/,\s*/g, '、')),
   ].join('，');
-  const key = composeCacheKey(materials);
   const ask = async (repair: string) => {
     const system = repair ? `${baseSystem}${repair}` : baseSystem;
     const paragraph = cleanModelEnglish(testTranslator
@@ -721,24 +735,23 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials): Pro
     if (!paragraph) throw new Error('English visual prompt translation was empty');
     return paragraph;
   };
-  // A stored paragraph was written only after this check passed, so a cache hit
-  // does not call the text model again. Image generation can then use the GPU.
-  const stored = translationCache.get(key) || readDiskOutbound(key);
-  let paragraph = stored || await ask('');
-  let failure = stored ? null : await fidelityFailure(source, paragraph);
-  if (failure) {
-    paragraph = await ask(` The previous paragraph failed the picture check: ${failure} Rewrite every picture fact so clothing, position, and action stay visible. Leave spoken_not_painted unpainted.`);
-    failure = await fidelityFailure(source, paragraph);
-  }
-  if (failure) throw new Error(failure);
+  const paragraph = await promptCache.run({ materials, model: textModelFingerprint() }, `compose-v3-verified-only:${baseSystem}:${FIDELITY_RULE_VERSION}:${FIDELITY_AUDIT_INSTRUCTION}`, async () => {
+    const work = async () => {
+      let text = await ask('');
+      let failure = await fidelityFailure(source, text);
+      if (failure) {
+        text = await ask(` The previous paragraph failed the picture check: ${failure} Rewrite every picture fact so clothing, position, and action stay visible. Leave spoken_not_painted unpainted.`);
+        failure = await fidelityFailure(source, text);
+      }
+      if (failure) throw new UnverifiedVisualPrompt(text, failure);
+      return text;
+    };
+    return testTranslator ? work() : withLocalTextInference(work);
+  }, options).catch(continueWithUnverifiedPrompt);
   const withAtmosphere = nsfwEnabled && visiblePerson(materials)
     ? `${paragraph} ${NSFW_ATMOSPHERE_SENTENCE}`
     : paragraph;
   if (containsCjk(withAtmosphere)) throw new Error('English visual prompt still contains Chinese characters');
-  if (!stored) {
-    translationCache.set(key, paragraph);
-    writeDiskOutbound(key, paragraph);
-  }
   return withAtmosphere;
 }
 
@@ -789,8 +802,18 @@ export async function compileEnglishShotPrompt(
     continuity_states: (contract as { continuity_states?: unknown }).continuity_states,
   } as Record<string, unknown>, [], options);
   const locked = charactersFromLocks(characterLock, contract.visible_subjects);
-  if (locked.length) materials.characters = locked;
-  const visualPrompt = await composeShotImagePrompt(materials);
+  if (locked.length) {
+    const physical = (materials.continuity_states || []).filter((state: any) => state?.entity_id && state?.entity_kind && Object.hasOwn(state, 'canonical_value')) as ContinuityVisualState[];
+    const tracked = charactersWithConfirmedWardrobe(physical);
+    for (const character of locked) if (tracked.has(character.name)) {
+      character.appearance.clothing = ''; character.appearance.accessories = '';
+      // An unstructured lock cannot safely separate default clothing from identity.
+      // Keep structured hair/face/body, and require explicit garment facts instead.
+      delete character.recorded_appearance;
+    }
+    materials.characters = locked;
+  }
+  const visualPrompt = await composeShotImagePrompt(materials, options);
   return {
     visual_prompt: visualPrompt,
     negative_extras: [],
@@ -805,18 +828,15 @@ export async function optimizeOutboundPrompt(
   const cleaned = String(prompt || '').trim();
   if (!containsCjk(cleaned)) return cleaned;
   const facts = cjkFacts(cleaned);
-  const cacheKey = outboundCacheKey(cleaned, options);
-  const cached = readDiskOutbound(cacheKey);
-  if (cached) return cached;
-  const render = async (repairNote = '') => {
-    const translated = await translateVisualFacts(cleaned, options, repairNote);
-    const combined = joinUnique([translated.text, stripCjkSegments(cleaned)]);
+  const { variant, forceRegenerate, ...requirements } = options;
+  const render = async () => {
+    const translated = await translateVisualFacts(cleaned, options);
+    const combined = joinUnique([translated, stripCjkSegments(cleaned)]);
     if (containsCjk(combined)) throw new Error('English visual prompt still contains Chinese characters');
-    await assertEnglishFidelity(facts || cleaned, combined);
-    translationCache.set(translated.key, translated.text);
+    const failure = await fidelityFailure(facts || cleaned, combined);
+    if (failure) throw new UnverifiedVisualPrompt(combined, failure);
     return combined;
   };
-  const visualText = await render();
-  writeDiskOutbound(cacheKey, visualText);
-  return visualText;
+  return outboundCache.run({ source: cleaned, requirements, model: textModelFingerprint() }, `literal-v4-verified-only:${translationInstructions(options.modelFamily || 'pony', Boolean(options.nsfwEnabled))}:${FIDELITY_RULE_VERSION}:${FIDELITY_AUDIT_INSTRUCTION}`,
+    () => testTranslator ? render() : withLocalTextInference(render), { variant, forceRegenerate }).catch(continueWithUnverifiedPrompt);
 }

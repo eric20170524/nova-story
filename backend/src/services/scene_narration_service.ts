@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { db } from '../db/database';
+import { db, withImmediateTransaction } from '../db/database';
+import { hashCanonical } from '../schemas/story_plan';
+import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
+import { withLocalTextInference } from './local_text_inference';
 import { LLMService } from './llm';
 import { syncActiveVersionFromScene } from './scene_versions';
 
@@ -9,6 +12,7 @@ const SceneNarrationResponseSchema = z.object({
     narration: z.string().trim().min(1).max(240),
   })).min(1),
 });
+const narrationCache = new InferenceCache<Array<{ scene_id: number; narration: string }>>('scene-narration');
 
 export const buildSceneNarrationPrompt = (chapter: any, scenes: any[]): string => {
   const sourceText = String(chapter.content || '');
@@ -44,13 +48,18 @@ Existing storyboard scenes:
 ${JSON.stringify(scenePayload, null, 2)}`;
 };
 
+const continuityBoundShot = (scene: { shot_spec?: string | null; continuity_status?: string | null }): boolean => {
+  if (scene.continuity_status && scene.continuity_status !== 'legacy') return true;
+  try { return Boolean(JSON.parse(scene.shot_spec || '{}').source?.continuity); } catch { return false; }
+};
+
 const normalizeCaption = (value: string): string => {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
   const chars = Array.from(normalized);
   return chars.length > 80 ? `${chars.slice(0, 79).join('')}…` : normalized;
 };
 
-export const generateSceneNarrationForChapter = async (chapterId: string) => {
+export const generateSceneNarrationForChapter = async (chapterId: string, options: InferenceReuseOptions = {}) => {
   const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
   if (!chapter) throw new Error('Chapter not found');
   if (!String(chapter.content || '').trim()) throw new Error('Chapter has no content');
@@ -60,44 +69,58 @@ export const generateSceneNarrationForChapter = async (chapterId: string) => {
     chapterId
   );
   if (!scenes.length) throw new Error('Chapter has no storyboard scenes');
-
-  const generated = await LLMService.generateStructuredLocallyWithRetry(
-    buildSceneNarrationPrompt(chapter, scenes),
-    SceneNarrationResponseSchema,
-    { maxRetries: 2, temperature: 0.35, maxTokens: 2400 }
-  );
-  if (!generated) throw new Error('Local model failed to generate structured narration');
-
-  const expectedIds = scenes.map((scene: any) => Number(scene.id));
-  const byId = new Map<number, string>();
-  for (const item of generated.scenes) {
-    if (byId.has(item.scene_id)) throw new Error(`Local model duplicated scene ${item.scene_id}`);
-    byId.set(item.scene_id, normalizeCaption(item.narration));
+  const writable = scenes.filter(scene => !continuityBoundShot(scene));
+  if (!writable.length) {
+    return {
+      chapter_id: chapterId,
+      generated_count: 0,
+      scenes: await db.all('SELECT id, "index", dialogue, narration FROM scene WHERE chapter_id = ? ORDER BY "index" ASC', chapterId),
+    };
   }
-  const missing = expectedIds.filter((id) => !byId.get(id));
-  const unexpected = [...byId.keys()].filter((id) => !expectedIds.includes(id));
-  if (missing.length || unexpected.length) {
-    throw new Error(
-      `Local narration coverage mismatch (missing=${missing.join(',') || 'none'}; unexpected=${unexpected.join(',') || 'none'})`
+
+  const prompt = buildSceneNarrationPrompt(chapter, writable);
+  const captions = await narrationCache.run({ prompt, model: textModelFingerprint() }, 'scene-narration-v2-coverage-normalization', () => withLocalTextInference(async () => {
+    const generated = await LLMService.generateStructuredLocallyWithRetry(
+      prompt,
+      SceneNarrationResponseSchema,
+      { maxRetries: 2, temperature: 0.35, maxTokens: 2400 }
     );
-  }
+    if (!generated) throw new Error('Local model failed to generate structured narration');
+    const expectedIds = writable.map((scene: any) => Number(scene.id));
+    const byId = new Map<number, string>();
+    for (const item of SceneNarrationResponseSchema.parse(generated).scenes) {
+      if (byId.has(item.scene_id)) throw new Error(`Local model duplicated scene ${item.scene_id}`);
+      byId.set(item.scene_id, normalizeCaption(item.narration));
+    }
+    const missing = expectedIds.filter((id) => !byId.get(id));
+    const unexpected = [...byId.keys()].filter((id) => !expectedIds.includes(id));
+    if (missing.length || unexpected.length) {
+      throw new Error(
+        `Local narration coverage mismatch (missing=${missing.join(',') || 'none'}; unexpected=${unexpected.join(',') || 'none'})`
+      );
+    }
+    return expectedIds.map(scene_id => ({ scene_id, narration: byId.get(scene_id)! }));
+  }), options);
+  const byId = new Map(captions.map(item => [item.scene_id, item.narration]));
 
-  await db.exec('BEGIN IMMEDIATE TRANSACTION');
-  try {
-    for (const scene of scenes) {
-      const narration = byId.get(Number(scene.id))!;
+  await withImmediateTransaction(async () => {
+    const currentChapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
+    const currentScenes = await db.all('SELECT * FROM scene WHERE chapter_id = ? ORDER BY "index" ASC', chapterId);
+    const currentWritable = currentScenes.filter(scene => !continuityBoundShot(scene));
+    if (!currentChapter || hashCanonical(buildSceneNarrationPrompt(currentChapter, currentWritable)) !== hashCanonical(prompt)) {
+      throw new Error('Narration inputs changed during generation; retry with current sources');
+    }
+    for (const scene of currentWritable) {
+      const narration = byId.get(Number(scene.id));
+      if (!narration) throw new Error(`Local narration coverage mismatch (missing=${scene.id})`);
       await db.run('UPDATE scene SET narration = ? WHERE id = ?', narration, scene.id);
       await syncActiveVersionFromScene(Number(scene.id));
     }
-    await db.exec('COMMIT');
-  } catch (error) {
-    await db.exec('ROLLBACK');
-    throw error;
-  }
+  });
 
   return {
     chapter_id: chapterId,
-    generated_count: scenes.length,
+    generated_count: writable.length,
     scenes: await db.all(
       'SELECT id, "index", dialogue, narration FROM scene WHERE chapter_id = ? ORDER BY "index" ASC',
       chapterId

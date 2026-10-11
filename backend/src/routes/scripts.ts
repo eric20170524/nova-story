@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { ZodError } from 'zod';
 import { FactWorkflowError } from '../services/storyboard_fact_workflow';
+import { ContinuityStoreError } from '../services/continuity_store';
+import { ContinuityConfirmationError } from '../services/continuity_confirmation';
 import {
   ScriptService,
   ScriptServiceError,
@@ -29,6 +31,7 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
   // Error handling helper
   const handleError = (error: unknown, reply: any) => {
     if (error instanceof ZodError) return reply.status(400).send({ detail: error.message });
+    if (error instanceof ContinuityStoreError || error instanceof ContinuityConfirmationError) return reply.status(error instanceof ContinuityStoreError ? error.statusCode : 409).send({ code: error.code, detail: error.message });
     if (error instanceof FactWorkflowError) return reply.status(error.statusCode).send({ detail: error.message });
     if (
       error instanceof ScriptServiceError ||
@@ -38,7 +41,7 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
       if (error instanceof ScriptGenerationError || error instanceof StoryboardGenerationError) {
         app.log.warn({ statusCode: error.statusCode }, error.message);
       }
-      return reply.status(error.statusCode).send({ detail: error.message });
+      return reply.status(error.statusCode).send({ detail: error.message, ...('code' in error ? { code: error.code } : {}) });
     }
     const message = error instanceof Error ? error.message : String(error);
     app.log.error(error, `Script operation failed: ${message}`);
@@ -468,7 +471,9 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
         let notifyReserved!: () => void;
         const reserved = new Promise<void>(resolve => { notifyReserved = resolve; });
         const work = StoryboardGenerationService.generateStoryboardCandidate({ scriptId,
+          scope: parsed.data.scope, targetSceneId: parsed.data.target_scene_id, momentBindings: parsed.data.moment_bindings,
           expectedRevision: parsed.data.expected_revision, requestKey: parsed.data.request_key,
+          forceRegenerate: parsed.data.force_regenerate,
           instructions: parsed.data.instructions, onReserved: currentAttempt => { attempt = currentAttempt; notifyReserved(); } });
         // Return only after durable reservation or an immediate validation failure.
         await Promise.race([reserved, work.then(() => undefined)]);
@@ -478,6 +483,8 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
       }
       const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
         scriptId,
+        scope: parsed.data.scope, targetSceneId: parsed.data.target_scene_id, momentBindings: parsed.data.moment_bindings,
+        forceRegenerate: parsed.data.force_regenerate,
         expectedRevision: parsed.data.expected_revision,
         requestKey: parsed.data.request_key,
         instructions: parsed.data.instructions,

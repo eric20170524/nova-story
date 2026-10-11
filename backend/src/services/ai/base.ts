@@ -4,6 +4,11 @@ export type StructuredGenOptions = {
   temperature?: number;
   maxTokens?: number;
   systemInstruction?: string;
+  seed?: number;
+  signal?: AbortSignal;
+  /** Logical task owners count transport retries themselves. */
+  transportRetries?: number;
+  onInference?: (record:{model:string;elapsed_ms:number;response?:unknown;error?:string;usage?:unknown;finish_reason?:string|null})=>void;
 };
 
 export type ImageGenerationOptions = {

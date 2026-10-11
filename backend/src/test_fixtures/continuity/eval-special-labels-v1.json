@@ -1,0 +1,11 @@
+{
+  "version":"continuity-special-1",
+  "labelled_before_inference":true,
+  "label_basis":"Accepted continuity contract, frozen before this run; actual human confirmations remain zero",
+  "seeds":[41,97],
+  "cases":[
+    {"id":"S01-single-person-inheritance","base_fixture":"E01","source":"青禾脱下外衣。她挂好外衣。","entities":[{"entity_id":"qing","project_id":10,"kind":"character","display_name":"青禾","aliases":[],"character_id":3},{"entity_id":"coat","project_id":10,"kind":"garment","display_name":"外衣","aliases":[]}],"prior":[{"entity_id":"coat","attribute_id":"wearer","knowledge_status":"confirmed","value":"qing"}],"expected":[{"entity_id":"coat","attribute_id":"wearer","operation":"clear","value":null}],"expected_pending":null},
+    {"id":"S02-shared-holder","base_fixture":"E05","source":"林岚和陈月共同握着黑伞 U1。","expected":[],"expected_pending":"shared_holder"},
+    {"id":"S03-unknown-time","base_fixture":"E05","source":"不知过了多久，陈月再次看见黑伞 U1。","time_relation":"unknown","expected":[],"expected_pending":"unknown_time"}
+  ]
+}

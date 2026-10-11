@@ -1,0 +1,1678 @@
+{
+  "version": "continuity-eval-1",
+  "labelled_before_inference": true,
+  "seeds": [
+    41,
+    97
+  ],
+  "logical_tasks": 72,
+  "fixtures": [
+    {
+      "id": "E01",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "coat",
+          "project_id": 10,
+          "kind": "garment",
+          "display_name": "蓝外套",
+          "aliases": []
+        },
+        {
+          "entity_id": "scarf",
+          "project_id": 10,
+          "kind": "garment",
+          "display_name": "白围巾",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "coat",
+          "attribute_id": "wearer",
+          "knowledge_status": "confirmed",
+          "value": "lin"
+        },
+        {
+          "entity_id": "coat",
+          "attribute_id": "color",
+          "knowledge_status": "confirmed",
+          "value": "blue"
+        },
+        {
+          "entity_id": "scarf",
+          "attribute_id": "wearer",
+          "knowledge_status": "confirmed",
+          "value": "lin"
+        },
+        {
+          "entity_id": "scarf",
+          "attribute_id": "color",
+          "knowledge_status": "confirmed",
+          "value": "white"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "林岚摘下围巾，仍穿蓝外套。",
+          "expected": [
+            {
+              "entity_id": "scarf",
+              "attribute_id": "wearer",
+              "operation": "clear",
+              "value": null
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "blue"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "white"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "林岚想摘围巾。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "blue"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "white"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "蓝外套仍穿着，围巾已被林岚摘下。",
+          "expected": [
+            {
+              "entity_id": "scarf",
+              "attribute_id": "wearer",
+              "operation": "clear",
+              "value": null
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "blue"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "scarf",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "white"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E02",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "coat",
+          "project_id": 10,
+          "kind": "garment",
+          "display_name": "红外套",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "coat",
+          "attribute_id": "wearer",
+          "knowledge_status": "confirmed",
+          "value": "lin"
+        },
+        {
+          "entity_id": "coat",
+          "attribute_id": "color",
+          "knowledge_status": "confirmed",
+          "value": "red"
+        },
+        {
+          "entity_id": "coat",
+          "attribute_id": "wetness",
+          "knowledge_status": "unknown"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "林岚的红外套淋湿，颜色未变。",
+          "expected": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wetness",
+              "operation": "assign",
+              "value": "wet"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "red"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "red"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "陈月看见林岚的红外套。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "red"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "颜色仍是红色，林岚的外套已湿透。",
+          "expected": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "wetness",
+              "operation": "assign",
+              "value": "wet"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "red"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat",
+              "attribute_id": "color",
+              "operation": "assign",
+              "value": "red"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E03",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "coat_lin",
+          "project_id": 10,
+          "kind": "garment",
+          "display_name": "林岚的外套",
+          "aliases": []
+        },
+        {
+          "entity_id": "coat_chen",
+          "project_id": 10,
+          "kind": "garment",
+          "display_name": "陈月的外套",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "coat_lin",
+          "attribute_id": "wearer",
+          "knowledge_status": "confirmed",
+          "value": "lin"
+        },
+        {
+          "entity_id": "coat_lin",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        },
+        {
+          "entity_id": "coat_chen",
+          "attribute_id": "wearer",
+          "knowledge_status": "confirmed",
+          "value": "chen"
+        },
+        {
+          "entity_id": "coat_chen",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "陈月的外套破了，林岚的外套完好。",
+          "expected": [
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "damaged"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "林岚看着陈月，她的外套破了。",
+          "expected": [],
+          "pending": "ambiguous_entity",
+          "optional": [
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "林岚的外套完好，陈月的外套破了。",
+          "expected": [
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "damaged"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "coat_lin",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "wearer",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "coat_chen",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E04",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "左侧黑伞 U1",
+          "aliases": []
+        },
+        {
+          "entity_id": "u2",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "右侧黑伞 U2",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        },
+        {
+          "entity_id": "u2",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "左侧黑伞 U1 柄折断，右侧 U2 完好。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "两把黑伞中有一把折断。",
+          "expected": [],
+          "pending": "ambiguous_entity",
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "右侧 U2 完好，左侧 U1 柄已折断。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E05",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "黑伞 U1",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": "lin"
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "broken"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "林岚把 U1 递给陈月，陈月接住。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "transfer",
+              "value": "chen",
+              "from": "lin"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "林岚递出 U1，陈月没有接住。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "U1 被林岚递给陈月，陈月已接住。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "transfer",
+              "value": "chen",
+              "from": "lin"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "lin"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E06",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "cup",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "杯子",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "cup",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": null
+        },
+        {
+          "entity_id": "cup",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "杯子落地碎裂。",
+          "expected": [
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "cup",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "杯子差点落地，但被接住。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "cup",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "杯子已碎裂，碎裂发生在落地时。",
+          "expected": [
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "cup",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E07",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "坏伞 U1",
+          "aliases": []
+        },
+        {
+          "entity_id": "u2",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "完好伞 U2",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": "chen"
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "broken"
+        },
+        {
+          "entity_id": "u2",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": null
+        },
+        {
+          "entity_id": "u2",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "陈月修好 U1 的伞柄。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "换场后，陈月再次看见 U1。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "陈月放下坏伞 U1，换用完好 U2。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u2",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E08",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "黑伞 U1",
+          "aliases": []
+        },
+        {
+          "entity_id": "room",
+          "project_id": 10,
+          "kind": "location",
+          "display_name": "房间",
+          "aliases": []
+        },
+        {
+          "entity_id": "hall",
+          "project_id": 10,
+          "kind": "location",
+          "display_name": "走廊",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": null
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "location",
+          "knowledge_status": "confirmed",
+          "value": "room"
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "broken"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "U1 留在房间，人物离开后返回。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "room"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "陈月离开房间。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "room"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "陈月返回房间，U1 仍留在原处。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "room"
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E09",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "door",
+          "project_id": 10,
+          "kind": "object",
+          "display_name": "木门门板",
+          "aliases": []
+        },
+        {
+          "entity_id": "lock",
+          "project_id": 10,
+          "kind": "component",
+          "display_name": "门锁 L1",
+          "aliases": [],
+          "parent_entity_id": "door"
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "door",
+          "attribute_id": "open_state",
+          "knowledge_status": "confirmed",
+          "value": "open"
+        },
+        {
+          "entity_id": "door",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        },
+        {
+          "entity_id": "lock",
+          "attribute_id": "lock_function",
+          "knowledge_status": "confirmed",
+          "value": "broken"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "门板完好，锁 L1 已坏；随后关门。",
+          "expected": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "closed"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "open"
+            },
+            {
+              "entity_id": "door",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "lock",
+              "attribute_id": "lock_function",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "门关上了。",
+          "expected": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "closed"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "open"
+            },
+            {
+              "entity_id": "door",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "lock",
+              "attribute_id": "lock_function",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "门被关上，门板仍完好，L1 仍坏。",
+          "expected": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "closed"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "door",
+              "attribute_id": "open_state",
+              "operation": "assign",
+              "value": "open"
+            },
+            {
+              "entity_id": "door",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            },
+            {
+              "entity_id": "lock",
+              "attribute_id": "lock_function",
+              "operation": "assign",
+              "value": "broken"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E10",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "lamp",
+          "project_id": 10,
+          "kind": "object",
+          "display_name": "台灯 T1",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "lamp",
+          "attribute_id": "power_state",
+          "knowledge_status": "confirmed",
+          "value": "on"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "陈月关掉台灯 T1。",
+          "expected": [
+            {
+              "entity_id": "lamp",
+              "attribute_id": "power_state",
+              "operation": "assign",
+              "value": "off"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "lamp",
+              "attribute_id": "power_state",
+              "operation": "assign",
+              "value": "on"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "陈月准备关灯。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "lamp",
+              "attribute_id": "power_state",
+              "operation": "assign",
+              "value": "on"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "台灯 T1 被陈月关掉。",
+          "expected": [
+            {
+              "entity_id": "lamp",
+              "attribute_id": "power_state",
+              "operation": "assign",
+              "value": "off"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "lamp",
+              "attribute_id": "power_state",
+              "operation": "assign",
+              "value": "on"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E11",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "黑伞 U1",
+          "aliases": []
+        },
+        {
+          "entity_id": "cup",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "杯子",
+          "aliases": []
+        },
+        {
+          "entity_id": "table",
+          "project_id": 10,
+          "kind": "location",
+          "display_name": "桌面",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": null
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "location",
+          "knowledge_status": "confirmed",
+          "value": "table"
+        },
+        {
+          "entity_id": "cup",
+          "attribute_id": "integrity",
+          "knowledge_status": "confirmed",
+          "value": "intact"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "陈月拿起 U1。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "陈月没有拿 U1，想打碎杯子。",
+          "expected": [],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "U1 被陈月拿起。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            }
+          ],
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            },
+            {
+              "entity_id": "cup",
+              "attribute_id": "integrity",
+              "operation": "assign",
+              "value": "intact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E12",
+      "entities": [
+        {
+          "entity_id": "lin",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "林岚",
+          "aliases": [],
+          "character_id": 1
+        },
+        {
+          "entity_id": "chen",
+          "project_id": 10,
+          "kind": "character",
+          "display_name": "陈月",
+          "aliases": [],
+          "character_id": 2
+        },
+        {
+          "entity_id": "u1",
+          "project_id": 10,
+          "kind": "prop",
+          "display_name": "黑伞 U1",
+          "aliases": []
+        },
+        {
+          "entity_id": "table",
+          "project_id": 10,
+          "kind": "location",
+          "display_name": "桌面",
+          "aliases": []
+        }
+      ],
+      "prior": [
+        {
+          "entity_id": "u1",
+          "attribute_id": "holder",
+          "knowledge_status": "confirmed",
+          "value": null
+        },
+        {
+          "entity_id": "u1",
+          "attribute_id": "location",
+          "knowledge_status": "confirmed",
+          "value": "table"
+        }
+      ],
+      "cases": [
+        {
+          "id": "positive",
+          "source": "她拿起 U1。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "chen"
+            }
+          ],
+          "prior_context": "林岚离开，陈月留下。",
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            }
+          ]
+        },
+        {
+          "id": "negative",
+          "source": "她拿起 U1。",
+          "expected": [],
+          "pending": "ambiguous_entity",
+          "prior_context": "林岚看着陈月。",
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            }
+          ]
+        },
+        {
+          "id": "variant",
+          "source": "她拿起 U1。",
+          "expected": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "assign",
+              "value": "lin"
+            }
+          ],
+          "prior_context": "陈月离开，林岚留下。",
+          "optional": [
+            {
+              "entity_id": "u1",
+              "attribute_id": "holder",
+              "operation": "clear",
+              "value": null
+            },
+            {
+              "entity_id": "u1",
+              "attribute_id": "location",
+              "operation": "assign",
+              "value": "table"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

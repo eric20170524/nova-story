@@ -33,6 +33,8 @@ backend/scripts/**
 !backend/scripts/video-benchmark.ts
 !backend/scripts/storyboard-regression.ts
 !backend/scripts/pronoun-binding-regression.ts
+!backend/scripts/continuity-real-eval.ts
+!backend/scripts/continuity-real-special.ts
 !backend/scripts/download_l40_models.sh
 !backend/scripts/download_l40_models.py
 !backend/scripts/run_l40_benchmark.ts
@@ -52,6 +54,15 @@ backend/scripts/**
 !/scripts/local-queue.mjs
 !/scripts/codex-image-jobs.mjs
 !/scripts/grok-video-jobs.mjs
+!/scripts/continuity-browser-server.mjs
+!/scripts/continuity-time-fixture.mjs
+!/scripts/continuity-browser-audit.mjs
+!/scripts/continuity-real-chain.mjs
+!/scripts/continuity-production-fixture.mjs
+!/scripts/continuity-production-audit.mjs
+!/scripts/continuity-production-metrics.mjs
+!/scripts/continuity-report.mjs
+backend/inference-cache/
 backend/codex-image-jobs/
 backend/grok-video-jobs/
 *.bak
@@ -71,3 +82,4 @@ backend/static/comics/
 backend/static/staging/
 *comfy_remote_session.json
 doc/
+/docs/archive/

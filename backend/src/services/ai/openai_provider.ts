@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import type { AIProvider, ImageGenerationOptions } from './base';
+import type { AIProvider, ImageGenerationOptions,StructuredGenOptions } from './base';
 import { logger } from '../../core/logging';
 
 function truncateLog(text: string, maxLength = 500): string {
@@ -94,7 +94,7 @@ export class OpenAIProvider implements AIProvider {
         prompt: string,
         responseSchema: z.ZodSchema<T>,
         systemInstruction?: string,
-        options?: { temperature?: number; maxTokens?: number; systemInstruction?: string }
+        options?: StructuredGenOptions
     ): Promise<T> {
         try {
             const sys = options?.systemInstruction ?? systemInstruction;
@@ -131,9 +131,13 @@ export class OpenAIProvider implements AIProvider {
             if (this.isOllama) {
                 request.reasoning_effort = 'none';
             }
+            if(typeof options?.seed==='number')request.seed=options.seed;
 
             logger.info(`[OpenAI Structured Prompt Input]: ${truncateLog(prompt)}`);
-            const response = await this.openai.chat.completions.create(request);
+            const inferenceStart=Date.now();
+            let response:OpenAI.Chat.Completions.ChatCompletion;
+            try {response=await this.openai.chat.completions.create(request,{signal:options?.signal,...(options?.transportRetries!==undefined?{maxRetries:options.transportRetries}:{})});options?.onInference?.({model:this.model,elapsed_ms:Date.now()-inferenceStart,response,usage:response.usage,finish_reason:response.choices[0]?.finish_reason});}
+            catch(error:any){options?.onInference?.({model:this.model,elapsed_ms:Date.now()-inferenceStart,error:error.message});throw error;}
             if (response.choices[0]?.finish_reason !== 'stop') {
                 throw new Error(`Structured generation incomplete: finish_reason=${response.choices[0]?.finish_reason || 'missing'}`);
             }

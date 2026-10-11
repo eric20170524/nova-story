@@ -118,6 +118,7 @@ export interface NovaStoryJsonImportProject {
   coverageShots: NovaStoryJsonImportCoverageShot[];
   storyPlan: { revision: number; document: Record<string, unknown> } | null;
   assetLibrary?: unknown;
+  continuity?: unknown;
   warnings: string[];
 }
 
@@ -568,6 +569,7 @@ export const normalizeNovaStoryJsonProject = (
     coverageShots,
     storyPlan: readStoryPlan(jsonContent, warnings),
     assetLibrary: jsonContent.asset_library,
+    continuity: jsonContent.continuity,
     warnings,
   };
 };

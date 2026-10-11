@@ -66,7 +66,14 @@ test('video preflight associates the current scene storyboard without reusing an
       assert.ok((await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source is stale')));
       source.script_revision = 2;
       await updateSource();
-      assert.ok(!(await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source')));
+      const currentScript = await VideoGenerationService.preflight({ ...request });
+      assert.ok(!currentScript.blockers.some(item => item.includes('Screenplay source')));
+      assert.ok(currentScript.blockers.some(item => item.startsWith('Continuity gate:')));
+      assert.equal(currentScript.compiled_spec, undefined);
+      await db.run('UPDATE scene SET continuity_status=?, shot_spec=? WHERE id=?', 'stale', JSON.stringify({ source: { ...source, continuity: { reference: { snapshot_id: 'old' } } }, continuity_states: [{ entity: 'Hero', attribute: 'holding', value: 'cup' }] }), sceneId);
+      const stale = await VideoGenerationService.preflight({ ...request });
+      assert.ok(stale.blockers.some(item => item.startsWith('Continuity gate:')));
+      assert.equal(stale.compiled_spec, undefined);
       script.status = 'draft';
       assert.ok((await VideoGenerationService.preflight({ ...request })).blockers.some(item => item.includes('Screenplay source is stale')));
       script.status = 'confirmed';

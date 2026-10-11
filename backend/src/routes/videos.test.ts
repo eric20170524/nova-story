@@ -27,11 +27,15 @@ const multipartUpload = async (
 
 test('Comprehensive /api/videos route verification', async () => {
   const previousVideoFlag = process.env.NOVASTORY_ENABLE_VIDEO;
+  const previousLegacyVideoFlag = process.env.ENABLE_VIDEO_GENERATION;
   const originalInspect = VideoRuntimeInspector.inspect;
-  delete process.env.NOVASTORY_ENABLE_VIDEO;
-  delete process.env.ENABLE_VIDEO_GENERATION;
+  // Explicit false survives dotenv loading and makes this gate independent of local settings.
+  process.env.NOVASTORY_ENABLE_VIDEO = 'false';
+  process.env.ENABLE_VIDEO_GENERATION = 'false';
 
   const app = await buildApp({ logger: false });
+  process.env.NOVASTORY_ENABLE_VIDEO = 'false';
+  process.env.ENABLE_VIDEO_GENERATION = 'false';
 
   await db.run('DELETE FROM scene WHERE id IN (9991, 9992)');
   await db.run('DELETE FROM chapter WHERE id = "chap_vid_1"');
@@ -423,4 +427,6 @@ test('Comprehensive /api/videos route verification', async () => {
   (VideoRuntimeInspector as any).inspect = originalInspect;
   if (previousVideoFlag == null) delete process.env.NOVASTORY_ENABLE_VIDEO;
   else process.env.NOVASTORY_ENABLE_VIDEO = previousVideoFlag;
+  if (previousLegacyVideoFlag == null) delete process.env.ENABLE_VIDEO_GENERATION;
+  else process.env.ENABLE_VIDEO_GENERATION = previousLegacyVideoFlag;
 });

@@ -29,6 +29,13 @@ test('exact dimensions reject legacy ratios and accept supported ratios', () => 
   assert.equal(parsed.generation_params?.height, 562);
 });
 
+test('production stage defaults to draft and stays separate from mode', () => {
+  const parsed = GenerateRequestSchema.parse({ scene_id: 1, workflow: { prompt: 'wide' }, mode: 'cinematic_grid' });
+  assert.equal(parsed.production_stage, 'draft');
+  assert.equal(parsed.mode, 'cinematic_grid');
+  assert.equal(GenerateRequestSchema.parse({ ...parsed, production_stage: 'production' }).production_stage, 'production');
+});
+
 test('supported explicit and automatic aspect ratios remain accepted', () => {
   for (const aspect_ratio of ['16:9', '9:16', '1:1', 'auto']) {
     assert.equal(GenerateRequestSchema.safeParse(request({ output_spec: { aspect_ratio } })).success, true);

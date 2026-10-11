@@ -721,6 +721,7 @@ export const StoryboardCandidateShotSchema = z.object({
 export type StoryboardCandidateShot = z.infer<typeof StoryboardCandidateShotSchema>;
 
 export const StoryboardCandidatePayloadSchema = z.object({
+  scope: z.object({ kind: z.literal('scene'), target_scene_id: z.string().min(1), snapshot_id: z.string().min(1), snapshot_revision: z.number().int().positive(), source_hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   fact_contract: StoryboardFactContractSchema.optional(),
   scriptId: z.number().int(),
@@ -741,10 +742,17 @@ export const StoryboardCandidatePayloadSchema = z.object({
 export type StoryboardCandidatePayload = z.infer<typeof StoryboardCandidatePayloadSchema>;
 
 export const CreateStoryboardCandidateBodySchema = z.object({
+  scope: z.enum(['chapter','scene']).default('chapter'),
+  target_scene_id: z.string().min(1).optional(),
+  moment_bindings: z.array(z.object({ block_id: z.string().nullable(), start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), moment_id: z.string().min(1), phase: z.enum(['before','during','after']), reads: z.array(z.object({ entity_id: z.string().min(1), attribute_id: z.string().min(1) }).strict()) }).strict()).optional(),
   background: z.boolean().optional().default(false),
+  force_regenerate: z.boolean().optional().default(false),
   expected_revision: z.number().int().min(1),
   request_key: z.string().min(1),
   instructions: z.string().optional(),
+}).superRefine((body, context) => {
+  if (body.scope === 'scene' && (!body.target_scene_id || !body.moment_bindings?.length)) context.addIssue({ code: 'custom', message: 'Scene generation requires target_scene_id and confirmed moment bindings' });
+  if (body.scope === 'chapter' && (body.target_scene_id || body.moment_bindings)) context.addIssue({ code: 'custom', message: 'Target/moment bindings require explicit scene scope' });
 });
 export type CreateStoryboardCandidateBody = z.infer<typeof CreateStoryboardCandidateBodySchema>;
 

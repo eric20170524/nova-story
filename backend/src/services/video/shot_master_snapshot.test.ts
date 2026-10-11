@@ -64,7 +64,8 @@ test('Shot Master snapshot keeps the inputs used for the image when bindings cha
       shot_master_character_ids: [characterId],
     }, sceneId);
 
-    assert.match(seenPrompt, /version one prop prompt/);
+    // A character shot uses the pinned reference image, without copying the prop plate sentence.
+    assert.doesNotMatch(seenPrompt, /version one prop prompt/);
     assert.doesNotMatch(seenPrompt, /version two prop prompt/);
     const snapshot = await db.get(
       'SELECT references_json, character_versions_json FROM scene_asset_image_snapshot WHERE scene_id = ?',

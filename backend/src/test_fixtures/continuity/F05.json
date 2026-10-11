@@ -1,0 +1,13 @@
+{
+  "id":"F05","version":1,"title":"已有时间线九机位三入口","matrix":["C08-A"],"project_id":"F05:project","source_revision":1,"story_order_revision":1,
+  "entities":[{"id":"F05:lin","kind":"character","name":"林岚","character_id":1},{"id":"F05:chen","kind":"character","name":"陈月","character_id":2},{"id":"F05:u1","kind":"prop","name":"黑伞"}],
+  "initial_state":{"F05:u1":{"holder":"F05:chen","integrity":"broken"}},
+  "sources":[{"id":"handover","scene_id":"F05:s2","text":"林岚把黑伞递给陈月。"}],
+  "cases":[
+    {"id":"all-three-endpoints","polarity":"positive","source_ids":["handover"],"operations":["generate coverage for F05:shot2","apply coverage to F05:shot2","promote before","promote after","promote replace"],"expected":{"status":"ready","changes":[],"checks":{"F05:u1":{"holder":"F05:chen","integrity":"broken"}},"issues":[],"moment_id":"F05:after-handover","story_order_revision":1,"must_not_call":"applyStoryboardCandidate"}},
+    {"id":"stale-source","polarity":"negative","source_ids":["handover"],"operations":["generate coverage","revise source snapshot","apply or promote stale coverage"],"expected":{"status":"conflict","changes":[],"checks":{"F05:u1":{"holder":"F05:chen","integrity":"broken"}},"issues":["CONTINUITY_STALE"],"preserve_media":true}},
+    {"id":"legacy-no-snapshot","polarity":"negative","source_ids":["handover"],"operations":["remove continuity reference from fixture shot","generate or write coverage"],"expected":{"status":"pending_review","changes":[],"checks":{},"issues":["CONTINUITY_ENTRY_REQUIRED"],"preserve_media":true}}
+  ],
+  "shots":[{"id":"F05:shot1","scene_id":"F05:s1","reads":[],"asset_url":"fixture://F05/scene1.png","versions":["F05:v1"]},{"id":"F05:shot2","scene_id":"F05:s2","moment_id":"F05:after-handover","snapshot_id":"F05:snapshot-r1","reads":[{"entity_id":"F05:u1","attribute_id":"holder"},{"entity_id":"F05:u1","attribute_id":"integrity"}],"asset_url":"fixture://F05/scene2.png","versions":["F05:v2"]},{"id":"F05:shot3","scene_id":"F05:s3","reads":[],"asset_url":"fixture://F05/scene3.png","versions":["F05:v3"]}],
+  "expected_dependencies":{"trigger":{"entity_id":"F05:u1","attribute_id":"integrity"},"affected_shots":["F05:shot2"],"unchanged_shots":["F05:shot1","F05:shot3"]}
+}

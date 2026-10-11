@@ -11,6 +11,13 @@ import { packShotSpec } from '../schemas/shot_contract';
 import { findChapterShotQuotaViolation } from './shot_intent_quota';
 import { containsCjk } from './english_visual_prompt';
 import { compileNegativePrompt } from './negative_prompt_compiler';
+import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
+import { withLocalTextInference } from './local_text_inference';
+import { continuityReadForFacts, type ContinuityWorkflowScope } from './continuity_workflow_scope';
+import { newWorkflowInferenceBudget, workflowBudgetProvider, WorkflowTransportError, type WorkflowInferenceBudget } from './workflow_inference_budget';
+import { continuityVisualFact, type ContinuityVisualState } from './continuity_visual_state';
+
+const stepCache = new InferenceCache<unknown>('storyboard-steps');
 
 const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -151,7 +158,7 @@ export function continuityForScene(state: State[], doc: ScriptDocument, facts: V
     return !['position', 'presence', 'pending_action'].includes(s.attribute) || originScene?.locationId === current.locationId;
   });
 }
-export const continuityLiteral = (states: State[]) => states.map(s => ({ id: `state_${hash(s).slice(0, 16)}`, text: s.attribute === 'wardrobe' && s.operation === 'remove' ? `${s.entity} 已脱下衣物：${s.item || s.value}` : `${s.entity} ${({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute}：${s.value}` }));
+export const continuityLiteral = (states: State[]) => states.map(s => ({ id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : s.attribute === 'wardrobe' && s.operation === 'remove' ? `${s.entity} 已脱下衣物：${s.item || s.value}` : `${s.entity} ${({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute}：${s.value}` }));
 function inheritedStates(state: State[], selected: VisualFact[], present: string[] = []) {
   const visible = new Set(present);
   return state.filter(s => !selected.some(f => f.id === s.fact_id) && (visible.has(s.entity) || selected.some(f => f.text.includes(s.entity))));
@@ -409,6 +416,10 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     const requiredAudio = contract.facts.filter(f => f.scene_id === budget.scene_id && f.kind === 'audio').map(f => f.id);
     if (hash(assigned) !== hash(requiredAudio)) throw new FactWorkflowError('声音事实遗漏、重复或乱序');
   }
+  if (payload.scope) {
+    if (payload.shots.some(shot => !JSON.parse(shot.shot_spec).source?.continuity?.reference || shot.script_scene_id !== payload.scope!.target_scene_id)) throw new FactWorkflowError('单场候选缺少已确认时刻引用');
+    return;
+  }
   let state: State[] = [];
   for (const scene of doc.scenes) {
     let shotState = continuityForScene(state, doc, contract.facts, scene.id);
@@ -424,7 +435,7 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
 
 export type WorkflowProgress = {
   attempt?: number;
-  request?: { request_key: string; expected_revision: number; instructions: string };
+  request?: { request_key: string; expected_revision: number; instructions: string; force_regenerate?: boolean };
   input_hash: string; phase: string; scene_id?: string; shot_index?: number; error?: string;
   candidate_id?: string;
   extracted: Record<string, VisualFact[]>;
@@ -434,6 +445,7 @@ export type WorkflowProgress = {
   metrics: Array<{ stage: string; elapsed_ms: number; attempts: number }>;
   state_checks?: Record<string, boolean>;
   state_review_pending?: string[];
+  inference_budget?: WorkflowInferenceBudget;
 };
 export const stateCheckKey = (fact: VisualFact) => hash([fact.id, fact.text, fact.kind, fact.beat, fact.binding]);
 let queue: Promise<unknown> = Promise.resolve();
@@ -452,20 +464,59 @@ export async function runFactWorkflow(input: {
   doc: ScriptDocument; scriptId: number; revision: number; provider: AIProvider;
   model: string; locks: CharacterLockRef[]; glossary: Record<string, string>; instructions: string;
   characters?: Array<{ id: number; name: string }>;
+  inferenceModel?: string;
+  reuse?: InferenceReuseOptions;
+  continuity_scope?: ContinuityWorkflowScope;
   progress: WorkflowProgress; persist: () => Promise<void>;
 }): Promise<{ contract: StoryboardFactContract; shots: StoryboardCandidateShot[] }> {
-  const { doc, progress: p, provider, persist } = input;
-  const request = async <T>(stage: string, work: (repair: string) => Promise<T>): Promise<T> => {
+  const { doc, progress: p, persist } = input;
+  if (input.continuity_scope && (doc.scenes.length !== 1 || doc.scenes[0]!.id !== input.continuity_scope.target_scene_id)) throw new FactWorkflowError('单场工作流不能包含其他分场', 409);
+  const inferenceBudget = p.inference_budget ||= newWorkflowInferenceBudget();
+  for (const call of inferenceBudget.calls) if (call.attempt_state === 'reserved') call.attempt_state = 'interrupted_unknown';
+  let activeStage = '', activeKind: 'initial' | 'semantic_repair' = 'initial';
+  const provider = workflowBudgetProvider(input.provider, inferenceBudget, persist, () => activeStage, () => activeKind);
+  const consumeRepair = async () => {
+    if (inferenceBudget.semantic_repairs >= 1) return false;
+    inferenceBudget.semantic_repairs++;
+    activeKind = 'semantic_repair';
+    await persist();
+    return true;
+  };
+  const recordBatch = (stage: string, items: unknown[], reason: 'initial' | 'repair_split' = 'initial') => {
+    const input_hash = hash(items);
+    if (!inferenceBudget.batches.some(batch => batch.stage === stage && batch.input_hash === input_hash && batch.reason === reason)) inferenceBudget.batches.push({ stage, input_hash, items: items.length, reason });
+  };
+  const request = async <T>(stage: string, work: (repair: string) => Promise<T>, dependencies?: unknown): Promise<T> => {
     const start = Date.now();
     let error = '';
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const value = await work(error);
-        p.metrics.push({ stage, elapsed_ms: Date.now() - start, attempts: attempt + 1 });
-        return value;
-      } catch (e: any) { error = e?.message || String(e); if (attempt) throw e; }
-    }
-    throw new FactWorkflowError(error, 502);
+    const infer = () => withLocalTextInference(async () => {
+      activeStage = stage; activeKind = 'initial';
+      if (stage.startsWith('repair:') && !await consumeRepair()) {
+        p.phase = 'needs_review'; await persist();
+        throw new FactWorkflowError('事实待核对：逻辑任务的语义修复预算已用尽');
+      }
+      let attempts = 0;
+      while (true) {
+        attempts++;
+        try {
+          const value = await work(error);
+          p.metrics.push({ stage, elapsed_ms: Date.now() - start, attempts });
+          return value;
+        } catch (e: any) {
+          error = e?.message || String(e);
+          if (e instanceof WorkflowTransportError || /超过.*预算|超出.*预算|超预算/.test(error) || !await consumeRepair()) {
+            p.phase = 'needs_review'; p.error = error;
+            p.metrics.push({ stage, elapsed_ms: Date.now() - start, attempts });
+            await persist();
+            throw e;
+          }
+        }
+      }
+    });
+    return await stepCache.run({ stage, scriptId: input.scriptId,
+      dependencies: dependencies ?? [doc, input.characters, input.locks, input.glossary, input.instructions],
+      model: input.inferenceModel || input.model, configuredModel: textModelFingerprint(), continuity_source: input.continuity_scope ? [input.continuity_scope.snapshot.source_hash,input.continuity_scope.bindings] : undefined,
+    }, `${FACT_POLICY_VERSION}:verified-workflow-step-v3-parent-budget`, infer, input.reuse) as T;
   };
   p.phase = 'facts';
   await persist();
@@ -478,13 +529,14 @@ export async function runFactWorkflow(input: {
     });
     const batches: Array<typeof units> = [];
     for (const unit of units) {
-      if (unit.text.length > 1800) throw new FactWorkflowError(`分场 ${scene.id} 来源片段超过输入预算，需按完整叙事节拍核对: ${unit.block_id}@${unit.start}`);
+      if (unit.text.length > 900) throw new FactWorkflowError(`分场 ${scene.id} 来源片段超过输入预算，需按完整叙事节拍核对: ${unit.block_id}@${unit.start}`);
       if (!batches.length || batches.at(-1)!.length >= 6 || batches.at(-1)!.reduce((n, u) => n + u.text.length, 0) + unit.text.length > 900) batches.push([]);
       batches.at(-1)!.push(unit);
     }
     for (const batch of batches) {
       const key = hash([scene.id, batch]);
       if (p.extracted[key]) continue;
+      recordBatch(`facts:${scene.id}`, batch);
       p.extracted[key] = await request(`facts:${scene.id}:${batch[0]!.id}`, async repair => {
         const prior = Object.values(p.extracted).flat().filter(f => f.scene_id === scene.id && f.kind === 'visual');
         const ids = batch.map(u => u.id) as [string, ...string[]];
@@ -554,7 +606,7 @@ export async function runFactWorkflow(input: {
         });
         if (facts.some(f => f.kind === 'visual' && f.beat < (prior.at(-1)?.beat ?? 0))) throw new FactWorkflowError('分场节拍编号不能倒退');
         return facts;
-      });
+      }, [scene.id, batch, Object.values(p.extracted).flat().filter(f => f.scene_id === scene.id).map(f => ({ id: f.id, block_id: f.block_id, text: f.text, kind: f.kind, beat: f.beat }))]);
       await persist();
     }
   }
@@ -589,13 +641,8 @@ export async function runFactWorkflow(input: {
           if (!clauseBoundaryBetween(spans[index]!.text, spans[index + 1]!.text)) throw new FactWorkflowError('修复片段没有落在分句边界');
         }
         return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: spans.map(span => ({ ...span, beat: fact.beat, states: [] as [] })) }, fact.start);
-      } catch (error) {
-        if (!repair) throw error;
-        const decided = await provider.generateStructured(JSON.stringify({ task: 'repair_kind', text: fact.text, repair: `${repair} ${error instanceof Error ? error.message : ''}` }), z.object({ kind: z.enum(['visual', 'audio', 'internal', 'figurative']) }),
-          'Choose one kind for the whole unchanged sentence. visual = something that can be photographed. audio = only a sound. internal = thought or feeling. figurative = a metaphor with no literal picture. Return kind only.', { temperature: 0.1, maxTokens: 32 });
-        return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: [{ text: fact.text, kind: decided.kind, beat: fact.beat, states: [] }] }, fact.start);
-      }
-    });
+      } catch (error) { throw error; }
+    }, [fact.id, fact.text, fact.kind, fact.beat, fact.start, fact.scene_id, fact.block_id]);
     for (const batch of Object.values(p.extracted)) {
       const index = batch.findIndex(item => item.id === fact.id);
       if (index >= 0) batch.splice(index, 1, ...replaced);
@@ -626,7 +673,7 @@ export async function runFactWorkflow(input: {
   const pendingBindings = facts.filter(f => f.kind === 'visual' && needsBindingReview(f.binding));
   if (pendingBindings.length) { p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`人物绑定待核对: ${pendingBindings.map(f => `${f.scene_id}/${f.id}: ${f.text}`).join('；')}`); }
   p.state_checks ||= {};
-  for (const scene of doc.scenes) {
+  for (const scene of input.continuity_scope ? [] : doc.scenes) {
     const visual = facts.filter(f => f.scene_id === scene.id && f.kind === 'visual');
     for (let offset = 0; offset < visual.length; offset++) {
       const group = visual.slice(offset, offset + 1);
@@ -636,6 +683,7 @@ export async function runFactWorkflow(input: {
         const source = group[0]!;
         const block = scene.blocks.find(item => item.id === source.block_id);
         const context = block ? block.text.slice(0, source.start) : '';
+        if (source.text.length > 1800 || context.length + JSON.stringify(source.binding || {}).length > 2200) throw new FactWorkflowError('完整状态来源或绑定前文超过输入预算，需人工核对');
         const cast = (input.characters || []).map(item => item.name).filter(Boolean);
         const entities = [...new Set([
           ...boundVisibleEntities(source.binding).map(e => e.name),
@@ -647,25 +695,22 @@ export async function runFactWorkflow(input: {
         const schema = z.object({ states: z.array(z.object({ entity: entities.length ? z.enum(entities as [string, ...string[]]) : z.string().min(1), attribute: z.enum(['presence', 'wardrobe', 'holding', 'position', 'pending_action']), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() })) });
         const ask = async (note: string) => provider.generateStructured(JSON.stringify({ task: 'state', facts: group.map(f => ({ id: f.id, text: f.text })), context, entities, binding: source.binding, repair: note }), schema,
           'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit persistent states. wardrobe = a stated clothing state; holding = an object held; position = where the entity stands or sits; presence = explicit entry or exit; pending_action = unfinished action. For wardrobe/holding extract one state per garment/object; item MUST quote its name from this fact. operation is set, or remove only for explicitly completed removal/release. value MUST be an exact contiguous substring of this fact. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 256 });
-        let result = await ask(repair);
+        const result = await ask(repair);
         const owners = boundVisibleEntities(source.binding).map(e => e.name);
-        let evidence = evidencedContinuityStates(source.text, result.states, context, owners);
-        // The local model often writes 无 for an absent attribute. Ask it to quote the sentence or drop the state.
-        if (evidence.rejected.length) {
-          result = await ask(`${repair} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`.trim());
-          evidence = evidencedContinuityStates(source.text, result.states, context, owners);
-        }
-        if (evidence.rejected.length) { source.states = result.states; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text}`); }
+        const evidence = evidencedContinuityStates(source.text, result.states, context, owners);
+        if (evidence.rejected.length) { source.states = result.states; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`); }
         return evidence.accepted.map(state => ({ ...state, fact_id: source.id }));
-      });
+      }, [group, scene.blocks.find(block => block.id === group[0]!.block_id)?.text, doc.props, input.characters]);
       for (const entry of Object.values(p.extracted)) for (const fact of entry.filter(f => group.some(g => g.id === f.id))) {
         fact.states = states.filter(s => s.fact_id === fact.id).map(({ fact_id, ...state }) => state);
       }
       p.state_checks[key] = true;
+      p.state_review_pending = p.state_review_pending?.filter(id => !group.some(fact => fact.id === id));
       await persist();
     }
   }
   facts = Object.values(p.extracted).flat();
+  if (input.continuity_scope) facts.forEach(fact => { fact.states = []; });
   p.facts = facts;
   validateFactSources(doc, facts);
   const unresolved = facts.filter(f => f.kind === 'mixed' || f.kind === 'uncertain');
@@ -697,9 +742,10 @@ export async function runFactWorkflow(input: {
     const sceneFacts = facts.filter(f => f.scene_id === scene.id);
     const budget = budgets[sceneIndex]!;
     const sceneSlots = slots.filter(s => s.scene_id === scene.id);
-    const relevantState = continuityForScene(state, doc, facts, scene.id);
+    const relevantState = input.continuity_scope ? [] : continuityForScene(state, doc, facts, scene.id);
     if (JSON.stringify(relevantState).length > 2000) throw new FactWorkflowError(`连续性状态超出输入预算: ${scene.id}，需要核对压缩`);
-    const dependency = hash([FACT_POLICY_VERSION, scene, sceneFacts, relevantState, sceneSlots, input.glossary, input.instructions]);
+    const dependency = hash([FACT_POLICY_VERSION, scene, sceneFacts, relevantState, sceneSlots, input.glossary, input.instructions,
+      ...(input.continuity_scope ? [input.continuity_scope.snapshot.source_hash,input.continuity_scope.bindings] : [])]);
     await persist();
     const visual = sceneFacts.filter(f => f.kind === 'visual');
     const beats = [...new Set(visual.map(f => f.beat))].map(beat => visual.filter(f => f.beat === beat));
@@ -715,17 +761,23 @@ export async function runFactWorkflow(input: {
     for (const [groupIndex, groupFacts] of groups.entries()) {
       const groupCount = new Set(groupFacts.map(f => f.beat)).size + (groupIndex === groups.length - 1 ? budget.minimum - beats.length : 0);
       const groupSlots = sceneSlots.slice(plan.length, plan.length + groupCount);
+      const momentInputs = input.continuity_scope ? (groupFacts.length ? groupFacts.map(fact => continuityReadForFacts(input.continuity_scope!, [fact])) : [continuityReadForFacts(input.continuity_scope, [])]).map(read => ({ story_position: read.story_position, values: read.values.map(cell => ({ entity_id: cell.entity_id, attribute_id: cell.attribute_id, knowledge_status: cell.knowledge_status, value: cell.value })) })) : undefined;
+      // Several source facts may read the same verified frame. Share its complete values;
+      // keep every fact and its binding, and never truncate a distinct moment to fit.
+      const confirmedMoments = momentInputs ? [...new Map(momentInputs.map(moment=>[hash(moment),moment])).values()] : undefined;
+      if (confirmedMoments && JSON.stringify(confirmedMoments).length > 2000) throw new FactWorkflowError('已确认时刻超过规划输入预算，需缩小读取范围', 409);
       const groupKey = hash([dependency, groupIndex, groupFacts, groupState, groupSlots]);
+      recordBatch(`plan:${scene.id}`, groupFacts);
       if (!p.plans[groupKey]) p.plans[groupKey] = await request(`plan:${scene.id}:${groupIndex + 1}`, async repair => {
       const slotFacts = assignFactSlots(groupFacts, groupCount);
       const choices = Object.fromEntries(slotFacts.map((fs, i) => [`s${i + 1}`, fs.length ? z.enum(fs.map(f => f.id) as [string, ...string[]]) : z.null()]));
       const schema = z.object({ primary_by_slot: z.object(choices).strict() });
-      const result = await provider.generateStructured(JSON.stringify({ task: 'plan', scene_id: scene.id, group: groupIndex + 1, facts: groupFacts, slots: groupSlots.map((slot, i) => ({ ...slot, id: `s${i + 1}`, fact_ids: slotFacts[i]!.map(f => f.id) })), continuity: groupState, character_ids: scene.characterIds, location_id: scene.locationId, prop_ids: scene.propIds, instructions: input.instructions, repair }), schema,
+      const result = await provider.generateStructured(JSON.stringify({ task: 'plan', scene_id: scene.id, group: groupIndex + 1, facts: groupFacts, slots: groupSlots.map((slot, i) => ({ ...slot, id: `s${i + 1}`, fact_ids: slotFacts[i]!.map(f => f.id) })), continuity: groupState, confirmed_moments: confirmedMoments, character_ids: scene.characterIds, location_id: scene.locationId, prop_ids: scene.propIds, instructions: input.instructions, repair }), schema,
         'Select only ONE primary fact ID per slot from that slot fact_ids. Program has fixed complete source coverage and beat order. Do not move, merge or omit facts. Empty slot => null. Return primary_by_slot with EVERY supplied slot ID. No other fields.', { temperature: 0.1, maxTokens: 384 });
       const selected = slotFacts.map((fs, i) => ({ fact_ids: fs.map(f => f.id), primary_fact_id: result.primary_by_slot[`s${i + 1}`] as string | null }));
       validatePlan(groupFacts, selected, groupCount);
       return selected;
-      });
+      }, [groupKey]);
       plan.push(...p.plans[groupKey]!);
       groupState = continuityAfter(groupState, groupFacts);
       await persist();
@@ -784,7 +836,8 @@ export async function runFactWorkflow(input: {
       if (p.shots[shotKey]) { allShots.push(p.shots[shotKey]!); continue; }
       const names = [...new Set(selected.flatMap(f => boundVisibleEntities(f.binding).map(e => e.name)))];
       if (names.length > 6) throw new FactWorkflowError(`镜头包含 ${names.length} 位项目人物，超过当前契约上限6位，请核对节拍`);
-      const inherited = inheritedStates(shotState, selected, names);
+      const continuityRead = input.continuity_scope ? continuityReadForFacts(input.continuity_scope, selected) : null;
+      const inherited = continuityRead?.states ?? inheritedStates(shotState, selected, names);
       const primary = sceneFacts.find(f => f.id === shot.primary_fact_id) || selected[0];
       const location = doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId;
       const contextFields = sceneContext(doc, scene);
@@ -818,13 +871,17 @@ export async function runFactWorkflow(input: {
           if (problems.length) throw new FactWorkflowError(`翻译格式错误: ${problems.join('；')}`, 502);
           return batch.map(f => result.translations.find(t => t.id === f.id)!);
         };
-        for (let offset = 0; offset < literal.length; offset += 4) {
-          const batch = literal.slice(offset, offset + 4);
+        for (let offset = 0; offset < literal.length;) {
+          const batch = literal.slice(offset, offset + (inferenceBudget.translation_batch_size || 4));
+          offset += batch.length;
+          recordBatch(activeStage, batch);
           try {
             translations.push(...await translateFacts(batch, repair));
           } catch (error: any) {
-            if (batch.length === 1) throw error;
+            if (error instanceof WorkflowTransportError || batch.length === 1 || !await consumeRepair()) throw error;
+            recordBatch(activeStage, batch, 'repair_split');
             for (const fact of batch) translations.push(...await translateFacts([fact], `${repair} ${error?.message || error}`.trim()));
+            inferenceBudget.translation_batch_size = 1;
           }
         }
         const context = { visible_names: names, bindings: selected.map(f => f.binding), original_facts: selected.map(f => ({ id: f.id, text: f.text })), locks: permittedLocks, glossary: input.glossary };
@@ -848,7 +905,7 @@ export async function runFactWorkflow(input: {
         try {
           compiled = await reviewEnglish();
         } catch (error: any) {
-          if (literal.length <= 1 || !String(error?.message || '').startsWith('译文待核对')) throw error;
+          if (literal.length <= 1 || !String(error?.message || '').startsWith('译文待核对') || !await consumeRepair()) throw error;
           const failed = new Set(String(error.message).slice('译文待核对: '.length).split(' 存在')[0]!.split(',').map(id => id.trim()).filter(Boolean));
           const targets = literal.filter(fact => failed.has(fact.id));
           if (!targets.length) throw error;
@@ -862,6 +919,7 @@ export async function runFactWorkflow(input: {
             const parts = quotedActionTail(fact.text);
             let english = '';
             if (parts) {
+              recordBatch(activeStage, parts.map(text => ({ id: fact.id, text })), 'repair_split');
               const partRepair = (text: string) => text.includes('低喘') ? '低喘=soft panting，不要译成 whimper、whistle 或 shout。' : repair;
               const head = (await translateFacts([{ ...fact, text: parts[0]! }], partRepair(parts[0]!)))[0];
               const tail = (await translateFacts([{ ...fact, text: parts[1]! }], partRepair(parts[1]!)))[0];
@@ -880,9 +938,9 @@ export async function runFactWorkflow(input: {
           compiled = await reviewEnglish();
         }
         return compiled;
-      });
+      }, [literal, selected.map(f => f.binding), permittedLocks, names, input.glossary, input.instructions]);
       const blockIds = [...new Set([...selected.map(f => f.block_id), ...audioFacts[index]!.map(f => f.block_id), ...buckets[index]!.map(b => b.id)])].sort((a, b) => scene.blocks.findIndex(x => x.id === a) - scene.blocks.findIndex(x => x.id === b));
-      const source = { type: 'script' as const, script_id: input.scriptId, script_revision: input.revision, script_scene_id: scene.id, block_ids: blockIds };
+      const source = { type: 'script' as const, script_id: input.scriptId, script_revision: input.revision, script_scene_id: scene.id, block_ids: blockIds, ...(continuityRead ? { continuity: continuityRead.reference } : {}) };
       const keyProps = doc.props.filter(prop => scene.propIds.includes(prop.id) && selected.some(f => f.text.includes(prop.name))).map(prop => prop.name).slice(0, 2);
       const contractFields = { ...sceneSlots[index]!, scene_context: contextFields, location, primary_action: primaryAction, visual_facts: selected, audible_blocks: buckets[index]!, continuity_states: inherited, visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined, key_props: keyProps, source };
       const assembled: StoryboardCandidateShot = {

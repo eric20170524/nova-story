@@ -22,7 +22,7 @@ export async function exportAssetLibrary(projectId: number) {
 
 /** Caller owns the project-copy/import transaction. IDs never cross project boundaries. */
 export async function restoreAssetLibrary(raw: unknown, projectId: number, chapters: Map<string, string>, scenes: Map<string, number>) {
-  if (raw == null) return;
+  if (raw == null) return new Map<number, number>();
   const bundle = AssetBundleSchema.parse(raw);
   const assetIds = new Map<number, number>();
   for (const asset of bundle.assets) {
@@ -47,4 +47,5 @@ export async function restoreAssetLibrary(raw: unknown, projectId: number, chapt
     await db.run('INSERT INTO scene_asset_image_snapshot (scene_id, image_url, references_json, character_versions_json) VALUES (?, ?, ?, ?)', sceneId, snap.image_url,
       JSON.stringify(refs.map(ref => ({ ...ref, id: assetIds.get(ref.id) ?? -1 }))), null);
   }
+  return assetIds;
 }

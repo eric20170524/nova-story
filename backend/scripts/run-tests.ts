@@ -25,8 +25,10 @@ const main = async () => {
   const hasConcurrency = passthrough.some(
     (arg) => arg === '--test-concurrency' || arg.startsWith('--test-concurrency=')
   );
-  const tests = (await collectTests(path.resolve('src'))).sort();
-  if (tests.length === 0) {
+  // Explicit files select a targeted run; do not append the entire suite again.
+  const hasSelectedFiles = passthrough.some(arg => !arg.startsWith('-') && arg.endsWith('.test.ts'));
+  const tests = hasSelectedFiles ? [] : (await collectTests(path.resolve('src'))).sort();
+  if (!hasSelectedFiles && tests.length === 0) {
     throw new Error('No backend test files were found');
   }
 

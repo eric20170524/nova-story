@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import { ApiError } from './api_error';
 import { unsupportedMockResponse } from './mock_fallback';
+import type { ContinuityReviewView,ContinuityReviewBody,ContinuityImpact,ContinuityUndoBody } from './continuityTypes';
 
 export { ApiError };
 
@@ -218,6 +219,23 @@ class ApiService {
       missing: string[];
       notes: string[];
       install_path: string | null;
+      formal?: {
+        model_class: string;
+        model_label: string;
+        workflow_file: string;
+        live_verified: boolean;
+        capabilities: Array<{
+          id: string;
+          installed: boolean;
+          nodes_loaded: boolean;
+          family_match: boolean;
+          shot_allowed: boolean;
+          wired: boolean;
+          live_verified: boolean;
+          chain_ready: boolean;
+          reason: string | null;
+        }>;
+      };
     }>('/settings/tier-b-status');
 
   // Characters
@@ -225,9 +243,16 @@ class ApiService {
   createLibraryAsset = (projectId: number, data: any) => this.request<any>(`/projects/${projectId}/asset-library`, { method: 'POST', body: data });
   updateLibraryAsset = (id: number, revision: number, data: any) => this.request<any>(`/asset-library/${id}`, { method: 'PUT', body: { expected_revision: revision, asset: data } });
   deleteLibraryAsset = (id: number) => this.request(`/asset-library/${id}`, { method: 'DELETE' });
-  extractLibraryAssets = (chapterId: string) => this.request<any[]>('/asset-library/extract', { method: 'POST', body: { chapter_id: chapterId } });
+  extractLibraryAssets = (chapterId: string, forceRegenerate = false) => this.request<any[]>('/asset-library/extract', { method: 'POST', body: { chapter_id: chapterId, force_regenerate: forceRegenerate } });
   generateLibraryAsset = (id: number) => this.request<{ task_id: string }>(`/asset-library/${id}/generate`, { method: 'POST', body: {} });
   getAssetTask = (taskId: string) => this.request<any>(`/assets/status/${taskId}`);
+  decideFormalCandidate = (sceneId: number | string, body: {
+    expected_version: number;
+    reference_hash: string;
+    verdict: 'accepted' | 'rejected';
+    checks: Record<string, boolean>;
+    note: string;
+  }) => this.request<any>(`/assets/formal-decision/${sceneId}`, { method: 'POST', body });
   getSceneAssetReferences = (sceneId: number) => this.request<any[]>(`/timeline/scenes/${sceneId}/asset-references`);
   bindSceneAssets = (sceneId: number, assetIds: number[]) => this.request<any[]>(`/timeline/scenes/${sceneId}/asset-references`, { method: 'PUT', body: { asset_ids: assetIds } });
   getCharacters = (projectId: number) => this.request<any[]>(`/characters/?project_id=${projectId}`);
@@ -430,7 +455,7 @@ class ApiService {
   // Timeline & Director
   getTimeline = (chapterId: string) => this.request<any>(`/timeline/${chapterId}`);
   generateTimeline = (chapterId: string, mode: string = 'narrative') => this.request<any>('/timeline/generate', { method: 'POST', body: { chapter_id: chapterId, mode } });
-  generateNarration = (chapterId: string) => this.request<any>('/timeline/narration/generate', { method: 'POST', body: { chapter_id: chapterId } });
+  generateNarration = (chapterId: string, forceRegenerate = false) => this.request<any>('/timeline/narration/generate', { method: 'POST', body: { chapter_id: chapterId, force_regenerate: forceRegenerate } });
   updateScene = (sceneId: number | string, data: any) => this.request<any>(`/timeline/scene/${sceneId}`, { method: 'PUT', body: data });
 
   listSceneVersions = (sceneId: number | string) =>
@@ -461,8 +486,10 @@ class ApiService {
       workflow: workflowData,
       scene_id: sceneId,
       mode: workflowData.mode || 'standard',
+      production_stage: workflowData.production_stage === 'production' ? 'production' : 'draft',
       new_version: Boolean(workflowData.new_version || workflowData.create_new_version)
     };
+    if (workflowData.request_key) payload.request_key = workflowData.request_key;
     if (workflowData.generation_params) {
       payload.generation_params = workflowData.generation_params;
     }
@@ -631,6 +658,28 @@ class ApiService {
     }>('/settings/vram/switch-comfyui', { method: 'POST' });
 
   // --- Track 5: Structured Screenplay / Script API ---
+  getSceneProduction=(scriptId:number)=>this.request<any>(`/scripts/${scriptId}/production`);
+  getProductionMedia=(scriptId:number,sceneId:number)=>this.request<any>(`/scripts/${scriptId}/production/frames/${sceneId}`);
+  bindProductionReferences=(scriptId:number,sceneId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/frames/${sceneId}/references`,{method:'POST',body});
+  reviewProductionImage=(scriptId:number,sceneId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/frames/${sceneId}/review`,{method:'POST',body});
+  previewProductionQueue=(scriptId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/queue-preview`,{method:'POST',body});
+  queueProductionImages=(scriptId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/queue`,{method:'POST',body});
+  redrawProductionImage=(scriptId:number,sceneId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/frames/${sceneId}/redraw`,{method:'POST',body});
+  createSceneProductionCandidate=(scriptId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/production/candidates`,{method:'POST',body});
+  previewSceneProductionApply=(scriptId:number,changeId:string,body:unknown)=>this.request<any>(`/scripts/${scriptId}/storyboard-candidates/${encodeURIComponent(changeId)}/preview-scene`,{method:'POST',body});
+  applySceneProduction=(scriptId:number,changeId:string,body:unknown)=>this.request<any>(`/scripts/${scriptId}/storyboard-candidates/${encodeURIComponent(changeId)}/apply-scene`,{method:'POST',body});
+  getContinuityReview=(scriptId:number,targetSceneId?:string)=>this.request<ContinuityReviewView>(`/scripts/${scriptId}/continuity${targetSceneId?`?target_scene_id=${encodeURIComponent(targetSceneId)}`:''}`);
+  confirmContinuity=(scriptId:number,body:ContinuityReviewBody)=>this.request<any>(`/scripts/${scriptId}/continuity/confirm`,{method:'POST',body});
+  previewContinuity=(scriptId:number,body:ContinuityReviewBody)=>this.request<ContinuityImpact>(`/scripts/${scriptId}/continuity/preview`,{method:'POST',body});
+  previewContinuityTime=(scriptId:number,body:unknown)=>this.request<ContinuityImpact>(`/scripts/${scriptId}/continuity/time-preview`,{method:'POST',body});
+  confirmContinuityTime=(scriptId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/continuity/time-confirm`,{method:'POST',body});
+  startContinuitySuggestions=(scriptId:number,body:{target_scene_id:string;expected_script_revision:number;expected_continuity_revision:number;request_key:string;related_entity_ids?:string[];preceding_source_ids?:string[];seed?:number})=>this.request<any>(`/scripts/${scriptId}/continuity/suggestions`,{method:'POST',body});
+  getContinuitySuggestionTasks=(scriptId:number)=>this.request<{tasks:any[]}>(`/scripts/${scriptId}/continuity/suggestion-tasks`);
+  getContinuitySuggestionTask=(scriptId:number,taskId:string)=>this.request<any>(`/scripts/${scriptId}/continuity/suggestion-tasks/${encodeURIComponent(taskId)}`);
+  cancelContinuitySuggestionTask=(scriptId:number,taskId:string)=>this.request<any>(`/scripts/${scriptId}/continuity/suggestion-tasks/${encodeURIComponent(taskId)}/cancel`,{method:'POST'});
+  previewContinuityUndo=(scriptId:number,body:ContinuityUndoBody)=>this.request<ContinuityImpact>(`/scripts/${scriptId}/continuity/undo-preview`,{method:'POST',body});
+  undoContinuity=(scriptId:number,body:ContinuityUndoBody)=>this.request<any>(`/scripts/${scriptId}/continuity/undo`,{method:'POST',body});
+  refreshContinuityShot=(scriptId:number,body:unknown)=>this.request<any>(`/scripts/${scriptId}/continuity/refresh-shot`,{method:'POST',body});
   getChapterScript = (chapterId: string) =>
     this.request<{ exists: boolean; script: any | null }>(`/chapters/${chapterId}/script`);
 
@@ -732,6 +781,7 @@ class ApiService {
       expected_revision: number;
       request_key: string;
       instructions?: string;
+      force_regenerate?: boolean;
     }
   ) => {
     const started = await this.request<{ candidate?: any; task_id?: string; attempt?: number }>(`/scripts/${scriptId}/storyboard-candidates`, {

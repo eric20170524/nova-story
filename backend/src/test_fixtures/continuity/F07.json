@@ -1,0 +1,16 @@
+{
+  "id":"F07","version":1,"title":"确认、否定意图与未支持回退","matrix":["C10-A","C11-A","C16"],"project_id":"F07:project","source_revision":1,"story_order_revision":1,
+  "entities":[{"id":"F07:lin","kind":"character","name":"林岚","character_id":1},{"id":"F07:chen","kind":"character","name":"陈月","character_id":2},{"id":"F07:u1","kind":"prop","name":"黑伞 U1"},{"id":"F07:cup","kind":"prop","name":"杯子"},{"id":"F07:coat","kind":"garment","name":"蓝外套"},{"id":"F07:table","kind":"location","name":"桌面"}],
+  "initial_state":{"F07:u1":{"holder":null,"location":"F07:table","integrity":{"unknown":true}},"F07:cup":{"holder":null,"integrity":"intact"},"F07:coat":{"wearer":"F07:chen","color":"blue","wetness":{"unknown":true},"integrity":"intact"}},
+  "sources":[{"id":"take","scene_id":"F07:s1","text":"陈月拿起黑伞 U1。"},{"id":"intent","scene_id":"F07:s1","text":"陈月没有拿黑伞 U1，想打碎杯子。"},{"id":"coat","scene_id":"F07:s1","text":"陈月的蓝外套湿透了。"},{"id":"shared","scene_id":"F07:s1","text":"林岚和陈月共同握着黑伞 U1。"},{"id":"time","scene_id":"F07:s2","text":"不知过了多久，陈月再次看见黑伞 U1。"}],
+  "cases":[
+    {"id":"confirmed-completion","polarity":"positive","source_ids":["take"],"operations":["human confirms evidence"],"expected":{"status":"ready","changes":[{"entity_id":"F07:u1","attribute_id":"holder","operation":"assign","value":"F07:chen","source_id":"take","authority":"human"}],"checks":{"F07:u1":{"holder":"F07:chen","integrity":{"unknown":true}}},"issues":[]}},
+    {"id":"negation-and-intention","polarity":"negative","source_ids":["intent"],"operations":["review suggestions"],"expected":{"status":"ready","changes":[],"checks":{"F07:u1":{"holder":null},"F07:cup":{"integrity":"intact"}},"issues":[]}},
+    {"id":"unconfirmed-wrong-owner","polarity":"negative","source_ids":["coat"],"operations":["inject model suggestion wearer=lin","inject self-audit faithful=true","attempt snapshot write"],"expected":{"status":"pending_review","changes":[],"checks":{"F07:coat":{"wearer":"F07:chen","wetness":{"unknown":true}}},"issues":["CONTINUITY_REVIEW_REQUIRED"]}},
+    {"id":"legal-human-correction","polarity":"positive","source_ids":["coat"],"operations":["human corrects owner and confirms wetness evidence"],"expected":{"status":"ready","changes":[{"entity_id":"F07:coat","attribute_id":"wetness","operation":"assign","value":"wet","source_id":"coat","authority":"human"}],"checks":{"F07:coat":{"wearer":"F07:chen","color":"blue","wetness":"wet"}},"issues":[]}},
+    {"id":"shared-holder","polarity":"negative","source_ids":["shared"],"operations":["review shared holding evidence"],"expected":{"status":"pending_review","changes":[],"checks":{"F07:u1":{"holder":null}},"issues":["shared holder unsupported"],"retained_entity_ids":["F07:lin","F07:chen"]}},
+    {"id":"unknown-time","polarity":"negative","source_ids":["time"],"operations":["review unknown time boundary"],"expected":{"status":"pending_review","changes":[],"checks":{"F07:u1":{"integrity":{"unknown":true}}},"issues":["unknown story time"]}}
+  ],
+  "shots":[{"id":"F07:shot-coat","scene_id":"F07:s1","reads":[{"entity_id":"F07:coat","attribute_id":"wetness"}]},{"id":"F07:shot-cup","scene_id":"F07:s1","reads":[{"entity_id":"F07:cup","attribute_id":"integrity"}]}],
+  "expected_dependencies":{"trigger":{"entity_id":"F07:coat","attribute_id":"wetness"},"affected_shots":["F07:shot-coat"],"unchanged_shots":["F07:shot-cup"]}
+}

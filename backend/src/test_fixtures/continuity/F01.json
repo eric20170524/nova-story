@@ -1,0 +1,58 @@
+{
+  "id": "F01", "version": 1, "title": "三场主链与调用顺序", "matrix": ["C02-A", "C03-A", "C07-A"],
+  "project_id": "F01:project", "source_revision": 1, "story_order_revision": 1,
+  "entities": [
+    {"id":"F01:lin","kind":"character","name":"林岚","character_id":1},
+    {"id":"F01:chen","kind":"character","name":"陈月","character_id":2},
+    {"id":"F01:coat","kind":"garment","name":"蓝外套"},
+    {"id":"F01:umbrella","kind":"prop","name":"黑伞"},
+    {"id":"F01:door","kind":"object","name":"木门"},
+    {"id":"F01:lock","kind":"component","name":"门锁","parent_entity_id":"F01:door"},
+    {"id":"F01:room","kind":"location","name":"房间"}
+  ],
+  "initial_state": {
+    "F01:coat":{"wearer":"F01:lin","color":"blue","wetness":"dry","integrity":"intact"},
+    "F01:umbrella":{"holder":"F01:lin","integrity":"intact","location":"F01:room"},
+    "F01:door":{"integrity":"intact","open_state":"open"},
+    "F01:lock":{"lock_function":"working"}
+  },
+  "sources": [
+    {"id":"coat","scene_id":"F01:s1","text":"林岚穿湿透的蓝外套。"},
+    {"id":"umbrella","scene_id":"F01:s1","text":"林岚握着柄折断的黑伞。"},
+    {"id":"lock","scene_id":"F01:s1","text":"门锁已经损坏。"},
+    {"id":"handover","scene_id":"F01:s2","text":"林岚把黑伞递给陈月。"},
+    {"id":"return","scene_id":"F01:s3","text":"陈月站在门旁。林岚回到房间。"},
+    {"id":"offered","scene_id":"F01:s2","text":"林岚向陈月递出黑伞，陈月没有接住。"},
+    {"id":"dry","scene_id":"F01:s3","text":"林岚已经晾干蓝外套。"}
+  ],
+  "cases": [
+    {"id":"ordered","polarity":"positive","source_ids":["coat","umbrella","lock","handover","return"],"operations":["confirm entry","preview s1","preview s2","preview s3"],"expected":{"status":"ready","changes":[{"entity_id":"F01:coat","attribute_id":"wetness","operation":"assign","value":"wet","source_id":"coat"},{"entity_id":"F01:umbrella","attribute_id":"integrity","operation":"assign","value":"broken","source_id":"umbrella"},{"entity_id":"F01:lock","attribute_id":"lock_function","operation":"assign","value":"broken","source_id":"lock"},{"entity_id":"F01:umbrella","attribute_id":"holder","operation":"transfer","from":"F01:lin","value":"F01:chen","source_id":"handover"}],"checks":{"F01:coat":{"wetness":"wet","color":"blue"},"F01:umbrella":{"holder":"F01:chen","integrity":"broken"},"F01:lock":{"lock_function":"broken"}},"issues":[]}},
+    {"id":"out-of-order","polarity":"positive","source_ids":["coat","umbrella","lock","handover","return"],"operations":["confirm entry","preview s3","preview s1","preview s2"],"expected":{"status":"ready","changes":[],"checks":{"F01:coat":{"wetness":"wet"},"F01:umbrella":{"holder":"F01:chen","integrity":"broken"}},"issues":[],"same_as":"ordered","writes_only_target_scene":true}},
+    {"id":"missing-entry","polarity":"negative","source_ids":["return"],"entry_confirmed":false,"operations":["preview s3"],"expected":{"status":"pending_review","changes":[],"checks":{},"issues":["CONTINUITY_ENTRY_REQUIRED"]}},
+    {"id":"not-received","polarity":"negative","source_ids":["umbrella","offered"],"operations":["confirm entry","confirm sources"],"expected":{"status":"ready","changes":[{"entity_id":"F01:umbrella","attribute_id":"integrity","operation":"assign","value":"broken","source_id":"umbrella"}],"checks":{"F01:umbrella":{"holder":"F01:lin","integrity":"broken"}},"issues":[]}},
+    {"id":"explicit-drying","polarity":"positive","source_ids":["coat","dry"],"operations":["confirm entry","confirm sources"],"expected":{"status":"ready","changes":[{"entity_id":"F01:coat","attribute_id":"wetness","operation":"assign","value":"wet","source_id":"coat"},{"entity_id":"F01:coat","attribute_id":"wetness","operation":"assign","value":"dry","source_id":"dry"}],"checks":{"F01:coat":{"wetness":"dry","color":"blue"}},"issues":[]}}
+  ],
+  "shots": [
+    {"id":"F01:shot-coat","scene_id":"F01:s3","reads":[{"entity_id":"F01:coat","attribute_id":"wetness"}]},
+    {"id":"F01:shot-umbrella","scene_id":"F01:s3","reads":[{"entity_id":"F01:umbrella","attribute_id":"holder"},{"entity_id":"F01:umbrella","attribute_id":"integrity"}]}
+  ],
+  "expected_dependencies":{"affected_shots":["F01:shot-coat"],"unchanged_shots":["F01:shot-umbrella"],"trigger":{"entity_id":"F01:coat","attribute_id":"wetness"}},
+  "legacy_mock": {
+    "states": {
+      "林岚穿湿透的蓝外套。":[{"entity":"林岚","attribute":"wardrobe","item":"外套","value":"湿透的蓝外套"}],
+      "林岚握着柄折断的黑伞。":[{"entity":"林岚","attribute":"holding","item":"黑伞","value":"柄折断的黑伞"}]
+    },
+    "translations": {
+      "林岚穿湿透的蓝外套。":"Lin Lan wears a soaking wet blue coat.",
+      "林岚握着柄折断的黑伞。":"Lin Lan holds a black umbrella with a broken handle.",
+      "门锁已经损坏。":"The door lock is broken.",
+      "林岚把黑伞递给陈月。":"Lin Lan hands the black umbrella to Chen Yue.",
+      "陈月站在门旁。":"Chen Yue stands beside the door.",
+      "林岚回到房间。":"Lin Lan returns to the room.",
+      "林岚 衣着：湿透的蓝外套":"Lin Lan wears a soaking wet blue coat.",
+      "林岚 持物：柄折断的黑伞":"Lin Lan holds a black umbrella with a broken handle.",
+      "陈月 持物：黑伞":"Chen Yue holds a black umbrella.",
+      "房间":"A room.","室内":"Indoors.","白天":"Daytime."
+    }
+  }
+}

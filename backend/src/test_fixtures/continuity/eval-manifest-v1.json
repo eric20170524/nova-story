@@ -1,0 +1,12 @@
+{
+  "dataset_version": "continuity-eval-1",
+  "labels_file": "eval-labels-v1.json",
+  "labels_sha256": "a9185f8dea6c70fba124fd59fe19c8a78e095f4ac7a195ba02c1aaf7fbc459a3",
+  "cases": 36,
+  "seeds": [
+    41,
+    97
+  ],
+  "logical_tasks": 72,
+  "model_run": false
+}

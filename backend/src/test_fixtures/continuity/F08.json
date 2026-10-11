@@ -1,0 +1,16 @@
+{
+  "id":"F08","version":1,"title":"旧项目、哈希与复制闭包","matrix":["C13-A"],"project_id":"F08:project","source_revision":1,"story_order_revision":1,
+  "entities":[{"id":"F08:lin","kind":"character","name":"林岚","character_id":1},{"id":"F08:coat","kind":"garment","name":"外套"},{"id":"F08:scarf","kind":"garment","name":"围巾"},{"id":"F08:door","kind":"object","name":"木门"},{"id":"F08:lock","kind":"component","name":"门锁","parent_entity_id":"F08:door"}],
+  "initial_state":{"F08:coat":{"wearer":"F08:lin","color":"blue","wetness":"wet","integrity":"intact"},"F08:scarf":{"wearer":"F08:lin","color":"white","wetness":"dry","integrity":"intact"},"F08:lock":{"lock_function":"broken"}},
+  "sources":[{"id":"wardrobe","scene_id":"F08:s1","text":"林岚穿蓝外套，戴白围巾。"},{"id":"revision","scene_id":"F08:s1","text":"林岚穿蓝外套，戴白围巾。\n"}],
+  "cases":[
+    {"id":"repeat-and-equivalent-permutation","polarity":"positive","source_ids":["wardrobe"],"operations":["repeat identical replay","reverse entity enumeration","reverse state cell enumeration"],"expected":{"status":"ready","changes":[],"checks":{},"issues":[],"state_hash_relation":"equal","source_hash_relation":"equal"}},
+    {"id":"evidence-revision","polarity":"negative","source_ids":["wardrobe","revision"],"operations":["change exact source text revision without changing values"],"expected":{"status":"ready","changes":[],"checks":{},"issues":[],"state_hash_relation":"equal","source_hash_relation":"different"}},
+    {"id":"story-order-revision","polarity":"negative","source_ids":["wardrobe"],"operations":["change story order or binding revision","apply old candidate"],"expected":{"status":"conflict","changes":[],"checks":{},"issues":["CONTINUITY_STALE"]}},
+    {"id":"copy-and-import","polarity":"positive","source_ids":["wardrobe"],"operations":["copy project","export and import","remap entities components relations evidence shots"],"expected":{"status":"ready","changes":[],"checks":{},"issues":[],"cross_project_references":0}},
+    {"id":"legacy-no-snapshot","polarity":"negative","source_ids":["wardrobe"],"operations":["view old timeline media","import legacy fact.states as suggestions","attempt new continuity write"],"expected":{"status":"pending_review","changes":[],"checks":{},"issues":["CONTINUITY_ENTRY_REQUIRED"],"preserve_media":true}},
+    {"id":"direct-write-bypass","polarity":"negative","source_ids":["wardrobe"],"operations":["POST /api/timeline/generate","Agent GENERATE_TIMELINE"],"expected":{"status":"conflict","changes":[],"checks":{},"issues":["TIMELINE_DIRECT_WRITE_DISABLED"],"http_status":410}}
+  ],
+  "shots":[{"id":"F08:shot-coat","scene_id":"F08:s1","reads":[{"entity_id":"F08:coat","attribute_id":"wetness"}],"asset_url":"fixture://F08/old-coat.png","versions":["F08:v1"]},{"id":"F08:shot-scarf","scene_id":"F08:s1","reads":[{"entity_id":"F08:scarf","attribute_id":"color"}],"asset_url":"fixture://F08/old-scarf.png","versions":["F08:v2"]}],
+  "expected_dependencies":{"trigger":{"entity_id":"F08:coat","attribute_id":"wetness"},"affected_shots":["F08:shot-coat"],"unchanged_shots":["F08:shot-scarf"]}
+}

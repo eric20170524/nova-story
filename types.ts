@@ -127,6 +127,12 @@ export interface GlossaryItem {
   category?: string | null;
 }
 
+// Shared continuity types are derived from the backend schema; these exports have no runtime import.
+export type { ContinuityEntity, ContinuityEntityRelation, ContinuityStoryOrder, ContinuityStoryPosition, ContinuityShotReference } from './backend/src/schemas/continuity';
+export type { ContinuityAttributeId, ContinuitySourceEvidence, ContinuityEvidence, ContinuityChangeProposal, ContinuityConfirmation, ContinuityConfirmedChange, ContinuityCell } from './backend/src/schemas/continuity_state';
+export type { ContinuityOverlayProposal, ContinuityConfirmedOverlay, ContinuityRead } from './backend/src/schemas/continuity_snapshot';
+export type { ShotSourceReference } from './backend/src/schemas/shot_contract';
+
 // Timeline & Director Mode
 export interface SceneVersionSummary {
   version: number;
@@ -134,6 +140,8 @@ export interface SceneVersionSummary {
   asset_status?: string;
   asset_url?: string | null;
   has_image?: boolean;
+  formal_stage?: 'draft' | 'production';
+  reference_hash?: string | null;
   created_at?: string;
 }
 
@@ -308,6 +316,7 @@ export interface VideoPreflightResponse {
 
 export interface VideoGenerationRequest {
   request_key?: string;
+  inference_variant?: string;
   expected_input_signature?: string;
   scene_id: number;
   scene_version?: number;
@@ -425,6 +434,8 @@ export interface GeneratePayload {
   reference_model_type?: string;
   model_type?: string;
   gen_type?: string;
+  /** Draft composition and formal storyboard candidate. Independent of mode and resolution. */
+  production_stage?: 'draft' | 'production';
   denoise?: number;
   output_spec?: ImageOutputSpec;
   generation_params?: GenerationParams;

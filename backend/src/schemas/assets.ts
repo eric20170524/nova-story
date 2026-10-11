@@ -32,6 +32,8 @@ export const GenerateRequestSchema = z.object({
   workflow: z.record(z.string(), z.any()),
   scene_id: z.number().int(),
   mode: z.string().default('standard'),
+  /** Draft and formal storyboard are separate from `mode` and from output resolution. */
+  production_stage: z.enum(['draft', 'production']).optional().default('draft'),
   generation_params: GenerationParamsSchema,
   /** When true, fork a new scene version (copy text, clear image) then generate into it */
   new_version: z.boolean().optional().default(false)

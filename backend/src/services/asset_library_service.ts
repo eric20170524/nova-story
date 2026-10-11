@@ -5,6 +5,8 @@ import { LLMService } from './llm';
 import { GenerationService } from './generation_service';
 import { AssetTaskStore } from './task_store';
 import { hashChapterContent } from '../schemas/story_plan';
+import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
+import { withLocalTextInference } from './local_text_inference';
 
 export const LibraryAssetInput = z.object({
   kind: z.enum(['location', 'prop']),
@@ -17,6 +19,8 @@ export type LibraryAsset = z.infer<typeof LibraryAssetInput> & {
   id: number; project_id: number; revision: number; image_url: string | null;
   status: string; task_id: string | null; source_chapter_ids: string;
 };
+const extractionCache = new InferenceCache<Array<z.infer<typeof LibraryAssetInput>>>('library-extraction');
+const EXTRACTION_RULES = 'library-extraction-v2-canonical-names';
 export class AssetLibraryError extends Error {
   constructor(message: string, public statusCode = 409) { super(message); }
 }
@@ -91,10 +95,11 @@ export class AssetLibraryService {
       const asset = await this.requireAsset(id);
       if (asset.status === 'generating') throw new AssetLibraryError('Cannot delete a generating asset');
       if (await db.get('SELECT scene_id FROM scene_asset_reference WHERE asset_id = ?', id)) throw new AssetLibraryError('Asset is referenced by a shot; remove its references first');
+      if (await db.get("SELECT entity_id FROM continuity_entity WHERE json_extract(entity_json,'$.asset_id')=?", id)) throw new AssetLibraryError('Asset is bound to a continuity entity; review its design binding before deleting');
       await db.run('DELETE FROM library_asset WHERE id = ?', id);
     });
   }
-  static async extract(chapterId: string, instructions?: string) {
+  static async extract(chapterId: string, instructions?: string, options: InferenceReuseOptions = {}) {
     const chapter = await db.get('SELECT * FROM chapter WHERE id = ?', chapterId);
     if (!chapter) throw new AssetLibraryError('Chapter not found', 404);
     if (!String(chapter.content || '').trim()) throw new AssetLibraryError('Chapter has no content', 400);
@@ -109,20 +114,34 @@ export class AssetLibraryService {
     const existingAssets = await this.list(Number(chapter.project_id));
     const characters = await db.all('SELECT name FROM character WHERE project_id = ?', chapter.project_id) as Array<{ name: string }>;
     const canonical = existingAssets.map(({ kind, name, description, visual_prompt }) => ({ kind, name, description, visual_prompt }));
-    const result = await LLMService.generateStructuredWithRetry(
-      `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
+    const promptFor = (canonicalAssets: typeof canonical) => `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
       `description 描述空间布局、材质、色彩及连续性；visual_prompt 用英文描述固定外观。` +
       `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind 和 name，不要改名，也不要为人物建档。kind 只能是 location 或 prop。` +
       `不同实体不能仅因材质、颜色或名称相近就合并；按原文分别管理各自的用途与位置。\n` +
       (instructions?.trim() ? `本次提取补充要求：${instructions.trim()}\n` : '') +
-      `已有资产：${JSON.stringify(canonical)}\n返回 JSON {assets:[{kind,name,description,visual_prompt}]}。\n本章正文：\n` + chapter.content,
-      schema);
-    if (!result) throw new AssetLibraryError('Model returned no assets', 502);
-    const accepted = normalizeExtractedAssets(result.assets, existingAssets, characters.map((character) => character.name));
-    if (!accepted.length) throw new AssetLibraryError('Model returned no location or prop assets', 502);
-    return withImmediateTransaction(async () => {
+      `已有资产：${JSON.stringify(canonicalAssets)}\n返回 JSON {assets:[{kind,name,description,visual_prompt}]}。\n本章正文：\n` + chapter.content;
+    const model = textModelFingerprint();
+    const inputFor = (canonicalAssets: typeof canonical) => ({ prompt: promptFor(canonicalAssets), characters, model });
+    const accepted = await extractionCache.run(inputFor(canonical), EXTRACTION_RULES, () => withLocalTextInference(async () => {
+      const result = await LLMService.generateStructuredWithRetry(promptFor(canonical), schema);
+      if (!result) throw new AssetLibraryError('Model returned no assets', 502);
+      const accepted = normalizeExtractedAssets(schema.parse(result).assets, existingAssets, characters.map((character) => character.name));
+      if (!accepted.length) throw new AssetLibraryError('Model returned no location or prop assets', 502);
+      return accepted;
+    }, { configuredProvider: true }), options);
+    const saved = await withImmediateTransaction(async () => {
       const fresh = await db.get('SELECT content FROM chapter WHERE id = ?', chapterId);
       if (!fresh || hashChapterContent(fresh.content) !== hashChapterContent(chapter.content)) throw new AssetLibraryError('Chapter changed during extraction');
+      const currentCharacters = await db.all('SELECT name FROM character WHERE project_id = ?', chapter.project_id);
+      if (JSON.stringify(currentCharacters) !== JSON.stringify(characters)) throw new AssetLibraryError('Characters changed during extraction');
+      const currentAssets = await this.list(Number(chapter.project_id));
+      const currentCanonical = currentAssets.map(({ kind, name, description, visual_prompt }) => ({ kind, name, description, visual_prompt }));
+      // A concurrent identical extraction may already have added the same assets.
+      const additions = currentCanonical.filter(asset => !canonical.some(old => old.kind === asset.kind && old.name === asset.name));
+      if (canonical.some(old => !currentCanonical.some(asset => JSON.stringify(asset) === JSON.stringify(old)))
+          || additions.some(asset => !accepted.some(data => data.kind === asset.kind && data.name === asset.name && data.description === asset.description && data.visual_prompt === asset.visual_prompt))) {
+        throw new AssetLibraryError('Asset library changed during extraction');
+      }
       const saved: LibraryAsset[] = [];
       for (const data of accepted) {
         const existing = await db.get('SELECT * FROM library_asset WHERE project_id = ? AND kind = ? AND name = ?', chapter.project_id, data.kind, data.name);
@@ -139,6 +158,15 @@ export class AssetLibraryService {
       }
       return saved;
     });
+    // Adding extracted assets changes the canonical library itself. Certify the
+    // resulting input too, so a repeat after saving does not infer the same chapter again.
+    const current = await this.list(Number(chapter.project_id));
+    const expected = [...canonical, ...accepted.filter(data => !canonical.some(asset => asset.kind === data.kind && asset.name === data.name))];
+    const after = current.map(({ kind, name, description, visual_prompt }) => ({ kind, name, description, visual_prompt }));
+    if (JSON.stringify(after) === JSON.stringify(expected.sort((a, b) => a.kind.localeCompare(b.kind)))) {
+      extractionCache.rememberVerified(inputFor(after), EXTRACTION_RULES, accepted, options);
+    }
+    return saved;
   }
   static async generate(id: number) {
     const asset = await this.requireAsset(id);

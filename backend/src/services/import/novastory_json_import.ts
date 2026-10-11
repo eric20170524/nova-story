@@ -8,6 +8,7 @@ import { ScriptService } from '../script_service';
 import { StoryPlanDocumentSchema, newPlanEntryId } from '../../schemas/story_plan';
 import { ensureSceneVersionBaseline } from '../scene_versions';
 import { restoreAssetLibrary } from '../asset_library_backup';
+import { restoreContinuity } from '../continuity_backup';
 
 const tableExists = async (tableName: string) => {
   const table = await db.get(
@@ -334,7 +335,8 @@ export const restoreNovaStoryJsonProject = async (
 
     const destinationScripts = await db.all(`SELECT cs.id FROM chapter_script cs JOIN chapter c ON c.id = cs.chapter_id WHERE c.project_id = ?`, projectId);
     await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, destinationScripts.map((script: any) => script.id));
-    await restoreAssetLibrary(importProject.assetLibrary, projectId, chapterIdMap, sceneIdMap);
+    const continuityAssets = await restoreAssetLibrary(importProject.assetLibrary, projectId, chapterIdMap, sceneIdMap);
+    await restoreContinuity(importProject.continuity, projectId, { scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap, assets: continuityAssets });
     await db.exec('COMMIT');
     return await db.get('SELECT * FROM project WHERE id = ?', projectId);
   } catch (error) {

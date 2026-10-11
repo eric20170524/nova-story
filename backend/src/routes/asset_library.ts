@@ -15,8 +15,8 @@ export const assetLibraryRoutes: FastifyPluginAsync = async app => {
   app.get('/projects/:id/asset-library', (req, reply) => handle(reply, () => AssetLibraryService.list(idOf(req.params))));
   app.post('/projects/:id/asset-library', (req, reply) => handle(reply, () => AssetLibraryService.create(idOf(req.params), req.body)));
   app.post('/asset-library/extract', (req, reply) => handle(reply, () => {
-    const body = z.object({ chapter_id: z.string().min(1), instructions: z.string().trim().max(3000).optional() }).parse(req.body);
-    return AssetLibraryService.extract(body.chapter_id, body.instructions);
+    const body = z.object({ chapter_id: z.string().min(1), instructions: z.string().trim().max(3000).optional(), force_regenerate: z.boolean().optional() }).parse(req.body);
+    return AssetLibraryService.extract(body.chapter_id, body.instructions, { forceRegenerate: body.force_regenerate });
   }));
   app.put('/asset-library/:id', (req, reply) => handle(reply, () => {
     const body = z.object({ expected_revision: z.number().int().positive(), asset: z.unknown() }).parse(req.body);

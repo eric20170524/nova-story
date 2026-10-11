@@ -1,12 +1,18 @@
 import { z } from 'zod';
+import { continuityVisualFact, type ContinuityVisualState } from '../continuity_visual_state';
 import {
   VideoPreset,
   VideoSpec,
   VideoGenerationRequest
 } from '../../schemas/video';
 import { flattenVisualTagMap } from '../reference_generation_policy';
-import { containsCjk } from '../english_visual_prompt';
+import { assertEnglishFidelity, containsCjk, FIDELITY_RULE_VERSION } from '../english_visual_prompt';
 import { LLMService } from '../llm';
+import { InferenceCache, isNodeTest, textModelFingerprint } from '../inference_cache';
+import { withLocalTextInference } from '../local_text_inference';
+
+export const VIDEO_PROMPT_RULE_VERSION = `video-motion-v2:${FIDELITY_RULE_VERSION}`;
+const motionCache = new InferenceCache<string>('video-motion');
 
 export interface CompileVideoSpecOptions {
   request: VideoGenerationRequest;
@@ -28,6 +34,7 @@ export interface CompileVideoSpecOptions {
     description?: string | null;
     visual_tags?: any;
   } | null;
+  style?: unknown;
 }
 
 const PONY_SCORE_REGEX = /score_\d+(_up)?|masterpiece|best quality|high quality|source_anime|very aesthetic|absurdres/gi;
@@ -138,6 +145,11 @@ export interface VideoMotionMaterials {
   camera_move: string;
   profile: string;
   primary_action: string;
+  camera_angle?: string;
+  continuity_states?: unknown[];
+  shot_intent?: string;
+  subject_scale?: string;
+  style?: unknown;
 }
 
 type VideoMotionTranslator = (materials: VideoMotionMaterials) => Promise<string>;
@@ -145,10 +157,8 @@ let motionTranslator: VideoMotionTranslator | null = null;
 
 export function setVideoMotionTranslatorForTests(fn: VideoMotionTranslator | null): void {
   motionTranslator = fn;
+  motionCache.clearMemory();
 }
-
-const underNodeTest = () => process.execArgv.includes('--test')
-  || process.argv.some(arg => arg.includes('.test.ts') || arg.includes('.test.tsx') || arg.includes('.test.js'));
 
 export async function echoVideoMotion(materials: VideoMotionMaterials): Promise<string> {
   const look = materials.appearance
@@ -163,15 +173,11 @@ export async function echoVideoMotion(materials: VideoMotionMaterials): Promise<
 const VideoMotionSchema = z.object({ prompt: z.string().min(1) }).strict();
 
 async function composeVideoMotion(materials: VideoMotionMaterials, translator?: VideoMotionTranslator | null): Promise<string> {
-  const translate = translator || motionTranslator || (underNodeTest() ? echoVideoMotion : null);
-  if (translate) {
-    const paragraph = cleanPromptForH3(await translate(materials));
-    if (!paragraph) throw new Error('视频运动提示词为空');
-    return paragraph;
-  }
+  const translate = translator || motionTranslator || (isNodeTest() ? echoVideoMotion : null);
   const system = [
     'Write one English motion prompt for a 5-second video.',
     'Use the visible facts, appearance fields, the still paragraph, location, shot type, and requested camera move.',
+    'Preserve continuity_states and use camera_angle, shot_intent, subject_scale and style for the framing and lighting.',
     'The still paragraph is the picture. Do not replace that picture with only primary_action.',
     'Write appearance fields as hair, face, body, clothing, and accessories. Do not write that a costume must remain strictly consistent.',
     'Do not add cloth or hair breeze unless a visible fact says the air moves.',
@@ -179,15 +185,26 @@ async function composeVideoMotion(materials: VideoMotionMaterials, translator?: 
     'If primary_action is present, keep that action. Do not replace it with breathing, blinking, or a closed mouth.',
     'English only. Return JSON {"prompt":"<the paragraph>"} only.',
   ].join(' ');
-  const result = await LLMService.getLocalProvider().generateStructured(
-    JSON.stringify(materials),
-    VideoMotionSchema,
-    system,
-    { temperature: 0.2, maxTokens: 500 },
-  );
-  const paragraph = cleanPromptForH3(result.prompt);
+  const generate = async () => {
+    const result = await LLMService.getLocalProvider().generateStructured(
+      JSON.stringify(materials),
+      VideoMotionSchema,
+      system,
+      { temperature: 0.2, maxTokens: 500 },
+    );
+    return result.prompt;
+  };
+  const paragraph = cleanPromptForH3(translate ? await translate(materials) : await generate());
   if (!paragraph) throw new Error('视频运动提示词为空');
-  if (containsCjk(paragraph)) throw new Error('视频运动提示词仍含中文');
+  if (containsCjk(paragraph) && translate !== echoVideoMotion) throw new Error('视频运动提示词仍含中文');
+  if (!translate) {
+    const source = [...materials.visible_facts, materials.location,
+      ...materials.appearance.flatMap(person => ([['hair', '头发'], ['face', '五官'], ['body', '体型'], ['clothing', '服装'], ['accessories', '配饰']] as const).map(([field, label]) => {
+        const key = field as keyof VideoAppearanceFields;
+        return person[key] ? `${person.name}的${label}：${person[key]}` : '';
+      }))].filter(Boolean).join('，');
+    await assertEnglishFidelity(source, paragraph);
+  }
   return paragraph;
 }
 
@@ -219,6 +236,32 @@ function appearanceFromCharacter(character: CompileVideoSpecOptions['character']
   }];
 }
 
+function continuityPromptLines(states: unknown[]): string[] {
+  return states.flatMap(state => {
+    if (!state || typeof state !== 'object') return [];
+    const row = state as Record<string, unknown>;
+    const attribute = String(row.attribute || row.attribute_id || '');
+    if (row.entity_id && attribute && Object.hasOwn(row, 'canonical_value')) {
+      return [continuityVisualFact(row as ContinuityVisualState)];
+    }
+    if (attribute === 'holding_hand') {
+      const canonical = row.canonical_value ?? row.value;
+      return [continuityVisualFact({
+        entity: String(row.entity || row.entity_id || 'object'),
+        entity_id: String(row.entity_id || row.entity || 'object'),
+        entity_kind: (row.entity_kind as ContinuityVisualState['entity_kind']) || 'prop',
+        attribute: 'holding_hand',
+        value: String(canonical ?? ''),
+        canonical_value: canonical,
+        fact_id: String(row.fact_id || 'video:holding_hand'),
+      })];
+    }
+    const value = String(row.value || '').trim();
+    if (!value) return [];
+    return [[row.entity, row.attribute, value].filter(Boolean).join(' ')];
+  }).filter(Boolean);
+}
+
 function visibleFacts(spec: Record<string, any>, primaryAction: string): string[] {
   const facts: string[] = [];
   const listed = Array.isArray(spec.visual_facts) ? spec.visual_facts : [];
@@ -226,12 +269,7 @@ function visibleFacts(spec: Record<string, any>, primaryAction: string): string[
     const text = typeof fact === 'string' ? fact : fact?.text;
     if (text) facts.push(String(text).trim());
   }
-  const states = Array.isArray(spec.continuity_states) ? spec.continuity_states : [];
-  for (const state of states) {
-    const value = String(state?.value || '').trim();
-    if (!value) continue;
-    facts.push([state.entity, state.attribute, value].filter(Boolean).join(' '));
-  }
+  facts.push(...continuityPromptLines(Array.isArray(spec.continuity_states) ? spec.continuity_states : []));
   for (const prop of Array.isArray(spec.key_props) ? spec.key_props : []) {
     if (prop) facts.push(String(prop).trim());
   }
@@ -254,7 +292,7 @@ export const VideoSpecCompiler = {
       .join('; ');
     const subjectIdentity = look || String(character?.name || '').trim();
     const requestedMove = String(scene.camera_movement || '').trim();
-    const cameraMove = requestedMove && requestedMove !== 'static' && requestedMove !== 'none' ? requestedMove : '';
+    const cameraMove = requestedMove && !['static', 'none'].includes(requestedMove.toLowerCase()) ? requestedMove : '';
     const cameraMotion = cameraMove ? `Smooth camera movement: ${cameraMove}.` : 'Locked camera, static frame with no camera movement.';
     const materials: VideoMotionMaterials = {
       visible_facts: visibleFacts(spec, primaryAction),
@@ -265,8 +303,16 @@ export const VideoSpecCompiler = {
       camera_move: cameraMove,
       profile: request.profile,
       primary_action: primaryAction,
+      camera_angle: String(scene.camera_angle || spec.camera_angle || '').trim(),
+      continuity_states: continuityPromptLines(Array.isArray(spec.continuity_states) ? spec.continuity_states : []),
+      shot_intent: String(spec.shot_intent || ''),
+      subject_scale: String(spec.subject_scale || ''),
+      style: options.style || null,
     };
-    const motion = await composeVideoMotion(materials, translator);
+    const compose = () => composeVideoMotion(materials, translator);
+    const motion = await motionCache.run({ materials, model: textModelFingerprint() }, VIDEO_PROMPT_RULE_VERSION,
+      () => translator || motionTranslator || isNodeTest() ? compose() : withLocalTextInference(compose),
+      { variant: request.inference_variant });
     const charName = appearance[0]?.name || character?.name || 'Character';
     const temporalArc = primaryAction
       ? 'Narrative motion follows the composed still for 5 seconds.'

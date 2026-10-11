@@ -23,6 +23,35 @@
 
 文档索引见 [README.md](./README.md)。
 
+## 连续性与单场分轮制作（CT00–CT22）
+
+以下路径相对于 `/api`，不替代既有整章采纳或 coverage 三入口。读取不产生建议；模型建议启动返回 202，确认必须经过独立人工核对。
+
+| 方法与路径 | 作用 |
+| --- | --- |
+| GET `/scripts/:scriptId/continuity?target_scene_id=…` | 原文、实物、入场/变化/出场、时刻、时间计划、旧图与核对记录 |
+| POST `/scripts/:scriptId/continuity/preview`、`confirm` | 只读影响预览、人工确认状态；完整核对可带 `time_plan` |
+| POST `/scripts/:scriptId/continuity/undo-preview`、`undo` | 预览/撤销为新修订，旧图和无关成品保留 |
+| POST `/scripts/:scriptId/continuity/refresh-shot` | 人工确认实际读取时刻/属性，创建恢复版本 |
+| POST `/scripts/:scriptId/continuity/time-preview`、`time-confirm` | 人工故事日/回忆边界的只读预览和确认 |
+| POST `/scripts/:scriptId/continuity/suggestions` | 创建或复用本场模型建议任务，`automatic_accepted=0` |
+| GET `/scripts/:scriptId/continuity/suggestion-tasks`、`suggestion-tasks/:taskId` | 任务、断点、原输出、预算与待核对项 |
+| POST `/scripts/:scriptId/continuity/suggestion-tasks/:taskId/cancel` | 持久化取消，仍保留诊断与断点 |
+| GET `/scripts/:scriptId/production` | 本场制作轮次、候选、文字覆盖与正式镜头 |
+| POST `/scripts/:scriptId/production/candidates` | 保存本场骨架/定样/补齐候选与覆盖缺口 |
+| POST `/scripts/:scriptId/storyboard-candidates/:changeId/preview-scene`、`apply-scene` | 独立局部预览/采纳事务，不改其他场次 |
+| GET `/scripts/:scriptId/production/frames/:sceneId` | 当前图、冻结状态/参考、相邻镜与图片核对 |
+| POST `/scripts/:scriptId/production/frames/:sceneId/references` | 冻结同一实物及人物的具体历史参考版本 |
+| POST `/scripts/:scriptId/production/frames/:sceneId/review` | 接受/拒绝本版图片，六项检查，不回写剧情 |
+| POST `/scripts/:scriptId/production/frames/:sceneId/redraw` | 显式新版本重绘；须有当前状态与参考指纹 |
+| POST `/scripts/:scriptId/production/queue-preview`、`queue` | 列出有效缺图/跳过理由并按本场排队；重复点击不重复任务 |
+
+状态/时间核对使用 `review_action: "human_review"`、`expected_script_revision`、`expected_continuity_revision`、`request_key`、`reason`；确认预览另带 `expected_impact_hash`。`time_plan` 为 `schema_version:1, policy_version:"continuity-time-1", initial_day_id, boundaries`，每边界包含 `script_scene_id`、`kind`、精确完整 `evidence`。`new_day` 另需新 `day_id` 及每属性 `inherit/unknown` 规则；`flashback` 另需 `day_id, branch_id, anchor{script_scene_id,phase}, rules`；`return_reality` 只关闭匹配分支；`unknown` 不断言继承。客户端 actor/authority 不会被信任。
+
+身体持物手别为唯一 v2 属性，值 `physical_left/physical_right/both/unheld`，读取同时包含已确认 holder；其他十一项属性仍 v1。模型建议不可自动确认；复杂多人持有、消耗量和轴线未支持。
+
+连续性错误返回 `{code,detail}`：冲突/来源过期/未确认读取通常 409，无效请求 422，越出所属剧本可为 404。保留草稿、旧图、旧版本，并由返回问题引导人工核对。接受图片要求当前版本、图片地址、冻结参考指纹及六项检查全部通过；拒绝当前展示的过期图可以记录，未绑定旧项目图须先完成参考核对。
+
 ## 接口清单
 
 | 分组 | 方法与路径 | 作用 |
@@ -54,7 +83,7 @@
 | | `GET /characters/{id}/versions` | 角色视觉版本列表 |
 | | `POST /characters/{id}/versions` | 新建角色版本 |
 | | `POST /characters/{id}/versions/{version}/activate` | 激活角色版本 |
-| Timeline | `GET /timeline/{chapter_id}` | 获取正式分镜 |
+| Timeline | `GET /timeline/{chapter_id}` | 获取时间线镜头。旧称“正式分镜”，指镜头列表，不是 Track 8 的已采纳正式分镜图 |
 | | `POST /timeline/generate` | 自动拆解章节并原子替换分镜 |
 | | `PUT /timeline/scene/{scene_id}` | 更新分镜 |
 | | `GET /timeline/scene/{scene_id}/versions` | 场景内容/资产版本列表 |

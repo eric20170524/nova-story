@@ -102,8 +102,8 @@ test('upgrades a legacy main database schema idempotently', async () => {
     const migrationCount = await legacyDatabase.get(
       'SELECT COUNT(*) AS count FROM schema_migration'
     );
-    // 001_core through 022_asset_translation_names
-    assert.equal(migrationCount.count, 22);
+    // 001_core through 027_scene_production
+    assert.equal(migrationCount.count, 27);
     for (const table of ['character', 'library_asset']) {
       const columns = await legacyDatabase.all(`PRAGMA table_info("${table}")`);
       assert.ok(columns.some((column: any) => column.name === 'english_name'));

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContinuityStateSchema, VisualFactSchema, type VisualFact } from './storyboard_facts';
+import { ContinuityShotReferenceSchema } from './continuity';
 
 export const SHOT_INTENTS = [
   'establish',
@@ -31,6 +32,13 @@ export const ShotSourceReferenceSchema = z.object({
   script_revision: z.number().int().optional().nullable(),
   script_scene_id: z.string().optional().nullable(),
   block_ids: z.array(z.string()).optional().nullable(),
+  continuity: ContinuityShotReferenceSchema.optional(),
+}).superRefine((source, context) => {
+  if (!source.continuity) return;
+  const position = source.continuity.story_position;
+  if (source.type !== 'script' || source.script_id !== position.script_id || source.script_revision !== position.script_revision || source.script_scene_id !== position.script_scene_id) {
+    context.addIssue({ code: 'custom', path: ['continuity'], message: 'Continuity moment must match the screenplay source' });
+  }
 });
 export const AudibleBlockSchema = z.object({ id: z.string(), type: z.enum(['dialogue', 'voiceover', 'sound']), text: z.string(), characterId: z.number().int().nullable().optional(), delivery: z.string().optional() });
 
@@ -117,8 +125,11 @@ export const packShotSpec = (shot: {
         script_revision: shot.source.script_revision ?? null,
         script_scene_id: shot.source.script_scene_id ?? null,
         block_ids: Array.isArray(shot.source.block_ids) ? shot.source.block_ids : null,
+        ...(shot.source.continuity ? { continuity: shot.source.continuity } : {}),
       }
     : null;
+
+  if (source?.continuity) ShotSourceReferenceSchema.parse(source);
 
   const payload = {
     ...(shot.scene_context ? { scene_context: shot.scene_context } : {}),
