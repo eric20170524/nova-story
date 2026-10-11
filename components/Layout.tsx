@@ -44,12 +44,12 @@ export const Layout: React.FC = () => {
         <div className="h-16 flex items-center justify-center border-b border-slate-200/80 dark:border-slate-800/80">
           <button
              onClick={() => navigate('/')}
-             className="w-10 h-10 rounded-2xl overflow-hidden shadow-md shadow-indigo-500/20 ring-1 ring-indigo-500/30 hover:ring-indigo-500/70 hover:scale-105 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 bg-gradient-to-tr from-indigo-600 to-violet-500 p-0.5"
+             className="w-10 h-10 rounded-2xl overflow-hidden shadow-md shadow-teal-700/20 ring-1 ring-teal-700/30 hover:ring-teal-600/70 hover:scale-105 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 bg-[#0F766E] p-0.5"
              title="NovaStory Studio"
              aria-label="NovaStory Home"
           >
             <img
-              src="/logo-192.png"
+              src="/logo-192.png?v=teal-1"
               alt="NovaStory"
               className="w-full h-full object-cover rounded-[14px]"
               width={40}
