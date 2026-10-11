@@ -386,7 +386,7 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const history = JSON.parse((await db.get('SELECT result_json FROM script_change WHERE id=?', candidate.id)).result_json);
     assert.equal(history.previous_timeline.scenes[0].asset_url, '/old.png');
   });
-  await t.test('句内连续动作由文本模型拆开，模型不拆则保持一句', async () => {
+  await t.test('句内连续动作由文本模型拆开，拆不开则不能当成单镜头事实', async () => {
     const source = '阿岚打开门并走到屋外。';
     assert.deepEqual(verbatimActionSplit(source, ['阿岚打开门', '并走到屋外。']), ['阿岚打开门', '并走到屋外。']);
     assert.equal(verbatimActionSplit(source, ['阿岚推开门', '并走到屋外。']), null);
@@ -396,7 +396,10 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
       const request = JSON.parse(prompt);
       if (request.task === 'atomicity') return schema.parse({ result: 'sequence' });
-      if (request.task === 'split_actions') return schema.parse({ spans: [{ text: '阿岚打开门' }, { text: '并走到屋外。' }] });
+      if (request.task === 'split_actions') {
+        assert.match(String(system), /Do not return the whole sentence/);
+        return schema.parse({ spans: [{ text: '阿岚打开门' }, { text: '并走到屋外。' }] });
+      }
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
     const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
@@ -415,24 +418,34 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
       if (request.task === 'split_actions') return schema.parse({ spans: [{ text: request.source }] });
       return m.provider.generateStructured(prompt, schema, system, options);
     } };
-    const kept = await StoryboardGenerationService.generateStoryboardCandidate({ ...keptSource.params, provider: keeping });
-    const keptFacts = JSON.parse(kept.after_json).fact_contract.facts.filter((fact: any) => fact.block_id === 'action_0');
-    assert.deepEqual(keptFacts.map((fact: any) => fact.text), ['阿岚打开门然后走到屋外。']);
+    await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...keptSource.params, provider: keeping }), /连续动作未能拆成/);
+    const keptTask = await StoryboardGenerationService.getTask(keptSource.script.id, StoryboardGenerationService.taskId(keptSource.script.id, keptSource.params.requestKey));
+    assert.equal(keptTask.progress.phase, 'needs_review');
+    assert.equal((await db.get("SELECT COUNT(*) AS n FROM script_change WHERE script_id=? AND kind='storyboard'", keptSource.script.id)).n, 0);
   });
-  await t.test('没有连词的单句动作即使被判成序列也留在当前镜头', async () => {
-    const doc = document();
-    doc.scenes[0]!.blocks[0]!.text = '清暮宫内殿的门在身后合拢。';
-    const f = await confirmed(doc);
-    const m = providerFixture();
-    const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
-      if (JSON.parse(prompt).task === 'atomicity') return schema.parse({ result: 'sequence' });
-      return m.provider.generateStructured(prompt, schema, system, options);
-    } };
-    const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider });
-    const payload = JSON.parse(candidate.after_json);
-    assert.equal(payload.fact_contract.facts.filter((fact: any) => fact.kind === 'uncertain').length, 0);
-    assert.equal(payload.fact_contract.facts.find((fact: any) => fact.text.includes('门在身后合拢')).kind, 'visual');
-    assert.ok(payload.shots.length >= 1);
+  await t.test('已判定为连续动作时，拆分失败不会退回一个可采纳镜头', async () => {
+    const source = '林岚先坐下然后站起。';
+    const splits: Array<(text: string) => Array<{ text: string }>> = [
+      (text) => [{ text }],
+      (text) => [{ text: text.slice(0, 4) }, { text: text.slice(5) }],
+      () => [{ text: '林岚坐下' }, { text: '然后站起。' }],
+    ];
+    for (const spans of splits) {
+      const doc = document();
+      doc.scenes[0]!.blocks[0]!.text = source;
+      const f = await confirmed(doc);
+      const m = providerFixture();
+      const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
+        const request = JSON.parse(prompt);
+        if (request.task === 'atomicity') return schema.parse({ result: 'sequence' });
+        if (request.task === 'split_actions') return schema.parse({ spans: spans(request.source) });
+        return m.provider.generateStructured(prompt, schema, system, options);
+      } };
+      await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider }), /连续动作未能拆成/);
+      const task = await StoryboardGenerationService.getTask(f.script.id, StoryboardGenerationService.taskId(f.script.id, f.params.requestKey));
+      assert.equal(task.progress.phase, 'needs_review');
+      assert.equal((await db.get("SELECT COUNT(*) AS n FROM script_change WHERE script_id=? AND kind='storyboard'", f.script.id)).n, 0);
+    }
   });
   await t.test('整批翻译含中文时改为逐条翻译', async () => {
     const doc = document();

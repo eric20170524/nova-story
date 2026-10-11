@@ -120,10 +120,76 @@ test('draft generation keeps a legacy shot image and a formal request stays clos
     const master = await db.get('SELECT image_url FROM scene_asset_image_snapshot WHERE scene_id = 9995');
     assert.equal(master.image_url, '/static/candidate.png');
     assert.equal((await db.get('SELECT asset_url FROM scene_version WHERE scene_id = 9995 AND version = 1')).asset_url, '/static/kept.png');
+    const repeated = await app.inject({
+      method: 'POST',
+      url: '/api/assets/formal-decision/9995',
+      payload: { expected_version: 2, reference_hash: referenceHash, verdict: 'accepted', checks, note: '六项都通过' },
+    });
+    assert.equal(repeated.statusCode, 200, repeated.body);
+    assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene_asset_image_snapshot WHERE scene_id = 9995')).n, 1);
+    assert.equal((await db.get('SELECT active_version, asset_url FROM scene WHERE id = 9995')).asset_url, '/static/candidate.png');
   } finally {
     await app.close();
     GenerationService.generateAssets = originalGenerate;
     SettingsManager.loadSettings = originalSettings;
+  }
+});
+
+test('formal adoption rejects a production candidate after continuity goes stale', async () => {
+  await initDb();
+  await db.run("INSERT INTO project (id, title, settings) VALUES (82003, '过期采纳', '{}')");
+  await db.run(`INSERT INTO chapter (id, project_id, "index", title) VALUES ('stale-ch', 82003, 1, '章')`);
+  const hash64 = 'ab'.repeat(32);
+  const continuity = {
+    story_position: {
+      version: 1, project_id: 82003, script_id: 1, script_revision: 1, screenplay_order_revision: 1,
+      story_segment_id: 'seg', script_scene_id: 'sc', scene_order: 0, beat_id: null, beat_order: null,
+      change_order: 0, moment_id: 'moment', phase: 'after',
+    },
+    entity_ids: [],
+    reference: { snapshot_id: 'snap', snapshot_revision: 1, state_hash: hash64, source_hash: hash64, dependency_hash: hash64, reads: [] },
+  };
+  const spec = JSON.stringify({
+    location: '清暮宫内殿',
+    primary_action: '南宫雪站在殿内',
+    source: { type: 'script', script_id: 1, script_revision: 1, script_scene_id: 'sc', continuity },
+  });
+  await db.run(
+    `INSERT INTO scene (id, chapter_id, "index", shot_spec, asset_status, asset_url, active_version, continuity_status)
+     VALUES (77, 'stale-ch', 1, ?, 'completed', '/static/kept.png', 1, 'stale')`,
+    spec,
+  );
+  const request = {
+    production_stage: 'production', source_version: 1, reference_hash: hash64,
+    model_fingerprint: { model: 'pony', style: null },
+    request_snapshot: { mode: 'standard', generation_params: null, production_stage: 'production' },
+    control_branch: 'continuity_pin', unused_reasons: [],
+  };
+  await db.run(
+    `INSERT INTO scene_version (scene_id, version, label, asset_status, asset_url, shot_spec) VALUES (77, 1, 'v1', 'completed', '/static/kept.png', ?), (77, 2, 'formal-candidate', 'completed', '/static/candidate.png', ?)`,
+    spec, JSON.stringify({ ...JSON.parse(spec), formal_request: request }),
+  );
+  const pin = { version: 1, scene_id: 77, scene_version: 2, dependency_hash: hash64, source_hash: hash64, references: [], text_characters: [], reason: 'saved with the candidate' };
+  await db.run(
+    `INSERT INTO scene_production_frame (scene_id, scene_version, round, reference_versions_json) VALUES (77, 2, 'formal', ?)`,
+    JSON.stringify(pin),
+  );
+  const app = Fastify();
+  await app.register(assetRoutes, { prefix: '/api/assets' });
+  try {
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/api/assets/formal-decision/77',
+      payload: { expected_version: 2, reference_hash: hash64, verdict: 'accepted', checks, note: '六项都通过，但依赖已变' },
+    });
+    assert.equal(accepted.statusCode, 409);
+    assert.equal(accepted.json().code, 'CONTINUITY_STALE');
+    const scene = await db.get('SELECT asset_url, active_version FROM scene WHERE id = 77');
+    assert.equal(scene.asset_url, '/static/kept.png');
+    assert.equal(scene.active_version, 1);
+    assert.equal((await db.get('SELECT image_review_json FROM scene_production_frame WHERE scene_id = 77 AND scene_version = 2')).image_review_json, null);
+  } finally {
+    await app.close();
   }
 });
 

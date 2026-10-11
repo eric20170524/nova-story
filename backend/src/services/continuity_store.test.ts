@@ -99,6 +99,24 @@ test('CT05 actual script/source changes invalidate fingerprint and snapshot read
   assert.equal((await db.get('SELECT asset_url FROM scene WHERE id=101')).asset_url, '/old-umbrella.svg');
 });
 
+test('formal activation refuses a stale dependency while history activation can still show that version', async () => {
+  const data = await seed();
+  await commitContinuityLedger(data.params);
+  await bindContinuityShot(101, { script_id: 30, script_scene_id: 'F06:s3', moment_id: 'F06:s3:exit', phase: 'after', reads: [{ entity_id: 'F06:u1', attribute_id: 'integrity' }] });
+  const clone = await createSceneVersion(101, { clearAsset: false, activate: false });
+  assert.equal(clone?.version.version, 2);
+  const before = await db.get('SELECT active_version, asset_url FROM scene WHERE id=101');
+  await commitContinuityLedger({ ...data.params, expected_revision: 1, request_key: 'formal-stale', input: confirmedContinuityFixture('F06', 'upstream-revision').input });
+  await assert.rejects(() => activateSceneVersion(101, 2, { purpose: 'formal' }), (error: any) => error instanceof ContinuityStoreError && error.code === 'CONTINUITY_STALE');
+  const kept = await db.get('SELECT active_version, asset_url FROM scene WHERE id=101');
+  assert.equal(kept.active_version, before.active_version);
+  assert.equal(kept.asset_url, before.asset_url);
+  const shown = await activateSceneVersion(101, 2);
+  assert.equal(shown.active_version, 2);
+  assert.equal(shown.asset_url, before.asset_url);
+  assert.equal(shown.continuity_status, 'stale');
+});
+
 test('CT05 version cloning retains dependencies and old-version activation preserves the image while marking stale', async () => {
   const data = await seed(); await commitContinuityLedger(data.params);
   await bindContinuityShot(101, { script_id: 30, script_scene_id: 'F06:s3', moment_id: 'F06:s3:exit', phase: 'after', reads: [{ entity_id: 'F06:u1', attribute_id: 'integrity' }] });

@@ -14,7 +14,7 @@ import { generateSceneNarrationForChapter } from '../services/scene_narration_se
 import { regenerateSceneVisualPromptsForChapter } from '../services/scene_visual_prompt_service';
 import { ShotContractFieldsSchema } from '../schemas/shot_contract';
 import { buildCharacterLockRefsForChapter } from '../services/timeline_generation_service';
-import { compileEnglishShotPrompt } from '../services/english_visual_prompt';
+import { compileEnglishShotPrompt, UnverifiedVisualPrompt } from '../services/english_visual_prompt';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
 import { normalizeImageModelFamily, styleLightingMaterial } from '../services/image_generation_policy';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
@@ -188,6 +188,13 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
           },
         );
       } catch (error: any) {
+        if (error instanceof UnverifiedVisualPrompt) {
+          return reply.status(502).send({
+            code: 'ENGLISH_PROMPT_NEEDS_REVIEW',
+            detail: error.message,
+            candidate_prompt: error.prompt,
+          });
+        }
         return reply.status(502).send({
           detail: error?.message || 'English visual prompt failed',
         });

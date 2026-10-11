@@ -140,10 +140,13 @@ export async function getActiveVersionNumber(sceneId: number): Promise<number> {
   return Number(scene?.active_version || 1);
 }
 
-/** Apply a version row onto the denormalized scene columns and set active_version */
+/** Apply a version row onto the denormalized scene columns and set active_version.
+ * `formal` refuses a missing or stale dependency before any write.
+ * History display may still switch to an old version and mark it stale. */
 export async function activateSceneVersion(
   sceneId: number,
-  version: number
+  version: number,
+  options: { purpose?: 'history' | 'formal' } = {}
 ): Promise<any | null> {
   await ensureSceneVersionBaseline(sceneId);
   const ver = await db.get(
@@ -154,7 +157,12 @@ export async function activateSceneVersion(
   if (!ver) return null;
 
   const dependency = await db.get(`SELECT d.*, l.revision AS current_revision FROM continuity_shot_dependency d LEFT JOIN continuity_ledger l ON l.script_id=d.script_id WHERE d.scene_id=? AND d.scene_version=?`, sceneId, version);
-  if (dependency && (dependency.status !== 'current' || dependency.ledger_revision !== dependency.current_revision || !ver.shot_spec)) {
+  const dependencyConflict = Boolean(dependency && (dependency.status !== 'current' || dependency.ledger_revision !== dependency.current_revision || !ver.shot_spec));
+  if (options.purpose === 'formal' && (!dependency || dependencyConflict)) {
+    const { ContinuityStoreError } = await import('./continuity_store');
+    throw new ContinuityStoreError('CONTINUITY_STALE', 'Formal adoption requires the current shot version and its dependencies');
+  }
+  if (dependencyConflict) {
     ver.continuity_status = dependency.status === 'conflict' ? 'conflict' : 'stale';
     ver.continuity_reason_json = dependency.reason_json || JSON.stringify({ code: 'CONTINUITY_STALE', old_revision: dependency.ledger_revision, new_revision: dependency.current_revision });
     await copyContinuityMetadata(sceneId, version, ver);

@@ -2,14 +2,14 @@
  * English image prompts from a Chinese shot contract.
  * Every narrative still is composed once by the local text model from structured
  * facts and appearance fields. The returned paragraph is the positive prompt.
- * A failed fact check rewrites the paragraph once. A remaining miss is logged
- * and the rewritten paragraph still goes to image generation without caching.
- * Only a paragraph that passed the check can be reused. An empty
- * paragraph, or Chinese left in the English, still fails the shot.
+ * A failed fact check rewrites the paragraph once. An unusable audit response
+ * does not. A remaining miss is not cached and is not a verified prompt.
+ * The caller decides whether that candidate may stay on an inactive draft or
+ * must stop before formal rendering. An empty paragraph, or Chinese left in
+ * the English, still fails the shot.
  */
 
 import { z } from 'zod';
-import { logger } from '../core/logging';
 import { LLMService } from './llm';
 import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
 import { withLocalTextInference } from './local_text_inference';
@@ -73,15 +73,12 @@ export type VisualPromptTranslator = (prompt: string, systemInstruction?: string
 const promptCache = new InferenceCache<string>('image-prompt');
 const outboundCache = new InferenceCache<string>('visual-translation');
 const fidelityCache = new InferenceCache<{ passed: true }>('visual-fidelity');
-export const FIDELITY_RULE_VERSION = 'visible-fidelity-v5';
-class UnverifiedVisualPrompt extends Error {
-  constructor(readonly prompt: string, failure: string) { super(failure); }
-}
-
-function continueWithUnverifiedPrompt(error: unknown): string {
-  if (!(error instanceof UnverifiedVisualPrompt)) throw error;
-  logger.warn(`English picture check still reports omitted or reversed facts. Image generation will continue without caching this prompt. ${error.message}`);
-  return error.prompt;
+export const FIDELITY_RULE_VERSION = 'visible-fidelity-v7';
+export class UnverifiedVisualPrompt extends Error {
+  constructor(readonly prompt: string, failure: string) {
+    super(failure);
+    this.name = 'UnverifiedVisualPrompt';
+  }
 }
 let testTranslator: VisualPromptTranslator | null = null;
 const FidelityReportSchema = z.object({
@@ -147,6 +144,7 @@ const FIDELITY_AUDIT_INSTRUCTION = [
   'Appearance lines name one person\'s hair, face, body, clothing, or accessories. Each appearance line is one fact. Natural wording preserves that field. The original snake_case token is not required. Hair written as hair preserves a hair field.',
   'A visible fact that changes one person\'s clothing overrides only that person\'s clothing field. Preserving the fact is not a contradiction of the old field. Every other person\'s clothing field must remain.',
   'A habit word such as often or usually is preserved when the English shows that state in this shot. Showing the state now is not the opposite of the habit.',
+  'When a fact includes subject and attribute, judge that person only. Words about a different person do not preserve it.',
   'Mark contradicted only when the English asserts the opposite visible state. In-progress wording such as unfastens, half-open, unbuttoning, or slightly ajar preserves the source action.',
   'Copy evidence verbatim from the english text. Evidence must be a continuous substring. Do not use ellipsis, paraphrase, or Chinese in evidence.',
   'If any detail is absent or uncertain mark missing. Return JSON only.',
@@ -169,24 +167,13 @@ function splitAuditRejection(item: string): { id: number; status: string; fact: 
   };
 }
 
-/** The stored appearance value is already in the English when its own words are present. */
-function appearanceFieldCovered(fact: string, english: string): boolean {
-  const match = fact.match(/的(?:头发|五官|体型|服装|配饰)：(.+)$/);
-  if (!match) return false;
-  const haystack = english.toLowerCase();
-  const parts = match[1]!.split(/[、,，]/).map((part) => part.trim()).filter(Boolean);
-  if (!parts.length) return false;
-  return parts.every((part) => {
-    const words = part.replace(/[_-]+/g, ' ').toLowerCase().split(/\s+/).filter((word) => word.length >= 3);
-    if (!words.length) return false;
-    let from = 0;
-    for (const word of words) {
-      const at = haystack.indexOf(word, from);
-      if (at < 0) return false;
-      from = at + word.length;
-    }
-    return true;
-  });
+const APPEARANCE_FACT = /^(.+?)的(头发|五官|体型|服装|配饰)：(.+)$/;
+
+/** The audit model sees the person and attribute. Keyword presence is not a verdict. */
+function auditFactInput(fact: string, id: number) {
+  const identity = fact.match(APPEARANCE_FACT);
+  if (!identity) return { id, fact };
+  return { id, fact, subject: identity[1], attribute: identity[2], source_value: identity[3] };
 }
 
 async function contradictionRelations(rejected: string[], english: string, report: FidelityReport): Promise<Map<number, 'same' | 'opposite' | 'unrelated'>> {
@@ -251,21 +238,35 @@ async function auditEnglishFidelity(source: string, english: string): Promise<vo
     const audit = async (repair = '') => FidelityReportSchema.parse(testVerifier
       ? await testVerifier(slice, text)
       : await LLMService.getLocalProvider().generateStructured(
-        JSON.stringify({ sourceFacts: slice.map((fact, id) => ({ id, fact })), english: text }),
+        JSON.stringify({ sourceFacts: slice.map((fact, id) => auditFactInput(fact, id)), english: text }),
         FidelityReportSchema,
         `${FIDELITY_AUDIT_INSTRUCTION}${repair}`,
         { maxTokens: 4096 },
       ));
-    let report = await audit();
+    const unusable = ' The previous audit response was unusable. Return one object for every source fact id. Quote a continuous English substring and do not use ellipsis.';
+    let report: FidelityReport;
+    try {
+      report = await audit();
+    } catch (error) {
+      if (testVerifier) throw error;
+      try {
+        report = await audit(unusable);
+      } catch {
+        throw new Error('AUDIT_INCOMPLETE: the picture check did not return a usable verdict');
+      }
+    }
     let rejected = rejectedBy(report, slice);
     if (rejected.length && !testVerifier) {
       const repair = rejected.some((item) => item.includes(':preserved:') || item.includes(':count:'))
         ? ' The previous reply missed a fact id or quoted evidence that is not a continuous substring. Return one object for every source fact id. Quote a continuous span from the English and do not use ellipsis.'
         : ' Re-read the English before marking a fact missing or contradicted. status=preserved when any continuous substring shows the fact, including a paraphrase. status=contradicted only when a continuous substring asserts the opposite visible state. status=missing only when the fact is absent.';
-      report = await audit(repair);
-      rejected = rejectedBy(report, slice);
+      try {
+        report = await audit(repair);
+        rejected = rejectedBy(report, slice);
+      } catch {
+        // The first usable verdict stays. An unusable retry is not a new semantic result.
+      }
     }
-    rejected = rejected.filter((item) => !appearanceFieldCovered(splitAuditRejection(item).fact, text));
     if (rejected.some((item) => splitAuditRejection(item).status === 'contradicted')) {
       const relations = await contradictionRelations(rejected, text, report);
       rejected = rejected.filter((item) => {
@@ -739,7 +740,7 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
     const work = async () => {
       let text = await ask('');
       let failure = await fidelityFailure(source, text);
-      if (failure) {
+      if (failure && !failure.startsWith('AUDIT_INCOMPLETE')) {
         text = await ask(` The previous paragraph failed the picture check: ${failure} Rewrite every picture fact so clothing, position, and action stay visible. Leave spoken_not_painted unpainted.`);
         failure = await fidelityFailure(source, text);
       }
@@ -747,7 +748,7 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
       return text;
     };
     return testTranslator ? work() : withLocalTextInference(work);
-  }, options).catch(continueWithUnverifiedPrompt);
+  }, options);
   const withAtmosphere = nsfwEnabled && visiblePerson(materials)
     ? `${paragraph} ${NSFW_ATMOSPHERE_SENTENCE}`
     : paragraph;
@@ -838,5 +839,5 @@ export async function optimizeOutboundPrompt(
     return combined;
   };
   return outboundCache.run({ source: cleaned, requirements, model: textModelFingerprint() }, `literal-v4-verified-only:${translationInstructions(options.modelFamily || 'pony', Boolean(options.nsfwEnabled))}:${FIDELITY_RULE_VERSION}:${FIDELITY_AUDIT_INSTRUCTION}`,
-    () => testTranslator ? render() : withLocalTextInference(render), { variant, forceRegenerate }).catch(continueWithUnverifiedPrompt);
+    () => testTranslator ? render() : withLocalTextInference(render), { variant, forceRegenerate });
 }

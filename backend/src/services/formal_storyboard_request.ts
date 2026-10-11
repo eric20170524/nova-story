@@ -4,12 +4,12 @@
  * an explicit six-check adoption.
  */
 
-import { db } from '../db/database';
+import { db, withImmediateTransaction } from '../db/database';
 import { hashCanonical } from '../schemas/story_plan';
 import { ContinuityStoreError } from './continuity_store';
 import { continuityHash } from './continuity_replay';
 import { requireCurrentContinuityShot } from './continuity_shot_gate';
-import { requireProductionReferencePin, type ProductionReferencePin } from './scene_production_media';
+import { requireFormalPinStillCurrent, requireProductionReferencePin, type ProductionReferencePin } from './scene_production_media';
 import { createSceneVersion, ensureSceneVersionBaseline, activateSceneVersion } from './scene_versions';
 import { recordShotMasterSnapshot } from './video/shot_master_snapshot';
 import { assembleFormalReferences } from './formal_storyboard_plan';
@@ -201,6 +201,54 @@ export async function persistFormalCandidateResult(sceneId: number, version: num
 
 const checksSchema = ['wardrobe', 'damage', 'count', 'holder', 'openings', 'space'] as const;
 
+const pinFromFrame = (raw: unknown): ProductionReferencePin | null => {
+  try {
+    const pin = JSON.parse(String(raw || 'null'));
+    return pin?.version === 1 ? pin : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Copy a current live dependency onto the candidate. A stale row is left unchanged. */
+async function refreshCandidateDependency(sceneId: number, candidateVersion: number): Promise<boolean> {
+  const scene = await db.get('SELECT active_version FROM scene WHERE id = ?', sceneId);
+  const activeVersion = Number(scene?.active_version || 1);
+  if (activeVersion === candidateVersion) return true;
+  const active = await db.get(`SELECT d.*, l.revision AS current_revision FROM continuity_shot_dependency d LEFT JOIN continuity_ledger l ON l.script_id = d.script_id WHERE d.scene_id = ? AND d.scene_version = ?`, sceneId, activeVersion);
+  const candidate = await db.get('SELECT 1 AS ok FROM continuity_shot_dependency WHERE scene_id = ? AND scene_version = ?', sceneId, candidateVersion);
+  if (!active || !candidate) return false;
+  const revisionMatches = active.current_revision == null || Number(active.ledger_revision) === Number(active.current_revision);
+  if (active.status !== 'current' || !revisionMatches) return false;
+  await db.run(
+    `UPDATE continuity_shot_dependency SET status = ?, reason_json = NULL, snapshot_id = ?, ledger_revision = ?, source_hash = ?, dependency_hash = ?, moment_id = ?, phase = ?, reads_json = ? WHERE scene_id = ? AND scene_version = ?`,
+    active.status, active.snapshot_id, active.ledger_revision, active.source_hash, active.dependency_hash, active.moment_id, active.phase, active.reads_json, sceneId, candidateVersion,
+  );
+  await db.run(
+    `UPDATE scene_version SET continuity_status = 'current', continuity_reason_json = NULL, continuity_snapshot_id = ?, continuity_revision = ? WHERE scene_id = ? AND version = ?`,
+    active.snapshot_id, active.ledger_revision, sceneId, candidateVersion,
+  );
+  return true;
+}
+
+/** Keep an unverified picture prompt on its own version. Blocking does not change the active scene. */
+export async function retainUnverifiedPrompt(sceneId: number, version: number, prompt: string, issues: string[], taskId: string, block: boolean) {
+  const row = await db.get('SELECT shot_spec FROM scene_version WHERE scene_id = ? AND version = ?', sceneId, version);
+  const spec = readSpec(row?.shot_spec);
+  spec.prompt_review = { status: 'needs_review', issues };
+  if (block) {
+    await db.run(
+      'UPDATE scene_version SET shot_spec = ?, english_visual_prompt = ?, asset_status = ?, task_id = ? WHERE scene_id = ? AND version = ?',
+      JSON.stringify(spec), prompt, 'failed', taskId, sceneId, version,
+    );
+    return;
+  }
+  await db.run(
+    'UPDATE scene_version SET shot_spec = ?, english_visual_prompt = ? WHERE scene_id = ? AND version = ?',
+    JSON.stringify(spec), prompt, sceneId, version,
+  );
+}
+
 export async function decideFormalCandidate(sceneId: number, raw: unknown) {
   const body = raw as {
     expected_version?: number;
@@ -214,42 +262,60 @@ export async function decideFormalCandidate(sceneId: number, raw: unknown) {
   const checks = body.checks || {};
   if (checksSchema.some((key) => typeof checks[key] !== 'boolean')) fail('PRODUCTION_INPUT_INVALID', 'Formal decision needs the six image checks', 422);
   const version = Number(body.expected_version);
-  const row = await db.get('SELECT * FROM scene_version WHERE scene_id = ? AND version = ?', sceneId, version);
-  if (!row) fail('CONTINUITY_SCOPE_INVALID', 'Formal candidate version was not found');
-  const record = readSpec(row.shot_spec).formal_request as FormalRequestRecord | undefined;
-  if (!record || record.reference_hash !== body.reference_hash) fail('CONTINUITY_REVISION_CONFLICT', 'The formal candidate or reference hash changed');
-  const savedRecord = record!;
-  if (row.asset_status !== 'completed' || !row.asset_url) fail('CONTINUITY_REVISION_CONFLICT', 'Review the completed candidate image');
-  const scene = await db.get('SELECT * FROM scene WHERE id = ?', sceneId);
-  const activeUrl = scene?.asset_url || null;
-  const activeVersion = Number(scene?.active_version || 1);
-  if (body.verdict === 'accepted' && checksSchema.some((key) => checks[key] !== true)) {
-    fail('CONTINUITY_REVIEW_REQUIRED', 'Every image check must pass before accepting this image');
-  }
-  const review = {
-    verdict: body.verdict,
-    checks,
-    note: String(body.note).trim(),
-    actor_id: 'local_reviewer',
-    reviewed_at: new Date().toISOString(),
-    image_only: true,
-    reference_hash: savedRecord.reference_hash,
-    expected_image_url: row.asset_url,
-  };
-  await db.run(
-    'UPDATE scene_production_frame SET image_review_json = ? WHERE scene_id = ? AND scene_version = ?',
-    JSON.stringify(review), sceneId, version
-  );
-  if (body.verdict === 'rejected') {
-    return { verdict: 'rejected', active_version: activeVersion, asset_url: activeUrl, candidate_version: version };
-  }
-  const activated = await activateSceneVersion(sceneId, version);
-  const project = await db.get('SELECT c.project_id FROM scene s JOIN chapter c ON c.id = s.chapter_id WHERE s.id = ?', sceneId);
-  await recordShotMasterSnapshot({
-    sceneId,
-    projectId: Number(project.project_id),
-    imageUrl: String(row.asset_url),
-    captured: { references: [], versions: [] },
+  return withImmediateTransaction(async () => {
+    const row = await db.get('SELECT * FROM scene_version WHERE scene_id = ? AND version = ?', sceneId, version);
+    if (!row) fail('CONTINUITY_SCOPE_INVALID', 'Formal candidate version was not found');
+    const record = readSpec(row.shot_spec).formal_request as FormalRequestRecord | undefined;
+    if (!record || record.reference_hash !== body.reference_hash) fail('CONTINUITY_REVISION_CONFLICT', 'The formal candidate or reference hash changed');
+    const savedRecord = record!;
+    if (row.asset_status !== 'completed' || !row.asset_url) fail('CONTINUITY_REVISION_CONFLICT', 'Review the completed candidate image');
+    const scene = await db.get('SELECT * FROM scene WHERE id = ?', sceneId);
+    const activeUrl = scene?.asset_url || null;
+    const activeVersion = Number(scene?.active_version || 1);
+    if (body.verdict === 'accepted' && activeVersion === version && activeUrl && activeUrl === row.asset_url) {
+      const existingReview = await db.get('SELECT image_review_json FROM scene_production_frame WHERE scene_id = ? AND scene_version = ?', sceneId, version);
+      let prior: { verdict?: string; reference_hash?: string } | null = null;
+      try { prior = JSON.parse(existingReview?.image_review_json || 'null'); } catch { prior = null; }
+      if (prior?.verdict === 'accepted' && prior.reference_hash === body.reference_hash && !checksSchema.some((key) => checks[key] !== true)) {
+        return { verdict: 'accepted', active_version: activeVersion, asset_url: activeUrl, candidate_version: version };
+      }
+    }
+    if (body.verdict === 'accepted' && savedRecord.production_stage === 'production') {
+      if (Number(savedRecord.source_version) !== activeVersion) fail('CONTINUITY_STALE', 'The shot version changed after this candidate was generated');
+      const frame = await db.get('SELECT reference_versions_json FROM scene_production_frame WHERE scene_id = ? AND scene_version = ?', sceneId, version);
+      const pin = pinFromFrame(frame?.reference_versions_json);
+      if (!pin) fail('CONTINUITY_REFERENCE_REVIEW_REQUIRED', 'Bind references before adopting a formal storyboard');
+      else await requireFormalPinStillCurrent(scene, pin);
+      if (!await refreshCandidateDependency(sceneId, version)) fail('CONTINUITY_STALE', 'The formal candidate no longer matches the current confirmed state');
+    }
+    if (body.verdict === 'accepted' && checksSchema.some((key) => checks[key] !== true)) {
+      fail('CONTINUITY_REVIEW_REQUIRED', 'Every image check must pass before accepting this image');
+    }
+    const review = {
+      verdict: body.verdict,
+      checks,
+      note: String(body.note).trim(),
+      actor_id: 'local_reviewer',
+      reviewed_at: new Date().toISOString(),
+      image_only: true,
+      reference_hash: savedRecord.reference_hash,
+      expected_image_url: row.asset_url,
+    };
+    await db.run(
+      'UPDATE scene_production_frame SET image_review_json = ? WHERE scene_id = ? AND scene_version = ?',
+      JSON.stringify(review), sceneId, version
+    );
+    if (body.verdict === 'rejected') {
+      return { verdict: 'rejected', active_version: activeVersion, asset_url: activeUrl, candidate_version: version };
+    }
+    const activated = await activateSceneVersion(sceneId, version, savedRecord.production_stage === 'production' ? { purpose: 'formal' } : undefined);
+    const project = await db.get('SELECT c.project_id FROM scene s JOIN chapter c ON c.id = s.chapter_id WHERE s.id = ?', sceneId);
+    await recordShotMasterSnapshot({
+      sceneId,
+      projectId: Number(project.project_id),
+      imageUrl: String(row.asset_url),
+      captured: { references: [], versions: [] },
+    });
+    return { verdict: 'accepted', active_version: Number(activated?.active_version), asset_url: activated?.asset_url, candidate_version: version };
   });
-  return { verdict: 'accepted', active_version: Number(activated?.active_version), asset_url: activated?.asset_url, candidate_version: version };
 }

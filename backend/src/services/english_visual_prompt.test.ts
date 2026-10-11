@@ -14,6 +14,7 @@ import {
   setLocalTextModelEnsureForTests,
   setVisualPromptTranslatorForTests,
   setVisualPromptVerifierForTests,
+  UnverifiedVisualPrompt,
   shotImageMaterialsFromSpec,
   stripPeopleBlockers,
   assetPromptForShot,
@@ -113,7 +114,7 @@ test('an appearance field with commas stays one fidelity clause', async () => {
   assert.equal(seen.includes('amber eyes'), false);
 });
 
-test('compiled shot prompts keep appearance fields and continue after a missed fact', async () => {
+test('compiled shot prompts keep appearance fields and retain a missed fact for review', async () => {
   let seenUser = '';
   let seenSystem = '';
   setVisualPromptTranslatorForTests(async (prompt, system) => {
@@ -153,8 +154,10 @@ test('compiled shot prompts keep appearance fields and continue after a missed f
     assert.doesNotMatch(compiled.visual_prompt, /[\u3400-\u9fff]/);
 
     setVisualPromptTranslatorForTests(async () => 'soft moonlight and poetic atmosphere');
-    const continued = await compileEnglishShotPrompt({ location: '清暮宫', primary_action: '她跨坐在他身上' }, '');
-    assert.match(continued.visual_prompt, /soft moonlight/);
+    await assert.rejects(
+      () => compileEnglishShotPrompt({ location: '清暮宫', primary_action: '她跨坐在他身上' }, ''),
+      (error: unknown) => error instanceof UnverifiedVisualPrompt && /soft moonlight/.test(error.prompt),
+    );
 
     setVisualPromptTranslatorForTests(async () => '她跨坐 straddling');
     await assert.rejects(
@@ -190,11 +193,11 @@ test('outbound optimization keeps an English prompt and continues when the pictu
 
     let failedTranslations = 0;
     setVisualPromptTranslatorForTests(async () => { failedTranslations++; return 'a quiet emotional atmosphere'; });
-    assert.equal(
-      await optimizeOutboundPrompt('她跨坐在他身上', { modelFamily: 'pony' }),
-      'a quiet emotional atmosphere',
+    await assert.rejects(
+      () => optimizeOutboundPrompt('她跨坐在他身上', { modelFamily: 'pony' }),
+      (error: any) => error.prompt === 'a quiet emotional atmosphere',
     );
-    await optimizeOutboundPrompt('她跨坐在他身上', { modelFamily: 'pony' });
+    await assert.rejects(() => optimizeOutboundPrompt('她跨坐在他身上', { modelFamily: 'pony' }));
     assert.equal(failedTranslations, 2, 'an unverified outbound translation must be checked again');
   } finally {
     setVisualPromptTranslatorForTests(null);
@@ -327,11 +330,15 @@ test('unrelated evidence does not cache a composed paragraph or an outbound tran
   try {
     const source = '主角拿着红杯';
     const materials = shotImageMaterialsFromSpec({ primary_action: source });
-    assert.equal(await composeShotImagePrompt(materials), english);
-    assert.equal(await composeShotImagePrompt(materials), english);
+    const kept = (error: unknown) => {
+      assert.equal((error as { prompt?: string }).prompt, english);
+      return true;
+    };
+    await assert.rejects(() => composeShotImagePrompt(materials), kept);
+    await assert.rejects(() => composeShotImagePrompt(materials), kept);
     assert.equal(translations, 4, 'each unverified composition must be generated and rewritten again');
-    assert.equal(await optimizeOutboundPrompt(source), english);
-    assert.equal(await optimizeOutboundPrompt(source), english);
+    await assert.rejects(() => optimizeOutboundPrompt(source), kept);
+    await assert.rejects(() => optimizeOutboundPrompt(source), kept);
     assert.equal(translations, 6, 'unverified outbound translations must not be cached');
   } finally { LLMService.getLocalProvider = original; }
 });
@@ -365,25 +372,97 @@ test('a dropped picture fact is rewritten once, then the passing paragraph is re
     return 'A woman wearing a robe.';
   });
   const reversed = { location: '庭院', primary_action: '她穿上外袍' };
-  const continued = await compileEnglishShotPrompt(reversed);
-  assert.match(continued.visual_prompt, /wearing a robe/);
+  await assert.rejects(() => compileEnglishShotPrompt(reversed), (error: any) => /wearing a robe/.test(error.prompt));
   assert.equal(badCalls, 2);
-  await Promise.all([compileEnglishShotPrompt(reversed), compileEnglishShotPrompt(reversed)]);
+  await Promise.all([
+    compileEnglishShotPrompt(reversed).catch(() => undefined),
+    compileEnglishShotPrompt(reversed).catch(() => undefined),
+  ]);
   assert.equal(badCalls, 4, 'a failed picture check must not certify the prompt for reuse');
 });
 
-test('an appearance field stays when its own words are already in the English', async () => {
-  setVisualPromptVerifierForTests(async () => ({
-    facts: [{ id: 0, status: 'contradicted' as const, evidence: 'different hair' }],
-  }));
-  await assertEnglishFidelity('陆嘉静的头发：long_silky_white', 'She has long silky white hair.');
+test('an unusable audit retries once and does not rewrite a usable paragraph', async () => {
+  let paragraphs = 0;
+  let audits = 0;
+  setVisualPromptTranslatorForTests(async () => { paragraphs += 1; return 'She wears a red robe.'; });
+  setVisualPromptVerifierForTests(null);
+  const original = LLMService.getLocalProvider;
+  const provider = original();
+  LLMService.getLocalProvider = () => provider;
+  const originalGenerate = provider.generateStructured.bind(provider);
+  provider.generateStructured = (async (prompt: string, schema: any) => {
+    const payload = JSON.parse(prompt);
+    if (!payload.sourceFacts) return originalGenerate(prompt, schema);
+    audits += 1;
+    if (audits === 1) throw new Error('timeout');
+    return schema.parse({
+      facts: payload.sourceFacts.map((_: unknown, id: number) => ({ id, status: 'preserved', evidence: 'red robe' })),
+    });
+  }) as typeof provider.generateStructured;
+  try {
+    const prompt = await composeShotImagePrompt(shotImageMaterialsFromSpec({ primary_action: '她穿着红袍走入未复核的庭院' }));
+    assert.match(prompt, /red robe/);
+    assert.equal(paragraphs, 1);
+    assert.equal(audits, 2);
+  } finally {
+    provider.generateStructured = originalGenerate;
+    LLMService.getLocalProvider = original;
+    setVisualPromptTranslatorForTests(null);
+  }
+});
+
+test('an audit that never returns a verdict keeps the paragraph unverified', async () => {
+  let paragraphs = 0;
+  setVisualPromptTranslatorForTests(async () => { paragraphs += 1; return 'She wears a red robe in the side court.'; });
+  setVisualPromptVerifierForTests(null);
+  const original = LLMService.getLocalProvider;
+  LLMService.getLocalProvider = () => ({ async generateStructured() { throw new Error('timeout'); } }) as any;
+  try {
+    await assert.rejects(
+      () => composeShotImagePrompt(shotImageMaterialsFromSpec({ primary_action: '她穿着红袍停在偏院' })),
+      (error: unknown) => error instanceof UnverifiedVisualPrompt
+        && error.message.startsWith('AUDIT_INCOMPLETE')
+        && error.prompt.includes('side court')
+        && paragraphs === 1,
+    );
+  } finally {
+    LLMService.getLocalProvider = original;
+    setVisualPromptTranslatorForTests(null);
+  }
+});
+
+test('appearance words do not turn a missing or swapped attribute into a pass', async () => {
   setVisualPromptVerifierForTests(async () => ({
     facts: [{ id: 0, status: 'missing' as const, evidence: '' }],
   }));
   await assert.rejects(
-    () => assertEnglishFidelity('陆嘉静的头发：long_silky_white', 'She has short black hair.'),
+    () => assertEnglishFidelity('陆嘉静的头发：long_silky_white', 'She has long silky white hair.'),
     /dropped visible facts/,
   );
+  await assert.rejects(
+    () => assertEnglishFidelity('林岚的服装：red dress', 'Chen Yue wears a red dress.'),
+    /dropped visible facts/,
+  );
+});
+
+test('swapped character attributes stay rejected and are not cached as verified', async () => {
+  const cases = [
+    ['林岚的服装：red dress，陈月的服装：blue coat', 'Lin Lan wears a blue coat. Chen Yue wears a red dress.'],
+    ['林岚的头发：black hair，陈月的头发：blonde hair', 'Lin Lan has blonde hair. Chen Yue has black hair.'],
+    ['林岚的配饰：red glove，陈月的配饰：blue fan', 'Lin Lan holds a blue fan. Chen Yue holds a red glove.'],
+  ] as const;
+  for (const [source, english] of cases) {
+    let calls = 0;
+    setVisualPromptVerifierForTests(async (facts) => {
+      calls += 1;
+      return { facts: facts.map((fact, id) => ({ id, status: 'contradicted' as const, evidence: english })) };
+    });
+    await assert.rejects(() => assertEnglishFidelity(source, english), /dropped visible facts/);
+    const first = calls;
+    await assert.rejects(() => assertEnglishFidelity(source, english), /dropped visible facts/);
+    assert.equal(calls, first * 2, source);
+    assert.ok(first > 0);
+  }
 });
 
 test('quoted speech is not a still fact, and the action around it still has to be painted', async () => {
@@ -405,11 +484,13 @@ test('quoted speech is not a still fact, and the action around it still has to b
     };
   });
   setVisualPromptTranslatorForTests(async () => 'She sits in the inner hall.');
-  const continued = await compileEnglishShotPrompt({
-    location: '内殿',
-    primary_action: '她坐着，红衣褪至腰间，低声道：‘是你么？’',
-  });
-  assert.equal(continued.visual_prompt, 'She sits in the inner hall.');
+  await assert.rejects(
+    () => compileEnglishShotPrompt({
+      location: '内殿',
+      primary_action: '她坐着，红衣褪至腰间，低声道：‘是你么？’',
+    }),
+    (error: any) => error.prompt === 'She sits in the inner hall.',
+  );
   assert.equal(seen.some((fact) => fact.includes('是你么')), false);
   assert.equal(seen.some((fact) => fact.includes('红衣褪至腰间')), true);
 });

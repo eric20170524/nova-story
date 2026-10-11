@@ -103,6 +103,22 @@ export async function requireProductionReferencePin(scene: any, expected?: { exp
   }
   return { gate, pin, frame };
 }
+/** Adoption must match the live shot, not the hash saved when the candidate was created. */
+export async function requireFormalPinStillCurrent(scene: any, pin: ProductionReferencePin) {
+  const gate = await requireCurrentContinuityShot(scene);
+  if (Number(pin.scene_id) !== Number(scene.id) || pin.dependency_hash !== gate.read.dependency_hash || pin.source_hash !== gate.read.source_hash) {
+    return fail('CONTINUITY_STALE', 'The formal candidate no longer matches the current confirmed state');
+  }
+  for (const ref of pin.references) {
+    const source = ref.kind === 'character' ? await db.get('SELECT * FROM character_version WHERE character_id=? AND version=?', ref.id, ref.version) : await db.get('SELECT reference_json FROM continuity_reference_version WHERE project_id=? AND asset_id=? AND asset_revision=?', gate.source.continuity!.story_position.project_id, ref.id, ref.version);
+    if (!source || continuityHash(ref.kind === 'asset' ? JSON.parse(source.reference_json) : source) !== ref.content_hash) return fail('CONTINUITY_STALE', 'A pinned reference version changed; review before adopting');
+  }
+  for (const character of pin.text_characters || []) {
+    const source = await db.get('SELECT * FROM character_version WHERE character_id=? AND version=?', character.id, character.version);
+    if (!source || continuityHash(source) !== character.content_hash) return fail('CONTINUITY_STALE', 'A frozen character appearance changed');
+  }
+  return gate;
+}
 export const ProductionImageGuardSchema = z.object({ expected_version: z.number().int().positive(), reference_hash: z.string().regex(/^[a-f0-9]{64}$/), redraw: z.boolean() }).strict();
 /** Caller owns the asset queue transaction. Never trust client-provided reference URLs. */
 export async function prepareProductionImage(sceneId: number, raw: unknown, asNewVersion: boolean) {
@@ -157,8 +173,10 @@ export async function persistProductionImageResult(sceneId: number, pin: Product
     try { const valid = await requireProductionReferencePin(scene); current = current && continuityHash(valid.pin) === continuityHash(pin); } catch { current = false; }
     if (current) await syncActiveVersionAssets(sceneId, patch, pin.scene_version);
     else {
-      await db.run('UPDATE scene_version SET asset_url=?,asset_status=?,task_id=?,english_visual_prompt=?,continuity_status=\'stale\',continuity_reason_json=? WHERE scene_id=? AND version=?', patch.asset_url || null, patch.asset_status, taskId, patch.english_visual_prompt || null, JSON.stringify({ code: 'CONTINUITY_STALE', reason: 'generation_inputs_changed' }), sceneId, pin.scene_version);
-      if (Number(scene?.active_version || 1) === pin.scene_version && scene?.task_id === taskId) await db.run("UPDATE scene SET asset_status=?,asset_url=?,continuity_status='stale' WHERE id=?", patch.asset_status, patch.asset_url || null, sceneId);
+      const version = await db.get('SELECT asset_url, english_visual_prompt FROM scene_version WHERE scene_id=? AND version=?', sceneId, pin.scene_version);
+      const reason = JSON.stringify({ code: 'CONTINUITY_STALE', reason: 'generation_inputs_changed' });
+      await db.run('UPDATE scene_version SET asset_url=?,asset_status=?,task_id=?,english_visual_prompt=?,continuity_status=\'stale\',continuity_reason_json=? WHERE scene_id=? AND version=?', patch.asset_url || version?.asset_url || null, patch.asset_status, taskId, patch.english_visual_prompt || version?.english_visual_prompt || null, reason, sceneId, pin.scene_version);
+      if (Number(scene?.active_version || 1) === pin.scene_version && scene?.task_id === taskId) await db.run("UPDATE scene SET asset_status=?,continuity_status='stale',continuity_reason_json=? WHERE id=?", patch.asset_status, reason, sceneId);
     }
     return { current, scene_version: pin.scene_version };
   });

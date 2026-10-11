@@ -825,6 +825,7 @@ export const DirectorMode: React.FC = () => {
               activeEvtSourceRef.current = null;
               clearVramSchedulerPhase();
               showToast(t('director.stream_disconnected'), 'info');
+              setTimeline(prev => prev.map(s => s.id === sceneId ? nextSceneAfterImageEvent(s, 'disconnect') : s));
               clearImageInflight();
               resolve();
             };

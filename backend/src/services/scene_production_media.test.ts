@@ -100,6 +100,25 @@ test('CT17 a late result is retained in its original version and cannot overwrit
   const result=await persistProductionImageResult(101,bound.pin,'late',{asset_url:'/late.png',asset_status:'completed',task_id:'late',english_visual_prompt:'captured input'});
   assert.equal(result.current,false);assert.equal((await db.get('SELECT asset_url FROM scene WHERE id=101')).asset_url,'/newer.png');assert.equal((await db.get('SELECT asset_url FROM scene_version WHERE scene_id=101 AND version=1')).asset_url,'/late.png');assert.equal((await db.get('SELECT continuity_status FROM scene_version WHERE scene_id=101 AND version=1')).continuity_status,'stale');
 });
+test('CT17 a stale in-flight result stays on its version and cannot replace or clear the active image',async()=>{
+  const {bound}=await seed();
+  await db.run("UPDATE scene SET task_id='same',asset_status='generating',asset_url='/kept.png',continuity_status='stale',active_version=1 WHERE id=101");
+  await db.run("UPDATE scene_version SET asset_url='/kept.png',asset_status='generating',english_visual_prompt='kept prompt' WHERE scene_id=101 AND version=1");
+  const late=await persistProductionImageResult(101,bound.pin,'same',{asset_url:'/late.png',asset_status:'completed',task_id:'same',english_visual_prompt:'captured input'});
+  assert.equal(late.current,false);
+  assert.equal((await db.get('SELECT asset_url,asset_status,continuity_status FROM scene WHERE id=101')).asset_url,'/kept.png');
+  assert.equal((await db.get('SELECT asset_status FROM scene WHERE id=101')).asset_status,'completed');
+  assert.equal((await db.get('SELECT continuity_status FROM scene WHERE id=101')).continuity_status,'stale');
+  assert.equal((await db.get('SELECT asset_url,continuity_status FROM scene_version WHERE scene_id=101 AND version=1')).asset_url,'/late.png');
+  await db.run("UPDATE scene SET asset_status='generating',asset_url='/kept.png' WHERE id=101");
+  await db.run("UPDATE scene_version SET asset_url='/kept.png',asset_status='generating',english_visual_prompt='kept prompt' WHERE scene_id=101 AND version=1");
+  const failed=await persistProductionImageResult(101,bound.pin,'same',{asset_status:'failed',task_id:'same'});
+  assert.equal(failed.current,false);
+  const scene=await db.get('SELECT asset_url,asset_status FROM scene WHERE id=101');
+  const version=await db.get('SELECT asset_url,asset_status,english_visual_prompt FROM scene_version WHERE scene_id=101 AND version=1');
+  assert.equal(scene.asset_url,'/kept.png');assert.equal(scene.asset_status,'failed');
+  assert.equal(version.asset_url,'/kept.png');assert.equal(version.asset_status,'failed');assert.equal(version.english_visual_prompt,'kept prompt');
+});
 test('CT18 image acceptance is distinct from text approval, requires every image check, and rejection changes no story state',async()=>{
   const {bound}=await seed(),ledger=await db.get('SELECT * FROM continuity_ledger WHERE script_id=30');
   await db.run("UPDATE scene SET asset_status='completed',asset_url='/current.png' WHERE id=101");

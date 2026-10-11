@@ -7,9 +7,12 @@ export function nextSceneAfterImageEvent(
   imageUrl?: string | null,
   candidateVersion?: number | null
 ): Scene {
-  if (kind === 'disconnect' || kind === 'failed' || candidateVersion) return scene;
+  if (candidateVersion) return scene;
   if (kind === 'completed' && imageUrl) {
     return { ...scene, asset_status: 'completed', asset_url: imageUrl };
+  }
+  if ((kind === 'disconnect' || kind === 'failed') && !scene.asset_url) {
+    return { ...scene, asset_status: 'failed' };
   }
   return scene;
 }

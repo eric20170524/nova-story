@@ -45,7 +45,7 @@ import {
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { captureShotMasterSnapshot, recordShotMasterSnapshot, type ShotMasterInputSnapshot } from './video/shot_master_snapshot';
 import { ensureSceneVersionBaseline, syncActiveVersionAssets } from './scene_versions';
-import { persistFormalCandidateResult } from './formal_storyboard_request';
+import { persistFormalCandidateResult, retainUnverifiedPrompt } from './formal_storyboard_request';
 import { formalRenderAllowed } from './formal_storyboard_plan';
 import { requireProductionReferencePin, persistProductionImageResult, type ProductionReferencePin } from './scene_production_media';
 import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
@@ -53,7 +53,7 @@ import {
     createProgressPublisher,
     runVramHandoffForImageGen,
 } from './generation_progress';
-import { optimizeOutboundPrompt, assetPromptForShot, composeShotImagePrompt, containsCjk, shotImageMaterialsFromSpec } from './english_visual_prompt';
+import { optimizeOutboundPrompt, assetPromptForShot, composeShotImagePrompt, containsCjk, shotImageMaterialsFromSpec, UnverifiedVisualPrompt } from './english_visual_prompt';
 import {
     normalizeGeneratedImage,
     resolveComfyLatentDimensions,
@@ -65,6 +65,23 @@ import { selectComfyWorkflow } from './comfy_workflow_selection';
 
 // Re-export for tests and callers that imported from generation_service
 export { resolveReferenceImg2ImgPolicy, planReferenceGeneration, resolveReferenceUrls };
+
+/** Draft candidates may keep an unverified prompt. Formal rendering and the active scene may not. */
+async function resolvePicturePrompt(taskId: string, sceneId: number, workflow: any, produce: () => Promise<string>): Promise<string> {
+    try {
+        return await produce();
+    } catch (error) {
+        if (!(error instanceof UnverifiedVisualPrompt)) throw error;
+        const candidate = workflow?.formal_candidate;
+        const experimentalDraft = candidate?.publish === false && candidate?.production_stage === 'draft';
+        if (candidate?.scene_version) {
+            await retainUnverifiedPrompt(sceneId, Number(candidate.scene_version), error.prompt, [error.message], taskId, !experimentalDraft);
+        }
+        if (!experimentalDraft) throw new Error(`ENGLISH_PROMPT_NEEDS_REVIEW: ${error.message}`);
+        logger.warn(`[Task ${taskId}] Unverified English prompt kept on the draft candidate and excluded from the verified cache. ${error.message}`);
+        return error.prompt;
+    }
+}
 
 const isComfyWorkflow = (value: any) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -1162,7 +1179,7 @@ export class GenerationService {
                     message: 'Writing the English image prompt. The text model may use the GPU briefly.',
                     message_zh: '正在编写英文画面提示词，文本模型会短暂占用显存…',
                 });
-                finalPrompt = await composeShotImagePrompt(materials, { variant: effectiveWorkflowData.inference_variant });
+                finalPrompt = await resolvePicturePrompt(taskId, sceneId, effectiveWorkflowData, () => composeShotImagePrompt(materials, { variant: effectiveWorkflowData.inference_variant }));
                 const personVisible = materials.subject_scale !== 'absent'
                     && (materials.characters.length > 0 || materials.facts.some((fact) => fact.binding.length > 0));
                 const currentType = String(effectiveWorkflowData.subject_type || '').toLowerCase().trim();
@@ -1248,11 +1265,11 @@ export class GenerationService {
                         message_zh: '正在编写英文画面提示词，文本模型会短暂占用显存…',
                     });
                 }
-                const outboundPrompt = await optimizeOutboundPrompt(finalPrompt, {
+                const outboundPrompt = await resolvePicturePrompt(taskId, sceneId, effectiveWorkflowData, () => optimizeOutboundPrompt(finalPrompt, {
                     modelFamily: outputModelFamily,
                     nsfwEnabled,
                     variant: effectiveWorkflowData.inference_variant,
-                });
+                }));
                 if (outboundPrompt !== finalPrompt) {
                     finalPrompt = outboundPrompt;
                     effectiveWorkflowData = { ...effectiveWorkflowData, prompt: finalPrompt };

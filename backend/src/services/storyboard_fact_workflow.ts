@@ -516,7 +516,7 @@ export async function runFactWorkflow(input: {
     return await stepCache.run({ stage, scriptId: input.scriptId,
       dependencies: dependencies ?? [doc, input.characters, input.locks, input.glossary, input.instructions],
       model: input.inferenceModel || input.model, configuredModel: textModelFingerprint(), continuity_source: input.continuity_scope ? [input.continuity_scope.snapshot.source_hash,input.continuity_scope.bindings] : undefined,
-    }, `${FACT_POLICY_VERSION}:verified-workflow-step-v3-parent-budget`, infer, input.reuse) as T;
+    }, `${FACT_POLICY_VERSION}:verified-workflow-step-v4-sequence-must-split`, infer, input.reuse) as T;
   };
   p.phase = 'facts';
   await persist();
@@ -570,20 +570,16 @@ export async function runFactWorkflow(input: {
             }
             if (atomic.result === 'sequence') {
               const split = await provider.generateStructured(JSON.stringify({ task: 'split_actions', source: source.text, repair }), z.object({ spans: z.array(z.object({ text: z.string().min(1) })).min(1) }),
-                'Decide whether this one sentence is two successive visible actions. If it is, return each action as its own span. Every span must be a verbatim contiguous quote, and joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. If it is one action, return one span whose text equals the source.', { temperature: 0.1, maxTokens: 256 });
+                'The sentence was already judged to be successive actions. Return at least two spans. Every span must be a verbatim contiguous quote, and joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. Do not return the whole sentence as one span. A one-span reply does not change the sequence judgment.', { temperature: 0.1, maxTokens: 256 });
               const quotes = verbatimActionSplit(source.text, split.spans.map(span => span.text));
-              if (quotes) {
-                let beat = lastVisualBeat < 0 ? 0 : lastVisualBeat + 1;
-                for (const text of quotes) {
-                  beat = place(source, beat, 'visual', text);
-                  lastVisualBeat = beat;
-                  beat += 1;
-                }
-                previousText = quotes.at(-1)!;
-                continue;
+              if (!quotes) throw new FactWorkflowError(`连续动作未能拆成可核对的原文片段: ${source.text}`);
+              let beat = lastVisualBeat < 0 ? 0 : lastVisualBeat + 1;
+              for (const text of quotes) {
+                beat = place(source, beat, 'visual', text);
+                lastVisualBeat = beat;
+                beat += 1;
               }
-              lastVisualBeat = place(source, lastVisualBeat >= 0 ? lastVisualBeat : 0, 'visual');
-              previousText = source.text;
+              previousText = quotes.at(-1)!;
               continue;
             }
             const result = previousText ? await provider.generateStructured(JSON.stringify({ task: 'beat_relation', previous: previousText, current: source.text, repair }), z.object({ relation: z.enum(['simultaneous', 'sequential', 'uncertain']) }),
