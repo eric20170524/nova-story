@@ -55,6 +55,54 @@ function StoryboardShotCards({ candidateId, shots }: { candidateId: string; shot
   );
 }
 
+export function formatStoryboardTaskError(errorMsg: string, facts: any[] = []): string {
+  if (!errorMsg) return '';
+  let formatted = errorMsg;
+
+  // 1. 业务术语与字段名替换
+  formatted = formatted.replace(/\blocation_description\b/g, '场景环境描述');
+  formatted = formatted.replace(/\binterior_exterior\b/g, '内外景（室内/室外）');
+  formatted = formatted.replace(/\btime_of_day\b/g, '时间（白天/夜间）');
+  formatted = formatted.replace(/\blocation\b/g, '场景地点');
+
+  // 2. 将段落位置形如 b_3_3@0 替换为易懂表达：第 3 场的第 3 个动作/剧情描述段落（开头处）
+  formatted = formatted.replace(/b_(\d+)_(\d+)@(\d+)/g, (_, sceneIdx, blockIdx, offset) => {
+    const offsetDesc = offset === '0' ? '开头处' : `第 ${offset} 字起`;
+    return `第 ${sceneIdx} 场的第 ${blockIdx} 个动作/剧情描述段落（${offsetDesc}）`;
+  });
+  formatted = formatted.replace(/b_(\d+)_(\d+)/g, '第 $1 场的第 $2 个动作/剧情描述段落');
+  formatted = formatted.replace(/b_(\d+)@(\d+)/g, (_, blockIdx, offset) => {
+    const offsetDesc = offset === '0' ? '开头处' : `第 ${offset} 字起`;
+    return `第 ${blockIdx} 个动作/剧情描述段落（${offsetDesc}）`;
+  });
+  formatted = formatted.replace(/b_(\d+)/g, '第 $1 个动作/剧情描述段落');
+
+  // 3. 将事实 ID（f_xxx）转换为具体场次和剧本原句引用
+  const factMap = new Map<string, any>();
+  for (const f of facts) {
+    if (f && f.id) factMap.set(f.id, f);
+  }
+
+  formatted = formatted.replace(/f_[0-9a-fA-F]{10,}/g, (factId) => {
+    const fact = factMap.get(factId);
+    if (fact) {
+      const blockMatch = fact.block_id ? String(fact.block_id).match(/^b_(\d+)_(\d+)$/) : null;
+      const sceneMatch = fact.scene_id ? String(fact.scene_id).match(/^sc_(\d+)$/) : null;
+      let loc = '';
+      if (blockMatch) {
+        loc = `第 ${blockMatch[1]} 场的第 ${blockMatch[2]} 个动作/剧情描述段落`;
+      } else if (sceneMatch) {
+        loc = `第 ${sceneMatch[1]} 场`;
+      }
+      const quote = fact.text ? `「${fact.text}」` : '';
+      return [loc, quote].filter(Boolean).join(' ') || factId;
+    }
+    return '对应剧本段落';
+  });
+
+  return formatted;
+}
+
 export interface DirectorScreenplay {
   id: number;
   revision: number;
@@ -270,7 +318,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
         const stages: Record<string, string> = { queued: '排队中', facts: '核对事实来源', planning: '规划镜头', translating: '直译画面事实', auditing: '核验译文', needs_review: '事实需要核对', failed: '已保留进度' };
         return <div key={task.task_id} className="px-4 py-3 border-b border-amber-200 bg-amber-50 dark:bg-amber-950/30 text-xs space-y-2 min-w-0 break-words">
           <div>{stages[progress.phase] || progress.phase} {progress.scene_id ? `· 分场 ${progress.scene_id}` : ''} {progress.shot_index ? `· 第 ${progress.shot_index} 镜` : ''} · 已完成 {Object.keys(progress.shots || {}).length} 镜</div>
-          {(task.error || progress.error) && <p className="text-amber-800 dark:text-amber-200">{task.error || progress.error}</p>}
+          {(task.error || progress.error) && <p className="text-amber-800 dark:text-amber-200">{formatStoryboardTaskError(task.error || progress.error, progress.facts)}</p>}
           {(progress.facts || []).filter((fact: any) => ['mixed', 'uncertain'].includes(fact.kind) || fact.binding?.mentions.some((m: any) => !m.confirmed)).map((fact: any) => <p key={fact.id}>待核对：{fact.text}</p>)}
           {progress.facts?.length > 0 && ['failed', 'interrupted'].includes(task.status) && <button type="button" data-testid={`storyboard-fact-review-open-${task.task_id}`} className="px-3 py-1 rounded border border-amber-400" onClick={() => { setReviewingTaskId(task.task_id); setReviewFacts(stabilizeReviewBeats(progress.facts.map((fact: any) => ({ scene_id: fact.scene_id, block_id: fact.block_id, text: fact.text, kind: fact.kind, beat: fact.beat, states: fact.states || [], binding: fact.binding })))); }}>{t('director.fact_review_open')}</button>}
           {['failed', 'interrupted'].includes(task.status) && progress.request?.expected_revision === script.revision && <button type="button" className="px-3 py-1 rounded border border-amber-400" disabled={resumingTaskId === task.task_id} onClick={() => void resumeTask(task)}>{t('director.task_resume', '进度继续')}</button>}
