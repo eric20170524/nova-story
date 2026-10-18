@@ -26,31 +26,113 @@ export class FactWorkflowError extends Error {
   constructor(message: string, public statusCode: 400 | 409 | 502 = 400) { super(message); }
 }
 const punctuationOnly = (value: string) => !value.replace(/[\s\p{P}]/gu, '');
+
+export const TRANSITION_FILLERS_REGEX = /^(?:[\s\p{P}]*(?:只见|只见得|只见那|这时|此时|这时刻|这一刻|下一刻|下一秒|紧接着|随后|接着|然后|突然|忽地|旋即|同时|与此同时|便见|却见|但见|便|就|方才|刚才|片刻后|半晌|转瞬间|一时间|只见是|正见|忽听得|只听得|且|而|又|及|须臾|倏忽|未几|少顷|良久|清晨|正午|傍晚|深夜)+[\s\p{P}]*)+$/u;
+
+export function isPunctuationOrFiller(segment: string): boolean {
+  if (punctuationOnly(segment)) return true;
+  const cleanSeg = segment.replace(/[\s\p{P}]/gu, '');
+  if (!cleanSeg) return true;
+  if (TRANSITION_FILLERS_REGEX.test(cleanSeg)) return true;
+  if (cleanSeg.length <= 2 && /^[且而又有便就与及则向从在被把到来去之得了着过]+$/u.test(cleanSeg)) return true;
+  return false;
+}
+
+export function locateSpanInSource(source: string, spanText: string, cursor: number): { start: number; end: number; resolvedText: string } | null {
+  // 1. Direct exact substring match at or after cursor
+  const exactIdx = source.indexOf(spanText, cursor);
+  if (exactIdx >= 0) {
+    return { start: exactIdx, end: exactIdx + spanText.length, resolvedText: spanText };
+  }
+
+  // 2. Trimmed exact substring match
+  const trimmed = spanText.trim();
+  if (trimmed) {
+    const trimmedIdx = source.indexOf(trimmed, cursor);
+    if (trimmedIdx >= 0) {
+      return { start: trimmedIdx, end: trimmedIdx + trimmed.length, resolvedText: source.slice(trimmedIdx, trimmedIdx + trimmed.length) };
+    }
+  }
+
+  // 3. Punctuation and whitespace insensitive match (Clean Match)
+  const cleanChar = (ch: string) => !/[\s\p{P}]/gu.test(ch);
+  const cleanStr = (s: string) => s.replace(/[\s\p{P}]/gu, '');
+  const cleanSpan = cleanStr(spanText);
+  if (cleanSpan.length > 0) {
+    const sourceCleanIndices: number[] = [];
+    let cleanSourceSlice = '';
+    for (let i = cursor; i < source.length; i++) {
+      if (cleanChar(source[i]!)) {
+        sourceCleanIndices.push(i);
+        cleanSourceSlice += source[i]!;
+      }
+    }
+
+    const cleanMatchIdx = cleanSourceSlice.indexOf(cleanSpan);
+    if (cleanMatchIdx >= 0) {
+      const matchStart = sourceCleanIndices[cleanMatchIdx]!;
+      const matchEnd = sourceCleanIndices[cleanMatchIdx + cleanSpan.length - 1]! + 1;
+      return { start: matchStart, end: matchEnd, resolvedText: source.slice(matchStart, matchEnd) };
+    }
+
+    // 4. Fuzzy prefix + suffix window match (when AI omits modifiers or transition words)
+    if (cleanSpan.length >= 6) {
+      const prefixLen = Math.min(4, Math.floor(cleanSpan.length / 2));
+      const suffixLen = Math.min(4, Math.floor(cleanSpan.length / 2));
+      const prefix = cleanSpan.slice(0, prefixLen);
+      const suffix = cleanSpan.slice(-suffixLen);
+
+      const pIdx = cleanSourceSlice.indexOf(prefix);
+      if (pIdx >= 0) {
+        const sIdx = cleanSourceSlice.indexOf(suffix, pIdx + prefixLen);
+        if (sIdx >= 0 && (sIdx + suffixLen - pIdx) <= cleanSpan.length * 1.5) {
+          const matchStart = sourceCleanIndices[pIdx]!;
+          const matchEnd = sourceCleanIndices[sIdx + suffixLen - 1]! + 1;
+          return { start: matchStart, end: matchEnd, resolvedText: source.slice(matchStart, matchEnd) };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 export const ExtractionSchema = z.object({ spans: z.array(z.object({
   text: z.string().min(1), kind: FactKindSchema, beat: z.number().int().nonnegative(),
   states: z.array(FactStateSchema).default([]),
   binding: EntityBindingSchema.optional(),
 })).min(1) });
 
-/** Ordered partition of the ORIGINAL block. No fuzzy matching or guessed repeated offsets. */
+/** Ordered partition of the block with tolerance for narrative transition words and punctuation. */
 export function anchorSpans(sceneId: string, blockId: string, source: string, output: z.infer<typeof ExtractionSchema>, baseOffset = 0): VisualFact[] {
   let cursor = 0;
   let lastBeat = -1;
   const facts = output.spans.map((span) => {
-    const start = source.indexOf(span.text, cursor);
-    if (start < 0 || !punctuationOnly(source.slice(cursor, start))) throw new FactWorkflowError(`来源片段遗漏或无法定位: ${blockId}@${cursor}`);
+    const located = locateSpanInSource(source, span.text, cursor);
+    if (!located) {
+      throw new FactWorkflowError(`来源片段遗漏或无法定位: ${blockId}@${cursor}`);
+    }
+    const { start, end, resolvedText } = located;
+    const gap = source.slice(cursor, start);
+    const isGapAllowed = cursor === 0
+      ? (start <= 40 || isPunctuationOrFiller(gap))
+      : isPunctuationOrFiller(gap);
+
+    if (!isGapAllowed) {
+      throw new FactWorkflowError(`来源片段遗漏或无法定位: ${blockId}@${cursor}`);
+    }
     if (span.beat < lastBeat) throw new FactWorkflowError(`事实节拍乱序: ${blockId}`);
     if (span.kind !== 'visual' && span.states.length) throw new FactWorkflowError(`非视觉片段不能改变连续状态: ${blockId}`);
     if (span.states.length) {
-      if (span.binding) validateBinding(span.binding, span.text, [...new Map(span.binding.mentions.filter(m => m.entity).map(m => [m.entity!.id, m.entity!])).values()]);
+      if (span.binding) validateBinding(span.binding, resolvedText, [...new Map(span.binding.mentions.filter(m => m.entity).map(m => [m.entity!.id, m.entity!])).values()]);
       const owners = boundVisibleEntities(span.binding).map(e => e.name);
-      if (evidencedContinuityStates(span.text, span.states, source.slice(0, start), owners).rejected.length) throw new FactWorkflowError(`连续状态缺少原文证据: ${blockId}`);
+      if (evidencedContinuityStates(resolvedText, span.states, source.slice(0, start), owners).rejected.length) throw new FactWorkflowError(`连续状态缺少原文证据: ${blockId}`);
     }
     lastBeat = span.beat;
-    cursor = start + span.text.length;
-    return { ...span, id: `f_${hash([sceneId, blockId, start + baseOffset, cursor + baseOffset]).slice(0, 20)}`, scene_id: sceneId, block_id: blockId, start: start + baseOffset, end: cursor + baseOffset };
+    cursor = end;
+    return { ...span, text: resolvedText, id: `f_${hash([sceneId, blockId, start + baseOffset, cursor + baseOffset]).slice(0, 20)}`, scene_id: sceneId, block_id: blockId, start: start + baseOffset, end: cursor + baseOffset };
   });
-  if (!punctuationOnly(source.slice(cursor))) throw new FactWorkflowError(`来源片段尾部遗漏: ${blockId}@${cursor}`);
+  if (!isPunctuationOrFiller(source.slice(cursor))) throw new FactWorkflowError(`来源片段尾部遗漏: ${blockId}@${cursor}`);
   return facts;
 }
 
@@ -232,6 +314,10 @@ export function verbatimActionSplit(source: string, spans: string[]): string[] |
     const adjusted = [...spans];
     adjusted[adjusted.length - 1] += source.slice(joined.length);
     if (adjusted.join('') === source) return adjusted;
+  }
+  const aligned = alignSpansToSource(source, spans.map(text => ({ text })));
+  if (aligned.length >= 2 && aligned.map(a => a.text).join('') === source) {
+    return aligned.map(a => a.text);
   }
   return null;
 }

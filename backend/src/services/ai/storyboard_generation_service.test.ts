@@ -123,6 +123,28 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     assert.equal(evidencedContinuityStates('她把里衣褪到腰间。', lowered).rejected.length, 1);
     assert.throws(() => anchorSpans('s', 'b', block, { spans: [{ text: '青禾解开外衣。', kind: 'visual', beat: 0, states: [{ entity: '后文的人', attribute: 'wardrobe', value: '解开外衣' }] }] }), /原文证据/);
   });
+  await t.test('容错门禁：支持首部过渡词/标点容差与段间连接词容差，无需一字不差硬性强求', () => {
+    // 1. 首部过渡词/叙述助词（如“只见”）不抛出 b@0 错误
+    const leadingFiller = '只见裴语涵赤足走来。';
+    const f1 = anchorSpans('s', 'b', leadingFiller, { spans: [{ text: '裴语涵赤足走来。', kind: 'visual', beat: 0, states: [] }] });
+    assert.equal(f1.length, 1);
+    assert.equal(f1[0]!.text, '裴语涵赤足走来。');
+
+    // 2. 标点和引号微调容差
+    const punctTolerant = '“裴语涵赤足走来。”';
+    const f2 = anchorSpans('s', 'b', punctTolerant, { spans: [{ text: '裴语涵赤足走来。', kind: 'visual', beat: 0, states: [] }] });
+    assert.equal(f2.length, 1);
+
+    // 3. 段间过渡词容差（如“，只见她”）
+    const middleFiller = '裴语涵走来，只见她举起红杯。';
+    const f3 = anchorSpans('s', 'b', middleFiller, { spans: [
+      { text: '裴语涵走来', kind: 'visual', beat: 0, states: [] },
+      { text: '她举起红杯。', kind: 'visual', beat: 1, states: [] },
+    ] });
+    assert.equal(f3.length, 2);
+    assert.equal(f3[0]!.beat, 0);
+    assert.equal(f3[1]!.beat, 1);
+  });
   await t.test('对白引号后的动作不把整段算成一条超长语音', () => {
     const doc = document();
     const scene = doc.scenes[0]!;
