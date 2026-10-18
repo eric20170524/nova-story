@@ -24,9 +24,10 @@ export function resolveAssetBindings(shot, assets, bound = []) {
       blockers.push(`Ambiguous ${item.kind} name: ${item.name}`);
       return;
     }
+    const itemNorm = normalized(item.name);
     const contained = exact.length ? [] : assets.filter(asset => {
       const name = normalized(asset.name);
-      return asset.kind === item.kind && name.length >= 2 && normalized(item.name).includes(name);
+      return asset.kind === item.kind && name.length >= 2 && itemNorm.includes(name);
     });
     const longest = contained.reduce((best, asset) => Math.max(best, normalized(asset.name).length), 0);
     const uniqueContained = contained.filter(asset => normalized(asset.name).length === longest);

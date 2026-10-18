@@ -60,6 +60,7 @@ export async function confirmContinuityReview(scriptId:number,raw:unknown,actorI
   if (!doc.scenes.some(scene=>scene.id===body.target_scene_id))return fail('CONTINUITY_SCOPE_INVALID','Target does not belong to this screenplay',404);
   if (ledger.record&&!ledger.input&&!body.replace_all)return fail(ledger.issues[0]!.code,'Review the preserved full ledger before replacing stale/imported approvals');
   if (body.replace_all&&!body.entry_values)return fail('CONTINUITY_ENTRY_REQUIRED','Full review requires an explicit first-scene entry');
+  if (body.entry_values&&body.entry_values.length===0)return fail('CONTINUITY_ENTRY_REQUIRED','Full review requires an explicit first-scene entry');
   const previous=body.replace_all?null:ledger.input;
   const entityInput=body.entities??previous?.context.entities??[];
   const entities=validateContinuityEntities(script.project_id,entityInput,await resources(script.project_id));
@@ -200,3 +201,41 @@ export async function refreshContinuityShot(scriptId:number,raw:unknown,actorId:
     return result;
   });
 }
+
+/** Bind script-backed shots that already declare attribute reads and have no continuity reference. */
+export async function bindChapterContinuityShots(scriptId:number,_actorId='local_admin'){
+  const initial=await loadContinuityLedger(scriptId);
+  const initialDoc=ScriptDocumentSchema.parse(JSON.parse(initial.script.document_json));
+  if (!initialDoc.scenes.length) return fail('CONTINUITY_SCOPE_INVALID','Screenplay has no scenes',404);
+  if (!initial.input) return fail('CONTINUITY_REVIEW_REQUIRED','Confirm the explicit first-scene entry before binding chapter shots');
+  return withImmediateTransaction(async()=>{
+    const ledger=await loadContinuityLedger(scriptId);
+    if (!ledger.input) return fail('CONTINUITY_REVIEW_REQUIRED','Continuity ledger is not ready');
+    const doc=ScriptDocumentSchema.parse(JSON.parse(ledger.script.document_json));
+    const validSceneIds=new Set(doc.scenes.map(scene=>scene.id));
+    const scenes=await db.all('SELECT id,active_version,shot_spec FROM scene WHERE chapter_id=? ORDER BY "index",id',ledger.script.chapter_id);
+    const boundSceneIds:number[]=[];
+    for (const row of scenes) {
+      let spec:any={};
+      try { spec=JSON.parse(row.shot_spec||'{}'); } catch { continue; }
+      if (spec?.source?.type!=='script' || Number(spec?.source?.script_id)!==scriptId) continue;
+      const scriptSceneId=String(spec?.source?.script_scene_id||'');
+      if (!scriptSceneId || !validSceneIds.has(scriptSceneId)) continue;
+      if (spec?.source?.continuity?.reference) continue;
+      const declared=spec?.source?.continuity?.reads;
+      if (!Array.isArray(declared) || !declared.length) continue;
+      const reads=declared.map(read=>ContinuityReadSchema.parse(read) as ContinuityRead);
+      await bindContinuityShotInTransaction(Number(row.id),{
+        script_id:scriptId,
+        script_scene_id:scriptSceneId,
+        moment_id:`${scriptSceneId}:exit`,
+        phase:'after',
+        reads,
+      });
+      await syncActiveVersionFromScene(Number(row.id));
+      boundSceneIds.push(Number(row.id));
+    }
+    return {script_id:scriptId,continuity_revision:ledger.revision,bound_scene_ids:boundSceneIds};
+  });
+}
+

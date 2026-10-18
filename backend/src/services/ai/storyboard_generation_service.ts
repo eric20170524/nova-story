@@ -30,13 +30,13 @@ import {
   assertChapterShotQuota,
   formatShotQuotaFailure,
 } from '../shot_intent_quota';
-import { ensureSceneVersionBaseline } from '../scene_versions';
+import { ensureSceneVersionBaseline, syncActiveVersionFromScene } from '../scene_versions';
 import { AssetLibraryService } from '../asset_library_service';
 import { auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, serialWorkflow, shotEvidenceIds, shotSoundText, continuityLiteral, visiblePropEvidence, validateFactPayload, validateFactSources, anchorSpans, stabilizeFactBeats, ExtractionSchema, stateCheckKey, type WorkflowProgress } from '../storyboard_fact_workflow';
 import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
 import { actionBindingSource, boundText, entityRoster, needsBindingReview, textHash, validateBinding } from '../entity_binding';
 import { sceneContextFacts, scopedWardrobeLock } from '../storyboard_fact_workflow';
-import { continuitySourceFingerprint } from '../continuity_store';
+import { continuitySourceFingerprint, bindContinuityShotInTransaction } from '../continuity_store';
 import { continuitySceneDocument, prepareContinuityWorkflowScope } from '../continuity_workflow_scope';
 
 export class StoryboardGenerationError extends Error {
@@ -527,6 +527,7 @@ export class StoryboardGenerationService {
     expectedCandidateRevision?: number;
     requestKey?: string;
     replaceExisting?: boolean;
+    archiveContinuity?: boolean;
     expectedSceneIds?: number[];
   }): Promise<{
     success: boolean;
@@ -698,7 +699,8 @@ export class StoryboardGenerationService {
       const idFloor = await db.get('SELECT MAX(value) AS maximum FROM (SELECT COALESCE(MAX(id),0) AS value FROM scene UNION ALL SELECT COALESCE(MAX(scene_id),0) AS value FROM media_asset)');
       let nextSceneId = Number(idFloor?.maximum || 0) + 1;
       verifyReplacement(lockedScenes);
-      if (lockedScenes.length && await continuitySourceFingerprint(params.scriptId)) throw new StoryboardGenerationError('已有连续性制作记录，请使用分场采纳保留镜头和旧图', 409);
+      const hasConfirmedContinuity = Boolean(await continuitySourceFingerprint(params.scriptId));
+      if (lockedScenes.length && !params.archiveContinuity && hasConfirmedContinuity) throw new StoryboardGenerationError('已有连续性制作记录，请使用分场采纳保留镜头和旧图', 409);
       const lockedTasks = await db.get(`SELECT COUNT(*) AS count FROM generation_task gt INNER JOIN scene s ON s.id=gt.scene_id WHERE s.chapter_id=? AND gt.status='processing'`, script.chapterId);
       if (Number(lockedTasks?.count)) throw new StoryboardGenerationError('当前章节存在正在执行的制作任务，无法提交分镜', 409);
       const accepted = await db.get(`SELECT COUNT(*) AS count FROM media_asset m INNER JOIN scene s ON s.id=m.scene_id WHERE s.chapter_id=? AND m.role='narrative_final' AND m.status='ready'`, script.chapterId);
@@ -710,12 +712,14 @@ export class StoryboardGenerationService {
         const related = (table: string) => db.all(`SELECT * FROM ${table} WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)`, script.chapterId);
         const coverageGroups = await db.all('SELECT * FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
         const coverageShots = await db.all('SELECT * FROM coverage_shot WHERE coverage_group_id IN (SELECT id FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?))', script.chapterId);
-        previousTimeline = { scenes: lockedScenes, versions: await related('scene_version'), references: await related('scene_asset_reference'), image_snapshots: await related('scene_asset_image_snapshot'), media_assets: await related('media_asset'), coverage_groups: coverageGroups, coverage_shots: coverageShots };
+        previousTimeline = { scenes: lockedScenes, versions: await related('scene_version'), references: await related('scene_asset_reference'), image_snapshots: await related('scene_asset_image_snapshot'), media_assets: await related('media_asset'), continuity_dependencies: await related('continuity_shot_dependency'), production_frames: await related('scene_production_frame'), coverage_groups: coverageGroups, coverage_shots: coverageShots };
         await db.run('DELETE FROM coverage_shot WHERE coverage_group_id IN (SELECT id FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?))', script.chapterId);
         await db.run('DELETE FROM coverage_group WHERE source_scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
         await db.run('DELETE FROM scene_version WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
         await db.run('DELETE FROM scene_asset_reference WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
         await db.run('DELETE FROM scene_asset_image_snapshot WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM continuity_shot_dependency WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
+        await db.run('DELETE FROM scene_production_frame WHERE scene_id IN (SELECT id FROM scene WHERE chapter_id=?)', script.chapterId);
         await db.run('DELETE FROM scene WHERE chapter_id=?', script.chapterId);
       }
 
@@ -751,6 +755,21 @@ export class StoryboardGenerationService {
 
         // Create scene_version baseline
         await ensureSceneVersionBaseline(newSceneId);
+        if (params.archiveContinuity && hasConfirmedContinuity && shot.script_scene_id) {
+          let spec: any = {};
+          try { spec = shot.shot_spec ? JSON.parse(shot.shot_spec) : {}; } catch { spec = {}; }
+          const declared = spec?.source?.continuity?.reads;
+          if (Array.isArray(declared) && declared.length && !spec?.source?.continuity?.reference) {
+            await bindContinuityShotInTransaction(newSceneId, {
+              script_id: lockedScript.id,
+              script_scene_id: shot.script_scene_id,
+              moment_id: `${shot.script_scene_id}:exit`,
+              phase: 'after',
+              reads: declared,
+            });
+            await syncActiveVersionFromScene(newSceneId);
+          }
+        }
       }
 
       // Mark candidate as applied and record result

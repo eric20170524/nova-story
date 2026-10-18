@@ -17,11 +17,13 @@ export function nextSceneAfterImageEvent(
   return scene;
 }
 
-export function formalProductionBlocked(capabilities: Array<{ chain_ready?: boolean; live_verified?: boolean; reason?: string | null }> | undefined): string[] {
+export function formalProductionBlocked(capabilities: Array<{ chain_ready?: boolean; live_verified?: boolean; reason?: string | null; family_match?: boolean }> | undefined): string[] {
   const rows = capabilities || [];
   if (rows.length === 0) return ['status_unavailable'];
-  const open = rows.some((row) => row.chain_ready && row.live_verified);
+  const matching = rows.filter((row) => row.family_match !== false);
+  if (matching.length === 0) return ['incompatible'];
+  const open = matching.some((row) => row.chain_ready && row.live_verified);
   if (open) return [];
-  const reasons = rows.map((row) => row.reason).filter((reason): reason is string => Boolean(reason));
+  const reasons = matching.map((row) => row.reason).filter((reason): reason is string => Boolean(reason));
   return reasons.length > 0 ? [...new Set(reasons)] : ['not_live_verified'];
 }

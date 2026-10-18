@@ -207,7 +207,7 @@ class ApiService {
   };
 
   /** Probe local ComfyUI for Tier B dual-ref readiness (IP-Adapter + ControlNet) */
-  getTierBStatus = () =>
+  getTierBStatus = (params?: { model?: string }) =>
     this.request<{
       ready: boolean;
       full_dual_ref: boolean;
@@ -236,7 +236,7 @@ class ApiService {
           reason: string | null;
         }>;
       };
-    }>('/settings/tier-b-status');
+    }>(params?.model ? `/settings/tier-b-status?model=${encodeURIComponent(params.model)}` : '/settings/tier-b-status');
 
   // Characters
   getLibraryAssets = (projectId: number) => this.request<any[]>(`/projects/${projectId}/asset-library`);

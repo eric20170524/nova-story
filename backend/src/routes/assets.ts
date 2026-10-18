@@ -46,7 +46,11 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         if (previous) {
           if (previous.request_hash !== hashCanonical(req)) return reply.status(409).send({ detail: 'Image request key was already used with different parameters' });
           const task = await AssetTaskStore.get(previous.task_id);
-          return { task_id: previous.task_id, status: task?.status || 'processing', replayed: true };
+          if (!task || task.status === 'failed' || task.status === 'cancelled') {
+            await db.run('DELETE FROM image_generation_request WHERE request_key = ?', req.request_key);
+          } else {
+            return { task_id: previous.task_id, status: task.status || 'processing', replayed: true };
+          }
         }
       }
       if (Object.values(req.workflow).some((node: any) => node?.class_type)) {
@@ -164,6 +168,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         status: 'processing',
         active_version: scene?.active_version ?? null,
         candidate_version: projectWorkflow.formal_candidate?.scene_version ?? null,
+        reference_hash: projectWorkflow.formal_candidate?.reference_hash ?? null,
         production_stage: req.production_stage,
         new_version: asNewVersion
       };

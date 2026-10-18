@@ -110,6 +110,29 @@ test('probeTierBCapability reports missing pieces without throwing', () => {
   }
 });
 
+test('missing object_info does not assume a Canny preprocessor is installed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-tierb-canny-'));
+  try {
+    fs.mkdirSync(path.join(root, 'models', 'controlnet'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'custom_nodes'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'nodes.py'), '# fake comfy\n');
+    fs.writeFileSync(path.join(root, 'models', 'controlnet', 'controlnet-canny-sdxl.safetensors'), '');
+    const cap = probeTierBCapability(root);
+    assert.equal(cap.compositionKind, 'canny');
+    assert.equal(cap.hasCannyPreprocessor, false);
+    const workflow = ponyWorkflow();
+    injectTierBAdapters(workflow, {
+      compositionImageFilename: 'edge.png',
+      capability: cap,
+    });
+    const types = Object.values(workflow).map((node: any) => node.class_type);
+    assert.equal(types.includes('CannyEdgePreprocessor'), false);
+    assert.equal(types.includes('ControlNetLoader'), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('injectTierBAdapters wires IP-Adapter Advanced + ControlNet', () => {
   const workflow = ponyWorkflow();
   const result = injectTierBAdapters(workflow, {

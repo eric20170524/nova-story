@@ -9,6 +9,7 @@ export interface FormalCapabilityGap {
   reason: string | null;
   chain_ready?: boolean;
   live_verified?: boolean;
+  family_match?: boolean;
 }
 
 const CHECKS = ['wardrobe', 'damage', 'count', 'holder', 'openings', 'space'] as const;
@@ -43,9 +44,18 @@ export const FormalShotActions: React.FC<{
   const names = visibleNames(scene);
   const stages = storyboardStages(scene);
   const candidate = stages.candidates[0] || null;
-  const open = capabilities.some((row) => row.chain_ready && row.live_verified);
-  const gapReasons = [...new Set(capabilities.map((row) => row.reason).filter((reason): reason is string => Boolean(reason)))];
-  const shownGaps = capabilities.length === 0 ? ['status_unavailable'] : open ? [] : gapReasons.length > 0 ? gapReasons : ['not_live_verified'];
+  const matching = capabilities.filter((row) => row.family_match !== false);
+  const open = matching.some((row) => row.chain_ready && row.live_verified);
+  const gapReasons = [...new Set(matching.map((row) => row.reason).filter((reason): reason is string => Boolean(reason)))];
+  const shownGaps = capabilities.length === 0
+    ? ['status_unavailable']
+    : matching.length === 0
+      ? ['incompatible']
+      : open
+        ? []
+        : gapReasons.length > 0
+          ? gapReasons
+          : ['not_live_verified'];
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [note, setNote] = useState('');
   const gapText = (reason: string) => t(`director.formal_gap_${reason}`, reason);

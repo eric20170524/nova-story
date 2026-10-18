@@ -174,3 +174,26 @@ test('CT08 browser round-trip entity ordering permits a scene review but still r
     assert.equal((await post({...correction,expected_impact_hash:preview.json().impact_hash})).statusCode,200);
   }finally{await app.close();}
 });
+
+test('bind-chapter-shots requires a confirmed entry and binds only declared reads',async()=>{
+  const {app,body,post}=await setup();try{
+    await db.run("UPDATE scene SET shot_spec=? WHERE id=101",JSON.stringify({location:'房间',primary_action:'林岚撑伞进入。',source:{type:'script',script_id:30,script_revision:1,script_scene_id:'F06:s1',block_ids:[],continuity:{reads:[{entity_id:'F06:u1',attribute_id:'integrity'}]}}}));
+    await db.run("UPDATE scene SET shot_spec=? WHERE id=102",JSON.stringify({location:'房间',primary_action:'陈月站立。',source:{type:'script',script_id:30,script_revision:1,script_scene_id:'F06:s2',block_ids:[],continuity:{reads:[]}}}));
+    const missing=await app.inject({method:'POST',url:'/api/scripts/30/continuity/bind-chapter-shots',payload:{}});
+    assert.equal(missing.statusCode,409,missing.body);
+    assert.equal(missing.json().code,'CONTINUITY_REVIEW_REQUIRED');
+    const emptyEntry=await post({...body,request_key:'empty-entry',entry_values:[]});
+    assert.equal(emptyEntry.statusCode,409,emptyEntry.body);
+    assert.equal(emptyEntry.json().code,'CONTINUITY_ENTRY_REQUIRED');
+    assert.equal((await db.get('SELECT COUNT(*) n FROM continuity_ledger')).n,0);
+    const saved=await post(body);
+    assert.equal(saved.statusCode,200,saved.body);
+    const bound=await app.inject({method:'POST',url:'/api/scripts/30/continuity/bind-chapter-shots',payload:{}});
+    assert.equal(bound.statusCode,200,bound.body);
+    assert.deepEqual(bound.json().bound_scene_ids,[101]);
+    const current=await requireCurrentContinuityShot(await db.get('SELECT * FROM scene WHERE id=101'));
+    assert.deepEqual(current.binding.reads,[{entity_id:'F06:u1',attribute_id:'integrity'}]);
+    await assert.rejects(async()=>requireCurrentContinuityShot(await db.get('SELECT * FROM scene WHERE id=102')),(error:any)=>error.code==='CONTINUITY_ENTRY_REQUIRED');
+  }finally{await app.close();}
+});
+

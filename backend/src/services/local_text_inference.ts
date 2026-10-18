@@ -16,7 +16,7 @@ export async function withLocalTextInference<T>(work: () => Promise<T>, options:
   if (options.configuredProvider && String(llm.provider || '').toLowerCase() === 'custom' && llm.base_url) {
     try { if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(llm.base_url).hostname)) return work(); } catch { return work(); }
   }
-  if (!ensureOverride && (isNodeTest() || String(llm.provider || '').toLowerCase() === 'codex' || isRemoteGemmaLlm(llm))) return work();
+  if (!ensureOverride && (isNodeTest() || isRemoteGemmaLlm(llm))) return work();
   if (ownedTextLease.getStore()) return work();
   const owner = `text_${randomUUID()}`;
   const lease = await GpuLeaseService.acquireLease(owner, 'text', 30 * 60 * 1000);

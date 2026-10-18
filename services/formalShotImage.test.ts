@@ -26,4 +26,13 @@ test('formal generation stays closed until a capability is live', () => {
   assert.deepEqual(formalProductionBlocked(undefined), ['status_unavailable']);
   assert.deepEqual(formalProductionBlocked([{ reason: 'offline', chain_ready: false, live_verified: false }]), ['offline']);
   assert.deepEqual(formalProductionBlocked([{ reason: null, chain_ready: true, live_verified: true }]), []);
+  // Other model family incompatible reason should not block matching capability
+  assert.deepEqual(formalProductionBlocked([
+    { id: 'sdxl_ip_adapter', family_match: true, reason: null, chain_ready: false, live_verified: false },
+    { id: 'krea2_native_reference', family_match: false, reason: 'incompatible', chain_ready: false, live_verified: false },
+  ] as any), ['not_live_verified']);
+  // When no capabilities match current family, block with incompatible
+  assert.deepEqual(formalProductionBlocked([
+    { id: 'sdxl_ip_adapter', family_match: false, reason: 'incompatible', chain_ready: false, live_verified: false },
+  ] as any), ['incompatible']);
 });

@@ -128,6 +128,8 @@ test('交换施受关系不再靠词面通过，同关系被动句通过；英�
   assert.equal(eventContentCovered(source, '陈月把蓝伞递给林岚。'), false);
   assert.equal(eventContentCovered(source, '蓝伞被林岚递给陈月。'), true);
   assert.equal(eventContentCovered('林岚用右手把蓝伞递给陈月。', '蓝伞被林岚用右手递给陈月。'), true);
+  assert.equal(eventContentCovered('林岚解开外衣，然后走出房间。', '林岚解开外衣。'), false);
+  assert.equal(eventContentCovered('她解开外衣。', '前文。她解开外衣。她举起蓝伞。'), true);
   const glossary = { 林岚: 'Lin Lan', 陈月: 'Chen Yue' };
   assert.equal(transferTranslationProblem(source, 'Lin Lan hands the blue umbrella to Chen Yue.', glossary), null);
   assert.equal(transferTranslationProblem(source, 'The blue umbrella is handed to Chen Yue by Lin Lan.', glossary), null);

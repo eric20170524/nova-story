@@ -1,6 +1,9 @@
 /** Lab Gemma 4 31B, served through the ComfyUI host's OpenAI-compatible path. */
 export const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 export const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
+export const LOCAL_LLM_DEFAULT_MODEL = 'novastory-qwen3.5:9b';
+export const LOCAL_LLM_DEFAULT_BASE_URL = 'http://127.0.0.1:11434/v1';
+export type LLMMode = 'local' | 'remote';
 
 const OLLAMA_PROVIDERS = new Set(['', 'ollama', 'local_llm']);
 
@@ -16,6 +19,38 @@ export function isRemoteGemmaLlm(
     return model === GEMMA4_REMOTE_MODEL
         || base === GEMMA4_REMOTE_BASE_URL
         || base.includes('/gemma4');
+}
+
+/**
+ * Apply explicit parameter/env mode control ('local' | 'remote') so local LLM
+ * and remote preset operate as parallel selectable working modes.
+ */
+export function applyLlmModeOverride(
+    settings: Record<string, any>,
+    rawMode?: string | null
+): Record<string, any> {
+    const normalized = String(rawMode || '').trim().toLowerCase();
+    if (!normalized) return settings;
+    const llm = { ...(settings.llm || {}) };
+    if (normalized === 'local') {
+        const isCurrentlyLocal = OLLAMA_PROVIDERS.has(String(llm.provider || '').toLowerCase()) && !isRemoteGemmaLlm(llm);
+        llm.provider = 'ollama';
+        llm.api_key = 'ollama';
+        llm.base_url = isCurrentlyLocal && llm.base_url ? llm.base_url : LOCAL_LLM_DEFAULT_BASE_URL;
+        llm.model = isCurrentlyLocal && llm.model ? llm.model : LOCAL_LLM_DEFAULT_MODEL;
+        settings.llm = llm;
+        settings.llm_model = llm.model;
+        return settings;
+    }
+    if (normalized === 'remote' || normalized === 'gemma4') {
+        llm.provider = 'openai';
+        llm.model = GEMMA4_REMOTE_MODEL;
+        llm.base_url = GEMMA4_REMOTE_BASE_URL;
+        settings.llm = llm;
+        settings.llm_model = GEMMA4_REMOTE_MODEL;
+        return applyKnownRemoteLlm(settings);
+    }
+    return settings;
 }
 
 /**

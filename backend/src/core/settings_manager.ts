@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import { getConfigDirectory } from './paths';
-import { applyKnownRemoteLlm } from '../services/llm_presets';
+import { applyKnownRemoteLlm, applyLlmModeOverride } from '../services/llm_presets';
 export { validateTtsBaseUrl, type TtsUrlValidationResult } from '../services/tts_service';
 
 const SETTINGS_FILE = 'system_settings.json';
@@ -162,13 +162,8 @@ export class SettingsManager {
         }
 
         applyKnownRemoteLlm(settings);
+        applyLlmModeOverride(settings, process.env.NOVASTORY_LLM_MODE || process.env.LLM_MODE);
         if (migrateRetiredLocalLlmModel(settings)) persistRetiredLocalLlmModel();
-
-        if (process.env.NOVASTORY_BUILTIN_AI === 'codex') {
-            settings.llm = { provider: 'codex', model: process.env.NOVASTORY_CODEX_MODEL || 'gpt-6.1-sol' };
-            settings.image_provider = 'codex';
-            settings.comfyui.enabled = false;
-        }
 
         if (settings.comfyui) {
             // The macOS launcher selects remote mode for this process without

@@ -33,6 +33,8 @@ export interface TierBCapability extends AdapterAvailability {
   hasIpAdapterNodes: boolean;
   hasControlNetNodes: boolean;
   hasOpenPosePreprocessor: boolean;
+  hasDepthPreprocessor?: boolean;
+  hasCannyPreprocessor?: boolean;
   /** Human-readable install hints when something is missing */
   missing: string[];
   notes: string[];
@@ -293,6 +295,16 @@ export const probeTierBCapability = (
     )
     : Boolean(installPath && hasControlNetAux(installPath));
 
+  const hasDepthPreprocessor = nodeNames
+    ? ['DepthAnythingPreprocessor', 'MiDaS-DepthMapPreprocessor', 'Zoe-DepthMapPreprocessor', 'Zoe_DepthAnythingPreprocessor'].some((n) =>
+      nodeNames.has(n)
+    )
+    : Boolean(installPath && hasControlNetAux(installPath));
+
+  const hasCannyPreprocessor = nodeNames
+    ? ['CannyEdgePreprocessor', 'Canny'].some((n) => nodeNames.has(n))
+    : Boolean(installPath && hasControlNetAux(installPath));
+
   if (!hasIpAdapterNodes) {
     missing.push('custom_nodes/ComfyUI_IPAdapter_plus');
   }
@@ -343,9 +355,13 @@ export const probeTierBCapability = (
     notes.push('Character adapter unavailable — Tier A tags/img2img only for identity');
   }
   if (compositionControl) {
+    const hasPre =
+      compositionKind === 'openpose' ? hasOpenPosePreprocessor :
+      compositionKind === 'depth' ? hasDepthPreprocessor :
+      hasCannyPreprocessor;
     notes.push(
       `Composition ControlNet ready (${compositionKind}, model=${models.controlnet}`
-      + `${hasOpenPosePreprocessor ? ', preprocessor=yes' : ', preprocessor=no — raw image hint'})`
+      + `${hasPre ? ', preprocessor=yes' : ', preprocessor=no — raw image hint'})`
     );
   } else {
     notes.push('Composition ControlNet unavailable — text composition only');
@@ -361,6 +377,8 @@ export const probeTierBCapability = (
     hasIpAdapterNodes,
     hasControlNetNodes,
     hasOpenPosePreprocessor,
+    hasDepthPreprocessor,
+    hasCannyPreprocessor,
     missing: Array.from(new Set(missing)),
     notes
   };
@@ -446,12 +464,16 @@ export const injectTierBAdapters = (
   // ── Composition: ControlNet ────────────────────────────────────────
   if (cap.compositionControl && compFile && cap.models.controlnet) {
     try {
+      const usePreprocessor =
+        (cap.compositionKind === 'openpose' && cap.hasOpenPosePreprocessor)
+        || (cap.compositionKind === 'depth' && Boolean(cap.hasDepthPreprocessor ?? true))
+        || (cap.compositionKind === 'canny' && Boolean(cap.hasCannyPreprocessor));
       compositionWired = injectControlNet(workflow, {
         imageFilename: compFile,
         controlnetFile: cap.models.controlnet,
         strength: clamp(options.compositionStrength ?? 0.55, 0.05, 1.5),
         kind: cap.compositionKind,
-        usePreprocessor: cap.hasOpenPosePreprocessor && cap.compositionKind === 'openpose'
+        usePreprocessor
       });
       if (compositionWired) {
         notes.push(
@@ -609,21 +631,48 @@ const injectControlNet = (
 
   let imageLink: [string, number] = [loadId, 0];
 
-  if (opts.usePreprocessor && opts.kind === 'openpose') {
-    const preId = nextNodeId(workflow);
-    // OpenposePreprocessor is the common controlnet_aux class name
-    workflow[preId] = {
-      inputs: {
-        image: [loadId, 0],
-        detect_hand: 'enable',
-        detect_body: 'enable',
-        detect_face: 'enable',
-        resolution: 1024
-      },
-      class_type: 'OpenposePreprocessor',
-      _meta: { title: 'NovaStory OpenPose Preprocessor' }
-    };
-    imageLink = [preId, 0];
+  if (opts.usePreprocessor) {
+    if (opts.kind === 'openpose') {
+      const preId = nextNodeId(workflow);
+      // OpenposePreprocessor is the common controlnet_aux class name
+      workflow[preId] = {
+        inputs: {
+          image: [loadId, 0],
+          detect_hand: 'enable',
+          detect_body: 'enable',
+          detect_face: 'enable',
+          resolution: 1024
+        },
+        class_type: 'OpenposePreprocessor',
+        _meta: { title: 'NovaStory OpenPose Preprocessor' }
+      };
+      imageLink = [preId, 0];
+    } else if (opts.kind === 'depth') {
+      const preId = nextNodeId(workflow);
+      workflow[preId] = {
+        inputs: {
+          image: [loadId, 0],
+          ckpt_name: 'depth_anything_vitl14.pth',
+          resolution: 1024
+        },
+        class_type: 'DepthAnythingPreprocessor',
+        _meta: { title: 'NovaStory Depth Anything Preprocessor' }
+      };
+      imageLink = [preId, 0];
+    } else if (opts.kind === 'canny') {
+      const preId = nextNodeId(workflow);
+      workflow[preId] = {
+        inputs: {
+          image: [loadId, 0],
+          low_threshold: 100,
+          high_threshold: 200,
+          resolution: 1024
+        },
+        class_type: 'CannyEdgePreprocessor',
+        _meta: { title: 'NovaStory Canny Edge Preprocessor' }
+      };
+      imageLink = [preId, 0];
+    }
   }
 
   const cnLoadId = nextNodeId(workflow);

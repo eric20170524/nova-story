@@ -9,7 +9,7 @@ export const textHash = (text: string) => crypto.createHash('sha256').update(tex
 export const entityRoster = (characters: Array<{ id: number; name: string }>): EntityRef[] => characters.map(c => ({ id: `character:${c.id}`, name: c.name }));
 const quote = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const pronouns = /她们|他们|它们|(?<!其)她|(?<!其)他(?!人)|它|对方|自己|前者|后者|两人/gu;
-const implicitPerson = /^(?:随后|然后|接着|并)?(?:伸手|抬手|抬头|低头|转身|坐下|起身|站起|举起|接过|递出|握住|拿起|放下|推开|走出|走进|解开|褪|脱|戴|穿|里衣|外衣|衣襟|衣领|双手|左手|右手)/u;
+const implicitPerson = /^(?:随后|然后|接着|并)?(?:将|把)?(?:随后|然后|接着|并)?(?:伸手|抬手|抬头|低头|转身|坐下|起身|站起|举起|接过|递出|握住|拿起|放下|推开|走出|走进|解开|褪|脱|戴|穿|里衣|外衣|衣襟|衣领|双手|左手|右手|手中)/u;
 const represented = /^(?:的)?(?:照片|画像|肖像|名字|姓名|传闻|故事|声音|来信|信件)/u;
 const representedPrefix = /(?:照片|画像|肖像)(?:里|中|上)(?:的)?$|(?:提起|提到|谈起|谈到|想起|听说|呼喊|喊出)(?:了)?$/u;
 const unnamedParticipant = /母亲|父亲|女儿|儿子|孩子|老人|女孩|男孩|女人|男人|女子|男子|路人|同事|朋友|侍女|服务员|陌生人|客人|守卫|保安|老师|学生|众人/u;
@@ -120,6 +120,34 @@ function localSubjectForReference(text: string, mention: EntityBinding['mentions
 
 export async function resolveScriptBindings(provider: AIProvider, binding: EntityBinding, text: string, context: string, roster: EntityRef[], scene?: { location: string; interior_exterior?: string; time_of_day?: string }): Promise<EntityBinding> {
   validateBinding(binding, text, roster);
+  const preResolvedMentions = binding.mentions.map(m => {
+    if (!m.confirmed) {
+      const matching = roster.filter(entity => entity.name === m.text);
+      if (matching.length === 1 && (!context || context.includes(m.text))) {
+        const representedMention = represented.test(text.slice(m.end)) || representedPrefix.test(text.slice(0, m.start));
+        if (representedMention || m.visibility === 'uncertain') {
+          return {
+            ...m,
+            entity: matching[0]!,
+            status: representedMention ? 'resolved' as const : m.status,
+            authority: 'model_proposal' as const,
+            confirmed: false,
+            visibility: representedMention ? 'mentioned' as const : 'uncertain' as const,
+          };
+        }
+        return {
+          ...m,
+          entity: matching[0]!,
+          status: 'resolved' as const,
+          authority: 'literal' as const,
+          confirmed: true,
+          visibility: m.visibility,
+        };
+      }
+    }
+    return m;
+  });
+  binding = { ...binding, mentions: preResolvedMentions };
   const pending = binding.mentions.map((mention, index) => ({ ...mention, index })).filter(m => !m.confirmed && !roster.some(entity => entity.name === m.text));
   if (!pending.length || !roster.length) return binding;
   const input = { task: 'script_entity_resolution', policy_version: SCRIPT_ENTITY_RESOLUTION_POLICY_VERSION, context, scene, entities: roster, text,
@@ -137,8 +165,9 @@ export async function resolveScriptBindings(provider: AIProvider, binding: Entit
     if (row.status === 'resolved' && localSubject && localSubject.id !== row.entity_id) return { ...mention, entity: null, candidates: roster, status: 'ambiguous', visibility: 'uncertain', authority: 'model_proposal', confirmed: false };
     const entity = row.status === 'resolved' ? roster.find(e => e.id === row.entity_id) || null : null;
     const accepted = Boolean(entity && row.visibility !== 'uncertain' && roster.filter(e => e.name === entity.name).length === 1);
+    const visibility = row.visibility;
     return { ...mention, entity, candidates: roster, status: entity ? 'resolved' : row.status === 'resolved' ? 'unknown' : row.status,
-      visibility: row.visibility, authority: accepted ? 'model_resolution' : 'model_proposal', confirmed: accepted };
+      visibility, authority: accepted ? 'model_resolution' : 'model_proposal', confirmed: accepted };
   }) };
   validateBinding(resolved, text, roster);
   return resolved;
@@ -157,7 +186,7 @@ export function validateBinding(binding: EntityBinding, text: string, roster: En
   for (const mention of binding.mentions) {
     if (mention.start < 0 || text.slice(mention.start, mention.end) !== mention.text || mention.end < mention.start || mention.end > text.length) throw new Error('人物绑定来源偏移不符');
     if (mention.entity && !roster.some(e => e.id === mention.entity!.id && e.name === mention.entity!.name)) throw new Error('人物绑定引用未知实体');
-    if (mention.confirmed && mention.entity && roster.filter(e => e.name === mention.entity!.name).length > 1) throw new Error('同名角色尚不能共用画面锁，请先为角色档案设置可区分的规范姓名');
+    if (mention.confirmed && mention.entity && new Set(roster.filter(e => e.name === mention.entity!.name).map(e => e.id)).size > 1) throw new Error('同名角色尚不能共用画面锁，请先为角色档案设置可区分的规范姓名');
     if (mention.authority === 'model_proposal' && mention.confirmed) throw new Error('模型人物建议未经人工确认');
     if (mention.authority === 'model_resolution' && (!mention.confirmed || mention.status !== 'resolved' || mention.visibility === 'uncertain')) throw new Error('人物自动解析必须明确且无歧义');
     if (mention.status !== 'resolved' && mention.entity) throw new Error('歧义不能作为入镜人物');

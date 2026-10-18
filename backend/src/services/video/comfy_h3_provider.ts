@@ -106,12 +106,14 @@ export class ComfyH3Provider {
     return this.comfyService.checkStatus();
   }
 
-  async getObjectInfo(): Promise<Record<string, any> | null> {
-    try {
-      const res = await this.comfyService.authenticatedFetch('/object_info', {}, 5000);
-      if (res.ok) return (await res.json()) as Record<string, any>;
-    } catch {
-      /* ComfyUI offline or unreachable */
+  async getObjectInfo(timeoutMs = 30000): Promise<Record<string, any> | null> {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await this.comfyService.authenticatedFetch('/object_info', {}, timeoutMs);
+        if (res.ok) return (await res.json()) as Record<string, any>;
+      } catch {
+        if (attempt === 1) await new Promise(r => setTimeout(r, 1000));
+      }
     }
     return null;
   }

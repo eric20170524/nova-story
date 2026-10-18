@@ -556,10 +556,12 @@ export const DirectorMode: React.FC = () => {
   const imageInflightRef = React.useRef<Record<string, string>>({});
   const ignoreStreamErrorRef = React.useRef(false);
   useEffect(() => {
-    api.getTierBStatus()
-      .then((status) => setFormalCapabilities(status.formal?.capabilities || []))
+    api.getTierBStatus({ model: projectModelType })
+      .then((status) => {
+        setFormalCapabilities(status.formal?.capabilities || []);
+      })
       .catch(() => setFormalCapabilities([]));
-  }, [projectId]);
+  }, [projectId, projectModelType]);
   const reattachedTasksRef = React.useRef(new Set<string>());
   useEffect(() => {
     for (const scene of timeline) {

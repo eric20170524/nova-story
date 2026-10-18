@@ -47,7 +47,7 @@ export class LLMService {
         const providerType = (llmConfig.provider || 'ollama').toLowerCase();
         const baseUrl = llmConfig.base_url;
 
-        if (providerType === 'codex') return new CodexProvider();
+        if (providerType === 'codex') return LLMService.getLocalProvider();
 
         if (['openai', 'custom', 'ollama', 'local_llm'].includes(providerType)) {
             const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
@@ -81,11 +81,10 @@ export class LLMService {
         );
     }
 
-    /** Always use the local llama.cpp OpenAI-compatible endpoint, regardless of any cloud
-     * provider selected for other writing tasks. */
+    /** Use the local llama.cpp OpenAI-compatible endpoint or the explicitly selected remote preset,
+     * while never invoking built-in CodexProvider. */
     static getLocalProvider(): AIProvider {
         const configured = SettingsManager.loadSettings().llm || {};
-        if (String(configured.provider || '').toLowerCase() === 'codex') return new CodexProvider();
         const configuredModel = String(configured.model || '');
         const configuredBase = String(configured.base_url || '');
         if (isRemoteGemmaLlm({ model: configuredModel, base_url: configuredBase })) {

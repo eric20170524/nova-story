@@ -74,9 +74,35 @@ Fastify (backend/src/server.ts)
 | `cd backend && npm test` | 后端单测 |
 | `cd backend && npm run typecheck` | 后端类型检查 |
 
-## 五章完整生成与验收
+## 文本模型与推理模式
 
-资产管理将角色、场景、道具分开管理。角色支持定妆照和三视图；场景和道具支持从章节正文提取、生成素材、独立编辑和镜头引用。资产外观变化会使旧引用过期，必须重新绑定并生成关键帧后才能用于视频。项目导出、复制和 JSON 回导保留资产及引用关系。
+系统保证文本推理经由真实大模型，**杜绝任何绕过 LLM 调用内置模型能力（如 `codex` / `NOVASTORY_BUILTIN_AI=codex`）**。系统提供**本地 LLM** 与**远端预设**两种并列的可选工作方式，支持通过参数或环境变量显式控制：
+
+| 工作模式 | 参数 / 环境变量 | 默认配置 | 显存与推理行为 |
+| --- | --- | --- | --- |
+| **本地 LLM**（默认） | `--llm-mode local`<br>`NOVASTORY_LLM_MODE=local` | Ollama / llama.cpp<br>`127.0.0.1:11434/v1`<br>`novastory-qwen3.5:9b` | 文本阶段独占申请本机 GPU 租约，按需自动启停 `llamacpp`；生图阶段自动释放显存给 ComfyUI |
+| **远端预设** | `--llm-mode remote`<br>`NOVASTORY_LLM_MODE=remote` | OpenAI 兼容接口<br>`https://comfy.chuangyi.chat/gemma4/v1`<br>`gemma-4-31b` | 文本推理运行在远端算力机（如 GPU 3），不占用本机 GPU 租约，本机显存完全保留给生图与生视频 |
+
+可在设置页面图形化测试连接与切换，也可在命令行脚本中直接传参。
+
+## 完整视频制作链路与生成验收
+
+制作全链路包含：依赖预检（A）→ 故事构思（B1）→ 章节规划与定稿正文（B2）→ 全篇连续性检查（B3）→ 分场剧本（C1）→ 章节分镜采纳（C2）→ 资产提取与生成（C3）→ 关键帧生成与正式定版（C4）→ 镜头视频生成与连续性时序绑定（C5）→ 章节拼接成片与总片验收（D）。详细规范见 [完整视频制作链路与内部接口.md](local/docs/完整视频制作链路与内部接口.md)。
+
+### 1. 严格逐章依次生图与生视频
+- **逐章前置门禁**：生图（`images`）和生视频（`videos`）阶段严格按章节从第 1 章开始依次进行。
+- **前置依赖强校验**：只有在上一章节的所有关键帧完成质检（`review-images` 签字）且章节视频通过验收（`review-chapter` 签字）后，方可启动下一章节的资产生成与视频渲染，杜绝跨章乱序或跳章生成。
+
+### 2. B3 直到 D 重新制作与历史版本自动归档
+当剧本设定或分镜视觉策略调整、需要对项目从 **B3（连续性检查与处置）直到 D（总片合成）** 进行重新制作时，系统支持全自动归档与重制：
+
+- **产物与状态归档**：传入 `--reproduce-from-b3` 参数，流水线将自动保留已确认的 Stage A/B1/B2 产物（`01-brainstorm.txt`、`02-story-plan.json`、`03-chapter-*.txt` 及对应 `state.steps`），并将原有的 B3～D 产物（`04-continuity-review.json`、`05-script-*`、`06-*`、`07-storyboards.json`、`08-rendered-storyboards.json`、`09-*`、`10-video-delivery.json`、`review-*`、`videos/` 及原 `state.json`）完整移入 `local/production/<projectId>/history/<timestamp>/` 目录留档。
+- **数据库与媒体历史版本**：
+  - **分镜重制与快照**：旧分镜在重新采纳时会自动备份到 `script_change.result_json.previous_timeline`（包含旧镜头的 `continuity_shot_dependency` 与 `scene_production_frame` 快照）。
+  - **就绪视频归档**：已有 `narrative_final` 就绪视频会自动调用归档接口转为 `archived` 状态，不阻塞新分镜替换。
+  - **关键帧历史留档**：镜头重做时自动派生新版本，旧图安全保留在 `scene_version` 历史记录中，并通过连续性重绑定（`bind-chapter-shots`）打通视频门禁。
+
+### 3. 运行与重制命令
 
 先启动已配置文本模型和 ComfyUI 的服务，并启用视频：
 
@@ -84,21 +110,23 @@ Fastify (backend/src/server.ts)
 NOVASTORY_ENABLE_VIDEO=true npm run dev
 ```
 
-执行示例项目的完整链路：
+常用流水线制作命令：
 
 ```bash
-npm run production:full -- --project 90713823
+# 执行示例项目的完整链路（默认本地 LLM，限制 5 章，支持断点续跑）
+npm run production:full -- --project 2 --retry-failed
+
+# 选用远端预设（Gemma 4 31B）并行推理，跑满 14 章
+npm run production:full -- --project 2 --chapter-limit 14 --llm-mode remote
+
+# 对已有项目从 B3 直到 D 重新制作（原有 B3..D 产物与成片自动归档为历史版本）
+npm run production:full -- --project 2 --chapter-limit 14 --reproduce-from-b3
+
+# 可选独立阶段：preflight|text|review-continuity|scripts|assets|storyboards|images|review-images|audio|video-preflight|videos|assemble|verify
+npm run production:full -- --project 2 --chapter-limit 14 --stage storyboards --rebuild-storyboards
 ```
 
-顺序为依赖预检 → 构思与五章规划 → 五章正文与定稿 → 分场剧本 → 角色/场景/道具素材 → 分镜 → 关键帧 → 镜头视频 → 五章合成与总片 → 验收报告。所有生成调用经过系统 API，预检失败会退出，已有正文不会被覆盖。默认示例是五章修仙冒险；其他创作要求可用 `--brief-file /绝对路径/创作要求.txt`。
-
-输出保存在 `local/production/90713823/`：`state.json` 保留步骤与任务 ID，`report.html` 显示执行记录，`acceptance.json` 记录验收矩阵，`videos/full-story.mp4` 为总片。重复执行同一命令继续未完成步骤；`--retry-failed` 明确重新提交已终止的图像/视频任务。未知或仍运行的任务不会自动重复提交。
-
-关键帧记录使用的素材版本，素材引用变更后会重新生成关键帧。视频任务按关键帧、镜头版本和主角参考图区分，当前素材未变时复用任务；变化后生成新候选。所有候选视频均须完成视觉检查并在导演中采纳，脚本才会合成；旧视频的生成清单必须与当前关键帧和角色引用相符才能复用。
-
-可使用 `--stage preflight|text|scripts|assets|storyboards|images|videos|assemble|verify` 单独执行阶段，或使用 `--base-url http://127.0.0.1:3001` 选择本地预览服务。章节正文全部定稿后再生成剧本，以免后续章节带来的世界观与角色变化让剧本来源过期。
-
-脚本按类型和稳定名称检查镜头所需的全部场景和道具，漏掉任一关键素材会停止。匹配不到时在导演镜头中手动绑定全部素材，再续跑；重复提取会向模型提供已有名称和外观。角色视频优先使用焦点主角的参考图，缺少参考图时停止；验收从实际视频生成清单核对引用身份。被标记为 `review_required` 的视频必须经过人工检查和采纳。自动验收检查完整性、字数、来源与文件，叙事质量、角色/道具视觉一致性和音画同步仍需观看实生成结果。当前 H3 提示与参考接口支持一个焦点角色，配角在多人镜头中的一致性需实测。场景参考图是否执行构图控制取决于已安装的 ControlNet，当前道具外观通过提示词和关键帧传递。
+输出保存在 `local/production/<projectId>/`：`state.json` 保留步骤与任务 ID，`report.html` 显示执行记录与验收矩阵，`videos/full-story.mp4` 为总片。重复执行同一命令继续未完成步骤；`--retry-failed` 明确重新提交已终止的图像/视频任务。
 
 ```bash
 npm run check

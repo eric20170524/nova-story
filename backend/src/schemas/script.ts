@@ -761,6 +761,7 @@ export const ApplyStoryboardCandidateBodySchema = z.object({
   expected_candidate_revision: z.number().int().min(1).optional(),
   request_key: z.string().optional(),
   replace_existing: z.boolean().optional().default(false),
+  archive_continuity: z.boolean().optional().default(false),
   expected_scene_ids: z.array(z.number().int().positive()).optional(),
 }).refine(body => !body.replace_existing || Boolean(body.expected_scene_ids?.length), {
   message: 'Replacing a timeline requires its expected scene IDs',

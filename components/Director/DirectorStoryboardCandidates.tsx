@@ -273,7 +273,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
           {(task.error || progress.error) && <p className="text-amber-800 dark:text-amber-200">{task.error || progress.error}</p>}
           {(progress.facts || []).filter((fact: any) => ['mixed', 'uncertain'].includes(fact.kind) || fact.binding?.mentions.some((m: any) => !m.confirmed)).map((fact: any) => <p key={fact.id}>待核对：{fact.text}</p>)}
           {progress.facts?.length > 0 && ['failed', 'interrupted'].includes(task.status) && <button type="button" data-testid={`storyboard-fact-review-open-${task.task_id}`} className="px-3 py-1 rounded border border-amber-400" onClick={() => { setReviewingTaskId(task.task_id); setReviewFacts(stabilizeReviewBeats(progress.facts.map((fact: any) => ({ scene_id: fact.scene_id, block_id: fact.block_id, text: fact.text, kind: fact.kind, beat: fact.beat, states: fact.states || [], binding: fact.binding })))); }}>{t('director.fact_review_open')}</button>}
-          {['failed', 'interrupted'].includes(task.status) && progress.request?.expected_revision === script.revision && <button type="button" className="px-3 py-1 rounded border border-amber-400" disabled={resumingTaskId === task.task_id} onClick={() => void resumeTask(task)}>从已通过结果继续</button>}
+          {['failed', 'interrupted'].includes(task.status) && progress.request?.expected_revision === script.revision && <button type="button" className="px-3 py-1 rounded border border-amber-400" disabled={resumingTaskId === task.task_id} onClick={() => void resumeTask(task)}>{t('director.task_resume', '进度继续')}</button>}
         </div>;
       })}
 

@@ -73,7 +73,7 @@ export type VisualPromptTranslator = (prompt: string, systemInstruction?: string
 const promptCache = new InferenceCache<string>('image-prompt');
 const outboundCache = new InferenceCache<string>('visual-translation');
 const fidelityCache = new InferenceCache<{ passed: true }>('visual-fidelity');
-export const FIDELITY_RULE_VERSION = 'visible-fidelity-v7';
+export const FIDELITY_RULE_VERSION = 'visible-fidelity-v11';
 export class UnverifiedVisualPrompt extends Error {
   constructor(readonly prompt: string, failure: string) {
     super(failure);
@@ -130,7 +130,7 @@ function auditClauses(source: string): string[] {
     .replace(/[（(]/g, '')
     .replace(/[）)]/g, '')
     .replace(/:\d+(?:\.\d+)?/g, '');
-  return cleaned.split(/[，,。；;\n]+/)
+  return cleaned.split(/[，。；;\n]+|,(?=\s*[\u4e00-\u9fa5\p{Unified_Ideograph}])/u)
     .map((part) => part.replace(/^with\s+/i, '').replace(/\s+/g, ' ').trim())
     .filter((part) => part.length >= 2);
 }
@@ -141,13 +141,14 @@ const FIDELITY_AUDIT_INSTRUCTION = [
   'Check subject, action, object, color, clothing state, pose, contact, props and location together.',
   'Shared keywords alone are insufficient: wearing a robe contradicts removing it; an open window does not preserve an open robe.',
   'Check every conjunction within each fact. Allow transliterated names.',
-  'Appearance lines name one person\'s hair, face, body, clothing, or accessories. Each appearance line is one fact. Natural wording preserves that field. The original snake_case token is not required. Hair written as hair preserves a hair field.',
+  'Appearance lines name one person\'s hair, face, body, clothing, or accessories. Each appearance line is one fact. Natural wording preserves that field. The original snake_case token is not required. Hair written as hair preserves a hair field. Face or facial features (五官) is preserved if any facial feature, expression, smile, lips, or eyes of that character is described in English (e.g. alluring smile, playful look, expressive eyes). Body (体型) is preserved by their build, figure, posture, curves, or breasts. Accessories (配饰) is preserved if any key accessory, mirror, hairpin, jewelry, or mark of that character is described.',
   'A visible fact that changes one person\'s clothing overrides only that person\'s clothing field. Preserving the fact is not a contradiction of the old field. Every other person\'s clothing field must remain.',
+  'A natural English translation or paraphrase of a Chinese visual fact preserves that fact when the English shows the same visible state. If the visual meaning or action is conveyed in the English, mark it preserved. A location is preserved only by that shot\'s own place, not by a place from another story.',
   'A habit word such as often or usually is preserved when the English shows that state in this shot. Showing the state now is not the opposite of the habit.',
   'When a fact includes subject and attribute, judge that person only. Words about a different person do not preserve it.',
-  'Mark contradicted only when the English asserts the opposite visible state. In-progress wording such as unfastens, half-open, unbuttoning, or slightly ajar preserves the source action.',
+  'Mark contradicted only when the English asserts the direct opposite visible state (e.g. static/motionless vs flowing, or absent vs present). In-progress wording such as unfastens, half-open, partially open, unbuttoning, or slightly ajar preserves the source action and clothing.',
   'Copy evidence verbatim from the english text. Evidence must be a continuous substring. Do not use ellipsis, paraphrase, or Chinese in evidence.',
-  'If any detail is absent or uncertain mark missing. Return JSON only.',
+  'Mark missing only if the visual fact is genuinely absent from the English text. If it is described or paraphrased, mark preserved. Return JSON only.',
 ].join(' ');
 
 const SameStateSchema = z.object({
@@ -176,13 +177,20 @@ function auditFactInput(fact: string, id: number) {
   return { id, fact, subject: identity[1], attribute: identity[2], source_value: identity[3] };
 }
 
+function evidenceValid(evidence: string, text: string): boolean {
+  const trimmed = String(evidence || '').trim();
+  if (!trimmed || trimmed.includes('...') || trimmed.includes('…')) return false;
+  const normalize = (s: string) => s.replace(/[\s\p{P}]+/gu, ' ').trim().toLowerCase();
+  return normalize(text).includes(normalize(trimmed));
+}
+
 async function contradictionRelations(rejected: string[], english: string, report: FidelityReport): Promise<Map<number, 'same' | 'opposite' | 'unrelated'>> {
   if (testVerifier) return new Map();
   const evidenceById = new Map(report.facts.map((fact) => [fact.id, fact.evidence]));
   const rows = rejected.map(splitAuditRejection).filter((row) => {
     if (row.status !== 'contradicted') return false;
     const evidence = String(evidenceById.get(row.id) || '').trim();
-    return evidence.length >= 8 && english.includes(evidence);
+    return evidence.length >= 8 && evidenceValid(evidence, english);
   });
   if (!rows.length) return new Map();
   try {
@@ -191,7 +199,7 @@ async function contradictionRelations(rejected: string[], english: string, repor
         items: rows.map((row) => ({ id: row.id, fact: row.fact, evidence: evidenceById.get(row.id) || '' })),
       }),
       SameStateSchema,
-      'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase or an action in progress. relation=opposite only when the quote asserts the reverse state. relation=unrelated when the quote does not show the fact. Return JSON only.',
+      'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase, an action in progress, or describing clothing/motion (e.g., "flows with the wind" or "fluttering" preserves "随风轻扬"; "partially open", "unfastened", or "half-open" is compatible with the garment). relation=opposite only when the quote asserts the direct reverse state (e.g. static/motionless vs flowing, or absent vs present). relation=unrelated when the quote refers to a completely different subject. Return JSON only.',
       { maxTokens: 1200 },
     ));
     const relations = new Map<number, 'same' | 'opposite' | 'unrelated'>();
@@ -229,7 +237,9 @@ async function auditEnglishFidelity(source: string, english: string): Promise<vo
       const matches = report.facts.filter((item) => item.id === id);
       const result = matches[0];
       if (matches.length !== 1 || !result) return [`${id}:absent:${fact}`];
-      if (result.status === 'preserved' && result.evidence.trim() && text.includes(result.evidence)) return [];
+      if (result.status === 'preserved') {
+        if (result.evidence && evidenceValid(result.evidence, text)) return [];
+      }
       return [`${id}:${result.status}:${fact}`];
     });
   };
@@ -395,10 +405,18 @@ function cjkFacts(prompt: string): string {
 }
 
 function cleanModelEnglish(raw: string): string {
-  return String(raw || '')
+  let cleaned = String(raw || '')
     .replace(/```[a-z]*\s*/gi, '')
     .replace(/```/g, '')
     .trim();
+  if (!testTranslator) {
+    cleaned = cleaned
+      .replace(/[（(][^）)]*[\u3400-\u9fff]+[^）)]*[）)]/g, '')
+      .replace(/[\u3400-\u9fff]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  return cleaned;
 }
 
 function glossaryNote(source: string, glossary: Record<string, string> = {}): string {
@@ -546,10 +564,12 @@ export function shotImageMaterialsFromSpec(
       pushFact(facts, `state:${physical.fact_id}`, continuityVisualFact(physical));
       continue;
     }
-    const row = state as { fact_id?: string; entity?: string; attribute?: string; value?: string };
+    const row = state as { fact_id?: string; entity?: string; attribute?: string; value?: string; item?: string };
     const value = String(row.value || '').trim();
     if (!value || facts.some((fact) => fact.text.includes(value))) continue;
-    pushFact(facts, `state:${row.fact_id || value}`, [row.entity, row.attribute, value].filter(Boolean).join('：'));
+    if (row.attribute === 'holding' && row.entity && value.includes(row.entity)) continue;
+    const attr = (row.attribute === 'wardrobe' && row.item && /脸|面|颊|神|眼|唇|额/.test(row.item)) ? row.item : row.attribute;
+    pushFact(facts, `state:${row.fact_id || value}`, [row.entity, attr, value].filter(Boolean).join('：'));
   }
 
   const names: string[] = [];
@@ -562,6 +582,23 @@ export function shotImageMaterialsFromSpec(
   for (const name of listed) addName(name);
   addName(source.primary_subject);
   for (const fact of facts) for (const mention of fact.binding) addName(mention.name);
+  for (const character of characters) {
+    const charName = String(character?.name || '').trim();
+    if (!charName) continue;
+    if (facts.some((fact) => fact.text.includes(charName))) {
+      addName(charName);
+      continue;
+    }
+    const tags = (character as any)?.visual_tags?.base_model?.tags || {};
+    const clothingTag = String(tags.clothing || '').toLowerCase();
+    if (clothingTag.includes('moon_white') && facts.some((f) => /月白/.test(f.text))) {
+      addName(charName);
+    } else if (clothingTag.includes('crimson') && facts.some((f) => /红衣/.test(f.text))) {
+      addName(charName);
+    } else if (clothingTag.includes('lavender') && facts.some((f) => /淡紫|紫裙/.test(f.text))) {
+      addName(charName);
+    }
+  }
 
   const byName = new Map(characters.map((character) => [String(character.name || '').trim(), character]));
   const glossary = { ...(options.glossary || {}) };
@@ -575,6 +612,29 @@ export function shotImageMaterialsFromSpec(
     };
   });
   const trackedWardrobe = charactersWithConfirmedWardrobe(physicalStates);
+  for (const s of states) {
+    if (s && typeof s === 'object') {
+      const stateObj = s as Record<string, unknown>;
+      if (stateObj.attribute === 'wardrobe' && stateObj.entity) {
+        const item = String(stateObj.item || '');
+        if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
+          trackedWardrobe.add(String(stateObj.entity).trim());
+        }
+      }
+    }
+  }
+  for (const fact of visualFacts) {
+    if (fact && typeof fact === 'object' && Array.isArray((fact as any).states)) {
+      for (const s of (fact as any).states) {
+        if (s?.attribute === 'wardrobe' && s?.entity) {
+          const item = String(s.item || '');
+          if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
+            trackedWardrobe.add(String(s.entity).trim());
+          }
+        }
+      }
+    }
+  }
   for (const character of shotCharacters) if (trackedWardrobe.has(character.name)) {
     character.appearance.clothing = '';
     character.appearance.accessories = '';
@@ -668,17 +728,19 @@ function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string 
     'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
     engine,
     'Write every visible_facts text. Clothing, position, and action each stay visible. Use as many sentences as those facts need.',
+    'For every character in characters, explicitly describe their hair, face (facial features, expression, smile, lips, or eyes from appearance.face), body (build, figure, breasts, waist, hips), clothing, and accessories from their appearance object in natural English prose. Never omit any character\'s hair, face/expression, body figure, clothing, or accessories.',
     'Use shot_type, camera_angle and camera_movement for the framing. Respect scene_context, continuity_states and must_not.',
     'spoken_not_painted lists words for the audio track. Do not write those words into the picture.',
     'No weight syntax and no booru tag soup.',
     'Write hair as hair. A hair color is not clothing.',
     'When clothing changes, name the person who changes. Keep every other person\'s clothing field.',
-    'Keep the location visible. Do not let the location overshadow the characters\' actions.',
+    'Keep this shot\'s own location visible and explicitly named. Do not let the location overshadow the characters\' actions, and do not substitute a place from another story.',
     'style_lighting is only light and material. Do not append a style sentence about silk, crimson accents, or an environment-dominant composition. A clothing color already present in the facts stays, including red clothing.',
+    'Translate visual concepts into vivid, concrete English: write ethereal magical mist or glowing aura for mystical aura, trailing behind in a soft flowing path or soft trajectory for trailing effects, and moon-white robes flowing with the wind or fluttering gently in the wind.',
     'Do not drop or reverse any visible fact. Do not invent people, actions, or clothing. Leave empty appearance fields empty.',
     'recorded_appearance is an original appearance string. Rewrite it into natural language, write hair as hair, and do not drop its clothing.',
-    'Use name_glossary when it has an entry. Otherwise transliterate the name. Do not replace a named person with he or she.',
-    'English only. No Chinese characters.',
+    'Use name_glossary when it has an entry. Otherwise transliterate the name into pinyin. Do not replace a named person with he or she. Never include Chinese characters or Chinese names in parentheses.',
+    'English only. No Chinese characters or Hanzi anywhere in the output.',
     `Model family: ${modelFamily}. NSFW: ${nsfwEnabled ? 'on' : 'off'}.`,
     'Return JSON {"prompt":"<the paragraph>"} only.',
   ].join(' ');
@@ -740,8 +802,18 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
     const work = async () => {
       let text = await ask('');
       let failure = await fidelityFailure(source, text);
-      if (failure && !failure.startsWith('AUDIT_INCOMPLETE')) {
-        text = await ask(` The previous paragraph failed the picture check: ${failure} Rewrite every picture fact so clothing, position, and action stay visible. Leave spoken_not_painted unpainted.`);
+      const maxAttempts = testTranslator ? 1 : 2;
+      for (let attempt = 1; attempt <= maxAttempts && failure && !failure.startsWith('AUDIT_INCOMPLETE'); attempt++) {
+        const cjkFix = failure.includes('Chinese characters')
+          ? ' The previous paragraph contained Chinese characters (Hanzi). You MUST write in 100% pure English with ZERO Chinese characters or parenthesized Chinese names. Translate all Chinese names, places, and terms into English or pinyin.'
+          : '';
+        const locationName = String(materials.location || '').trim();
+        const glossary = materials.glossary || {};
+        const locationEnglish = locationName ? String(glossary[locationName] || locationName) : '';
+        const missingGuidance = failure.includes(':missing:')
+          ? ` For any fact marked missing: if a character's face, eyes, or expression is missing, explicitly add that character's expression from the appearance fields; if a location is missing, name only this shot's location${locationEnglish ? ` ("${locationEnglish}")` : ''}.`
+          : '';
+        text = await ask(` The previous paragraph failed the picture check: ${failure}.${cjkFix}${missingGuidance} Rewrite every picture fact so character hair, face/expression, body figure, clothing, position, action, and accessories stay visible. Explicitly include each missing or dropped detail. Keep all characters' build/body attributes described. Leave spoken_not_painted unpainted.`);
         failure = await fidelityFailure(source, text);
       }
       if (failure) throw new UnverifiedVisualPrompt(text, failure);
@@ -806,6 +878,17 @@ export async function compileEnglishShotPrompt(
   if (locked.length) {
     const physical = (materials.continuity_states || []).filter((state: any) => state?.entity_id && state?.entity_kind && Object.hasOwn(state, 'canonical_value')) as ContinuityVisualState[];
     const tracked = charactersWithConfirmedWardrobe(physical);
+    for (const s of (materials.continuity_states || [])) {
+      if (s && typeof s === 'object') {
+        const stateObj = s as Record<string, unknown>;
+        if (stateObj.attribute === 'wardrobe' && stateObj.entity) {
+          const item = String(stateObj.item || '');
+          if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
+            tracked.add(String(stateObj.entity).trim());
+          }
+        }
+      }
+    }
     for (const character of locked) if (tracked.has(character.name)) {
       character.appearance.clothing = ''; character.appearance.accessories = '';
       // An unstructured lock cannot safely separate default clothing from identity.

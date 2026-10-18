@@ -47,7 +47,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /** Probe ComfyUI install for Tier B and the formal storyboard capability baseline. */
-  app.get('/tier-b-status', async () => {
+  app.get('/tier-b-status', async (request) => {
     const settings = SettingsManager.loadSettings();
     const comfy = settings.comfyui || {};
     const installPath = comfy.install_path || null;
@@ -62,11 +62,23 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         controlnet: tierB.controlnet_model,
       },
     });
-    const workflowFile = comfy.selected_workflow_file || comfy.default_workflow || 'pony_xl_12gb.json';
+    const query = (request.query || {}) as Record<string, string>;
+    let workflowFile = comfy.selected_workflow_file || comfy.default_workflow || 'pony_xl_12gb.json';
+    let modelName = 'pony';
+    if (query.model === 'redcraft_krea2') {
+      modelName = 'redcraft_krea2';
+      workflowFile = 'redcraft_krea2_12gb.json';
+    } else if (query.model === 'pony') {
+      modelName = 'pony';
+      workflowFile = 'pony_xl_12gb.json';
+    } else if (query.model === 'sd15') {
+      modelName = 'anything-v5';
+      workflowFile = 'anything_v5.json';
+    } else if (String(workflowFile).includes('krea') || String(workflowFile).includes('redcraft')) {
+      modelName = 'redcraft_krea2';
+    }
     const formal = assessFormalInstall({
-      modelName: String(workflowFile).includes('krea') || String(workflowFile).includes('redcraft')
-        ? 'redcraft_krea2'
-        : 'pony',
+      modelName,
       workflowFile,
       installPath,
       runtime: objectInfo ? 'online' : 'offline',

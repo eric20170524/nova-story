@@ -1130,7 +1130,7 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   });
 
   await t.test('a skipped outline event is dramatized in the nearest scene', async () => {
-    const fix = await createFixture('甲段。\n乙段。\n丙段。\n丁段。');
+    const fix = await createFixture('甲段开门入殿。\n乙段解开外袍。\n丙段。\n丁段红衣晃动。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
     const prompts: string[] = [];
     const provider = createMockProvider({

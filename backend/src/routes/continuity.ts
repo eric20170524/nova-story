@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { getContinuityReview,confirmContinuityReview,refreshContinuityShot,undoContinuityReview,reviewContinuityTime } from '../services/continuity_review';
+import { getContinuityReview,confirmContinuityReview,refreshContinuityShot,undoContinuityReview,reviewContinuityTime,bindChapterContinuityShots } from '../services/continuity_review';
 import { ContinuityStoreError } from '../services/continuity_store';
 import { ContinuityConfirmationError } from '../services/continuity_confirmation';
 import { startContinuitySuggestionTask,getContinuitySuggestionTask,listContinuitySuggestionTasks,cancelContinuitySuggestionTask } from '../services/continuity_suggestion_tasks';
@@ -21,7 +21,11 @@ export const continuityRoutes:FastifyPluginAsync=async app=>{
     catch(error){return handle(error,reply);}
   });
   app.post('/scripts/:scriptId/continuity/refresh-shot',async(request,reply)=>{
-    try {const {scriptId}=z.object({scriptId:z.coerce.number().int().positive()}).parse(request.params);return await refreshContinuityShot(scriptId,request.body,'local_admin');}
+    try {const {scriptId}=z.object({scriptId:z.object({scriptId:z.coerce.number().int().positive()}).shape.scriptId}).parse(request.params);return await refreshContinuityShot(scriptId,request.body,'local_admin');}
+    catch(error){return handle(error,reply);}
+  });
+  app.post('/scripts/:scriptId/continuity/bind-chapter-shots',async(request,reply)=>{
+    try {const {scriptId}=z.object({scriptId:z.coerce.number().int().positive()}).parse(request.params);return await bindChapterContinuityShots(scriptId,'local_admin');}
     catch(error){return handle(error,reply);}
   });
   app.post('/scripts/:scriptId/continuity/preview',async(request,reply)=>{

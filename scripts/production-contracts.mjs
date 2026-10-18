@@ -8,7 +8,13 @@ export function fingerprint(value) {
 export function shotContract(shot) {
   let spec = shot.shot_spec;
   if (typeof spec === 'string') { try { spec = JSON.parse(spec); } catch { spec = null; } }
-  return { id: shot.id, chapter_id: shot.chapter_id, version: shot.active_version || 1, duration: shot.duration,
+  if (spec && typeof spec === 'object') {
+    spec = { ...spec };
+    delete spec.formal_request;
+    delete spec.english_visual_prompt;
+    delete spec.visual_prompt;
+  }
+  return { id: shot.id, chapter_id: shot.chapter_id, duration: shot.duration,
     spec, visual_prompt: shot.visual_prompt, motion_prompt: shot.motion_prompt, dialogue: shot.dialogue || '', narration: shot.narration || '', audio_prompt: shot.audio_prompt || '' };
 }
 export function validateScriptCoverage(script, shots) {

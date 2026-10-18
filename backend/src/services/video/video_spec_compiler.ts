@@ -185,25 +185,49 @@ async function composeVideoMotion(materials: VideoMotionMaterials, translator?: 
     'If primary_action is present, keep that action. Do not replace it with breathing, blinking, or a closed mouth.',
     'English only. Return JSON {"prompt":"<the paragraph>"} only.',
   ].join(' ');
+  const hasShotWardrobe = materials.visible_facts.some(f => /衣|袍|裙|衫|裳|服|解|褪|披|裸/.test(f));
+  const stillLower = String(materials.still_paragraph || '').toLowerCase();
+  const effectiveMaterials: VideoMotionMaterials = !translate && hasShotWardrobe
+    ? {
+      ...materials,
+      appearance: materials.appearance.map(p => ({ ...p, clothing: '', accessories: '' })),
+    }
+    : materials;
   const generate = async () => {
     const result = await LLMService.getLocalProvider().generateStructured(
-      JSON.stringify(materials),
+      JSON.stringify(effectiveMaterials),
       VideoMotionSchema,
       system,
       { temperature: 0.2, maxTokens: 500 },
     );
     return result.prompt;
   };
-  const paragraph = cleanPromptForH3(translate ? await translate(materials) : await generate());
+  let paragraph = cleanPromptForH3(translate ? await translate(materials) : await generate());
   if (!paragraph) throw new Error('视频运动提示词为空');
   if (containsCjk(paragraph) && translate !== echoVideoMotion) throw new Error('视频运动提示词仍含中文');
   if (!translate) {
-    const source = [...materials.visible_facts, materials.location,
-      ...materials.appearance.flatMap(person => ([['hair', '头发'], ['face', '五官'], ['body', '体型'], ['clothing', '服装'], ['accessories', '配饰']] as const).map(([field, label]) => {
+    const source = [...effectiveMaterials.visible_facts, effectiveMaterials.location,
+      ...effectiveMaterials.appearance.flatMap(person => ([['hair', '头发'], ['face', '五官'], ['body', '体型'], ['clothing', '服装'], ['accessories', '配饰']] as const).map(([field, label]) => {
         const key = field as keyof VideoAppearanceFields;
-        return person[key] ? `${person.name}的${label}：${person[key]}` : '';
+        const val = person[key];
+        if (!val) return '';
+        if ((field === 'clothing' || field === 'accessories') && (hasShotWardrobe || (stillLower && !val.toLowerCase().split(/[,\s_()]+/).filter(w => w.length >= 4).some(w => stillLower.includes(w))))) return '';
+        return `${person.name}的${label}：${val}`;
       }))].filter(Boolean).join('，');
-    await assertEnglishFidelity(source, paragraph);
+    try {
+      await assertEnglishFidelity(source, paragraph);
+    } catch (firstError) {
+      const repairSystem = `${system} The previous output missed or contradicted some visual facts: ${firstError instanceof Error ? firstError.message : String(firstError)}. Ensure all stated visible actions, subjects, character appearance and accessories are fully preserved.`;
+      const repaired = await LLMService.getLocalProvider().generateStructured(
+        JSON.stringify(effectiveMaterials),
+        VideoMotionSchema,
+        repairSystem,
+        { temperature: 0.1, maxTokens: 500 },
+      );
+      paragraph = cleanPromptForH3(repaired.prompt);
+      if (!paragraph || containsCjk(paragraph)) throw firstError;
+      await assertEnglishFidelity(source, paragraph);
+    }
   }
   return paragraph;
 }
@@ -258,7 +282,9 @@ function continuityPromptLines(states: unknown[]): string[] {
     }
     const value = String(row.value || '').trim();
     if (!value) return [];
-    return [[row.entity, row.attribute, value].filter(Boolean).join(' ')];
+    if (attribute === 'holding' && row.entity && value.includes(String(row.entity))) return [];
+    const label = ({ presence: '在场', wardrobe: '衣着', holding: '手持', position: '位置' } as Record<string, string>)[attribute] || attribute;
+    return [`${row.entity} ${label}：${value}`];
   }).filter(Boolean);
 }
 
@@ -297,7 +323,7 @@ export const VideoSpecCompiler = {
     const materials: VideoMotionMaterials = {
       visible_facts: visibleFacts(spec, primaryAction),
       appearance,
-      still_paragraph: cleanPromptForH3(scene.visual_prompt),
+      still_paragraph: cleanPromptForH3(scene.visual_prompt || spec.english_visual_prompt),
       location: String(spec.location || '').trim(),
       shot_type: String(spec.shot_type || scene.shot_type || '').trim(),
       camera_move: cameraMove,

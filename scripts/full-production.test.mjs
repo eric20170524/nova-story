@@ -115,6 +115,7 @@ test('text bootstraps only PLAN_NOT_FOUND and keeps other HTTP failures visible'
     const document = { blueprint: { characters: [] } };
     const content = '已完成正文'.repeat(10);
     const f = await fixture(url => {
+      if (url === '/api/settings/') return { body: { llm: { provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', model: 'novastory-qwen3.5:9b' } } };
       if (url === '/api/projects/90713823') return { body: { title: '新项目' } };
       if (url.endsWith('/story-plan')) return existing ? { body: { document, entries: [{ disposition: 'active', summary: '规划' }] } } : { status: 404, body: { code } };
       if (url.endsWith('/story-plan/bootstrap')) { bootstrap++; existing = true; return { body: { document, entries: [{ disposition: 'active', summary: '规划' }] } }; }
@@ -124,7 +125,7 @@ test('text bootstraps only PLAN_NOT_FOUND and keeps other HTTP failures visible'
       throw new Error(`Unexpected ${url}`);
     });
     try {
-      const result = await f.run('text', ['--chapter-limit', '1']);
+      const result = await f.run('text', ['--chapter-limit', '1'], { NOVASTORY_LLM_MODE: '', LLM_MODE: '' });
       assert.equal(result.code, code === 'PLAN_NOT_FOUND' ? 0 : 1, result.output);
       assert.equal(bootstrap, code === 'PLAN_NOT_FOUND' ? 1 : 0);
     } finally { await f.close(); }
@@ -157,6 +158,7 @@ test('existing finalized chapters are preserved on rerun without extra chapters 
   const chapters = Array.from({ length: 5 }, (_, i) => ({ id: `ch-${i}`, index: i + 1, content, title: `第${i + 1}章`, status: 'completed', finalized_content_hash: contentHash }));
   let brainstorms = 0; const mutations = [];
   const f = await fixture((url, method) => {
+    if (url === '/api/settings/') return { body: { llm: { provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', model: 'novastory-qwen3.5:9b' } } };
     if (url === '/api/assistant/chat') { brainstorms++; return { body: { response: '五章构思' } }; }
     if (url === '/api/agent/consistency') return { body: { issues: [] } };
     if (url === '/api/projects/90713823') return { body: { id: 90713823, title: '凡间之上' } };
@@ -166,7 +168,7 @@ test('existing finalized chapters are preserved on rerun without extra chapters 
     return { status: 500, body: { error: 'unexpected endpoint' } };
   });
   try {
-    assert.equal((await f.run('text')).code, 0); assert.equal((await f.run('text')).code, 0);
+    assert.equal((await f.run('text', [], { NOVASTORY_LLM_MODE: '', LLM_MODE: '' })).code, 0); assert.equal((await f.run('text', [], { NOVASTORY_LLM_MODE: '', LLM_MODE: '' })).code, 0);
     assert.equal(brainstorms, 1); assert.deepEqual(mutations, []);
     assert.equal(await readFile(path.join(f.directory, '03-chapter-5.txt'), 'utf8'), content);
   } finally { await f.close(); }
@@ -266,6 +268,13 @@ test('every named asset is bound by kind, with explicit alias bindings reserved 
   ];
   const prose = { shot_spec: { location: '清暮宫·玉阶，千瓣花海在云海间齐绽', key_props: ['合欢香还没有点燃'] } };
   assert.deepEqual(resolveAssetBindings(prose, library).asset_ids, [10, 13]);
+  const mirrors = [
+    { id: 20, kind: 'prop', name: '神镜碎片' },
+    { id: 21, kind: 'prop', name: '神镜' },
+  ];
+  assert.deepEqual(resolveAssetBindings({ shot_spec: { key_props: ['神镜'] } }, mirrors).asset_ids, [21]);
+  assert.deepEqual(resolveAssetBindings({ shot_spec: { key_props: ['神镜'] } }, [mirrors[0]]).asset_ids, []);
+  assert.match(resolveAssetBindings({ shot_spec: { key_props: ['神镜'] } }, [mirrors[0]]).blockers.join(';'), /神镜/);
   const current = { id: 51, asset_url: '/static/frame.png' };
   const snapshots = [{ scene_id: 51, image_url: current.asset_url, references_json: JSON.stringify([{ id: 1, revision: 1 }, { id: 2, revision: 2 }]) }];
   assert.equal(keyframeUsesBindings(current, [{ id: 2, revision: 2 }, { id: 1, revision: 1 }], snapshots), true);
@@ -530,5 +539,123 @@ test('rebuild flags regenerate an existing screenplay and storyboard instead of 
     assert.equal(board.code, 0, board.output);
     assert.equal(calls.some(call => call.startsWith('POST') && call.includes('/storyboard-candidates')), true);
     assert.equal(calls.some(call => call.includes('/storyboard-candidates/') && call.includes('/apply')), true);
+  } finally { await f.close(); }
+});
+
+test('--reproduce-from-b3 archives B3..D artifacts into history while preserving A..B2 and archives ready final videos', async () => {
+  const calls = [];
+  let applyPayload = null;
+  const script = {
+    id: 10, revision: 4, status: 'confirmed', freshness: { sourceChanged: false },
+    document: { scenes: [{ id: 'sc-1', blocks: [{ id: 'b-1' }] }], outline: { beats: [{ id: 'beat-1' }] } },
+  };
+  const f = await fixture((url, method, body) => {
+    calls.push(`${method} ${url}`);
+    if (url === '/api/projects/90713823') return { body: { settings: {} } };
+    if (url === '/api/settings/') return { body: { llm: { provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', model: 'novastory-qwen3.5:9b' } } };
+    if (url === '/api/chapters/?project_id=90713823') return { body: [{ id: 'ch-1', index: 1 }] };
+    if (url === '/api/chapters/ch-1/script') return { body: { script } };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 202, active_version: 1, shot_spec: { source: { type: 'script', script_id: 10, script_revision: 4 } } }] } };
+    if (url.includes('/media?')) return { body: { assets: [{ id: 501, role: 'narrative_final', status: 'ready' }] } };
+    if (url === '/api/videos/assets/501/archive' && method === 'POST') return { body: { id: 501, status: 'archived' } };
+    if (url === '/api/scripts/10/storyboard-candidates' && method === 'POST') return { body: { candidate: { id: 'board-repro', state: 'pending', base_revision: 4, candidate_revision: 5 } } };
+    if (url === '/api/scripts/10/storyboard-candidates/board-repro/apply' && method === 'POST') {
+      applyPayload = body;
+      return { body: { success: true, count: 1, scene_ids: [203] } };
+    }
+    return { status: 500, body: { error: `unexpected ${method} ${url}` } };
+  });
+  try {
+    await writeFile(path.join(f.directory, '01-brainstorm.txt'), '构思保留');
+    await writeFile(path.join(f.directory, '02-story-plan.json'), '{"keep":true}');
+    await writeFile(path.join(f.directory, '03-chapter-1.txt'), '正文保留');
+    await writeFile(path.join(f.directory, '04-continuity-review.json'), '{"old":true}');
+    await writeFile(path.join(f.directory, '05-script-1.json'), '{"old":true}');
+    await writeFile(path.join(f.directory, 'state.json'), JSON.stringify({
+      projectId: 90713823,
+      steps: {
+        brainstorm: { status: 'completed', result: { response: '构思' } },
+        'chapter-1:draft': { status: 'completed', result: {} },
+        'storyboard-10:revision-4:policy-old:candidate': { status: 'completed', result: {} },
+      },
+      reviews: { images: { 'ch-1': { status: 'approved' } } },
+    }));
+    const res = await f.run('storyboards', ['--chapter-limit', '1', '--reproduce-from-b3']);
+    assert.equal(res.code, 0, res.output);
+    assert.equal(await readFile(path.join(f.directory, '01-brainstorm.txt'), 'utf8'), '构思保留');
+    assert.equal(await readFile(path.join(f.directory, '03-chapter-1.txt'), 'utf8'), '正文保留');
+    assert.equal(calls.includes('POST /api/videos/assets/501/archive'), true);
+    assert.equal(applyPayload?.replace_existing, true);
+    assert.equal(applyPayload?.archive_continuity, true);
+    const nextState = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
+    assert.equal(nextState.steps.brainstorm?.status, 'completed');
+    assert.equal(nextState.steps['storyboard-10:revision-4:policy-old:candidate'], undefined);
+    assert.equal(nextState.reviews, undefined);
+    assert.equal(nextState.historyArchives?.length, 1);
+    assert.equal(nextState.historyArchives[0].entries.includes('04-continuity-review.json'), true);
+    assert.equal(nextState.historyArchives[0].entries.includes('05-script-1.json'), true);
+    await writeFile(path.join(f.directory, '05-script-1.json'), '{"resume":true}');
+    nextState.steps['storyboard-resume:in-progress'] = { status: 'in_progress', result: {} };
+    await writeFile(path.join(f.directory, 'state.json'), JSON.stringify(nextState));
+    const resumed = await f.run('storyboards', ['--chapter-limit', '1', '--reproduce-from-b3']);
+    assert.equal(resumed.code, 0, resumed.output);
+    assert.equal(await readFile(path.join(f.directory, '05-script-1.json'), 'utf8'), '{"resume":true}');
+    const resumedState = JSON.parse(await readFile(path.join(f.directory, 'state.json'), 'utf8'));
+    assert.equal(resumedState.historyArchives.length, 1);
+    assert.equal(resumedState.steps['storyboard-resume:in-progress']?.status, 'in_progress');
+    assert.equal(resumedState.reproduction.id, 'b3:90713823');
+  } finally { await f.close(); }
+});
+
+test('preflight blocks built-in codex, supports --llm-mode local and --llm-mode remote in parallel, and videoPreflight auto-binds continuity shots', async () => {
+  const calls = [];
+  let preflightCalls = 0;
+  let llmSettings = { provider: 'openai', base_url: 'https://comfy.chuangyi.chat/gemma4/v1', model: 'gemma-4-31b' };
+  const f = await fixture((url, method, body) => {
+    calls.push(`${method} ${url}`);
+    if (url === '/api/settings/' && method === 'POST') {
+      llmSettings = { ...llmSettings, ...body.llm, model: body.llm_model || body.llm?.model };
+      return { body: { llm: llmSettings } };
+    }
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true }, llm: llmSettings } };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, settings: '{}' } };
+    if (url.includes('/settings/verify-llm')) return { body: { status: 'success' } };
+    if (url.includes('/settings/verify-comfy')) return { body: { status: 'success' } };
+    if (url.includes('/videos/capabilities')) return { body: { video_generation_enabled: true, missing_components: [] } };
+    if (url.includes('/asset-library')) return { body: [] };
+    if (url.startsWith('/api/characters/')) return { body: [] };
+    if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1', index: 1 }] };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 88, chapter_id: 'ch-1', active_version: 1, asset_status: 'completed', asset_url: '/static/88.png', shot_spec: { source: { type: 'script', script_id: 10, script_revision: 1, script_scene_id: 'sc-1' } } }] } };
+    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url === '/api/videos/preflight') {
+      preflightCalls++;
+      return { body: preflightCalls === 1 ? { ready: false, blockers: ['Continuity gate: Bind this shot version to a confirmed continuity moment before video generation'] } : { ready: true, blockers: [] } };
+    }
+    if (url === '/api/scripts/10/continuity/bind-chapter-shots' && method === 'POST') return { body: { script_id: 10, bound_scene_ids: [88] } };
+    return { status: 500, body: { error: `unexpected ${method} ${url}` } };
+  });
+  try {
+    const quietMode = { NOVASTORY_LLM_MODE: '', LLM_MODE: '' };
+    const blockedUnrequestedRemote = await f.run('preflight', [], quietMode);
+    assert.equal(blockedUnrequestedRemote.code, 1);
+    assert.match(blockedUnrequestedRemote.output, /--llm-mode remote/);
+    const okRemotePreset = await f.run('preflight', ['--llm-mode', 'remote'], { ...quietMode, NOVASTORY_BUILTIN_AI: '' });
+    assert.equal(okRemotePreset.code, 0, okRemotePreset.output);
+    llmSettings = { provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', model: 'novastory-qwen3.5:9b' };
+    const appliedRemote = await f.run('preflight', ['--llm-mode', 'remote'], { ...quietMode, NOVASTORY_BUILTIN_AI: '' });
+    assert.equal(appliedRemote.code, 0, appliedRemote.output);
+    assert.equal(llmSettings.provider, 'openai');
+    assert.equal(llmSettings.model, 'gemma-4-31b');
+    assert.equal(llmSettings.base_url, 'https://comfy.chuangyi.chat/gemma4/v1');
+    llmSettings = { provider: 'ollama', base_url: 'http://127.0.0.1:11434/v1', model: 'novastory-qwen3.5:9b' };
+    const blockedBuiltinEnv = await f.run('preflight', [], { ...quietMode, NOVASTORY_BUILTIN_AI: 'codex' });
+    assert.equal(blockedBuiltinEnv.code, 1);
+    assert.match(blockedBuiltinEnv.output, /禁止通过 NOVASTORY_BUILTIN_AI=codex/);
+    const okLocalPreflight = await f.run('preflight', [], { ...quietMode, NOVASTORY_BUILTIN_AI: '' });
+    assert.equal(okLocalPreflight.code, 0, okLocalPreflight.output);
+    const okVideoPreflight = await f.run('video-preflight', ['--chapter-limit', '1']);
+    assert.equal(okVideoPreflight.code, 0, okVideoPreflight.output);
+    assert.equal(calls.includes('POST /api/scripts/10/continuity/bind-chapter-shots'), true);
+    assert.equal(preflightCalls, 2);
   } finally { await f.close(); }
 });

@@ -133,3 +133,36 @@ test('Gemma clears Ollama placeholders and uses only a real configured key', () 
         else process.env.LLM_API_KEY = previousLlm;
     }
 });
+
+test('applyLlmModeOverride switches cleanly between parallel local LLM and remote preset modes', async () => {
+    const { applyLlmModeOverride, LOCAL_LLM_DEFAULT_BASE_URL, LOCAL_LLM_DEFAULT_MODEL } = await import('./llm_presets');
+    const remoteSelected = applyLlmModeOverride({
+        llm: {
+            provider: 'ollama',
+            api_key: 'ollama',
+            base_url: LOCAL_LLM_DEFAULT_BASE_URL,
+            model: LOCAL_LLM_DEFAULT_MODEL,
+        },
+    }, 'remote');
+    assert.equal(remoteSelected.llm.provider, 'openai');
+    assert.equal(remoteSelected.llm.model, GEMMA4_REMOTE_MODEL);
+    assert.equal(remoteSelected.llm.base_url, GEMMA4_REMOTE_BASE_URL);
+
+    const localSelected = applyLlmModeOverride(structuredClone(remoteSelected), 'local');
+    assert.equal(localSelected.llm.provider, 'ollama');
+    assert.equal(localSelected.llm.model, LOCAL_LLM_DEFAULT_MODEL);
+    assert.equal(localSelected.llm.base_url, LOCAL_LLM_DEFAULT_BASE_URL);
+    assert.equal(localSelected.llm.api_key, 'ollama');
+
+    const leftoverHost = applyLlmModeOverride({
+        llm: {
+            provider: 'openai',
+            api_key: '',
+            base_url: 'http://127.0.0.1:8080/v1',
+            model: GEMMA4_REMOTE_MODEL,
+        },
+    }, 'remote');
+    assert.equal(leftoverHost.llm.provider, 'openai');
+    assert.equal(leftoverHost.llm.model, GEMMA4_REMOTE_MODEL);
+    assert.equal(leftoverHost.llm.base_url, GEMMA4_REMOTE_BASE_URL);
+});

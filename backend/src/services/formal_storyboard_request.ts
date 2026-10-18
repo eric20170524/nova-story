@@ -309,13 +309,19 @@ export async function decideFormalCandidate(sceneId: number, raw: unknown) {
       return { verdict: 'rejected', active_version: activeVersion, asset_url: activeUrl, candidate_version: version };
     }
     const activated = await activateSceneVersion(sceneId, version, savedRecord.production_stage === 'production' ? { purpose: 'formal' } : undefined);
-    const project = await db.get('SELECT c.project_id FROM scene s JOIN chapter c ON c.id = s.chapter_id WHERE s.id = ?', sceneId);
-    await recordShotMasterSnapshot({
+    const existingSnapshot = await db.get(
+      'SELECT 1 FROM scene_asset_image_snapshot WHERE scene_id = ? AND image_url = ?',
       sceneId,
-      projectId: Number(project.project_id),
-      imageUrl: String(row.asset_url),
-      captured: { references: [], versions: [] },
-    });
+      String(row.asset_url)
+    );
+    if (!existingSnapshot) {
+      const project = await db.get('SELECT c.project_id FROM scene s JOIN chapter c ON c.id = s.chapter_id WHERE s.id = ?', sceneId);
+      await recordShotMasterSnapshot({
+        sceneId,
+        projectId: Number(project.project_id),
+        imageUrl: String(row.asset_url),
+      });
+    }
     return { verdict: 'accepted', active_version: Number(activated?.active_version), asset_url: activated?.asset_url, candidate_version: version };
   });
 }

@@ -540,6 +540,7 @@ export const scriptRoutes: FastifyPluginAsync = async (app) => {
         expectedCandidateRevision: parsed.data.expected_candidate_revision,
         requestKey: parsed.data.request_key,
         replaceExisting: parsed.data.replace_existing,
+        archiveContinuity: parsed.data.archive_continuity,
         expectedSceneIds: parsed.data.expected_scene_ids,
       });
 

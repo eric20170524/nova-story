@@ -452,7 +452,7 @@ export class ScriptGenerationService {
       characters: context.characters.map(character => character.name).join('、') || '无预设角色',
     });
 
-    const provider = params.provider || LLMService.getProvider(params.token);
+    const provider = params.provider || LLMService.getLocalProvider();
     let outlineResult: GeneratedOutlineResponse | null = null;
 
     try {
@@ -597,7 +597,7 @@ export class ScriptGenerationService {
       }));
     const validParagraphIds = new Set(paragraphs.map((p) => p.id));
 
-    const provider = params.provider || LLMService.getProvider(params.token);
+    const provider = params.provider || LLMService.getLocalProvider();
     const context = await ScriptService.loadSourceContext(script.projectId);
     const projectCharacters = context.characters;
 
@@ -662,9 +662,10 @@ export class ScriptGenerationService {
       }
       if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'), roster);
       if (needsBindingReview(event.binding) || event.sourceBindings.some(s => needsBindingReview(s.binding))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
+      const sourceText = event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n');
       const explicit = materializeScriptReferences(event.text, event.binding).text;
-      const grounded = eventContentCovered(explicit, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'));
-      if (!grounded && event.binding.mentions.length && !event.binding.mentions.every(m => m.authority === 'human' && m.confirmed)) throw new ScriptGenerationError(`提纲事件 ${event.id} 的改编人物关系没有可验证的原文对应，请在提纲中核对并确认`, 400);
+      const grounded = eventContentCovered(event.text, sourceText) || eventContentCovered(explicit, sourceText);
+      if (!grounded) throw new ScriptGenerationError(`提纲事件 ${event.id} 的改编人物关系没有可验证的原文对应，请在提纲中核对并确认`, 400);
       if (event.sourceBindings.some(s => eventRelationConflict(explicit, materializeScriptReferences(s.text, s.binding).text))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的施受关系与已核对原文矛盾`, 400);
       // The downstream action is grounded in this outline text version. Originals
       // remain in sourceBindings with their own offsets and hashes.
@@ -1055,7 +1056,7 @@ export class ScriptGenerationService {
         : '本场没有必须保留的事件',
     });
 
-    const provider = params.provider || LLMService.getProvider(params.token);
+    const provider = params.provider || LLMService.getLocalProvider();
     let rawScene: GeneratedSceneResponse | null = null;
 
     try {

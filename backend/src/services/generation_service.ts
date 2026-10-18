@@ -1453,6 +1453,15 @@ export class GenerationService {
 
                 const holdCandidate = workflowData?.formal_candidate?.publish === false;
                 if (finalStatus === "completed" && sceneChapterId != null && holdCandidate) {
+                    if (!productionPin && sceneProjectId != null && assetUrl) {
+                        await recordShotMasterSnapshot({
+                            sceneId,
+                            projectId: sceneProjectId,
+                            imageUrl: assetUrl,
+                            characterIds: shotMasterCharacterIds,
+                            captured: shotMasterInputs ?? undefined,
+                        });
+                    }
                     await persistFormalCandidateResult(sceneId, sceneVersion, taskId, {
                         asset_status: 'completed',
                         asset_url: assetUrl,
