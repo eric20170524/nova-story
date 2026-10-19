@@ -194,3 +194,15 @@ test('fact review opens a dialog on the saved sentences and lines up sequence nu
   assert.equal(document.body.querySelector('[data-testid="storyboard-fact-review"]'), null);
   assert.equal(document.body.style.overflow, '');
 });
+
+test('storyboard candidate panel supports collapsible toggle between collapsed and expanded states', async (t) => {
+  const dom = await mount(t);
+  const document = dom.window.document;
+  const toggle = document.querySelector<HTMLButtonElement>('[data-testid="storyboard-candidate-toggle"]')!;
+  assert.ok(toggle);
+  assert.ok(document.querySelector('[data-testid="storyboard-candidate-scroll"]'));
+  await act(async () => toggle.click());
+  assert.equal(document.querySelector('[data-testid="storyboard-candidate-scroll"]'), null);
+  await act(async () => toggle.click());
+  assert.ok(document.querySelector('[data-testid="storyboard-candidate-scroll"]'));
+});

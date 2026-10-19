@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Edit3, Eye, EyeOff, GitPullRequest, Save, Trash2, AlertTriangle } from 'lucide-react';
+import { Check, Edit3, Eye, EyeOff, GitPullRequest, Save, Trash2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '../../services/api';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -133,6 +133,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
 }) => {
   const { t } = useLanguage();
   const { showToast } = useToast();
+  const [panelExpanded, setPanelExpanded] = useState(true);
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
   const [editingCandidateJson, setEditingCandidateJson] = useState('');
@@ -298,21 +299,28 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
         data-testid="storyboard-candidate-panel"
         className="flex min-h-0 min-w-0 max-h-[min(52dvh,36rem)] flex-col overflow-hidden border-b border-amber-200 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30"
       >
-        <div className="shrink-0 px-4 lg:px-6 py-3 border-b border-amber-200/80 dark:border-amber-900/50">
+        <div className={`shrink-0 px-4 lg:px-6 py-3 ${panelExpanded ? 'border-b border-amber-200/80 dark:border-amber-900/50' : ''}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200">
+            <button
+              type="button"
+              data-testid="storyboard-candidate-toggle"
+              className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200 cursor-pointer"
+              onClick={() => setPanelExpanded(!panelExpanded)}
+            >
+              {panelExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
               <GitPullRequest size={15} />
               <span>{t('director.storyboard_panel_title')} ({candidates.length})</span>
-            </div>
+            </button>
             <span className="text-[11px] text-amber-700/80 dark:text-amber-300/80 min-w-0 break-words">
               {t('director.storyboard_panel_hint')}
             </span>
           </div>
         </div>
-        <div
-          data-testid="storyboard-candidate-scroll"
-          className="min-h-0 flex-auto overflow-y-auto overflow-x-hidden overscroll-contain custom-scrollbar pb-3"
-        >
+        {panelExpanded && (
+          <div
+            data-testid="storyboard-candidate-scroll"
+            className="min-h-0 flex-auto overflow-y-auto overflow-x-hidden overscroll-contain custom-scrollbar pb-3"
+          >
       {tasks.filter(task => task.status !== 'completed').map(task => {
         const progress = task.progress || {};
         const stages: Record<string, string> = { queued: '排队中', facts: '核对事实来源', planning: '规划镜头', translating: '直译画面事实', auditing: '核验译文', needs_review: '事实需要核对', failed: '已保留进度' };
@@ -481,6 +489,7 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
           );
         })}
         </div>
+        )}
       </div>
 
       {confirmCandidate && typeof document !== 'undefined' && createPortal(
