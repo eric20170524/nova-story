@@ -22,6 +22,7 @@ import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
 import { WorkflowSettings } from '../components/WorkflowSettings';
 import { TtsStatusCard } from '../components/settings/TtsStatusCard';
+import { VramHealthBadge } from '../components/VramHealthBadge';
 import {
   ADVANCED_VISUAL_STYLES,
   isAdvancedStylesEnabled,
@@ -398,15 +399,18 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="h-full w-full overflow-y-auto overscroll-contain bg-slate-50/50 dark:bg-slate-950 p-4 sm:p-8 lg:p-12 custom-scrollbar transition-colors">
       <div className="max-w-4xl mx-auto space-y-6 pb-12">
-        <div>
-          <h1 
-            className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 cursor-pointer select-none"
-            onClick={handleTitleClick}
-          >
-            <Settings className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-            {t('settings_title')}
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('settings_subtitle')}</p>
+        <div className="flex items-start sm:items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
+          <div>
+            <h1 
+              className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 cursor-pointer select-none"
+              onClick={handleTitleClick}
+            >
+              <Settings className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+              {t('settings_title')}
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">{t('settings_subtitle')}</p>
+          </div>
+          <VramHealthBadge align="right" />
         </div>
 
         {/* Secret click trigger zone */}

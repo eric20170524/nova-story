@@ -11,6 +11,7 @@ import { Project } from '../types';
 import { useLanguage } from '../LanguageContext';
 import { useToast } from '../ToastContext';
 import { CardSkeleton } from '../components/Skeleton';
+import { VramHealthBadge } from '../components/VramHealthBadge';
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -197,6 +198,7 @@ export const Dashboard: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="flex items-center gap-3 w-full sm:w-auto">
+            <VramHealthBadge align="right" />
             <button
                 onClick={() => {
                   resetImportDialog();

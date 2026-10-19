@@ -3,7 +3,6 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Settings, Globe, User, Sun, Moon } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
-import { VramHealthBadge } from './VramHealthBadge';
 
 export const Layout: React.FC = () => {
   const navigate = useNavigate();
@@ -194,10 +193,6 @@ export const Layout: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        {/* Global hardware status strip (VRAM health + one-click release) */}
-        <div className="h-11 flex-shrink-0 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#0c1322]/70 backdrop-blur-md flex items-center justify-start px-3 sm:px-4 z-30 transition-colors duration-200">
-          <VramHealthBadge />
-        </div>
         <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col h-full w-full">
           <Outlet />
         </div>

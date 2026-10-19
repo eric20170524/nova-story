@@ -39,3 +39,16 @@ test('CT16 dirty edits disable adoption; a saved candidate needs a fresh impact 
   t.mock.method(api,'createSceneProductionCandidate',async()=>({}));await ui.choose('production-moment','s1:exit|after');await ui.click('production-add-shot');await ui.click('production-save');await ui.click('production-replace-101');await ui.click('production-preview');assert.match(ui.query('production-order').textContent!,/#101/);await ui.click('production-apply');
   assert.deepEqual(submitted.replace_scene_ids,[101]);assert.equal(submitted.expected_impact_hash,'a'.repeat(64));assert.equal(submitted.target_scene_id,'s1');assert.match(ui.dom.window.document.body.textContent!,/雨声/);
 });
+test('CT15 panel supports collapsible toggle between collapsed and expanded states',async t=>{
+  const dom=new JSDOM('<div id="root"></div>',{url:'http://localhost'}),globals={window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,IS_REACT_ACT_ENVIRONMENT:true};
+  const originals=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));for(const [key,value]of Object.entries(globals))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+  const {createRoot}=await import('react-dom/client'),root=createRoot(dom.window.document.getElementById('root')!);t.mock.method(api,'getSceneProduction',async()=>material());
+  t.after(async()=>{await act(async()=>root.unmount());dom.window.close();for(const [key,descriptor]of originals){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}});
+  await act(async()=>root.render(<ToastProvider><LanguageProvider><SceneProductionPanel script={{id:30,revision:1}} onChanged={()=>{}}/></LanguageProvider></ToastProvider>));
+  assert.equal(dom.window.document.querySelector('[data-testid="production-scene"]'),null);
+  assert.ok(dom.window.document.querySelector('[data-testid="production-toggle"]'));
+  await act(async()=>dom.window.document.querySelector<HTMLButtonElement>('[data-testid="production-toggle"]')!.click());
+  assert.ok(dom.window.document.querySelector('[data-testid="production-scene"]'));
+  await act(async()=>dom.window.document.querySelector<HTMLButtonElement>('[data-testid="production-toggle"]')!.click());
+  assert.equal(dom.window.document.querySelector('[data-testid="production-scene"]'),null);
+});

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '../../services/api';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -52,9 +53,14 @@ export const SceneProductionPanel: React.FC<{ script: { id: number; revision: nu
   };
   if (!script) return null;
   const button = 'rounded border px-2 py-1 text-xs disabled:opacity-40';
-  return <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900" data-testid="production-panel">
-    <button className="font-semibold text-sm" data-testid="production-toggle" onClick={() => setExpanded(!expanded)}>{t('production.title')}</button>
-    {expanded && <div className="mt-3 space-y-3 text-xs">
+  return <section data-testid="production-panel" className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0 min-w-0">
+    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+      <button data-testid="production-toggle" className="flex items-center gap-2 text-sm font-medium cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        <span>{t('production.title')}</span>
+      </button>
+    </div>
+    {expanded && <div className="max-h-[45vh] overflow-y-auto min-w-0 p-4 pt-0 space-y-3 text-xs">
       <button className={button} data-testid="production-refresh" disabled={busy} onClick={() => void refresh(true)}>{t('production.refresh')}</button>
       {error && <p className="break-words text-red-600" role="alert">{error}</p>}
       {view && <>

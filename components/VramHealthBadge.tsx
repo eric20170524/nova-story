@@ -113,7 +113,15 @@ function schedulerPhaseFallback(phase: VramSchedulerPhase, language: string): st
   return '';
 }
 
-export const VramHealthBadge: React.FC = () => {
+export interface VramHealthBadgeProps {
+  align?: 'left' | 'right';
+  className?: string;
+}
+
+export const VramHealthBadge: React.FC<VramHealthBadgeProps> = ({
+  align = 'left',
+  className = '',
+}) => {
   const { t, language } = useLanguage();
   const { showToast } = useToast();
   const [status, setStatus] = useState<VramStatus | null>(null);
@@ -306,7 +314,7 @@ export const VramHealthBadge: React.FC = () => {
   const imageMode = Boolean(status?.comfyui.online) && !status?.ollama.online;
 
   return (
-    <div className="relative group/vram flex items-center gap-2" ref={rootRef}>
+    <div className={`relative group/vram flex items-center gap-2 ${className}`} ref={rootRef}>
       {/* Plan 1 seamless status text (status bar) */}
       {schedulerLabel && (
         <div
@@ -362,7 +370,7 @@ export const VramHealthBadge: React.FC = () => {
 
       {/* Hover tooltip when panel closed */}
       {!open && tip && (
-        <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 opacity-0 group-hover/vram:opacity-100 transition-opacity z-50">
+        <div className={`pointer-events-none absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-2 w-72 opacity-0 group-hover/vram:opacity-100 transition-opacity z-50`}>
           <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-[#0f172a]/95 px-3 py-2 text-[11px] text-slate-700 dark:text-slate-300 shadow-xl backdrop-blur-md leading-relaxed">
             {tip}
           </div>
@@ -373,7 +381,7 @@ export const VramHealthBadge: React.FC = () => {
         <div
           role="dialog"
           aria-label={t('vram.panel_title', '显存快速控制')}
-          className="absolute left-0 top-full mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0f172a] shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0f172a] shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150`}
         >
           <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-[#0f172a] dark:to-[#131c2e]">
             <div className="flex items-start justify-between gap-2">

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
-import { BookOpen, Film, Users, Clapperboard, Settings, Sparkles, Sun, Moon, Loader2 } from 'lucide-react';
+import { BookOpen, Film, Users, Clapperboard, Settings, Sun, Moon, Loader2 } from 'lucide-react';
 import { useLanguage } from '../LanguageContext';
 import { useTheme } from '../ThemeContext';
 import { useToast } from '../ToastContext';
+import { VramHealthBadge } from '../components/VramHealthBadge';
 import { api } from '../services/api';
 import { resumePersistedProjectWork, useProjectWorkJobs, type ProjectWorkJob } from '../services/project_work_tracker';
 import { rememberLastProjectId } from '../services/characters_entry';
@@ -59,29 +60,29 @@ export const ProjectLayout: React.FC = () => {
     <ProjectAgentProvider projectId={id}>
       <div className="flex flex-col h-full bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors duration-200">
         {/* Project Top Bar Navigation */}
-        <div className="h-14 bg-white/90 dark:bg-[#0c1322]/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex items-center px-4 sm:px-6 gap-2 sm:gap-6 flex-shrink-0 overflow-x-auto custom-scrollbar shadow-xs">
+        <div className="h-14 bg-white/90 dark:bg-[#0c1322]/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between px-4 sm:px-6 gap-2 sm:gap-4 flex-shrink-0 relative z-30 shadow-xs">
           
-          {projectTitle && (
-              <div className="hidden sm:flex items-center gap-2 mr-2 border-r border-slate-200 dark:border-slate-800 pr-5">
-                  <div className="w-6 h-6 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-xs">
-                    <BookOpen size={13} />
-                  </div>
-                  <span className="font-semibold text-sm text-slate-800 dark:text-slate-200 truncate max-w-[180px]" title={projectTitle}>
-                      {projectTitle}
-                  </span>
-              </div>
-          )}
+          <div className="flex items-center gap-2 sm:gap-6 min-w-0 overflow-x-auto custom-scrollbar py-1">
+            {projectTitle && (
+                <div className="hidden sm:flex items-center gap-2 mr-2 border-r border-slate-200 dark:border-slate-800 pr-5 flex-shrink-0">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-xs">
+                      <BookOpen size={13} />
+                    </div>
+                    <span className="font-semibold text-sm text-slate-800 dark:text-slate-200 truncate max-w-[180px]" title={projectTitle}>
+                        {projectTitle}
+                    </span>
+                </div>
+            )}
 
-          <div className="flex items-center gap-1 sm:gap-2">
-            <TabLink to={`/project/${id}/story`} icon={<BookOpen size={16} />} label={t('project_nav.story')} />
-            <TabLink to={`/project/${id}/script`} icon={<Film size={16} />} label={t('project_nav.script')} />
-            <TabLink to={`/project/${id}/assets`} icon={<Users size={16} />} label="资产管理" />
-            <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+              <TabLink to={`/project/${id}/story`} icon={<BookOpen size={16} />} label={t('project_nav.story')} />
+              <TabLink to={`/project/${id}/script`} icon={<Film size={16} />} label={t('project_nav.script')} />
+              <TabLink to={`/project/${id}/assets`} icon={<Users size={16} />} label="资产管理" />
+              <TabLink to={`/project/${id}/director`} icon={<Clapperboard size={16} />} label={t('project_nav.director')} />
+            </div>
           </div>
-          
-          <div className="flex-1 min-w-[1rem]" />
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             {/* Quick theme toggle */}
             <button
               type="button"
@@ -92,7 +93,7 @@ export const ProjectLayout: React.FC = () => {
               {isDark ? <Sun size={16} className="text-amber-400" /> : <Moon size={16} className="text-indigo-600" />}
             </button>
 
-            <ProjectAgentNavButton />
+            <VramHealthBadge align="right" />
             
             <NavLink
               to={`/project/${id}/settings`}
@@ -121,28 +122,6 @@ export const ProjectLayout: React.FC = () => {
         <ProjectAgentPanel projectId={id} />
       </div>
     </ProjectAgentProvider>
-  );
-};
-
-/** Top-bar Agent OS entry (visible on story / director / characters / settings). */
-const ProjectAgentNavButton: React.FC = () => {
-  const { t } = useLanguage();
-  const { open, setOpen, toggle } = useProjectAgent();
-
-  return (
-    <button
-      type="button"
-      onClick={() => (open ? setOpen(false) : toggle())}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-medium transition-all flex-shrink-0 border shadow-xs ${
-        open
-          ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-500/20'
-          : 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 hover:text-indigo-900 dark:hover:text-indigo-200'
-      }`}
-      title={t('agent.open_panel', '打开 Agent OS')}
-    >
-      <Sparkles size={14} />
-      <span className="hidden sm:inline">{t('agent.fab_label', 'Agent OS')}</span>
-    </button>
   );
 };
 
