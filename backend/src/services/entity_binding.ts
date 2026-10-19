@@ -162,7 +162,11 @@ export async function resolveScriptBindings(provider: AIProvider, binding: Entit
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']), visibility: z.enum(['visible', 'mentioned', 'uncertain']) })) });
   const result = schema.parse(await provider.generateStructured(JSON.stringify(input), schema,
     '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。', { temperature: 0.1, maxTokens: 1024 }));
-  if (result.bindings.length !== pending.length || new Set(result.bindings.map(b => b.index)).size !== pending.length || result.bindings.some(b => !pending.some(m => m.index === b.index))) throw new Error('人物自动解析缺项或重复');
+  const pendingIndices = new Set(pending.map(m => m.index));
+  if (result.bindings.length === pending.length && result.bindings.some(b => !pendingIndices.has(b.index))) {
+    result.bindings = result.bindings.map((b, i) => ({ ...b, index: pending[i]!.index }));
+  }
+  if (result.bindings.length !== pending.length || new Set(result.bindings.map(b => b.index)).size !== pending.length || result.bindings.some(b => !pendingIndices.has(b.index))) throw new Error('人物自动解析缺项或重复');
   const resolved: EntityBinding = { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((mention, index) => {
     const row = result.bindings.find(b => b.index === index);
     if (!row) return mention;

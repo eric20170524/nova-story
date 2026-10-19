@@ -39,6 +39,28 @@ test('剧本自动解析保留歧义复数，不接受缺项或重复结果', as
   }
 });
 
+test('剧本自动解析在条数一致时按顺序对齐错误索引，合法索引保持原对应', async () => {
+  const text = '林岚看着陈月。她把蓝伞递给她。';
+  const pendingIndexes = bindEntities(text, roster).mentions.flatMap((mention, index) => mention.confirmed ? [] : [index]);
+  assert.deepEqual(pendingIndexes, [2, 3]);
+  const misaligned = { async generateStructured(_prompt: string, schema: any) {
+    return schema.parse({ bindings: [
+      { index: 0, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' },
+      { index: 1, entity_id: roster[0]!.id, status: 'resolved', visibility: 'visible' },
+    ] });
+  } } as AIProvider;
+  const aligned = await resolveScriptBindings(misaligned, bindEntities(text, roster), text, '两人同在厅内。', roster);
+  assert.equal(materializeScriptReferences(text, aligned).text, '林岚看着陈月。陈月把蓝伞递给林岚。');
+  const swapped = { async generateStructured(_prompt: string, schema: any) {
+    return schema.parse({ bindings: [
+      { index: 3, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' },
+      { index: 2, entity_id: roster[0]!.id, status: 'resolved', visibility: 'visible' },
+    ] });
+  } } as AIProvider;
+  const kept = await resolveScriptBindings(swapped, bindEntities(text, roster), text, '两人同在厅内。', roster);
+  assert.equal(materializeScriptReferences(text, kept).text, '林岚看着陈月。林岚把蓝伞递给陈月。');
+});
+
 test('她自己、他自己解析为同一人物时只写一次姓名并保留有效偏移', async () => {
   for (const word of ['她', '他']) {
     const text = `林岚看着镜中${word}自己的倒影。`;
