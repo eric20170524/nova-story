@@ -834,6 +834,14 @@ const migrations: Migration[] = [
         CREATE TABLE IF NOT EXISTS scene_production_receipt(script_id INTEGER NOT NULL REFERENCES chapter_script(id) ON DELETE CASCADE,request_key TEXT NOT NULL,request_hash TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(script_id,request_key));
         CREATE TABLE IF NOT EXISTS scene_production_frame(scene_id INTEGER NOT NULL REFERENCES scene(id) ON DELETE CASCADE,scene_version INTEGER NOT NULL,round TEXT NOT NULL,reference_versions_json TEXT NOT NULL DEFAULT '[]',image_review_json TEXT,PRIMARY KEY(scene_id,scene_version));`);
     }
+
+  },
+  {
+    version: '028_character_age',
+    up: async database => {
+      await ensureColumns(database, 'character', { age: 'TEXT' });
+      await ensureColumns(database, 'character_version', { age: 'TEXT' });
+    }
   }
 ];
 

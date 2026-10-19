@@ -16,6 +16,7 @@ import { SettingsManager } from '../core/settings_manager';
 import {
   buildCharacterPromptHeader,
   CharacterSheetError,
+  inferPromptSubjectType,
   readStoredCharacterSheet,
 } from '../services/image_generation_policy';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
@@ -47,7 +48,8 @@ const serializeCharacter = (row: any) => {
     turnaround_url: assets.turnaround_url || null,
     face_url: assets.face_url || null,
     voice_id: row.voice_id || null,
-    voice_label: row.voice_label || null
+    voice_label: row.voice_label || null,
+    age: row.age != null && String(row.age).trim() !== '' ? String(row.age).trim() : (serialized.visual_tags?.base_model?.tags?.age || serialized.visual_tags?.age || null)
   };
 };
 
@@ -111,6 +113,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const visualTags = profile.visual_tags || {};
+        const profileAge = (profile.age && String(profile.age).trim()) || (visualTags.age && String(visualTags.age).trim()) || null;
+        if (profileAge) {
+          visualTags.age = profileAge;
+        }
         const mergedTags: any = {
           ...existingTags,
           timeline_map: existingTags.timeline_map || {},
@@ -162,24 +168,26 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
           await db.run(
             `UPDATE character
-             SET role = ?, description = ?, visual_tags = ?
+             SET role = ?, description = ?, visual_tags = ?, age = COALESCE(?, age)
              WHERE id = ?`,
             profile.role,
             profile.description,
             JSON.stringify(mergedTags),
+            profileAge,
             existing.id
           );
           characterId = existing.id;
         } else {
           mergedTags.timeline_map[chapter_id] = 'v1_default';
           const result = await db.run(
-            `INSERT INTO character (project_id, name, role, description, visual_tags)
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO character (project_id, name, role, description, visual_tags, age)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             chapter.project_id,
             profile.name,
             profile.role,
             profile.description,
-            JSON.stringify(mergedTags)
+            JSON.stringify(mergedTags),
+            profileAge
           );
           characterId = Number(result.lastID);
         }
@@ -221,6 +229,14 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     delete tags.model_type;
     delete assets.model_type;
 
+    const ageVal = data.age !== undefined && data.age !== null ? String(data.age).trim() : null;
+    if (ageVal) {
+      tags.age = ageVal;
+      if (tags.base_model?.tags) {
+        tags.base_model.tags.age = ageVal;
+      }
+    }
+
     const tagsStr = JSON.stringify(tags);
 
     let voiceId: string | null = null;
@@ -254,8 +270,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await db.run(
       `INSERT INTO character
-        (project_id, name, role, description, visual_tags, voice_id, voice_label, english_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (project_id, name, role, description, visual_tags, voice_id, voice_label, english_name, age)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.project_id,
       data.name,
       data.role || null,
@@ -263,7 +279,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       tagsStr,
       voiceId,
       voiceLabel,
-      data.english_name || ''
+      data.english_name || '',
+      ageVal
     );
 
     const newChar = await db.get('SELECT * FROM character WHERE id = ?', result.lastID);
@@ -316,6 +333,11 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       updateFields.push('growth_path = ?');
       params.push(data.growth_path);
     }
+    if (data.age !== undefined) {
+      updateFields.push('age = ?');
+      const ageVal = data.age !== null ? String(data.age).trim() : null;
+      params.push(ageVal);
+    }
 
     // Voice field validation and handling
     if (data.voice_id !== undefined) {
@@ -367,6 +389,20 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     delete tags.model_type;
     delete assets.model_type;
 
+    if (data.age !== undefined) {
+      if (data.age !== null && String(data.age).trim()) {
+        tags.age = String(data.age).trim();
+        if (tags.base_model?.tags) {
+          tags.base_model.tags.age = String(data.age).trim();
+        }
+      } else {
+        delete tags.age;
+        if (tags.base_model?.tags) {
+          delete tags.base_model.tags.age;
+        }
+      }
+    }
+
     // Always update visual_tags since we merge virtual fields into it
     updateFields.push('visual_tags = ?');
     params.push(JSON.stringify(tags));
@@ -412,7 +448,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
-    const stored = readStoredCharacterSheet(tags);
+    const stored = readStoredCharacterSheet(tags, { description: dbChar.description });
+    if (dbChar.age && !stored.appearance.age) {
+      stored.appearance.age = String(dbChar.age).trim();
+    }
     const assets = tags?.assets || {};
     const refUrl = req.ref_image_url || assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url;
     const codexImage = SettingsManager.loadSettings().image_provider === 'codex';
@@ -423,7 +462,9 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       systemNsfwEnabled: Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled),
       projectSettings,
     });
-    const effectiveModelType = getProjectImageSettings(projectSettings).model;
+    const imageSettings = getProjectImageSettings(projectSettings);
+    const effectiveModelType = imageSettings.model;
+    const stylePreset = String(imageSettings.style || '').toLowerCase();
     let header: { prefix: string; negative: string };
     try {
       header = buildCharacterPromptHeader(
@@ -445,8 +486,27 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       refHint = ", matching reference character design, consistent face hair and clothing across views";
     }
 
+    const mustKeepText = Array.isArray(tags?.identity_lock?.must_keep)
+      ? tags.identity_lock.must_keep.join(', ')
+      : '';
+    const subjectContext = [
+      dbChar.name,
+      dbChar.description,
+      header.prefix,
+      mustKeepText,
+    ].filter(Boolean).join(', ');
+    const inferredSubject = inferPromptSubjectType(
+      subjectContext,
+      tags?.subject_type || tags?.species || (stored.gender === 'female' ? 'female_human' : stored.gender === 'male' ? 'male_human' : null)
+    );
+    const isHumanCharacter = inferredSubject !== 'nonhuman' && inferredSubject !== 'environment';
+    const isWesternStyle = /western_comic/i.test(stylePreset);
+
     let prompt = "";
     let negativePrompt = header.negative;
+    if (isHumanCharacter && !isWesternStyle && !negativePrompt.includes('caucasian')) {
+      negativePrompt += ', caucasian, western face, european facial structure, deep-set western eyes, prominent brow ridge, high nose bridge, deep eye sockets, european, western facial features';
+    }
 
     if (req.gen_type === "turnaround") {
       // ComfyUI composes three panels; the built-in image tool draws the sheet in one generation.
@@ -455,11 +515,15 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         : `${header.prefix}, full body, standing, character reference${refHint}`;
     } else {
       prompt = codexImage
-        ? `${header.prefix}. Upper-body front portrait, waist-up, facing camera, both shoulders visible, plain studio background, no writing, no watermark.`
+        ? `${header.prefix}. Upper-body front portrait, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, plain studio background, no writing, no watermark.`
         : `${header.prefix}${refHint}`;
     }
 
-    const activeRefUrl = req.use_ref_portrait ? (refUrl || null) : null;
+    if (isHumanCharacter && !isWesternStyle && !/(east asian|oriental|chinese|asian)/i.test(prompt)) {
+      prompt += ', East Asian facial features, delicate classical oriental bone structure, soft East Asian eyelids';
+    }
+
+    const activeRefUrl = (req.gen_type === 'turnaround' && req.use_ref_portrait !== false) ? (refUrl || null) : (req.use_ref_portrait ? (refUrl || null) : null);
     return {
       prompt,
       negative_prompt: negativePrompt,

@@ -249,7 +249,7 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
                 data-testid="character-age-input"
                 placeholder={t('characters.age_placeholder', '例如：28至31岁 / 25岁成年女性')}
                 className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition-all"
-                value={flatEditableVisualTags(editingChar.visual_tags).age || ''}
+                value={editingChar.age != null && String(editingChar.age).trim() !== '' ? String(editingChar.age) : (flatEditableVisualTags(editingChar.visual_tags).age || '')}
                 onChange={(e) => {
                   const val = e.target.value;
                   const cur = flatEditableVisualTags(editingChar.visual_tags);
@@ -260,6 +260,7 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
                   }
                   setEditingChar((prev) => ({
                     ...prev,
+                    age: val.trim() || null,
                     visual_tags: applyFlatVisualTags(prev.visual_tags, cur),
                   }));
                 }}

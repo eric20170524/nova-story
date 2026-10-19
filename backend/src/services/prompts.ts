@@ -181,6 +181,7 @@ Dialogue: ${dialogue || 'None'}`;
 For each character return:
 - name: the name as written in the chapter
 - role: exactly one of protagonist, antagonist, supporting, extra. If the chapter does not support one of these four, omit that character.
+- age: character's age or age group (e.g., "18", "25", "teenager", "middle-aged", or empty string if unspecified)
 - gender: female, male, or unspecified. Use unspecified when the chapter does not state a gender.
 - description: biography, age (or age group), and personality supported by this chapter
 - visual_tags:

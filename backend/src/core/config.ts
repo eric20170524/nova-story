@@ -8,7 +8,7 @@ import {
 } from './paths';
 
 // Load .env from backend root
-dotenv.config({ path: path.join(getConfigDirectory(), '.env') });
+dotenv.config({ path: path.join(getConfigDirectory(), '.env'), quiet: true });
 
 const DEFAULT_DB_FILE = path.join(getDataDirectory(), 'sql_app.db');
 

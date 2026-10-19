@@ -179,10 +179,10 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-0.5">
-                    {useRefPortrait ? t('characters.ref_portrait_active') : t("casting.ref_portrait_inactive")}
+                    {useRefPortrait ? (genType === 'turnaround' ? '已自动复用定妆照垫图 (IP-Adapter)' : t('characters.ref_portrait_active')) : t("casting.ref_portrait_inactive")}
                   </p>
                   <p className="text-[11px] text-slate-600 dark:text-slate-400 truncate font-medium">
-                    {character.name} - {t("casting.ref_portrait_feature")}
+                    {character.name} - {genType === 'turnaround' ? '作为正面参考图及 ComfyUI IP-Adapter 垫图' : t("casting.ref_portrait_feature")}
                   </p>
                   <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">
                     {t('characters.ref_tier_a_hint')}

@@ -25,10 +25,11 @@ import {
 import { resolveTierBFromSettings } from './tier_b_adapters';
 import {
   normalizeImageModelFamily,
+  readStoredCharacterSheet,
   type ImageModelFamily
 } from './image_generation_policy';
 import { GpuLeaseService } from './gpu_lease_service';
-import { getProjectImageSettings, parseProjectSettings } from './project_settings';
+import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { isSyntheticCharacterSceneId, syntheticCharacterId } from './synthetic_scene_id';
 
 export type TurnaroundViewId = 'front' | 'side' | 'back';
@@ -292,6 +293,7 @@ export async function generateTurnaroundComposite(
   let characterId: number | null = null;
   let version: number = Number(input.workflowData?.version || input.workflowData?.scene_version || 1);
 
+  let inferredSubjectType: string | null = null;
   const sceneRow = await db.get(
     'SELECT chapter_id, active_version FROM scene WHERE id = ?',
     input.sceneId
@@ -315,24 +317,41 @@ export async function generateTurnaroundComposite(
       : syntheticCharacterId(input.sceneId);
     if (characterId) {
       const charRow = await db.get(
-        'SELECT id, project_id, active_version, visual_tags FROM character WHERE id = ?',
+        'SELECT id, project_id, active_version, description, visual_tags FROM character WHERE id = ?',
         characterId
       );
       if (charRow) {
         projectId = charRow.project_id != null ? Number(charRow.project_id) : null;
         version = Number(charRow.active_version || 1);
-        if (!refUrl && input.workflowData?.use_ref_portrait !== false) {
-          try {
-            const tags = typeof charRow.visual_tags === 'string'
-              ? JSON.parse(charRow.visual_tags || '{}')
-              : (charRow.visual_tags || {});
-            const storedAvatar = tags?.assets?.avatar_url || tags?.avatar_url;
+        try {
+          const tags = typeof charRow.visual_tags === 'string'
+            ? JSON.parse(charRow.visual_tags || '{}')
+            : (charRow.visual_tags || {});
+          const storedSheet = readStoredCharacterSheet(tags, { description: charRow.description });
+          if (storedSheet.gender === 'female') {
+            inferredSubjectType = 'female_human';
+          } else if (storedSheet.gender === 'male') {
+            inferredSubjectType = 'male_human';
+          }
+          if (!refUrl && input.workflowData?.use_ref_portrait !== false) {
+            let storedAvatar = tags?.assets?.avatar_url || tags?.avatar_url || (charRow as any).avatar_url;
+            if (!storedAvatar && version) {
+              const verRow = await db.get(
+                'SELECT visual_tags FROM character_version WHERE character_id = ? AND version = ?',
+                characterId,
+                version
+              );
+              if (verRow?.visual_tags) {
+                const vtags = typeof verRow.visual_tags === 'string' ? JSON.parse(verRow.visual_tags) : verRow.visual_tags;
+                storedAvatar = vtags?.assets?.avatar_url || vtags?.avatar_url;
+              }
+            }
             if (typeof storedAvatar === 'string' && storedAvatar.trim()) {
               refUrl = storedAvatar.trim();
             }
-          } catch {
-            /* ignore malformed visual_tags */
           }
+        } catch {
+          /* ignore malformed visual_tags */
         }
       }
     }
@@ -356,17 +375,23 @@ export async function generateTurnaroundComposite(
 
   let effectiveWorkflowData: Record<string, unknown> = {
     ...input.workflowData,
+    ...(inferredSubjectType && !input.workflowData.subject_type ? { subject_type: inferredSubjectType } : {}),
     ...(enableFrontAdapter ? { turnaround_front_adapter: true } : {})
   };
   if (projectId != null) {
     const projectRow = await db.get('SELECT settings FROM project WHERE id = ?', projectId);
     if (projectRow) {
       const projectSettings = parseProjectSettings(projectRow.settings);
+      const nsfwEnabled = resolveEffectiveNsfw({
+        systemNsfwEnabled: Boolean(settings.advanced?.nsfw_enabled),
+        projectSettings,
+      });
       effectiveWorkflowData = {
         ...effectiveWorkflowData,
         project_settings: projectSettings,
         model_type: getProjectImageSettings(projectSettings).model,
         style_preset: getProjectImageSettings(projectSettings).style,
+        nsfw_enabled: effectiveWorkflowData.nsfw_enabled ?? nsfwEnabled,
         workflow_id: undefined,
         selected_workflow_id: undefined,
       };

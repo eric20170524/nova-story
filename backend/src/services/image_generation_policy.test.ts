@@ -14,6 +14,7 @@ import {
   isEmptyShotIntent,
   mergeClipPositivePrompt,
   normalizeImageModelFamily,
+  readStoredCharacterSheet,
   resolveGenerationPlan,
   resolveLoraStack,
   resolveNsfwLora,
@@ -875,3 +876,53 @@ test('character extract quotes stored appearance fields including age and reject
   assert.equal(canonicalCharacterRole('main'), null);
   assert.equal(canonicalCharacterRole('main', { allowStoredAlias: true }), 'protagonist');
 });
+
+test('semi_realistic and guofeng_xianxia presets inject East Asian facial features and readStoredCharacterSheet infers gender from female cues', () => {
+  const semiPony = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: false,
+    stylePreset: 'semi_realistic',
+    existingPrompt: '1girl standing in mist'
+  });
+  assert.match(semiPony.suffix, /delicate East Asian facial features/i);
+
+  const guofengFlux = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: false,
+    stylePreset: 'guofeng_xianxia',
+    existingPrompt: '1girl standing in mist'
+  });
+  assert.match(guofengFlux.suffix, /delicate East Asian facial bone structure/i);
+  assert.doesNotMatch(guofengFlux.suffix, /photographic detail/i);
+
+  const inferredFemale = readStoredCharacterSheet(
+    {
+      base_model: {
+        tags: {
+          hair: 'long_silky_white',
+          eyes: 'ice_blue',
+          face_features: 'cold refined adult beauty, high cheekbones',
+          clothing: 'half_unraveled_moon_white',
+        },
+      },
+      identity_lock: {
+        must_keep: ['moon-white xianxia immortal dress'],
+      },
+    },
+    { description: '清暮宫宫主，成年神女。' }
+  );
+  assert.equal(inferredFemale.gender, 'female');
+
+  const nonhumanSheet = readStoredCharacterSheet(
+    {
+      base_model: {
+        tags: {
+          hair: 'white fur',
+        },
+      },
+    },
+    { description: '一只白色灵狐，animal creature furry paw' }
+  );
+  assert.equal(nonhumanSheet.gender, 'unspecified');
+});
+

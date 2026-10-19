@@ -272,12 +272,17 @@ export const CharacterManager: React.FC = () => {
 
   const openModal = (char?: Character) => {
     if (char) {
-      setEditingChar({ ...char });
+      const visualAge = (char.visual_tags?.base_model?.tags?.age ?? char.visual_tags?.age ?? '');
+      setEditingChar({
+        ...char,
+        age: char.age != null && String(char.age).trim() !== '' ? String(char.age).trim() : visualAge
+      });
     } else {
       setEditingChar({
         project_id: Number(projectId),
         name: '',
         role: 'protagonist',
+        age: '',
         description: '',
         visual_tags: {},
         voice_id: null,
@@ -320,8 +325,15 @@ export const CharacterManager: React.FC = () => {
     e.preventDefault();
     try {
       const flat = flatEditableVisualTags(editingChar.visual_tags);
+      if (editingChar.age !== undefined && editingChar.age !== null) {
+        const trimmedAge = String(editingChar.age).trim();
+        if (trimmedAge) flat.age = trimmedAge;
+        else delete flat.age;
+      }
+      const finalAge = editingChar.age !== undefined ? (editingChar.age ? String(editingChar.age).trim() : null) : (flat.age || null);
       const payload = {
         ...editingChar,
+        age: finalAge,
         visual_tags: applyFlatVisualTags(editingChar.visual_tags, flat),
       };
       if (payload.id) {
@@ -415,7 +427,7 @@ export const CharacterManager: React.FC = () => {
     } catch (e) {
       // portrait: upper-body front view; turnaround: appearance base only (backend generates front/side/back then stitches)
       const fallbackComposition = initialGenType === 'portrait'
-        ? 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, detailed face and eyes, plain studio background'
+        ? 'high quality character portrait, upper body, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, plain studio background'
         : 'full body character design, standing, consistent identity';
       setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
@@ -479,13 +491,23 @@ export const CharacterManager: React.FC = () => {
       };
 
       // Tier A: single character ref → classic img2img / IP-Adapter for portrait/turnaround
-      if (useRefPortrait && refImageUrl) {
-        payload.ref_image_url = refImageUrl;
-        payload.character_ref_url = refImageUrl;
+      const effectiveRef = (useRefPortrait && refImageUrl)
+        ? refImageUrl
+        : (genType === 'turnaround' ? (sheetModalChar.avatar_url || null) : null);
+      if (effectiveRef) {
+        payload.ref_image_url = effectiveRef;
+        payload.character_ref_url = effectiveRef;
         if (genType === 'turnaround') {
           payload.turnaround_front_adapter = true;
         }
       }
+
+
+
+
+
+
+
 
       const loraPath = sheetModalChar?.visual_tags?.assets?.lora_ready
         ? (sheetModalChar.visual_tags.assets.lora_path || sheetModalChar.visual_tags.assets.lora_name)

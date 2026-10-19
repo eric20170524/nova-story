@@ -45,6 +45,8 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
 
   const visualTagsObj = char.visual_tags?.base_model?.tags || char.visual_tags || {};
   const charAge =
+    (typeof char.age === 'string' && char.age.trim()) ||
+    (typeof char.age === 'number' && String(char.age)) ||
     (typeof visualTagsObj.age === 'string' && visualTagsObj.age.trim()) ||
     (typeof char.visual_tags?.age === 'string' && char.visual_tags.age.trim()) ||
     (typeof char.visual_tags?.visual_bible?.age === 'string' && char.visual_tags.visual_bible.age.trim()) ||
@@ -307,7 +309,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                       className="absolute top-2 right-2 bg-emerald-950/85 backdrop-blur-sm text-[9px] text-emerald-300 font-medium px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1 pointer-events-none"
                       title="三视图生成时自动参考上半身正面定妆照锁定五官与服饰"
                     >
-                      <Link2 size={10} /> 参考定妆照
+                      <Link2 size={10} /> 自动复用定妆照垫图
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
@@ -344,6 +346,11 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   <span className="font-semibold text-slate-600 dark:text-slate-300">
                     {t("casting.turnaround_sheet", "角色三视图（正 / 侧 / 背）")}
                   </span>
+                  {char.avatar_url && (
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1 font-medium">
+                      <Link2 size={10} /> 自动复用定妆照为垫图
+                    </span>
+                  )}
                   <div className="flex flex-col gap-1.5 mt-0.5">
                     <button
                       type="button"
@@ -422,6 +429,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
       <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col gap-2">
         <div className="grid grid-cols-2 gap-2">
           <button
+            data-testid="character-card-generate-portrait"
             type="button"
             onClick={() => onOpenSheetModal(char, 'portrait')}
             className="flex items-center justify-center gap-1.5 bg-emerald-50 hover:bg-emerald-600 dark:bg-slate-800 dark:hover:bg-emerald-600 text-emerald-700 hover:text-white dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all border border-emerald-200/80 dark:border-transparent shadow-xs"
@@ -430,6 +438,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
             {t('characters.generate_portrait_btn', '定妆照工作台')}
           </button>
           <button
+            data-testid="character-card-generate-turnaround"
             type="button"
             onClick={() => onOpenSheetModal(char, 'turnaround')}
             className="flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-indigo-700 hover:text-white dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all border border-indigo-200/80 dark:border-transparent shadow-xs"

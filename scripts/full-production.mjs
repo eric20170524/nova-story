@@ -667,7 +667,7 @@ async function storyboards(selected = null) {
       if (readyFinals.length) {
         if (!archiveExistingVideos) throw new Error(`Chapter ${chapter.id} has accepted narrative_final assets (${readyFinals.join(', ')}). Archive these candidates in Director to keep their files and history, then rerun --rebuild-storyboards.`);
         for (const assetId of readyFinals) {
-          await request(`/videos/assets/${assetId}/archive`, 'POST', {});
+          await request(`/videos/assets/${assetId}/archive`, 'POST', { expected_status: 'ready' });
         }
         state.archivedVideoAssets ||= [];
         state.archivedVideoAssets.push({ chapter_id: chapter.id, asset_ids: readyFinals, archived_at: new Date().toISOString() });

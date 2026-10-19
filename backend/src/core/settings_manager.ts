@@ -133,7 +133,7 @@ export class SettingsManager {
 
         // 2. Load from .env and apply overrides
         if (fs.existsSync(envPath)) {
-            dotenv.config({ path: envPath, override: true });
+            dotenv.config({ path: envPath, override: true, quiet: true });
         }
 
         const llmProviderEnv = process.env.LLM_PROVIDER;

@@ -176,11 +176,11 @@ const TRIGGER_BY_PATTERN: Array<{ pattern: RegExp; trigger: string }> = [
 
 /** Shared East-Asian feminine beauty anchors (Pony tags + FLUX phrases). */
 export const EAST_ASIAN_FEMALE_BEAUTY_PONY =
-  'beautiful East Asian woman, chinese beauty, japanese anime beauty, delicate feminine face, soft jawline, large expressive eyes, clear skin, pretty face, female, woman';
+  '(delicate East Asian facial features:1.25), (classical Chinese beauty, oriental bone structure:1.2), beautiful East Asian woman, chinese beauty, japanese anime beauty, delicate feminine face, soft jawline, large expressive eyes, clear skin, pretty face, female, woman';
 export const EAST_ASIAN_FEMALE_BEAUTY_FLUX =
-  'beautiful young East Asian woman, Chinese and Japanese beauty aesthetics, delicate feminine face, soft facial contour, clear skin, elegant female features';
+  'beautiful young East Asian woman, classical Chinese and oriental beauty aesthetics, delicate East Asian facial bone structure, soft facial contour, gentle nose bridge, luminous porcelain skin, elegant female features';
 export const EAST_ASIAN_FEMALE_NEGATIVE =
-  'western face, caucasian, european face, male, man, boy, androgynous, masculine face, ugly face, deformed face, asymmetrical eyes, cross-eyed, extra eyes, beard, mustache';
+  'western face, caucasian, european face, european facial structure, deep-set western eyes, prominent brow ridge, high western nose bridge, male, man, boy, androgynous, masculine face, ugly face, deformed face, asymmetrical eyes, cross-eyed, extra eyes, beard, mustache';
 
 /**
  * Style boosters should describe look (color/light/medium), not narrative content
@@ -189,12 +189,16 @@ export const EAST_ASIAN_FEMALE_NEGATIVE =
  */
 const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   ancient_fantasy: {
-    pony: `ancient chinese xianxia, guofeng national style, ethereal silk texture rendering, volumetric light, semi-realistic digital painting`,
-    flux: `ancient Chinese xianxia fantasy, guofeng national style, ethereal silk textures, volumetric god rays`
+    pony: `ancient chinese xianxia, guofeng national style, delicate East Asian facial features, ethereal silk texture rendering, volumetric light, semi-realistic digital painting`,
+    flux: `ancient Chinese xianxia fantasy, guofeng national style, delicate East Asian facial bone structure, ethereal silk textures, volumetric god rays`
+  },
+  guofeng_xianxia: {
+    pony: `ancient chinese xianxia, guofeng national style, delicate East Asian facial features, classical oriental bone structure, ethereal silk texture rendering, volumetric light, semi-realistic digital painting`,
+    flux: `ancient Chinese xianxia fantasy, guofeng national style, delicate East Asian facial bone structure, classical oriental aesthetics, ethereal silk textures, volumetric god rays`
   },
   xianxia_immortal: {
-    pony: `xianxia immortal aesthetic, cool jade tones, soft volumetric godrays, ethereal atmosphere, polished semi-realistic illustration`,
-    flux: `xianxia immortal aesthetic, cool jade and mist tones, translucent fabric lighting, serene atmosphere`
+    pony: `xianxia immortal aesthetic, delicate East Asian facial features, cool jade tones, soft volumetric godrays, ethereal atmosphere, polished semi-realistic illustration`,
+    flux: `xianxia immortal aesthetic, delicate East Asian facial bone structure, cool jade and mist tones, translucent fabric lighting, serene atmosphere`
   },
   ethereal_glow: {
     pony: `ethereal bloom, soft glow, light particles, dreamy backlighting, smooth digital polish`,
@@ -206,12 +210,16 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   },
   sensual_gufeng: {
     // Non-composed path only. A composed still uses styleLightingMaterial and does not receive this booster.
-    pony: `alluring ancient chinese guofeng fantasy illustration, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
-    flux: `alluring ancient Chinese guofeng fantasy, sheer fabric rim light, luxurious silk texture, intimate atmospheric haze, cinematic lighting`
+    pony: `alluring ancient chinese guofeng fantasy illustration, delicate East Asian facial features, sheer fabric rim light, warm gold and deep crimson accents, luxurious silk texture, intimate atmospheric haze, refined semi-realistic digital painting, dramatic chiaroscuro`,
+    flux: `alluring ancient Chinese guofeng fantasy, delicate East Asian facial bone structure, sheer fabric rim light, luxurious silk texture, intimate atmospheric haze, cinematic lighting`
   },
   elegant_mature: {
     pony: `elegant mature aesthetic, refined semi-realistic face rendering, sophisticated proportions, cinematic key light`,
     flux: `elegant mature aesthetic, refined semi-realistic face, sophisticated proportions, soft cinematic key light`
+  },
+  semi_realistic: {
+    pony: `refined semi-realistic digital painting, delicate East Asian facial features, soft blending, volumetric soft light, cinematic lighting, detailed eyes`,
+    flux: `refined semi-realistic digital painting, delicate East Asian facial structure, subsurface scattering, soft studio lighting, cinematic lighting`
   },
   alluring_portrait: {
     pony: `alluring portrait, soft beauty lighting, skin highlights, shallow depth of field`,
@@ -241,10 +249,6 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
     pony: 'game character splash art shading, sharp silhouette, polished anime-semireal shading',
     flux: 'premium game character illustration shading, splash-art quality materials, cinematic character spotlight'
   },
-  semi_realistic: {
-    pony: 'semi-realistic digital painting, soft blending, cinematic lighting, detailed eyes',
-    flux: 'semi-realistic digital painting, East Asian facial structure, subsurface scattering, cinematic lighting'
-  },
   ink_wash: {
     pony: 'ink wash painting, sumi-e, brushstrokes, negative space',
     flux: 'traditional ink wash painting, sumi-e, visible brushstrokes, rice paper texture, negative space'
@@ -258,6 +262,7 @@ const STYLE_NARRATIVE_STRIP_RE =
 /** Light and material only. The text model may use this; it is not appended after the paragraph. */
 const STYLE_LIGHTING_MATERIAL: Record<string, string> = {
   ancient_fantasy: 'volumetric light, semi-realistic material',
+  guofeng_xianxia: 'volumetric light, semi-realistic material',
   xianxia_immortal: 'soft volumetric godrays, cool mist light',
   ethereal_glow: 'soft glow, dreamy backlighting',
   guoman_painterly: 'strong rim light, painterly material',
@@ -291,17 +296,17 @@ export type StyleShotMode = 'portrait' | 'action' | 'aftermath' | 'environment' 
 const NONHUMAN_SUBJECT_RE =
   /\b(animal|creature|furry|furred|quadruped|paw|paws|paw pads?|whiskers?|muzzle|snout|beak|hooves?|tail|kitten|cat|puppy|dog|fox|rabbit|bunny|wolf|bear|otter|hamster|mouse|deer|bird)\b/i;
 const FEMALE_HUMAN_RE =
-  /\b(1girl|2girls|3girls|girl|girls|woman|women|female|goddess|princess|swordswoman|heroine|lady|ladies)\b/i;
+  /\b(1girl|2girls|3girls|girl|girls|woman|women|female|goddess|princess|swordswoman|heroine|lady|ladies)\b|(?:神女|仙子|女修|少女|女子|妇人|美妇|师姐|师妹|娘子|双乳|酥胸)/i;
 const MALE_HUMAN_RE =
-  /\b(1boy|2boys|3boys|boy|boys|man|men|male|prince|swordsman|hero|gentleman)\b/i;
+  /\b(1boy|2boys|3boys|boy|boys|man|men|male|prince|swordsman|hero|gentleman)\b|(?:少年|男子|男修|公子|少侠|老者|壮汉)/i;
 const ENVIRONMENT_RE =
   /\b(establishing shot|panoramic|landscape|environment|overview|cityscape|no people)\b/i;
 const ENVIRONMENT_SHOT_RE =
   /\b(extreme long shot|establishing shot|wide shot|long shot|panoramic|landscape|overview|aerial shot|overhead shot|bird'?s[- ]eye)\b/i;
 const HUMAN_IDENTITY_CLAUSE_RE =
-  /beautiful .*woman|chinese beauty|japanese anime beauty|east asian (?:facial|face)|delicate feminine face|soft jawline|pretty face|refined facial features|long flowing hair|fairy elegance|\b(?:1girl|2girls|3girls|female|woman|women|girl|girls)\b/i;
+  /beautiful .*woman|chinese beauty|japanese anime beauty|east asian (?:facial|face)|classical chinese|oriental bone structure|delicate feminine face|soft jawline|pretty face|refined facial features|long flowing hair|fairy elegance|\b(?:1girl|2girls|3girls|female|woman|women|girl|girls)\b/i;
 const HUMAN_IDENTITY_NEGATIVE_RE =
-  /western face|caucasian|european face|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
+  /western face|caucasian|european face|european facial structure|deep-set western eyes|prominent brow ridge|high (?:western )?nose bridge|deep eye sockets|western facial features|\b(?:male|man|men|boy|boys|androgynous)\b|masculine face|beard|mustache|childlike face/i;
 
 /** A finished sentence, not a tag list. Plate and identity suffixes stay off it. */
 export const isWrittenParagraph = (prompt: string): boolean => {
@@ -1112,7 +1117,17 @@ export const buildPromptEnhancement = (options: {
   } else if (modelFamily === 'redcraft_krea2') {
     // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support)
     if (!/high aesthetic|photographic detail|delicate lighting/i.test(existingPrompt)) {
-      suffixParts.push('high aesthetic photographic detail, rich textures, natural studio lighting, intricate nuances');
+      const isOrientalContext =
+        !keepWrittenParagraph
+        && (
+          /ancient_fantasy|xianxia|guofeng|guoman|sensual_gufeng|ink_wash/i.test(String(stylePreset || ''))
+          || /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠|East Asian|oriental)/i.test(existingPrompt)
+        );
+      suffixParts.push(
+        isOrientalContext
+          ? 'high aesthetic detail, rich textures, soft ethereal lighting, intricate nuances'
+          : 'high aesthetic photographic detail, rich textures, natural studio lighting, intricate nuances'
+      );
     }
     const intimateCue =
       /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
@@ -1386,15 +1401,23 @@ export class CharacterSheetError extends Error {
 
 export function normalizeStoredGender(value: unknown): CharacterSheetGender {
   const gender = String(value ?? '').trim().toLowerCase();
-  if (gender === 'female' || gender === 'male') return gender;
+  if (gender === 'female' || gender === 'woman' || gender === 'girl' || gender === '1girl' || gender === '女' || gender === '女性') {
+    return 'female';
+  }
+  if (gender === 'male' || gender === 'man' || gender === 'boy' || gender === '1boy' || gender === '男' || gender === '男性') {
+    return 'male';
+  }
   return 'unspecified';
 }
 
 const appearanceText = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : '';
 
-/** Stored gender and appearance. A missing gender stays unspecified. */
-export function readStoredCharacterSheet(tags: Record<string, any> | null | undefined): {
+/** Stored gender and appearance. Infers gender from human appearance/description cues when gender field is absent. */
+export function readStoredCharacterSheet(
+  tags: Record<string, any> | null | undefined,
+  fallbackContext?: { description?: string | null }
+): {
   gender: CharacterSheetGender;
   appearance: CharacterAppearanceFields;
 } {
@@ -1402,19 +1425,43 @@ export function readStoredCharacterSheet(tags: Record<string, any> | null | unde
   const base = source.base_model?.tags && typeof source.base_model.tags === 'object'
     ? source.base_model.tags
     : {};
-  const gender = normalizeStoredGender(source.gender ?? base.gender);
+  let gender = normalizeStoredGender(source.gender ?? base.gender);
   const undressed = source.undressed === true || base.undressed === true;
+  const appearance: CharacterAppearanceFields = {
+    age: appearanceText(base.age || source.age),
+    hair: appearanceText(base.hair || source.hair),
+    face: appearanceText(base.face || source.face || base.face_features || source.face_features),
+    body: appearanceText(base.body || source.body || base.build || source.build),
+    clothing: appearanceText(base.clothing || source.clothing),
+    accessories: appearanceText(base.accessories || source.accessories),
+    undressed,
+  };
+  if (gender === 'unspecified') {
+    const mustKeep = Array.isArray(source.identity_lock?.must_keep)
+      ? source.identity_lock.must_keep.join(', ')
+      : '';
+    const hintText = [
+      appearance.face,
+      appearance.body,
+      appearance.clothing,
+      mustKeep,
+      fallbackContext?.description || '',
+    ].filter(Boolean).join(', ');
+    if (hintText && !NONHUMAN_SUBJECT_RE.test(hintText)) {
+      const isFemale =
+        FEMALE_HUMAN_RE.test(hintText)
+        || /\b(breasts?|hourglass|cleavage|xianxia dress)\b/i.test(hintText);
+      const isMale = MALE_HUMAN_RE.test(hintText);
+      if (isFemale && !isMale) {
+        gender = 'female';
+      } else if (isMale && !isFemale) {
+        gender = 'male';
+      }
+    }
+  }
   return {
     gender,
-    appearance: {
-      age: appearanceText(base.age || source.age),
-      hair: appearanceText(base.hair || source.hair),
-      face: appearanceText(base.face || source.face || base.face_features || source.face_features),
-      body: appearanceText(base.body || source.body || base.build || source.build),
-      clothing: appearanceText(base.clothing || source.clothing),
-      accessories: appearanceText(base.accessories || source.accessories),
-      undressed,
-    },
+    appearance,
   };
 }
 
@@ -1436,7 +1483,7 @@ export const buildCharacterPromptHeader = (
   const storedGender = gender === 'female' || gender === 'male' ? gender : 'unspecified';
   const layout = genType === 'turnaround'
     ? 'full body character design, consistent character identity, plain studio background'
-    : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, detailed face and eyes, plain studio background';
+    : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, plain studio background';
   const look = [
     appearance?.age,
     appearance?.hair,

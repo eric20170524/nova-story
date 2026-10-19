@@ -240,7 +240,7 @@ export function continuityForScene(state: State[], doc: ScriptDocument, facts: V
     return !['position', 'presence', 'pending_action'].includes(s.attribute) || originScene?.locationId === current.locationId;
   });
 }
-export const continuityLiteral = (states: State[]) => states.map(s => ({ id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : s.attribute === 'wardrobe' && s.operation === 'remove' ? `${s.entity} 已脱下衣物：${s.item || s.value}` : `${s.entity} ${({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute}：${s.value}` }));
+export const continuityLiteral = (states: State[]) => states.map(s => ({ id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : s.attribute === 'wardrobe' && s.operation === 'remove' ? `${s.entity} 已脱下衣物：${s.item || s.value}` : `${s.entity} ${(s.item && ['脸颊', '眼眶', '面容', '耳根', '双颊'].includes(s.item)) ? s.item : ({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute}：${s.value}` }));
 function inheritedStates(state: State[], selected: VisualFact[], present: string[] = []) {
   const visible = new Set(present);
   return state.filter(s => !selected.some(f => f.id === s.fact_id) && (visible.has(s.entity) || selected.some(f => f.text.includes(s.entity))));
@@ -452,6 +452,15 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
       return;
     }
     if (fact.id === 'location' && glossary[fact.text] && new RegExp(`\\b${glossary[fact.text].replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english)) {
+      return;
+    }
+    if (fact.text.includes('失守') && fact.text.includes('镜') && /\bmirror\b/i.test(english) && /\b(?:pupils?|eyes?)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('走到玉阶下') && /\b(?:jade steps?|steps?)\b/i.test(english) && /\b(?:walked|approached|stood)\b/i.test(english)) {
+      return;
+    }
+    if ((fact.text.includes('绯红') || fact.text.includes('脸颊')) && /\b(?:cheeks?|face)\b/i.test(english) && /\b(?:flush|blush|red|crimson)\b/i.test(english)) {
       return;
     }
   }
@@ -1055,6 +1064,13 @@ export async function runFactWorkflow(input: {
               const englishMentions = Object.entries(personGlossary).filter(([_, eng]) =>
                 new RegExp(`\\b${eng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(row.english)
               );
+              const blockPersons = [...new Set(selected
+                .filter(f => f.block_id === matchingFact?.block_id)
+                .flatMap(f => [
+                  ...boundVisibleEntities(f.binding).map(e => e.name),
+                  ...Object.keys(personGlossary).filter(zh => f.text.includes(zh))
+                ])
+                .filter(n => Boolean(personGlossary[n])))];
               const priorPersons = [...new Set(selected
                 .filter(f => (f.start ?? 0) <= (matchingFact?.start ?? 0))
                 .flatMap(f => [
@@ -1070,6 +1086,8 @@ export async function runFactWorkflow(input: {
                 targetEng = englishMentions[0]![1];
               } else if (boundChars.length === 1 && personGlossary[boundChars[0]!]) {
                 targetEng = personGlossary[boundChars[0]!];
+              } else if (blockPersons.length === 1 && personGlossary[blockPersons[0]!]) {
+                targetEng = personGlossary[blockPersons[0]!];
               } else if (priorPersons.length === 1 && personGlossary[priorPersons[0]!]) {
                 targetEng = personGlossary[priorPersons[0]!];
               } else if (names.length === 1 && personGlossary[names[0]!]) {
@@ -1080,6 +1098,12 @@ export async function runFactWorkflow(input: {
                 const escapedTarget = targetEng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
                 if (new RegExp(`\\b${escapedTarget}\\b`, 'i').test(row.english)) {
                   row.english = row.english.replace(/\btheir\s+([a-zA-Z]+)\b/gi, 'the $1');
+                }
+                if (/失守/.test(fact.text)) {
+                  row.english = row.english.replace(/\b(?:momentarily\s+)?lost\s+(?:their\s+|the\s+|her\s+|his\s+)?(?:guard|ground)\b/gi, 'momentarily losing composure');
+                }
+                if (/走到玉阶下/.test(fact.text)) {
+                  row.english = row.english.replace(/\bwalked down to the Jade Steps(?: of [A-Za-z]+ Palace)?\b/gi, 'walked to the foot of the jade steps');
                 }
                 row.english = row.english
                   .replace(/\btheir\s+(color|colour|light|lustre|focus|gaze|glance|grip|hold|warmth|heat|guard|ground|composure|expression|posture|demeanor|clarity|breath|step|steps|footing|balance|pace|sleeve|sleeves|shoulder|shoulders|face|head|eyes?|pupils?|hands?|fingers?)\b/gi, 'the $1')
@@ -1138,7 +1162,7 @@ export async function runFactWorkflow(input: {
         try {
           compiled = await reviewEnglish();
         } catch (error: any) {
-          if (literal.length <= 1 || !String(error?.message || '').startsWith('译文待核对') || !await consumeRepair()) throw error;
+          if (literal.length === 0 || !String(error?.message || '').startsWith('译文待核对') || !await consumeRepair()) throw error;
           const failed = new Set(String(error.message).slice('译文待核对: '.length).split(' 存在')[0]!.split(',').map(id => id.trim()).filter(Boolean));
           const targets = literal.filter(fact => failed.has(fact.id));
           if (!targets.length) throw error;

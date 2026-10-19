@@ -366,7 +366,7 @@ export function assetPromptForShot(prompt: string, shot: {
 
 export function stripCjkSegments(prompt: string): string {
   return String(prompt || '')
-    .split(',')
+    .split(/[,，]/)
     .map((part) => part.trim())
     .filter((part) => part && !containsCjk(part))
     .join(', ');
@@ -398,7 +398,7 @@ function joinUnique(parts: string[]): string {
 
 function cjkFacts(prompt: string): string {
   return String(prompt || '')
-    .split(',')
+    .split(/[,，]/)
     .map((part) => part.trim())
     .filter((part) => containsCjk(part))
     .join('。');

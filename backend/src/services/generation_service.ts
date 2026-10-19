@@ -926,14 +926,36 @@ export class GenerationService {
                 let turnaroundGpuLease: Awaited<ReturnType<typeof GpuLeaseService.acquireLease>> | null = null;
                 try {
                     turnaroundGpuLease = await GpuLeaseService.acquireLease(taskId, 'image', 30 * 60 * 1000);
-                    // Plan 1: free LLM VRAM before multi-panel ComfyUI work
-                    await runVramHandoffForImageGen(publish);
-
-                    const finalPrompt =
+                    let finalPrompt = String(
                         workflowData?.prompt
                         || workflowData?.text
                         || workflowData?.description
-                        || '';
+                        || ''
+                    );
+                    if (containsCjk(finalPrompt)) {
+                        const turnaroundModelFamily = normalizeImageModelFamily(
+                            workflowData?.model_type
+                            || workflowData?.reference_model_type
+                            || 'pony'
+                        );
+                        try {
+                            finalPrompt = await resolvePicturePrompt(
+                                taskId,
+                                sceneId,
+                                workflowData,
+                                () => optimizeOutboundPrompt(finalPrompt, {
+                                    modelFamily: turnaroundModelFamily,
+                                    nsfwEnabled: Boolean(workflowData?.nsfw_enabled),
+                                    variant: workflowData?.inference_variant,
+                                })
+                            );
+                        } catch (translateErr) {
+                            logger.warn(`[Task ${taskId}] Turnaround CJK translation fallback: ${translateErr}`);
+                        }
+                    }
+                    // Plan 1: free LLM VRAM before multi-panel ComfyUI work
+                    await runVramHandoffForImageGen(publish);
+
                     const result = await generateTurnaroundComposite({
                         taskId,
                         sceneId,
@@ -941,7 +963,10 @@ export class GenerationService {
                         negative_prompt: workflowData?.negative_prompt
                             ? String(workflowData.negative_prompt)
                             : undefined,
-                        workflowData,
+                        workflowData: {
+                            ...workflowData,
+                            prompt: String(finalPrompt),
+                        },
                         generationParams,
                         onProgress: publish
                     });

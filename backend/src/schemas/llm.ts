@@ -129,6 +129,7 @@ export const VisualTagsSchema = z.object({
 export const CharacterProfileSchema = z.object({
   name: z.string(),
   role: z.string(),
+  age: z.union([z.string(), z.number()]).optional().nullable().transform(v => v != null ? String(v) : '').default(''),
   description: z.string().optional().default(''),
   visual_tags: VisualTagsSchema.optional().default({
     age: '',
