@@ -182,6 +182,14 @@ export const EAST_ASIAN_FEMALE_BEAUTY_FLUX =
 export const EAST_ASIAN_FEMALE_NEGATIVE =
   'western face, caucasian, european face, european facial structure, deep-set western eyes, prominent brow ridge, high western nose bridge, male, man, boy, androgynous, masculine face, ugly face, deformed face, asymmetrical eyes, cross-eyed, extra eyes, beard, mustache';
 
+/** Positive lock for 东方写实. Krea2 uses CFG 1, so this has to be in the positive prompt. */
+export const ORIENTAL_REALISTIC_FACE_LOCK =
+  'oriental realistic style, photorealistic, delicate East Asian facial features, classical oriental bone structure, soft East Asian eyelids, natural porcelain skin texture, subsurface scattering, realistic human anatomy';
+
+/** Blocks a Caucasian read and a flat anime or doll read. No gender tokens. */
+export const ORIENTAL_REALISTIC_NEGATIVE =
+  'caucasian, western face, european facial structure, deep-set western eyes, prominent brow ridge, high nose bridge, deep eye sockets, european, western facial features, anime, cartoon, 3d render, doll, illustration, flat color';
+
 /**
  * Style boosters should describe look (color/light/medium), not narrative content
  * (clothing integrity, portrait composition, fashion pose). Content words are
@@ -216,6 +224,10 @@ const STYLE_PRESET_BOOSTERS: Record<string, { pony: string; flux: string }> = {
   elegant_mature: {
     pony: `elegant mature aesthetic, refined semi-realistic face rendering, sophisticated proportions, cinematic key light`,
     flux: `elegant mature aesthetic, refined semi-realistic face, sophisticated proportions, soft cinematic key light`
+  },
+  oriental_realistic: {
+    pony: `(oriental realistic style:1.2), (delicate East Asian facial features:1.25), (classical oriental bone structure:1.2), soft East Asian eyelids, natural porcelain skin texture, photorealistic, subsurface scattering, realistic human anatomy`,
+    flux: ORIENTAL_REALISTIC_FACE_LOCK,
   },
   semi_realistic: {
     pony: `refined semi-realistic digital painting, delicate East Asian facial features, soft blending, volumetric soft light, cinematic lighting, detailed eyes`,
@@ -275,6 +287,7 @@ const STYLE_LIGHTING_MATERIAL: Record<string, string> = {
   cinematic_photo: 'cinematic lighting, shallow depth of field',
   aesthetic_romance: 'soft color grade, gentle depth of field',
   game_illustration: 'cinematic character spotlight',
+  oriental_realistic: 'realistic cinematic lighting, subsurface scattering, delicate East Asian skin texture',
   semi_realistic: 'cinematic lighting, soft blending',
   ink_wash: 'ink wash light, negative space',
 };
@@ -1115,8 +1128,10 @@ export const buildPromptEnhancement = (options: {
       }
     }
   } else if (modelFamily === 'redcraft_krea2') {
-    // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support)
-    if (!/high aesthetic|photographic detail|delicate lighting/i.test(existingPrompt)) {
+    // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support).
+    // oriental_realistic brings its own face lock. The ethereal suffix reads as a doll illustration.
+    const orientalRealisticPreset = String(stylePreset || '').toLowerCase() === 'oriental_realistic';
+    if (!orientalRealisticPreset && !/high aesthetic|photographic detail|delicate lighting/i.test(existingPrompt)) {
       const isOrientalContext =
         !keepWrittenParagraph
         && (
@@ -1168,8 +1183,27 @@ export const buildPromptEnhancement = (options: {
   negativeParts.push(CHILD_SAFETY_NEGATIVE);
 
   const presetKey = stylePreset ? String(stylePreset).toLowerCase() : '';
-  const booster = keepWrittenParagraph ? undefined : (presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined);
-  if (booster) {
+  const orientalPerson = presetKey === 'oriental_realistic' && (
+    hasVisiblePerson === true
+    || personSubject
+    || /portrait|turnaround|face/i.test(String(genType || ''))
+  );
+  const booster = presetKey === 'oriental_realistic' || keepWrittenParagraph
+    ? undefined
+    : (presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined);
+  if (presetKey === 'oriental_realistic') {
+    if (orientalPerson) {
+      if (!/oriental realistic style/i.test(lower)) {
+        const lock = (modelFamily === 'pony' || modelFamily === 'sd15')
+          ? STYLE_PRESET_BOOSTERS.oriental_realistic.pony
+          : ORIENTAL_REALISTIC_FACE_LOCK;
+        suffixParts.push(lock);
+      }
+      negativeParts.push(ORIENTAL_REALISTIC_NEGATIVE);
+    } else if (!keepWrittenParagraph && !/subsurface scattering/i.test(lower)) {
+      suffixParts.push(STYLE_LIGHTING_MATERIAL.oriental_realistic);
+    }
+  } else if (booster) {
     // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
     const boost = (modelFamily === 'flux' || modelFamily === 'redcraft_krea2') ? booster.flux : booster.pony;
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);

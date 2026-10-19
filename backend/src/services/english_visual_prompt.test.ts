@@ -381,6 +381,24 @@ test('a dropped picture fact is rewritten once, then the passing paragraph is re
   assert.equal(badCalls, 4, 'a failed picture check must not certify the prompt for reuse');
 });
 
+test('oriental_realistic prepends the East Asian face lock after the picture check', async () => {
+  setVisualPromptTranslatorForTests(async () => 'Pei Yuhan has voluminous crimson hair and wears a red robe.');
+  try {
+    const prompt = await composeShotImagePrompt(
+      shotImageMaterialsFromSpec(
+        { primary_action: '她穿着红袍', visible_subjects: ['裴雨涵'] },
+        [{ name: '裴雨涵', visual_tags: { hair: 'voluminous_crimson' } }],
+      ),
+      { stylePreset: 'oriental_realistic' },
+    );
+    assert.match(prompt, /^oriental realistic style, photorealistic, delicate East Asian facial features/i);
+    assert.match(prompt, /soft East Asian eyelids/i);
+    assert.match(prompt, /wears a red robe/);
+  } finally {
+    setVisualPromptTranslatorForTests(null);
+  }
+});
+
 test('an unusable audit retries once and does not rewrite a usable paragraph', async () => {
   let paragraphs = 0;
   let audits = 0;

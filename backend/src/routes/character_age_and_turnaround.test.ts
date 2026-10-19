@@ -161,6 +161,29 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     const beastPromptData = JSON.parse(beastPromptRes.payload);
     assert.doesNotMatch(beastPromptData.prompt, /East Asian facial features/i);
     assert.doesNotMatch(beastPromptData.negative_prompt, /caucasian|western face/i);
+
+    await db.run(
+      'UPDATE project SET settings = ? WHERE id = 1',
+      JSON.stringify({ image_generation: { style: 'oriental_realistic', model: 'redcraft_krea2' } }),
+    );
+    await db.run(
+      'UPDATE character SET visual_tags = ? WHERE id = ?',
+      JSON.stringify({
+        face_features: 'refined classical East Asian mature beauty, delicate oriental bone structure',
+        hair: 'long_silky_white',
+      }),
+      created.id,
+    );
+    const orientalRes = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${created.id}/build-prompt`,
+      payload: { gen_type: 'portrait' },
+    });
+    assert.equal(orientalRes.statusCode, 200);
+    const oriental = JSON.parse(orientalRes.payload);
+    assert.match(oriental.prompt, /^oriental realistic style, photorealistic, delicate East Asian facial features/i);
+    assert.match(oriental.prompt, /soft East Asian eyelids/i);
+    assert.match(oriental.negative_prompt, /3d render, doll, illustration, flat color/i);
   } finally {
     await app.close();
   }

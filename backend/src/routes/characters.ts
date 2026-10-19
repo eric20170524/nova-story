@@ -17,6 +17,8 @@ import {
   buildCharacterPromptHeader,
   CharacterSheetError,
   inferPromptSubjectType,
+  ORIENTAL_REALISTIC_FACE_LOCK,
+  ORIENTAL_REALISTIC_NEGATIVE,
   readStoredCharacterSheet,
 } from '../services/image_generation_policy';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
@@ -501,11 +503,18 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     );
     const isHumanCharacter = inferredSubject !== 'nonhuman' && inferredSubject !== 'environment';
     const isWesternStyle = /western_comic/i.test(stylePreset);
+    const isOrientalRealistic = /oriental_realistic/i.test(stylePreset) || /oriental_realistic/i.test(projectSettings.style || '') || /oriental_realistic/i.test(projectSettings.image_generation?.style || '');
 
     let prompt = "";
     let negativePrompt = header.negative;
-    if (isHumanCharacter && !isWesternStyle && !negativePrompt.includes('caucasian')) {
-      negativePrompt += ', caucasian, western face, european facial structure, deep-set western eyes, prominent brow ridge, high nose bridge, deep eye sockets, european, western facial features';
+    if (isHumanCharacter && isWesternStyle) {
+      if (!negativePrompt.includes('east asian')) {
+        negativePrompt += ', oriental, classical chinese, east asian facial features, anime, cartoon, hanfu';
+      }
+    } else if (isHumanCharacter && !isWesternStyle && !negativePrompt.includes('caucasian')) {
+      negativePrompt += isOrientalRealistic
+        ? `, ${ORIENTAL_REALISTIC_NEGATIVE}`
+        : ', caucasian, western face, european facial structure, deep-set western eyes, prominent brow ridge, high nose bridge, deep eye sockets, european, western facial features';
     }
 
     if (req.gen_type === "turnaround") {
@@ -519,8 +528,18 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         : `${header.prefix}${refHint}`;
     }
 
-    if (isHumanCharacter && !isWesternStyle && !/(east asian|oriental|chinese|asian)/i.test(prompt)) {
-      prompt += ', East Asian facial features, delicate classical oriental bone structure, soft East Asian eyelids';
+    if (isHumanCharacter && isWesternStyle) {
+      if (!/(western|caucasian)/i.test(prompt)) {
+        prompt += ', western comic book style, graphic novel shading';
+      }
+    } else if (isHumanCharacter && !isWesternStyle) {
+      if (isOrientalRealistic) {
+        if (!/^oriental realistic style\b/i.test(prompt)) {
+          prompt = `${ORIENTAL_REALISTIC_FACE_LOCK}, ${prompt}`;
+        }
+      } else if (!/(east asian|oriental|chinese|asian)/i.test(prompt)) {
+        prompt += ', East Asian facial features, delicate classical oriental bone structure, soft East Asian eyelids';
+      }
     }
 
     const activeRefUrl = (req.gen_type === 'turnaround' && req.use_ref_portrait !== false) ? (refUrl || null) : (req.use_ref_portrait ? (refUrl || null) : null);

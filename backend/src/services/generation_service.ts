@@ -18,6 +18,7 @@ import {
 import {
     applyPromptEnhancement,
     CHILD_SAFETY_NEGATIVE,
+    ORIENTAL_REALISTIC_NEGATIVE,
     isAdultLookLoraName,
     mergeClipPositivePrompt,
     normalizeImageModelFamily,
@@ -595,10 +596,12 @@ export const compileComfyWorkflow = async (
     const preserveTemplateConditioning =
         modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
 
+    const orientalRealistic = String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'oriental_realistic';
     const negativeParts = promptComposed
         ? [
             String(workflowData?.negative_prompt || '').trim(),
             CHILD_SAFETY_NEGATIVE,
+            orientalRealistic ? ORIENTAL_REALISTIC_NEGATIVE : '',
         ]
         : [
             sanitizeNegativePromptForSubject(
@@ -1217,7 +1220,10 @@ export class GenerationService {
                     message: 'Writing the English image prompt. The text model may use the GPU briefly.',
                     message_zh: '正在编写英文画面提示词，文本模型会短暂占用显存…',
                 });
-                finalPrompt = await resolvePicturePrompt(taskId, sceneId, effectiveWorkflowData, () => composeShotImagePrompt(materials, { variant: effectiveWorkflowData.inference_variant }));
+                finalPrompt = await resolvePicturePrompt(taskId, sceneId, effectiveWorkflowData, () => composeShotImagePrompt(materials, {
+                    variant: effectiveWorkflowData.inference_variant,
+                    stylePreset: effectiveWorkflowData.style_preset,
+                }));
                 const personVisible = materials.subject_scale !== 'absent'
                     && (materials.characters.length > 0 || materials.facts.some((fact) => fact.binding.length > 0));
                 const currentType = String(effectiveWorkflowData.subject_type || '').toLowerCase().trim();

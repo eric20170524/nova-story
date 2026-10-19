@@ -14,7 +14,7 @@ import { LLMService } from './llm';
 import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
 import { withLocalTextInference } from './local_text_inference';
 export { setLocalTextModelEnsureForTests } from './local_text_inference';
-import { NSFW_ATMOSPHERE_SENTENCE } from './image_generation_policy';
+import { NSFW_ATMOSPHERE_SENTENCE, ORIENTAL_REALISTIC_FACE_LOCK } from './image_generation_policy';
 import {
   type CharacterLockRef,
   type CompilePonyPromptResult,
@@ -62,6 +62,7 @@ export type EnglishPromptOptions = InferenceReuseOptions & {
   nsfwEnabled?: boolean;
   glossary?: Record<string, string>;
   styleLighting?: string | null;
+  stylePreset?: string | null;
   shotType?: string | null;
   chapterId?: string | number | null;
   cameraAngle?: string | null;
@@ -765,7 +766,7 @@ async function fidelityFailure(source: string, english: string): Promise<string 
   }
 }
 
-export async function composeShotImagePrompt(materials: ShotImageMaterials, options: InferenceReuseOptions = {}): Promise<string> {
+export async function composeShotImagePrompt(materials: ShotImageMaterials, options: EnglishPromptOptions = {}): Promise<string> {
   const modelFamily = materials.modelFamily || 'pony';
   const nsfwEnabled = Boolean(materials.nsfwEnabled);
   const baseSystem = composeInstructions(modelFamily, nsfwEnabled);
@@ -828,8 +829,14 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
   const withAtmosphere = nsfwEnabled && visiblePerson(materials)
     ? `${paragraph} ${NSFW_ATMOSPHERE_SENTENCE}`
     : paragraph;
-  if (containsCjk(withAtmosphere)) throw new Error('English visual prompt still contains Chinese characters');
-  return withAtmosphere;
+  const stylePreset = String(options.stylePreset || '').trim().toLowerCase();
+  const withFaceLock = stylePreset === 'oriental_realistic'
+    && visiblePerson(materials)
+    && !/^oriental realistic style\b/i.test(withAtmosphere.trim())
+    ? `${ORIENTAL_REALISTIC_FACE_LOCK}. ${withAtmosphere}`
+    : withAtmosphere;
+  if (containsCjk(withFaceLock)) throw new Error('English visual prompt still contains Chinese characters');
+  return withFaceLock;
 }
 
 function resolveContractIntent(contract: PonyContract): ShotIntent {

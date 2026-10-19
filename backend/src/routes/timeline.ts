@@ -183,6 +183,7 @@ export const timelineRoutes: FastifyPluginAsync = async (app) => {
               projectSettings,
             }),
             styleLighting: styleLightingMaterial(getProjectImageSettings(projectSettings).style),
+            stylePreset: getProjectImageSettings(projectSettings).style,
             shotType: data.shot_type || scene.shot_type,
             chapterId: scene.chapter_id,
           },

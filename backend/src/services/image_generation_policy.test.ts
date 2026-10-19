@@ -877,6 +877,44 @@ test('character extract quotes stored appearance fields including age and reject
   assert.equal(canonicalCharacterRole('main', { allowStoredAlias: true }), 'protagonist');
 });
 
+test('oriental_realistic locks an East Asian face on people and leaves empty scenery alone', () => {
+  const portrait = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    stylePreset: 'oriental_realistic',
+    existingPrompt: 'refined classical East Asian mature beauty, ice blue eyes, long white hair',
+    genType: 'portrait',
+  });
+  assert.match(portrait.suffix, /soft East Asian eyelids/i);
+  assert.match(portrait.suffix, /classical oriental bone structure/i);
+  assert.match(portrait.negativeExtra, /prominent brow ridge/i);
+  assert.match(portrait.negativeExtra, /3d render, doll, illustration/i);
+  assert.doesNotMatch(portrait.suffix, /soft ethereal lighting/i);
+
+  const scene = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: true,
+    stylePreset: 'oriental_realistic',
+    existingPrompt: 'She sits in the inner hall and lowers one sleeve.',
+    genType: 'scene',
+    hasVisiblePerson: true,
+  });
+  assert.match(scene.suffix, /oriental realistic style, photorealistic, delicate East Asian facial features/i);
+
+  const scenery = buildPromptEnhancement({
+    modelFamily: 'redcraft_krea2',
+    nsfwEnabled: false,
+    stylePreset: 'oriental_realistic',
+    existingPrompt: 'wide landscape of a cloud sea, no people',
+    genType: 'scene',
+    shotType: 'Extreme Long Shot',
+    subjectType: 'environment',
+    hasVisiblePerson: false,
+  });
+  assert.doesNotMatch(scenery.suffix, /soft East Asian eyelids|East Asian female/i);
+  assert.doesNotMatch(scenery.negativeExtra, /caucasian/i);
+});
+
 test('semi_realistic and guofeng_xianxia presets inject East Asian facial features and readStoredCharacterSheet infers gender from female cues', () => {
   const semiPony = buildPromptEnhancement({
     modelFamily: 'pony',

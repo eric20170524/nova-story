@@ -340,6 +340,14 @@ export const STANDARD_VISUAL_STYLES: VisualStyleDef[] = [
     tier: 'standard',
   },
   {
+    value: 'oriental_realistic',
+    label: 'Oriental Realistic (东方写实)',
+    prompt: 'oriental realistic style, photorealistic, delicate East Asian facial features, classical oriental bone structure, soft East Asian eyelids, natural porcelain skin texture, subsurface scattering, realistic human anatomy',
+    negative_prompt: 'caucasian, western face, european facial structure, deep-set western eyes, prominent brow ridge, high nose bridge, deep eye sockets, european, western facial features, anime, cartoon, 3d render, doll, illustration, flat color, low quality, blurry',
+    recommended_model: 'redcraft_krea2',
+    tier: 'standard',
+  },
+  {
     value: 'cinematic_photo',
     label: 'Cinematic Photo (电影写实)',
     prompt: 'cinematic photorealistic still, East Asian features, natural skin texture, realistic lens bokeh, physically based lighting, film color grade, shallow depth of field, detailed environment interaction, shot on 50mm lens look',
