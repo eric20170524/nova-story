@@ -243,11 +243,34 @@ export const CharacterEditModal: React.FC<CharacterEditModalProps> = ({
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">{t('characters.age', '年龄设定')}</label>
+              <input
+                data-testid="character-age-input"
+                placeholder={t('characters.age_placeholder', '例如：28至31岁 / 25岁成年女性')}
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition-all"
+                value={flatEditableVisualTags(editingChar.visual_tags).age || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const cur = flatEditableVisualTags(editingChar.visual_tags);
+                  if (val.trim()) {
+                    cur.age = val;
+                  } else {
+                    delete cur.age;
+                  }
+                  setEditingChar((prev) => ({
+                    ...prev,
+                    visual_tags: applyFlatVisualTags(prev.visual_tags, cur),
+                  }));
+                }}
+              />
+            </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">{t('characters.desc')}</label>
             <textarea
+              placeholder="包含角色的身份、年龄、外貌气质、性格特征与核心动机…"
               className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white min-h-[6rem] h-36 resize-y text-sm focus:ring-2 focus:ring-indigo-500/50 focus:outline-none custom-scrollbar transition-all"
               value={editingChar.description || ''}
               onChange={(e) => setEditingChar({ ...editingChar, description: e.target.value })}

@@ -47,7 +47,12 @@ export class LLMService {
         const providerType = (llmConfig.provider || 'ollama').toLowerCase();
         const baseUrl = llmConfig.base_url;
 
-        if (providerType === 'codex') return LLMService.getLocalProvider();
+        if (providerType === 'codex') {
+            if (isRemoteGemmaLlm({ model: llmConfig.model, base_url: baseUrl })) {
+                return LLMService.getProvider(token, { ...llmConfig, provider: 'custom' });
+            }
+            return LLMService.getLocalProvider();
+        }
 
         if (['openai', 'custom', 'ollama', 'local_llm'].includes(providerType)) {
             const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
@@ -88,7 +93,10 @@ export class LLMService {
         const configuredModel = String(configured.model || '');
         const configuredBase = String(configured.base_url || '');
         if (isRemoteGemmaLlm({ model: configuredModel, base_url: configuredBase })) {
-            return LLMService.getProvider();
+            return LLMService.getProvider(undefined, {
+                ...configured,
+                provider: configured.provider === 'codex' ? 'custom' : (configured.provider || 'custom'),
+            });
         }
         const configuredProvider = String(configured.provider || '').toLowerCase();
         const isConfiguredLocal = LOCAL_LLM_PROVIDERS.has(configuredProvider);

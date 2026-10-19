@@ -168,7 +168,7 @@ function splitAuditRejection(item: string): { id: number; status: string; fact: 
   };
 }
 
-const APPEARANCE_FACT = /^(.+?)的(头发|五官|体型|服装|配饰)：(.+)$/;
+const APPEARANCE_FACT = /^(.+?)的(年龄|头发|五官|体型|服装|配饰)：(.+)$/;
 
 /** The audit model sees the person and attribute. Keyword presence is not a verdict. */
 function auditFactInput(fact: string, id: number) {
@@ -450,6 +450,7 @@ async function translateVisualFacts(source: string, options: EnglishPromptOption
 }
 
 export type AppearanceFields = {
+  age?: string;
   hair: string;
   face: string;
   body: string;
@@ -509,10 +510,12 @@ export function appearanceFieldsFromTags(
   const tagMap = flattenVisualTagMap(parsed, { chapterId });
   const faceKeys = ['face_features', 'facial_features', 'face', 'eyes', 'eyebrows', 'lashes', 'skin_tone'];
   const face = faceKeys.map((key) => String(tagMap[key] || '').trim()).filter(Boolean).join(', ');
+  const age = String(tagMap.age || '').trim();
   return {
+    ...(age ? { age } : {}),
     hair: String(tagMap.hair || '').trim(),
     face,
-    body: String(tagMap.build || '').trim(),
+    body: String(tagMap.body || tagMap.build || '').trim(),
     clothing: String(tagMap.clothing || '').trim(),
     accessories: String(tagMap.accessories || '').trim(),
   };
@@ -662,6 +665,7 @@ export function shotImageMaterialsFromSpec(
 
 function appearanceFactLines(characters: ShotCharacterAppearance[]): string[] {
   const labels: Array<[keyof AppearanceFields, string]> = [
+    ['age', '年龄'],
     ['hair', '头发'],
     ['face', '五官'],
     ['body', '体型'],

@@ -282,23 +282,11 @@ export async function generateTurnaroundComposite(
     throw new Error('Failed to start or connect to ComfyUI');
   }
 
-  // A portrait reference is optional for the front panel only.
-  const refUrl =
+  // A portrait reference is used for the turnaround when available (unless explicitly disabled).
+  let refUrl =
     (input.workflowData?.character_ref_url as string | undefined)
     || (input.workflowData?.ref_image_url as string | undefined)
     || null;
-
-  if (refUrl && input.workflowData.turnaround_front_adapter === true && !comfyService.isRemote) {
-    copyReferenceImageToComfy(
-      {
-        ...input.workflowData,
-        character_ref_url: refUrl,
-        ref_image_url: refUrl
-      },
-      staticDir,
-      comfySettings.install_path
-    );
-  }
 
   let projectId: number | null = null;
   let characterId: number | null = null;
@@ -327,23 +315,55 @@ export async function generateTurnaroundComposite(
       : syntheticCharacterId(input.sceneId);
     if (characterId) {
       const charRow = await db.get(
-        'SELECT id, project_id, active_version FROM character WHERE id = ?',
+        'SELECT id, project_id, active_version, visual_tags FROM character WHERE id = ?',
         characterId
       );
       if (charRow) {
         projectId = charRow.project_id != null ? Number(charRow.project_id) : null;
         version = Number(charRow.active_version || 1);
+        if (!refUrl && input.workflowData?.use_ref_portrait !== false) {
+          try {
+            const tags = typeof charRow.visual_tags === 'string'
+              ? JSON.parse(charRow.visual_tags || '{}')
+              : (charRow.visual_tags || {});
+            const storedAvatar = tags?.assets?.avatar_url || tags?.avatar_url;
+            if (typeof storedAvatar === 'string' && storedAvatar.trim()) {
+              refUrl = storedAvatar.trim();
+            }
+          } catch {
+            /* ignore malformed visual_tags */
+          }
+        }
       }
     }
   }
 
-  let effectiveWorkflowData = input.workflowData;
+  const enableFrontAdapter = Boolean(
+    refUrl && input.workflowData.turnaround_front_adapter !== false
+  );
+
+  if (refUrl && enableFrontAdapter && !comfyService.isRemote) {
+    copyReferenceImageToComfy(
+      {
+        ...input.workflowData,
+        character_ref_url: refUrl,
+        ref_image_url: refUrl
+      },
+      staticDir,
+      comfySettings.install_path
+    );
+  }
+
+  let effectiveWorkflowData: Record<string, unknown> = {
+    ...input.workflowData,
+    ...(enableFrontAdapter ? { turnaround_front_adapter: true } : {})
+  };
   if (projectId != null) {
     const projectRow = await db.get('SELECT settings FROM project WHERE id = ?', projectId);
     if (projectRow) {
       const projectSettings = parseProjectSettings(projectRow.settings);
       effectiveWorkflowData = {
-        ...input.workflowData,
+        ...effectiveWorkflowData,
         project_settings: projectSettings,
         model_type: getProjectImageSettings(projectSettings).model,
         style_preset: getProjectImageSettings(projectSettings).style,

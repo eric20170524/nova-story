@@ -1031,7 +1031,8 @@ export async function runFactWorkflow(input: {
             }
             if (fact.id === 'time_of_day' && !/\b(?:day|daytime|night|nighttime|dawn|dusk)\b/i.test(row.english)) {
               const knownTime: Record<string, string> = { '白天': 'Daytime.', '夜间': 'Night.', '黎明': 'Dawn.', '黄昏': 'Dusk.' };
-              if (knownTime[fact.text]) row.english = knownTime[fact.text];
+              const mappedTime = knownTime[fact.text];
+              if (mappedTime) row.english = mappedTime;
             }
             if (fact.id === 'location' && input.glossary[fact.text] && !row.english.toLowerCase().includes(input.glossary[fact.text]!.toLowerCase())) {
               row.english = input.glossary[fact.text]!;

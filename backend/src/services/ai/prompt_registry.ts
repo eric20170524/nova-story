@@ -190,7 +190,7 @@ mainPlot 是未来走向，不是已经发生的事实。
   "initialRelations": "开篇时已经成立的人物关系",
   "plannedRelations": "以后可能变化的关系，尚未发生",
   "characters": [
-    { "name": "姓名", "role": "protagonist", "description": "身份、欲望与行为逻辑", "personality": "性格", "growthPath": "成长预期" }
+    { "name": "姓名", "role": "protagonist", "description": "身份、年龄、欲望与行为逻辑", "personality": "性格", "growthPath": "成长预期" }
   ],
   "glossary": [
     { "term": "专有名词", "definition": "解释", "category": "分类" }
@@ -335,8 +335,8 @@ mainPlot 是未来走向，不是已经发生的事实。
    - 检查人物性格或阵营是否有重大反转。
    - **新增角色**：如果有重要新配角（有名字、有台词、影响剧情），请添加到列表。忽略路人甲。
    - **不要删除**未出场的老角色，除非他们被确认死亡且剧情完全不再需要。
-   - description 写简要身份/传记/本章定位（1-3 句）；细粒度性格由系统另行从正文合并，description 可略写性格。
-   - visual_tags：从正文提取可画外观，值用简洁英文图像标签（Danbooru 风格优先）；正文未写的键可省略；可额外加 tail/ears/markings/species 等。
+   - description 写简要身份/年龄/传记/本章定位（1-3 句）；细粒度性格由系统另行从正文合并，description 可略写性格。
+   - visual_tags：从正文提取可画外观（含年龄段 age），值用简洁英文图像标签（Danbooru 风格优先）；正文未写的键可省略；可额外加 tail/ears/markings/species 等。
    - role: main / supporting / minor。
 
 2. **专有名词一致性 (Consistency)**:
@@ -351,6 +351,7 @@ mainPlot 是未来走向，不是已经发生的事实。
        "role": "main|supporting|minor",
        "description": "...",
        "visual_tags": {
+         "age": "...",
          "hair": "...",
          "eyes": "...",
          "skin_tone": "...",

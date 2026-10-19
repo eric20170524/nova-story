@@ -386,14 +386,17 @@ export const CharacterManager: React.FC = () => {
   const openSheetModal = async (char: Character, overrideGenType?: 'turnaround' | 'portrait') => {
     setSheetModalChar(char);
 
-    const availableRef = char.avatar_url || char.turnaround_url || null;
-    const initialUseRef = !!availableRef;
-    setUseRefPortrait(initialUseRef);
-    setRefImageUrl(availableRef);
-
     // Flow sequence: Default to 'portrait' if no image exists yet, otherwise 'turnaround'
     const initialGenType = overrideGenType || ((!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround');
     setGenType(initialGenType);
+
+    const availableRef = initialGenType === 'turnaround'
+      ? (char.avatar_url || char.turnaround_url || null)
+      : (char.avatar_url || null);
+    const initialUseRef = initialGenType === 'turnaround' ? Boolean(availableRef) : false;
+    setUseRefPortrait(initialUseRef);
+    setRefImageUrl(availableRef);
+
     setGeneratedImageUrl(null);
     setPrompt('');
     setNegativePrompt('');
@@ -410,9 +413,9 @@ export const CharacterManager: React.FC = () => {
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
     } catch (e) {
-      // turnaround: appearance base only (backend generates front/side/back then stitches)
+      // portrait: upper-body front view; turnaround: appearance base only (backend generates front/side/back then stitches)
       const fallbackComposition = initialGenType === 'portrait'
-        ? 'character portrait, full body, front view'
+        ? 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, detailed face and eyes, plain studio background'
         : 'full body character design, standing, consistent identity';
       setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
@@ -475,10 +478,13 @@ export const CharacterManager: React.FC = () => {
         composition_ref_url: null,
       };
 
-      // Tier A: single character ref → classic img2img for portrait/turnaround only
+      // Tier A: single character ref → classic img2img / IP-Adapter for portrait/turnaround
       if (useRefPortrait && refImageUrl) {
         payload.ref_image_url = refImageUrl;
         payload.character_ref_url = refImageUrl;
+        if (genType === 'turnaround') {
+          payload.turnaround_front_adapter = true;
+        }
       }
 
       const loraPath = sheetModalChar?.visual_tags?.assets?.lora_ready
@@ -559,6 +565,7 @@ export const CharacterManager: React.FC = () => {
             character_id: char.id,
             ref_image_url: portraitUrl,
             character_ref_url: portraitUrl,
+            turnaround_front_adapter: true,
             composition_ref_url: null,
             reference_tier: 'A',
           }, 999992 + char.id);
@@ -736,7 +743,7 @@ export const CharacterManager: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {characters.map((char) => (
           <CharacterCard
             key={char.id}

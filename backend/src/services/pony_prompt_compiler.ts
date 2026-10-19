@@ -25,6 +25,7 @@ export type CharacterLockRef = {
   aliases?: string[] | null;
   lock: string;
   appearance?: {
+    age?: string;
     hair?: string;
     face?: string;
     body?: string;

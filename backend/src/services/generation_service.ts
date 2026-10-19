@@ -1098,10 +1098,23 @@ export class GenerationService {
                         ? Number(workflowData.character_id)
                         : syntheticCharacterId(sceneId);
                     if (characterId) {
-                        const charRow = await db.get('SELECT id, project_id, active_version FROM character WHERE id = ?', characterId);
+                        const charRow = await db.get('SELECT id, project_id, active_version, visual_tags FROM character WHERE id = ?', characterId);
                         if (charRow) {
                             sceneProjectId = charRow.project_id != null ? Number(charRow.project_id) : null;
                             characterVersion = Number(charRow.active_version || 1);
+                            if (
+                                String(effectiveWorkflowData?.gen_type || '').toLowerCase() === 'turnaround'
+                                && effectiveWorkflowData?.use_ref_portrait !== false
+                                && !effectiveWorkflowData?.character_ref_url
+                                && !effectiveWorkflowData?.ref_image_url
+                            ) {
+                                const tags = parseCharacterVisualTags(charRow.visual_tags);
+                                const storedAvatar = tags?.assets?.avatar_url || tags?.avatar_url;
+                                if (typeof storedAvatar === 'string' && storedAvatar.trim()) {
+                                    effectiveWorkflowData.character_ref_url = storedAvatar.trim();
+                                    effectiveWorkflowData.ref_image_url = storedAvatar.trim();
+                                }
+                            }
                         }
                     }
                 }

@@ -182,9 +182,9 @@ For each character return:
 - name: the name as written in the chapter
 - role: exactly one of protagonist, antagonist, supporting, extra. If the chapter does not support one of these four, omit that character.
 - gender: female, male, or unspecified. Use unspecified when the chapter does not state a gender.
-- description: biography and personality supported by this chapter
+- description: biography, age (or age group), and personality supported by this chapter
 - visual_tags:
-  - hair, face, body, clothing, accessories: short quotes of what this chapter shows. Leave a field empty when the chapter does not show it.
+  - age, hair, face, body, clothing, accessories: short quotes of what this chapter shows. Leave a field empty when the chapter does not show it.
   - undressed: true only when the chapter states this character is not wearing clothes. Otherwise false. When true, put that stated condition in clothing. Do not replace it with garments.
 
 Return JSON { "profiles": [ ... ] }.

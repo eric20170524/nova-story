@@ -114,6 +114,7 @@ export const TimelineResponseSchema = z.object({
 });
 
 export const VisualTagsSchema = z.object({
+  age: z.string().optional().default(''),
   hair: z.string().optional().default(''),
   face: z.string().optional().default(''),
   face_features: z.string().optional().default(''),
@@ -130,6 +131,7 @@ export const CharacterProfileSchema = z.object({
   role: z.string(),
   description: z.string().optional().default(''),
   visual_tags: VisualTagsSchema.optional().default({
+    age: '',
     hair: '',
     face: '',
     face_features: '',

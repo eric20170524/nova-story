@@ -455,17 +455,20 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         : `${header.prefix}, full body, standing, character reference${refHint}`;
     } else {
       prompt = codexImage
-        ? `${header.prefix}. Waist-up, facing camera, both shoulders visible, plain studio background, no writing, no watermark.`
+        ? `${header.prefix}. Upper-body front portrait, waist-up, facing camera, both shoulders visible, plain studio background, no writing, no watermark.`
         : `${header.prefix}${refHint}`;
     }
 
+    const activeRefUrl = req.use_ref_portrait ? (refUrl || null) : null;
     return {
       prompt,
       negative_prompt: negativePrompt,
       model_type: effectiveModelType,
       gen_type: req.gen_type,
       nsfw_enabled: nsfwEnabled,
-      ref_image_url: req.use_ref_portrait ? refUrl : null,
+      ref_image_url: activeRefUrl,
+      character_ref_url: activeRefUrl,
+      turnaround_front_adapter: req.gen_type === 'turnaround' ? Boolean(activeRefUrl) : undefined,
       // Document composite pipeline for clients
       turnaround_pipeline: req.gen_type === 'turnaround'
         ? codexImage ? 'codex_single_sheet' : 'three_views_stitch'

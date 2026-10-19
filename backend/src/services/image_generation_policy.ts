@@ -1367,6 +1367,7 @@ ${contractOnly ? '- Adjacent shots must differ in visible action or key props.' 
 export type CharacterSheetGender = 'female' | 'male' | 'unspecified';
 
 export type CharacterAppearanceFields = {
+  age?: string | null;
   hair?: string | null;
   face?: string | null;
   body?: string | null;
@@ -1406,6 +1407,7 @@ export function readStoredCharacterSheet(tags: Record<string, any> | null | unde
   return {
     gender,
     appearance: {
+      age: appearanceText(base.age || source.age),
       hair: appearanceText(base.hair || source.hair),
       face: appearanceText(base.face || source.face || base.face_features || source.face_features),
       body: appearanceText(base.body || source.body || base.build || source.build),
@@ -1434,8 +1436,9 @@ export const buildCharacterPromptHeader = (
   const storedGender = gender === 'female' || gender === 'male' ? gender : 'unspecified';
   const layout = genType === 'turnaround'
     ? 'full body character design, consistent character identity, plain studio background'
-    : 'high quality character portrait, front view, detailed face and eyes, plain studio background';
+    : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, detailed face and eyes, plain studio background';
   const look = [
+    appearance?.age,
     appearance?.hair,
     appearance?.face,
     appearance?.body,
@@ -1445,8 +1448,11 @@ export const buildCharacterPromptHeader = (
   const prefix = [layout, storedGender === 'unspecified' ? '' : storedGender, ...look]
     .filter(Boolean)
     .join(', ');
+  const angleNegative = genType === 'turnaround'
+    ? ''
+    : ', side view, profile, back view, from behind';
   return {
     prefix,
-    negative: `${CHILD_SAFETY_NEGATIVE}, distorted face, cluttered background, mismatched clothing, inconsistent face`,
+    negative: `${CHILD_SAFETY_NEGATIVE}, distorted face, cluttered background, mismatched clothing, inconsistent face${angleNegative}`,
   };
 };

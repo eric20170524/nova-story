@@ -20,6 +20,7 @@ interface TurnaroundModalProps {
   useRefPortrait: boolean;
   setUseRefPortrait: (val: boolean) => void;
   refImageUrl: string | null;
+  setRefImageUrl?: (val: string | null) => void;
   projectStyle: string;
   effectiveNsfw: boolean;
   onRebuildPrompt: (genType: string, customUseRef?: boolean, customRefUrl?: string | null) => void;
@@ -44,6 +45,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
   useRefPortrait,
   setUseRefPortrait,
   refImageUrl,
+  setRefImageUrl,
   projectStyle,
   effectiveNsfw,
   onRebuildPrompt,
@@ -106,8 +108,14 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    const nextRef = character.avatar_url || refImageUrl || character.turnaround_url || null;
+                    const nextUseRef = Boolean(nextRef);
+                    if (setRefImageUrl && nextRef !== refImageUrl) {
+                      setRefImageUrl(nextRef);
+                    }
+                    setUseRefPortrait(nextUseRef);
                     setGenType('turnaround');
-                    onRebuildPrompt('turnaround');
+                    onRebuildPrompt('turnaround', nextUseRef, nextRef);
                   }}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold border transition-all ${
                     genType === 'turnaround'
@@ -120,8 +128,9 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    setUseRefPortrait(false);
                     setGenType('portrait');
-                    onRebuildPrompt('portrait');
+                    onRebuildPrompt('portrait', false, refImageUrl);
                   }}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold border transition-all ${
                     genType === 'portrait'
@@ -308,17 +317,17 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                     type="button"
                     onClick={() => onSaveAssetToCharacter('avatar')}
                     className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/60 dark:hover:bg-emerald-600 text-emerald-800 dark:text-emerald-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-300 dark:border-emerald-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="覆盖当前版本立绘"
+                    title="覆盖当前版本定妆照"
                   >
-                    <CheckCircle size={14} /> 保存立绘·本版
+                    <CheckCircle size={14} /> 保存定妆照·本版
                   </button>
                   <button
                     type="button"
                     onClick={() => onSaveAssetToCharacter('avatar', { newVersion: true })}
                     className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/50 dark:hover:bg-amber-700 text-amber-800 dark:text-amber-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-amber-300 dark:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="新建版本并保存为立绘"
+                    title="新建版本并保存为定妆照"
                   >
-                    <CheckCircle size={14} /> 立绘·新版
+                    <CheckCircle size={14} /> 定妆照·新版
                   </button>
                   <button
                     type="button"

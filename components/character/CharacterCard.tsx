@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, CheckCircle, Volume2 } from 'lucide-react';
+import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, CheckCircle, Volume2, Link2 } from 'lucide-react';
 import { Character } from '../../types';
 import { CHARACTER_ROLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
@@ -44,6 +44,12 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
   const roleLabel = roleObj ? (t(`roles.${roleObj.value}`) || roleObj.label) : char.role;
 
   const visualTagsObj = char.visual_tags?.base_model?.tags || char.visual_tags || {};
+  const charAge =
+    (typeof visualTagsObj.age === 'string' && visualTagsObj.age.trim()) ||
+    (typeof char.visual_tags?.age === 'string' && char.visual_tags.age.trim()) ||
+    (typeof char.visual_tags?.visual_bible?.age === 'string' && char.visual_tags.visual_bible.age.trim()) ||
+    '';
+
   const tagEntries = Object.entries(visualTagsObj).filter(
     ([, v]) => !(typeof v === 'object' && v !== null)
   );
@@ -60,7 +66,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   <PreviewableImage
                     src={char.avatar_url}
                     alt={char.name}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover object-top"
                   />
                   <ZoomHint />
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition-opacity">
@@ -106,6 +112,15 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                 <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium inline-block border border-slate-200 dark:border-slate-700">
                   {roleLabel}
                 </span>
+                {charAge && (
+                  <span
+                    data-testid="character-card-age"
+                    className="text-xs px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-medium inline-block border border-amber-200 dark:border-amber-800/70"
+                    title={`年龄: ${charAge}`}
+                  >
+                    {charAge}
+                  </span>
+                )}
                 <span
                   data-testid="character-card-voice"
                   className={`text-xs px-2.5 py-0.5 rounded-full font-medium inline-flex items-center gap-1 border ${
@@ -196,22 +211,106 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
           </div>
         )}
 
-        {/* Asset Slot: Turnaround Sheet / Portrait */}
-        <div className="space-y-2 mb-4">
-          <div className="grid grid-cols-1 gap-2">
-            <div className="aspect-[21/9] bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden flex items-center justify-center relative group">
+        {/* Dual Large Showcase: Upper-Body Front Portrait (定妆照) + 3-View Turnaround Sheet (三视图) */}
+        <div className="mb-4" data-testid="character-card-showcase">
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+            {/* Left Slot: Upper-Body Front Portrait (定妆照 · 上半身正面大图) */}
+            <div
+              data-testid="character-card-portrait-slot"
+              className="sm:col-span-5 aspect-[3/4] sm:min-h-[240px] bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden flex items-center justify-center relative group"
+            >
+              {char.avatar_url ? (
+                <>
+                  <PreviewableImage
+                    src={char.avatar_url}
+                    alt={`${char.name} portrait`}
+                    className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
+                  />
+                  <ZoomHint />
+                  <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-sm text-[10px] text-emerald-300 font-semibold px-2 py-0.5 rounded-md border border-emerald-500/30 pointer-events-none">
+                    {t("casting.portrait_upper_front", "定妆照 · 上半身正面")}
+                  </div>
+                  <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onOpenPreview(char.avatar_url); }}
+                      className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-medium px-2.5 py-1 rounded-md shadow-xs"
+                    >
+                      大图
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onOpenSheetModal(char, 'portrait'); }}
+                      className="pointer-events-auto bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-medium px-2.5 py-1 rounded-md shadow-xs"
+                    >
+                      {t("casting.ai_regenerate", "AI 重新生成")}
+                    </button>
+                    <label className="pointer-events-auto cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2.5 py-1 rounded-md shadow-xs flex items-center gap-1">
+                      <Upload size={10} /> {t("casting.upload_local", "上传")}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onUploadAsset(e, 'avatar', char.id)}
+                      />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <div className="text-slate-400 dark:text-slate-500 text-[11px] flex flex-col items-center justify-center gap-2 p-3 text-center">
+                  <div className="w-9 h-9 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                    <User size={18} />
+                  </div>
+                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                    {t("casting.portrait_upper_front", "定妆照 · 上半身正面")}
+                  </span>
+                  <div className="flex flex-col gap-1.5 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onOpenSheetModal(char, 'portrait')}
+                      className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold"
+                    >
+                      {t("casting.ai_generate_portrait", "+ AI 生成定妆照")}
+                    </button>
+                    <label className="cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white underline flex items-center justify-center gap-1">
+                      <Upload size={10} /> {t("casting.upload_local", "本地上传")}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onUploadAsset(e, 'avatar', char.id)}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right Slot: 3-View Turnaround Sheet (角色三视图大图) */}
+            <div
+              data-testid="character-card-turnaround-slot"
+              className="sm:col-span-7 aspect-[16/10] sm:aspect-auto sm:min-h-[240px] bg-slate-100/70 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 rounded-xl overflow-hidden flex items-center justify-center relative group"
+            >
               {char.turnaround_url ? (
                 <>
                   <PreviewableImage
                     src={char.turnaround_url}
                     alt={`${char.name} turnaround`}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    className="w-full h-full object-contain group-hover:scale-[1.03] transition-transform duration-300"
                   />
                   <ZoomHint />
-                  <div className="absolute top-1.5 left-1.5 bg-black/80 backdrop-blur-sm text-[9px] text-indigo-300 font-semibold px-2 py-0.5 rounded-md border border-indigo-500/30 pointer-events-none">
-                    {t("casting.turnaround_sheet")}
+                  <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-sm text-[10px] text-indigo-300 font-semibold px-2 py-0.5 rounded-md border border-indigo-500/30 pointer-events-none">
+                    {t("casting.turnaround_sheet", "角色三视图")}
                   </div>
-                  <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
+                  {char.avatar_url && (
+                    <div
+                      className="absolute top-2 right-2 bg-emerald-950/85 backdrop-blur-sm text-[9px] text-emerald-300 font-medium px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1 pointer-events-none"
+                      title="三视图生成时自动参考上半身正面定妆照锁定五官与服饰"
+                    >
+                      <Link2 size={10} /> 参考定妆照
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); onOpenPreview(char.turnaround_url); }}
@@ -224,10 +323,10 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                       onClick={(e) => { e.stopPropagation(); onOpenSheetModal(char, 'turnaround'); }}
                       className="pointer-events-auto bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium px-2.5 py-1 rounded-md shadow-xs"
                     >
-                      {t("casting.ai_regenerate")}
+                      {t("casting.ai_regenerate", "AI 重新生成")}
                     </button>
                     <label className="pointer-events-auto cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-medium px-2.5 py-1 rounded-md shadow-xs flex items-center gap-1">
-                      <Upload size={10} /> {t("casting.upload_local")}
+                      <Upload size={10} /> {t("casting.upload_local", "上传")}
                       <input
                         type="file"
                         accept="image/*"
@@ -238,18 +337,23 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   </div>
                 </>
               ) : (
-                <div className="text-slate-400 dark:text-slate-500 text-[10px] flex flex-col items-center gap-1.5 p-2 text-center">
-                  <ImageIcon size={18} className="opacity-60" />
-                  <div className="flex flex-col gap-1">
+                <div className="text-slate-400 dark:text-slate-500 text-[11px] flex flex-col items-center justify-center gap-2 p-3 text-center">
+                  <div className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                    <ImageIcon size={18} />
+                  </div>
+                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                    {t("casting.turnaround_sheet", "角色三视图（正 / 侧 / 背）")}
+                  </span>
+                  <div className="flex flex-col gap-1.5 mt-0.5">
                     <button
                       type="button"
                       onClick={() => onOpenSheetModal(char, 'turnaround')}
                       className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
                     >
-                      {t("casting.ai_generate_turnaround")}
+                      {t("casting.ai_generate_turnaround", "+ AI 生成三视图")}
                     </button>
-                    <label className="cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white underline flex items-center justify-center gap-0.5">
-                      <Upload size={10} /> {t("casting.upload_local")}
+                    <label className="cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white underline flex items-center justify-center gap-1">
+                      <Upload size={10} /> {t("casting.upload_local", "本地上传")}
                       <input
                         type="file"
                         accept="image/*"
@@ -314,15 +418,26 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
         </div>
       </div>
 
-      {/* Action Bar for Turnaround, Face Crop, and LoRA */}
+      {/* Action Bar for Portrait, Turnaround, Face Crop, and LoRA */}
       <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col gap-2">
-        <button
-          onClick={() => onOpenSheetModal(char)}
-          className="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-indigo-700 hover:text-white dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all border border-indigo-200/80 dark:border-transparent shadow-xs"
-        >
-          <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400 group-hover:text-white" />
-          {t('characters.generate_sheet')}
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenSheetModal(char, 'portrait')}
+            className="flex items-center justify-center gap-1.5 bg-emerald-50 hover:bg-emerald-600 dark:bg-slate-800 dark:hover:bg-emerald-600 text-emerald-700 hover:text-white dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all border border-emerald-200/80 dark:border-transparent shadow-xs"
+          >
+            <User size={13} />
+            {t('characters.generate_portrait_btn', '定妆照工作台')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenSheetModal(char, 'turnaround')}
+            className="flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-indigo-700 hover:text-white dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-semibold transition-all border border-indigo-200/80 dark:border-transparent shadow-xs"
+          >
+            <Sparkles size={13} />
+            {t('characters.generate_sheet')}
+          </button>
+        </div>
 
         <div className="flex gap-2">
           <button
