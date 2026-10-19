@@ -102,7 +102,7 @@
 #### Phase 3: 存量章节（仅 P1 绿灯后）
 - [~] **Task 3.1:** 为项目「失声的梦核游乐园」第 2–10 章按正文+角色卡重编译 Prompt，写入 **新 scene version**，不覆盖第 1 章，不自动批量生图。
   - **状态:** 数据已写入；可交付验收见 Phase 4 Task 4.7（fixture + 断言 CLI）。
-  - **复现:** `cd backend && npx tsx scripts/verify_dreamcore_ac.ts --fixture`（干净环境）或 `--project-id 4`（本地库）。
+  - **复现:** `cd backend && npm test -- src/services/dreamcore_ac_verify.test.ts`。断言在 `assertDreamcoreAc`，不再依赖已删除的 fixture CLI。
 
 #### Phase 4: E2E Closure（审查阻断项）
 - [x] **Task 4.1:** 根目录 typecheck — uniqueness/quota `ok === false` 收窄。

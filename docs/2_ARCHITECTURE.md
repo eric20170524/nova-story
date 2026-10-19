@@ -90,11 +90,12 @@ locales.ts                前后端可见文案的唯一词典
 **后端：**
 
 ```text
-cd backend && npm test
+npm test
+npm run test:full
 cd backend && npm run typecheck
 ```
 
-编译器 / sanitizer / uniqueness / negative 必须有不启动服务的 `.test.ts`。
+`npm test` 只跑核心链路：故事规划、剧本、分镜、出图编译、正式分镜、视频规格与成片契约。连续性、配音、导入和制作驱动在 `npm run test:full`。编译器 / sanitizer / uniqueness / negative 必须留在核心集里，并且不启动服务。
 
 **前端（仅当本任务改了 UI）：**
 

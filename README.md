@@ -71,7 +71,9 @@ Fastify (backend/src/server.ts)
 | --- | --- |
 | `npm run dev` | 全栈开发服务器 |
 | `npm run check` | 前端类型检查 + 构建 |
-| `cd backend && npm test` | 后端单测 |
+| `npm test` | 核心功能自测：故事、剧本、分镜、出图编译、视频契约 |
+| `npm run test:full` | 全部单测，含连续性、配音、导入与制作驱动 |
+| `cd backend && npm test` | 后端核心单测 |
 | `cd backend && npm run typecheck` | 后端类型检查 |
 
 ## 文本模型与推理模式

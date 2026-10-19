@@ -1,6 +1,6 @@
 /**
  * Pure AC checks for「失声的梦核游乐园」ch2/3/8/10 recompile contract.
- * Usable from fixture JSON (clean clone) or a live DB via CLI.
+ * Golden cases live in dreamcore_ac_verify.test.ts.
  */
 
 export type DreamcoreAcScene = {

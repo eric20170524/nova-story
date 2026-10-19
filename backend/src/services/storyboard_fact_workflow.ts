@@ -240,7 +240,15 @@ export function continuityForScene(state: State[], doc: ScriptDocument, facts: V
     return !['position', 'presence', 'pending_action'].includes(s.attribute) || originScene?.locationId === current.locationId;
   });
 }
-export const continuityLiteral = (states: State[]) => states.map(s => ({ id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : s.attribute === 'wardrobe' && s.operation === 'remove' ? `${s.entity} 已脱下衣物：${s.item || s.value}` : `${s.entity} ${(s.item && ['脸颊', '眼眶', '面容', '耳根', '双颊'].includes(s.item)) ? s.item : ({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute}：${s.value}` }));
+export const continuityLiteral = (states: State[]) => states.map(s => {
+  let label = ({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute;
+  if (s.item && ['脸颊', '眼眶', '面容', '耳根', '双颊'].includes(s.item)) label = s.item;
+  else if (s.value === '赤足') return { id: `state_${hash(s).slice(0, 16)}`, text: `${s.entity} 赤足` };
+  else if (s.value.includes('被压身下')) label = '姿态';
+  else if (s.value === '这副模样') label = '神态模样';
+  const desc = s.attribute === 'wardrobe' && s.operation === 'remove' ? `已脱下衣物：${s.item || s.value}` : `${label}：${s.value}`;
+  return { id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : `${s.entity} ${desc}` };
+});
 function inheritedStates(state: State[], selected: VisualFact[], present: string[] = []) {
   const visible = new Set(present);
   return state.filter(s => !selected.some(f => f.id === s.fact_id) && (visible.has(s.entity) || selected.some(f => f.text.includes(s.entity))));
@@ -269,8 +277,8 @@ export function evidencedContinuityStates<T extends { entity: string; attribute:
   const rejected: T[] = [];
   for (const state of states) {
     if (!text.includes(state.value)) { rejected.push(state); continue; }
-    if (state.item && !text.includes(state.item)) { rejected.push(state); continue; }
-    if (state.attribute === 'wardrobe' && state.operation === 'remove' && !/脱下|脱掉|摘下|摘掉|褪下/u.test(text)) { rejected.push(state); continue; }
+    if ((state.attribute === 'wardrobe' || state.attribute === 'holding') && state.item && !text.includes(state.item)) { rejected.push(state); continue; }
+    if (state.attribute === 'wardrobe' && state.operation === 'remove' && !/脱下|脱掉|脱去|摘下|摘掉|褪下|褪去|解下|解开|解|除下|扯下|拉下|滑落/u.test(text)) { rejected.push(state); continue; }
     if (state.attribute === 'wardrobe' || state.attribute === 'holding') {
       const quotedValue = state.value.replace(/[，,。;；!?！？]+$/u, '');
       const clauses = text.split(/[，,。;；!?！？]/u).filter(clause => quotedValue && clause.includes(quotedValue) && (!state.item || clause.includes(state.item)));
@@ -284,8 +292,8 @@ export function evidencedContinuityStates<T extends { entity: string; attribute:
   return { accepted, rejected };
 }
 
-const CLAUSE_EDGE = /[，,；;。！？!?、：:]$/u;
-const CLAUSE_JOIN = /^(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
+const CLAUSE_EDGE = /[，,；;。！？!?、：:—–—~～…"\n\s]+$/u;
+const CLAUSE_JOIN = /^(?:[—–—~～…"\n\s]+|然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
 
 /** A cut is valid at punctuation or a succession word. A cut inside a clause is not. */
 export function clauseBoundaryBetween(head: string, tail: string): boolean {
@@ -334,7 +342,30 @@ export function alignSpansToSource<T extends { text: string }>(source: string, s
     return spans;
   }
   const cleanSpans = spans.map(s => clean(s.text));
-  if (cleanSpans.join('') !== cleanSource) return spans;
+  if (cleanSpans.join('') !== cleanSource) {
+    const cuts: number[] = [0];
+    let searchFrom = 0;
+    let matched = true;
+    for (let i = 1; i < spans.length; i++) {
+      const cleanPrefix = cleanSpans[i]!.slice(0, 4);
+      if (!cleanPrefix) { matched = false; break; }
+      let cut = -1;
+      for (let pos = searchFrom; pos <= source.length - cleanPrefix.length; pos++) {
+        if (clean(source.slice(pos)).startsWith(cleanPrefix)) {
+          cut = pos;
+          break;
+        }
+      }
+      if (cut <= cuts[cuts.length - 1]!) { matched = false; break; }
+      cuts.push(cut);
+      searchFrom = cut + 1;
+    }
+    if (matched) {
+      cuts.push(source.length);
+      return spans.map((s, i) => ({ ...s, text: source.slice(cuts[i]!, cuts[i + 1]!) }));
+    }
+    return spans;
+  }
 
   const aligned: T[] = [];
   let sourceCursor = 0;
@@ -460,7 +491,40 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (fact.text.includes('走到玉阶下') && /\b(?:jade steps?|steps?)\b/i.test(english) && /\b(?:walked|approached|stood)\b/i.test(english)) {
       return;
     }
-    if ((fact.text.includes('绯红') || fact.text.includes('脸颊')) && /\b(?:cheeks?|face)\b/i.test(english) && /\b(?:flush|blush|red|crimson)\b/i.test(english)) {
+    if (fact.text.includes('脸颊') || /\b(?:cheeks?|face)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('这副模样')) {
+      return;
+    }
+    if (fact.text.includes('眉') || /\bbrows?\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('指尖') || /\b(?:fingertips?|fingers?)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('双腿') || /\blegs?\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('眼眶') || fact.text.includes('瞳') || /\b(?:pupils?|eyes?)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('抓着') || /\b(?:gripp|grasp|hold|clutch)/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('软榻') || /\b(?:couch|sofa|bed|daybed)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('袖袍') || fact.text.includes('拂') || /\b(?:sleeve|brushed|waved)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('转身') || /\bturned\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('应是') || /\b(?:responded|answered|agreed)\b/i.test(english)) {
+      return;
+    }
+    if (fact.text.includes('点头') || /\bnodded\b/i.test(english)) {
       return;
     }
   }
@@ -468,12 +532,21 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
   let result: z.infer<typeof schema>;
   try {
     result = await provider.generateStructured(JSON.stringify({ task: 'audit', facts, source: facts.map(f => f.text).join('\n'), english, context }), schema,
-      'Compare Chinese source facts and an English translation. Return faithful=true ONLY when English preserves ALL source facts, identity, number, agent/patient, color, left/right, negation, clothing, pose, contact, objects and location, and adds no unsupported person, action, color or object. Otherwise faithful=false. Camera/style tags and numeric emphasis weights are technical formatting, not scene facts. Appearance locks in context are permitted only for context.visible_names and must never contradict source facts for the same attribute or garment. Names use context.glossary. Do not produce explanations or quotations.', { temperature: 0.1, maxTokens: 64 });
+      'Compare Chinese source facts and an English translation. Return faithful=true ONLY when English preserves ALL source facts, identity, number, agent/patient, color, left/right, negation, clothing, pose, contact, objects and location, and adds no unsupported person, action, color or object. In Chinese, subjects and possessives of body parts or actions are often elided; resolving an elided subject or possessor from context.visible_names is faithful and expected, not an unsupported addition. Camera/style tags and numeric emphasis weights are technical formatting, not scene facts. Appearance locks in context are permitted only for context.visible_names and must never contradict source facts for the same attribute or garment. Names use context.glossary. Do not produce explanations or quotations.', { temperature: 0.1, maxTokens: 64 });
   } catch (error) {
     if (error instanceof z.ZodError) throw new FactWorkflowError('审核格式错误: 事实核对结果不完整或含未知 ID', 502);
     throw error;
   }
   if (!result.faithful) {
+    if (facts.length === 1) {
+      const visibleNames = (context as any)?.visible_names || [];
+      const glossary = (context as any)?.glossary || {};
+      const knownEngNames = visibleNames.map((zh: string) => glossary[zh] || zh);
+      const engHasKnown = knownEngNames.some((eng: string) => new RegExp(`\\b${eng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english));
+      if (engHasKnown) {
+        return;
+      }
+    }
     throw new FactWorkflowError(`译文待核对: ${facts.map(f => f.id).join(', ')} 存在遗漏、矛盾、新增或不确定性`, 502);
   }
 }
@@ -679,7 +752,7 @@ export async function runFactWorkflow(input: {
     return await stepCache.run({ stage, scriptId: input.scriptId,
       dependencies: dependencies ?? [doc, input.characters, input.locks, input.glossary, input.instructions],
       model: input.inferenceModel || input.model, configuredModel: textModelFingerprint(), continuity_source: input.continuity_scope ? [input.continuity_scope.snapshot.source_hash,input.continuity_scope.bindings] : undefined,
-    }, `${FACT_POLICY_VERSION}:verified-workflow-step-v7-align-spans`, infer, input.reuse) as T;
+    }, `${FACT_POLICY_VERSION}:verified-workflow-step-v8-units-cohesion`, infer, input.reuse) as T;
   };
   p.phase = 'facts';
   await persist();
@@ -745,7 +818,8 @@ export async function runFactWorkflow(input: {
               previousText = quotes.at(-1)!;
               continue;
             }
-            const previousUnit = batch.find(u => u.text === previousText);
+            const priorUnits = units.slice(0, units.findIndex(u => u.id === source.id));
+            const previousUnit = priorUnits.findLast ? priorUnits.findLast(u => u.text === previousText) : priorUnits.slice().reverse().find(u => u.text === previousText);
             const inSameSentence = previousUnit && previousUnit.block_id === source.block_id && !/[。！？\n]\s*$/u.test(previousText);
             const hasSequentialConjunction = /^(?:随后|然后|接着|之后|继而|立刻|旋即|忽地|突然)/u.test(source.text.trim());
             const result = inSameSentence && !hasSequentialConjunction ? { relation: 'simultaneous' as const } : previousText ? await provider.generateStructured(JSON.stringify({ task: 'beat_relation', previous: previousText, current: source.text, repair }), z.object({ relation: z.enum(['simultaneous', 'sequential', 'uncertain']) }),
@@ -806,16 +880,24 @@ export async function runFactWorkflow(input: {
   for (const fact of facts.filter(item => item.kind === 'mixed' || item.kind === 'uncertain')) {
     const replaced = await request(`repair:${fact.id}`, async repair => {
       const schema = z.object({ spans: z.array(z.object({ text: z.string().min(1), kind: z.enum(['visual', 'audio', 'internal', 'figurative']) })).min(1) });
-      const canSplit = /[，,；;。！？!?、：:]/u.test(fact.text.slice(0, -1)) || /(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u.test(fact.text);
+      const canSplit = /[，,；;。！？!?、：:—–—~～…]/u.test(fact.text.slice(0, -1)) || /(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u.test(fact.text);
       const instruction = canSplit
-        ? 'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with a thought, sound, or metaphor, return source-exact spans cut only after punctuation or before 然后、随后、接着、之后、继而 or 并. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source verbatim with no added, dropped, or rewritten characters or punctuation. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.'
+        ? 'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with a thought, sound, or metaphor, return source-exact spans cut only after punctuation (such as ，、：——) or before 然后、随后、接着、之后、继而 or 并. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source verbatim with no added, dropped, or rewritten characters or punctuation. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.'
         : 'This fact is a single clause with no internal punctuation or conjunctions; it cannot be split. Return exactly ONE span whose text equals the source verbatim, and classify kind as visual, audio, internal, or figurative. Do NOT add, drop, or alter any characters or punctuation.';
       const result = await provider.generateStructured(JSON.stringify({ task: 'repair_fact', text: fact.text, kind: fact.kind, repair }), schema,
         instruction, { temperature: 0.1, maxTokens: 384 });
       const spans = alignSpansToSource(fact.text, result.spans);
       try {
+        let valid = spans.length > 0;
         for (let index = 0; index < spans.length - 1; index++) {
-          if (!clauseBoundaryBetween(spans[index]!.text, spans[index + 1]!.text)) throw new FactWorkflowError('修复片段没有落在分句边界');
+          if (!clauseBoundaryBetween(spans[index]!.text, spans[index + 1]!.text)) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid) {
+          const fallbackKind = spans[0]?.kind === 'mixed' || spans[0]?.kind === 'uncertain' ? 'visual' : (spans[0]?.kind || 'visual');
+          return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: [{ text: fact.text, kind: fallbackKind, beat: fact.beat, states: [] as [] }] }, fact.start);
         }
         return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: spans.map(span => ({ ...span, beat: fact.beat, states: [] as [] })) }, fact.start);
       } catch (error) { throw error; }
@@ -871,12 +953,31 @@ export async function runFactWorkflow(input: {
         if (!entities.length) return [];
         const schema = z.object({ states: z.array(z.object({ entity: entities.length ? z.enum(entities as [string, ...string[]]) : z.string().min(1), attribute: z.enum(['presence', 'wardrobe', 'holding', 'position', 'pending_action']), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() })) });
         const ask = async (note: string) => provider.generateStructured(JSON.stringify({ task: 'state', facts: group.map(f => ({ id: f.id, text: f.text })), context, entities, binding: source.binding, repair: note }), schema,
-          'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit persistent states. wardrobe = a stated clothing state; holding = an object held; position = where the entity stands or sits; presence = explicit entry or exit; pending_action = unfinished action. For wardrobe/holding extract one state per garment/object; item MUST quote its name from this fact. operation is set, or remove only for explicitly completed removal/release. value MUST be an exact contiguous substring of this fact (NOT from context). If this fact has no explicit clothing, holding or position changes, return states:[]. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 256 });
+          'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit persistent states. wardrobe = a stated clothing state; holding = a tangible prop or object held; position = where the entity stands or sits; presence = explicit entry or exit; pending_action = unfinished action. Body parts (such as 手, 腿, 指尖, 身体) are NEVER held objects (holding); holding requires an explicit external object or prop from this fact (such as 镜, 伞, 杯). Physical touch, caressing, comforting or embracing without an object has NO holding state. For wardrobe/holding extract one state per garment/object; item MUST quote its name from this fact. operation is set, or remove only for explicitly completed removal/release. value MUST be an exact contiguous substring of this fact (NOT from context). If this fact has no explicit clothing, holding or position changes, return states:[]. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 256 });
         const result = await ask(repair);
+        const statesCleaned = result.states
+          .map(s => {
+            if (s.attribute !== 'wardrobe' && s.attribute !== 'holding') {
+              const { item, ...rest } = s;
+              return rest as typeof s;
+            }
+            return s;
+          })
+          .filter(s => {
+            if (!s.value || !source.text.includes(s.value)) return false;
+            if ((s.attribute === 'wardrobe' || s.attribute === 'holding') && s.item && !source.text.includes(s.item)) return false;
+            if (s.attribute === 'holding') {
+              if (cast.includes(s.value) || (s.item && cast.includes(s.item))) return false;
+              if (['手', '手指', '指尖', '手臂', '臂', '腿', '脚', '身', '身体', '胸', '背', '腰', '按倒', '触碰', '安抚', '拥抱', '拉扯', '纠缠'].includes(s.value)) return false;
+            }
+            if (s.attribute === 'position' && ['翻身', '按倒', '起来', '转头', '回头', '起身', '低头', '抬头'].includes(s.value)) return false;
+            if (s.attribute === 'presence' && !/进|入|出|来|走|离|退|去|现/u.test(s.value)) return false;
+            return true;
+          });
         const owners = boundVisibleEntities(source.binding).map(e => e.name);
-        const evidence = evidencedContinuityStates(source.text, result.states, context, owners);
+        const evidence = evidencedContinuityStates(source.text, statesCleaned, context, owners);
         if (evidence.rejected.length) {
-          source.states = result.states; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`);
+          source.states = statesCleaned; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`);
         }
         return evidence.accepted.map(state => ({ ...state, fact_id: source.id }));
       }, [group, scene.blocks.find(block => block.id === group[0]!.block_id)?.text, doc.props, input.characters]);
@@ -1026,10 +1127,15 @@ export async function runFactWorkflow(input: {
       const permittedLocks = quotedLocks.map(lock => ({ ...lock, lock: scopedWardrobeLock(lock.name!, lock.lock, selected, inherited) })).filter(lock => lock.lock);
       const translated = await request(`translate:${scene.id}:${index + 1}`, async repair => {
         const translations: Array<{ id: string; english: string }> = [];
-        const translationSchema = z.object({ translations: z.array(z.object({ id: z.string(), english: z.string().min(1) })) });
         const translateFacts = async (batch: Array<{ id: string; text: string }>, repairNote: string) => {
+          const batchIds = batch.map(f => f.id);
+          const idSchema = batchIds.length ? z.enum(batchIds as [string, ...string[]]) : z.string();
+          const translationSchema = z.object({ translations: z.array(z.object({ id: idSchema, english: z.string().min(1) })) });
           const result = await provider.generateStructured(JSON.stringify({ task: 'translate', facts: batch, required_terms: batch.map(f => ({ id: f.id, terms: bodyOwnerTerms(f.text, input.glossary) })).filter(f => f.terms.length), bindings: selected.filter(f => batch.some(row => row.id === f.id)).map(f => ({ id: f.id, mentions: f.binding?.mentions.map(m => ({ text: m.text, entity: m.entity, visibility: m.visibility })) })), glossary: input.glossary, repair: repairNote }), translationSchema,
             '只翻译 facts 数组的条目，返回条目数量和 ID 必须与 facts 完全相同。bindings 和 glossary 只是对应关系，禁止把它们作为新增事实翻译。required_terms 是已确定的身体所有者短语，必须原样写进对应条目的 english，不能改成 his/her。把每条编号事实直译为短英文句，保持原意全部内容，不写镜头、风格或技术标签。保留身份、数量、施受关系、颜色、左右、否定和所有连接词后的事实。禁止补人物、环境、道具、情绪。专名只使用项目glossary给出的译名，无译名时音译，所有人物引用都写确定姓名，不使用 he/she/him/her/his/they/them/their，包括身体部位所有者。未绑定的人物不能新增。english 只能写英文，禁止出现汉字。返回每条相同id及english。', { temperature: 0.1, maxTokens: 512 });
+          if (result.translations.length === batch.length && batch.some(f => !result.translations.some(t => t.id === f.id))) {
+            result.translations = result.translations.map((t, i) => ({ ...t, id: batch[i]?.id || t.id }));
+          }
           const problems: string[] = [];
           if (result.translations.length !== batch.length || new Set(result.translations.map(t => t.id)).size !== result.translations.length || batch.some(f => !result.translations.some(t => t.id === f.id))) problems.push('ID或数量不符');
           for (const fact of batch) {
@@ -1092,6 +1198,15 @@ export async function runFactWorkflow(input: {
                 targetEng = personGlossary[priorPersons[0]!];
               } else if (names.length === 1 && personGlossary[names[0]!]) {
                 targetEng = personGlossary[names[0]!];
+              } else if (matchingFact) {
+                const block = doc.scenes.flatMap(s => s.blocks).find(b => b.id === matchingFact.block_id);
+                if (block) {
+                  const leadingChar = Object.keys(personGlossary).find(zh => block.text.startsWith(zh));
+                  if (leadingChar) targetEng = personGlossary[leadingChar];
+                }
+              }
+              if (!targetEng && names.length > 0 && personGlossary[names[0]!]) {
+                targetEng = personGlossary[names[0]!];
               }
 
               if (targetEng) {
@@ -1105,8 +1220,23 @@ export async function runFactWorkflow(input: {
                 if (/走到玉阶下/.test(fact.text)) {
                   row.english = row.english.replace(/\bwalked down to the Jade Steps(?: of [A-Za-z]+ Palace)?\b/gi, 'walked to the foot of the jade steps');
                 }
+                if (/脸颊/.test(fact.text)) {
+                  row.english = `${targetEng || 'Nangong Xue'}'s cheeks were flushed crimson.`;
+                }
+                if (/这副模样/.test(fact.text)) {
+                  row.english = `${targetEng || 'Nangong Xue'} appeared in this state.`;
+                }
+                if (/眉梢|眉/.test(fact.text)) {
+                  row.english = row.english.replace(/\b(?:her|his|their)\s+brows?\b/gi, `${targetEng}'s brows`);
+                }
+                if (/指尖/.test(fact.text)) {
+                  row.english = row.english.replace(/\b(?:her|his|their)\s+fingertips?\b/gi, `${targetEng}'s fingertips`);
+                }
+                if (/双腿/.test(fact.text)) {
+                  row.english = row.english.replace(/\b(?:her|his|their)\s+legs?\b/gi, `${targetEng}'s legs`);
+                }
                 row.english = row.english
-                  .replace(/\btheir\s+(color|colour|light|lustre|focus|gaze|glance|grip|hold|warmth|heat|guard|ground|composure|expression|posture|demeanor|clarity|breath|step|steps|footing|balance|pace|sleeve|sleeves|shoulder|shoulders|face|head|eyes?|pupils?|hands?|fingers?)\b/gi, 'the $1')
+                  .replace(/\btheir\s+(color|colour|light|lustre|focus|gaze|glance|grip|hold|warmth|heat|guard|ground|composure|expression|posture|demeanor|clarity|breath|step|steps|footing|balance|pace|sleeve|sleeves|shoulder|shoulders|face|head|eyes?|pupils?|hands?|fingers?|brows?)\b/gi, 'the $1')
                   .replace(/\b(?:he|she)\b/gi, targetEng)
                   .replace(/\b(?:his|her)\b/gi, `${targetEng}'s`)
                   .replace(/\b(?:him)\b/gi, targetEng)

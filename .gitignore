@@ -27,8 +27,6 @@ frontend/local/
 # Un-ignore directory, re-ignore contents, then whitelist deliverables only.
 !backend/scripts/
 backend/scripts/**
-!backend/scripts/recompile_dreamcore_ch2_10.ts
-!backend/scripts/verify_dreamcore_ac.ts
 !backend/scripts/run-tests.ts
 !backend/scripts/video-benchmark.ts
 !backend/scripts/storyboard-regression.ts
@@ -38,8 +36,6 @@ backend/scripts/**
 !backend/scripts/download_l40_models.sh
 !backend/scripts/download_l40_models.py
 !backend/scripts/run_l40_benchmark.ts
-!backend/scripts/fixtures/
-!backend/scripts/fixtures/dreamcore_ac_fixture.json
 !/scripts/
 /scripts/*
 !/scripts/full-production.mjs

@@ -146,11 +146,11 @@ async function request(url, method = 'GET', body) {
     }
     return result;
   };
-  // Status polls are GET. A director page can stall the dev server in Vite and reset
-  // the socket; that must not abandon a ComfyUI job that is still sampling.
-  if (method !== 'GET') return send();
+  const canRetry = method === 'GET' || Boolean(body?.request_key);
+  if (!canRetry) return send();
   let lastError;
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  const maxAttempts = method === 'GET' ? 6 : 60;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await send();
     } catch (error) {
@@ -158,8 +158,8 @@ async function request(url, method = 'GET', body) {
       const code = error?.cause?.code || '';
       const message = String(error?.message || error);
       const transient = message === 'fetch failed' || ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET'].includes(code);
-      if (!transient || attempt === 6) throw error;
-      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      if (!transient || attempt === maxAttempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(2000 * attempt, 10000)));
     }
   }
   throw lastError;
@@ -659,7 +659,7 @@ async function storyboards(selected = null) {
       if (!rebuildStoryboards) throw new Error(`Script ${script.id}: storyboard source or content policy changed; review and run --rebuild-storyboards to retain a snapshot and replace it`);
       const readyFinals = [];
       for (const shot of existing.timeline) {
-        const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+        const media = await request(`/scenes/${shot.id}/media`);
         for (const asset of media.assets || []) {
           if (asset.role === 'narrative_final' && asset.status === 'ready') readyFinals.push(asset.id);
         }

@@ -26,7 +26,7 @@
 
 - 大变动先对照 `docs/2_ARCHITECTURE.md` 的目标管道，确认没有退回「更长的导演散文」。
 - 测试红了先读失败断言和 log，禁止连跑三次同一失败命令当进度。
-- 编译器任务：`cd backend && npm test` 相关文件通过才打勾。
+- 编译器任务：`cd backend && npm test` 通过才打勾。改了核心集以外的模块时，再跑 `npm run test:full`。
 - 拒绝假成功：库里还能搜到新写入的 `environmental storytelling` 前缀，任务就不算完。
 
 ## 4. 错误处理
