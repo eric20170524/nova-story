@@ -1,7 +1,22 @@
 import { z } from 'zod';
 import { EntityBindingSchema, EntityRefSchema } from './entity_binding';
 
-export const FACT_POLICY_VERSION = 'storyboard-facts-3.1';
+export const FACT_POLICY_VERSION = 'storyboard-facts-3.2';
+export const FACT_STATE_ATTRIBUTES = ['presence', 'wardrobe', 'holding', 'position', 'pose', 'body', 'expression', 'pending_action'] as const;
+export type FactStateAttribute = (typeof FACT_STATE_ATTRIBUTES)[number];
+export const FACT_STATE_LABELS: Record<FactStateAttribute, string> = {
+  presence: '在场',
+  wardrobe: '衣着',
+  holding: '手持',
+  position: '位置',
+  pose: '姿势',
+  body: '身体',
+  expression: '表情',
+  pending_action: '未完成动作',
+};
+export function factStateLabel(attribute: string): string {
+  return FACT_STATE_LABELS[attribute as FactStateAttribute] || attribute;
+}
 export const FactKindSchema = z.enum(['visual', 'audio', 'internal', 'figurative', 'mixed', 'uncertain']);
 export const FactStateSchema = z.object({ entity: z.string().min(1), attribute: z.string().min(1), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() });
 export const ContinuityStateSchema = FactStateSchema.extend({ fact_id: z.string(), entity_id: z.string().optional(), entity_kind: z.enum(['character', 'garment', 'prop', 'object', 'component', 'location']).optional(), parent_entity_id: z.string().optional(), canonical_value: z.unknown().optional(), target_entity_id: z.string().optional(), target_name: z.string().optional(), design_asset_id: z.number().int().positive().optional(), design_asset_revision: z.number().int().positive().optional() });
@@ -16,7 +31,7 @@ export const VisualFactSchema = z.object({
 export type VisualFact = z.infer<typeof VisualFactSchema>;
 export const StoryboardFactContractSchema = z.object({
   // Read legacy records without silently promoting them to the new policy.
-  version: z.union([z.literal(2), z.literal(3)]), policy: z.enum(['storyboard-facts-2', 'storyboard-facts-3', FACT_POLICY_VERSION]),
+  version: z.union([z.literal(2), z.literal(3)]), policy: z.enum(['storyboard-facts-2', 'storyboard-facts-3', 'storyboard-facts-3.1', FACT_POLICY_VERSION]),
   source_hash: z.string().min(1), facts: z.array(VisualFactSchema),
   entities: z.array(EntityRefSchema).optional(),
   budgets: z.array(z.object({ scene_id: z.string(), minimum: z.number().int().positive(), duration: z.number().positive() })),

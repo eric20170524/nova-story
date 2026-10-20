@@ -152,7 +152,7 @@ test('fact review opens a dialog on the saved sentences and lines up sequence nu
       error: '事实节拍乱序: action_1',
       input_hash: 'hash',
       facts: [
-        { id: 'lamp', scene_id: 's1', block_id: 'action_0', text: '灯六。', kind: 'visual', beat: 5, states: [] },
+        { id: 'lamp', scene_id: 's1', block_id: 'action_0', text: '灯六。', kind: 'visual', beat: 5, states: [{ entity: '阿岚', attribute: 'pose', value: '站着' }] },
         { id: 'bell', scene_id: 's1', block_id: 'action_1', text: '钟声响起。', kind: 'audio', beat: 6, states: [] },
         { id: 'stand', scene_id: 's1', block_id: 'action_1', text: '阿岚仍站在原地。', kind: 'visual', beat: 5, states: [] },
       ],
@@ -186,6 +186,9 @@ test('fact review opens a dialog on the saved sentences and lines up sequence nu
     [0, 1, 2].map((index) => document.querySelector<HTMLInputElement>(`[data-testid="storyboard-fact-review-beat-${index}"]`)!.value),
     ['5', '5', '5'],
   );
+  const category = document.querySelector<HTMLSelectElement>('select[aria-label="连续状态类别"]')!;
+  assert.deepEqual([...category.options].map((option) => option.value), ['presence', 'wardrobe', 'holding', 'position', 'pose', 'body', 'expression', 'pending_action']);
+  assert.equal(category.value, 'pose');
   assert.equal(document.body.style.overflow, 'hidden');
 
   await act(async () => {

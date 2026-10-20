@@ -3,7 +3,18 @@ import { z } from 'zod';
 import { db } from '../db/database';
 import type { AIProvider } from './ai/base';
 import type { ScriptDocument, StoryboardCandidatePayload, StoryboardCandidateShot } from '../schemas/script';
-import { FACT_POLICY_VERSION, FactKindSchema, FactStateSchema, type VisualFact, type StoryboardFactContract } from '../schemas/storyboard_facts';
+import { FACT_POLICY_VERSION, FACT_STATE_ATTRIBUTES, FactKindSchema, FactStateSchema, factStateLabel, type VisualFact, type StoryboardFactContract } from '../schemas/storyboard_facts';
+import { positionApplies, reviewExtractedStates, stateCategoryConflict } from './fact_state';
+
+export const FACT_CLASSIFY_INSTRUCTION = [
+  'Classify each unchanged ID only.',
+  'visual = observable appearance, action, object, number, position, location, gesture, posture, or expression.',
+  'audio = sound, silence, or a speech act (说、问、答、应). A speech act is not visual.',
+  'internal = thought, bodily sensation, energy surge, memory, or invisible intention.',
+  'figurative = metaphor.',
+  'mixed = a sentence that contains both a visible action and speech, or both a visible action and an internal thought, separated by punctuation or by 然后、随后、接着、之后、继而、并. A single clause with no such split is never mixed; classify it by its primary trait.',
+  'uncertain = cannot decide. An empty scene is visual. Return items with id and kind only.',
+].join(' ');
 import { EntityBindingSchema } from '../schemas/entity_binding';
 import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { type CharacterLockRef } from './pony_prompt_compiler';
@@ -206,15 +217,19 @@ export function allocateBudgets(doc: ScriptDocument, facts: VisualFact[], limit 
 }
 
 type State = { entity: string; attribute: string; value: string; fact_id: string; item?: string; operation?: 'set' | 'remove' };
-/** Per garment/object, so a scarf never replaces a coat. Other attributes retain their scope. */
+/** One posture and one unlabeled body state per person. A later value replaces the earlier one. Garments and held objects stay per item. */
 export function stateResourceKey(s: { entity: string; attribute: string; value: string; item?: string }) {
-  const item = s.item || (['wardrobe', 'holding'].includes(s.attribute) ? s.value.match(/外套|围巾|里衣|外衣|外袍|长袍|衣襟|手套|帽子|雨伞|蓝伞|伞|信封|杯|衣领|臂膀/u)?.[0] || s.value : '');
+  if (s.attribute === 'pose') return `${s.entity}:pose:`;
+  if (s.attribute === 'body') return `${s.entity}:body:${s.item || ''}`;
+  const garment = s.value.match(/外套|围巾|里衣|外衣|外袍|长袍|衣襟|手套|帽子|雨伞|蓝伞|伞|信封|杯|衣领|臂膀/u)?.[0];
+  const item = s.item || (['wardrobe', 'holding'].includes(s.attribute) ? garment || s.value : '');
   return `${s.entity}:${s.attribute}:${item}`;
 }
 export function continuityAfter(previous: State[], facts: VisualFact[]): State[] {
   const states = new Map(previous.map(s => [stateResourceKey(s), s]));
   for (const fact of facts.filter(f => f.kind === 'visual')) {
     for (const s of fact.states) {
+      if (s.attribute === 'expression') continue;
       const key = stateResourceKey(s);
       if (s.operation === 'remove' && s.attribute !== 'wardrobe') states.delete(key);
       else states.set(key, { ...s, fact_id: fact.id });
@@ -234,6 +249,7 @@ export function continuityAfter(previous: State[], facts: VisualFact[]): State[]
 export function continuityForScene(state: State[], doc: ScriptDocument, facts: VisualFact[], sceneId: string) {
   const current = doc.scenes.find(s => s.id === sceneId)!;
   return state.filter(s => {
+    if (s.attribute === 'expression') return false;
     if (!facts.some(f => f.scene_id === sceneId && f.kind === 'visual' && (boundVisibleEntities(f.binding).some(e => e.name === s.entity) || (!f.binding && f.text.includes(s.entity))))) return false;
     const origin = facts.find(f => f.id === s.fact_id);
     const originScene = doc.scenes.find(sc => sc.id === origin?.scene_id);
@@ -241,17 +257,20 @@ export function continuityForScene(state: State[], doc: ScriptDocument, facts: V
   });
 }
 export const continuityLiteral = (states: State[]) => states.map(s => {
-  let label = ({ presence: '在场状态', wardrobe: '衣着', holding: '持物', position: '位置', pending_action: '未完成动作' } as Record<string, string>)[s.attribute] || s.attribute;
-  if (s.item && ['脸颊', '眼眶', '面容', '耳根', '双颊'].includes(s.item)) label = s.item;
-  else if (s.value === '赤足') return { id: `state_${hash(s).slice(0, 16)}`, text: `${s.entity} 赤足` };
-  else if (s.value.includes('被压身下')) label = '姿态';
-  else if (s.value === '这副模样') label = '神态模样';
+  const label = factStateLabel(s.attribute);
   const desc = s.attribute === 'wardrobe' && s.operation === 'remove' ? `已脱下衣物：${s.item || s.value}` : `${label}：${s.value}`;
   return { id: `state_${hash(s).slice(0, 16)}`, text: (s as Partial<ContinuityVisualState>).entity_id ? continuityVisualFact(s as ContinuityVisualState) : `${s.entity} ${desc}` };
 });
-function inheritedStates(state: State[], selected: VisualFact[], present: string[] = []) {
+export function inheritedStates(state: State[], selected: VisualFact[], present: string[] = [], location = '') {
   const visible = new Set(present);
-  return state.filter(s => !selected.some(f => f.id === s.fact_id) && (visible.has(s.entity) || selected.some(f => f.text.includes(s.entity))));
+  const texts = selected.map((fact) => fact.text);
+  return state.filter(s => {
+    if (s.attribute === 'expression') return false;
+    if (selected.some(f => f.id === s.fact_id)) return false;
+    if (!(visible.has(s.entity) || texts.some(text => text.includes(s.entity)))) return false;
+    if (s.attribute === 'position') return positionApplies(s.value, location, texts);
+    return true;
+  });
 }
 
 /** Names are visible only through this fact's confirmed binding, never historical name occurrence. */
@@ -485,33 +504,6 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (fact.id === 'location' && glossary[fact.text] && new RegExp(`\\b${glossary[fact.text].replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english)) {
       return;
     }
-    if (fact.text.includes('失守') && fact.text.includes('镜') && /\bmirror\b/i.test(english) && /\b(?:pupils?|eyes?)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('走到玉阶下') && /\b(?:jade steps?|steps?)\b/i.test(english) && /\b(?:walked|approached|stood)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('脸颊') || /\b(?:cheeks?|face)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('这副模样')) {
-      return;
-    }
-    if (fact.text.includes('眉') || /\bbrows?\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('指尖') || /\b(?:fingertips?|fingers?)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('双腿') || /\blegs?\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('眼眶') || fact.text.includes('瞳') || /\b(?:pupils?|eyes?)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('抓着') || /\b(?:gripp|grasp|hold|clutch)/i.test(english)) {
-      return;
-    }
     if (fact.text.includes('软榻') || /\b(?:couch|sofa|bed|daybed)\b/i.test(english)) {
       return;
     }
@@ -631,6 +623,7 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     if (shot.duration + 0.01 < scene.blocks.filter(b => shot.block_ids.includes(b.id)).reduce((n, b) => n + audioSeconds(b), 0)) throw new FactWorkflowError('镜头语音超过已分配时长');
     const audioFacts = contract.facts.filter(f => shot.audio_fact_ids?.includes(f.id));
     if (audioFacts.length !== (shot.audio_fact_ids || []).length || audioFacts.some(f => f.scene_id !== scene.id || f.kind !== 'audio')) throw new FactWorkflowError('声音含未知或跨场事实');
+    if (hash(spec.speech_facts || []) !== hash(audioFacts.map(f => f.text))) throw new FactWorkflowError('镜头声音事实与契约不一致');
     const visualBlocks = new Set([...selected, ...audioFacts].map(f => f.block_id));
     const ownedActions = shot.block_ids.filter(id => doc.scenes[index]!.blocks.find(b => b.id === id)?.type === 'action');
     if (ownedActions.length !== visualBlocks.size || ownedActions.some(id => !visualBlocks.has(id))) throw new FactWorkflowError('事实与动作来源块不一致');
@@ -652,9 +645,10 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     let shotState = continuityForScene(state, doc, contract.facts, scene.id);
     for (const shot of payload.shots.filter(s => s.script_scene_id === scene.id)) {
       const selected = contract.facts.filter(f => shotEvidenceIds(shot).includes(f.id));
-      const visible = JSON.parse(shot.shot_spec).visible_subjects || [];
+      const stored = JSON.parse(shot.shot_spec);
+      const visible = stored.visible_subjects || [];
       shotState = continuityAfter(shotState, selected);
-      if (hash(JSON.parse(shot.shot_spec).continuity_states || []) !== hash(inheritedStates(shotState, selected, visible))) throw new FactWorkflowError('镜头连续状态缺失或与来源依赖不符');
+      if (hash(stored.continuity_states || []) !== hash(inheritedStates(shotState, selected, visible, String(stored.location || '')))) throw new FactWorkflowError('镜头连续状态缺失或与来源依赖不符');
     }
     state = continuityAfter(state, contract.facts.filter(f => f.scene_id === scene.id));
   }
@@ -675,7 +669,7 @@ export type WorkflowProgress = {
   inference_budget?: WorkflowInferenceBudget;
   repaired_phase_started?: boolean;
 };
-export const stateCheckKey = (fact: VisualFact) => hash([fact.id, fact.text, fact.kind, fact.beat, fact.binding]);
+export const stateCheckKey = (fact: VisualFact) => hash([FACT_POLICY_VERSION, fact.id, fact.text, fact.kind, fact.beat, fact.binding]);
 let queue: Promise<unknown> = Promise.resolve();
 const active = new Map<string, Promise<unknown>>();
 export function serialWorkflow<T>(id: string, work: () => Promise<T>): Promise<T> {
@@ -739,7 +733,8 @@ export async function runFactWorkflow(input: {
           return value;
         } catch (e: any) {
           error = e?.message || String(e);
-          const cannotRepair = stage.startsWith('repair:') ? attempts >= 2 : !await consumeRepair();
+          const terminalReview = error.startsWith('连续状态待核对:');
+          const cannotRepair = terminalReview || (stage.startsWith('repair:') ? attempts >= 2 : !await consumeRepair());
           if (e instanceof WorkflowTransportError || /超过.*预算|超出.*预算|超预算/.test(error) || cannotRepair) {
             p.phase = 'needs_review'; p.error = error;
             p.metrics.push({ stage, elapsed_ms: Date.now() - start, attempts });
@@ -777,7 +772,7 @@ export async function runFactWorkflow(input: {
         const prior = Object.values(p.extracted).flat().filter(f => f.scene_id === scene.id && f.kind === 'visual');
         const ids = batch.map(u => u.id) as [string, ...string[]];
         const classified = await provider.generateStructured(JSON.stringify({ task: 'classify', sources: batch.map(u => ({ id: u.id, text: u.text })), repair }), z.object({ items: z.array(z.object({ id: z.enum(ids), kind: FactKindSchema })) }),
-          'Classify each unchanged ID only. visual = observable appearance, action, object, number, position, location, character gesture, posture, expression, or speech/quote action (e.g. "袖中琼明神镜忽然发烫", "收起神镜月白袖袍一拂：‘进内殿。", "南宫雪走到玉阶下问：‘宫主……", "指尖微顿"). audio = sound or silence. internal = thought, bodily sensation, energy surge, memory or invisible intention (e.g. "那凉薄的触感瞬间点燃了宫主体内翻涌的仙力", "南宫雪只觉一股暖流顺着指尖涌入", "仙力在经脉里横冲直撞"). figurative = metaphor. mixed = ONLY when a compound sentence contains both a physical action and an internal memory/thought separated by conjunctions like 然后、随后、接着、之后、继而 or 并. Single clauses without these conjunctions cannot be split and must NEVER be classified as mixed; classify them by their primary trait (visual, internal, audio, or figurative). uncertain = cannot decide. An empty scene is visual. Return items with id and kind only.', { temperature: 0.1, maxTokens: 384 });
+          FACT_CLASSIFY_INSTRUCTION, { temperature: 0.1, maxTokens: 384 });
         if (classified.items.length !== batch.length || new Set(classified.items.map(i => i.id)).size !== batch.length) throw new FactWorkflowError('分类结果缺项或重复');
         let lastVisualBeat = prior.length ? prior.at(-1)!.beat : -1;
         let previousText = prior.at(-1)?.text || '';
@@ -882,7 +877,7 @@ export async function runFactWorkflow(input: {
       const schema = z.object({ spans: z.array(z.object({ text: z.string().min(1), kind: z.enum(['visual', 'audio', 'internal', 'figurative']) })).min(1) });
       const canSplit = /[，,；;。！？!?、：:—–—~～…]/u.test(fact.text.slice(0, -1)) || /(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u.test(fact.text);
       const instruction = canSplit
-        ? 'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with a thought, sound, or metaphor, return source-exact spans cut only after punctuation (such as ，、：——) or before 然后、随后、接着、之后、继而 or 并. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source verbatim with no added, dropped, or rewritten characters or punctuation. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.'
+        ? 'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with speech, a thought, a sound, or a metaphor, return source-exact spans cut only after punctuation (such as ，、：——) or before 然后、随后、接着、之后、继而 or 并. A speech act such as 说、问、答、应 is audio. A visible reaction in the same sentence stays visual. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source verbatim with no added, dropped, or rewritten characters or punctuation. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.'
         : 'This fact is a single clause with no internal punctuation or conjunctions; it cannot be split. Return exactly ONE span whose text equals the source verbatim, and classify kind as visual, audio, internal, or figurative. Do NOT add, drop, or alter any characters or punctuation.';
       const result = await provider.generateStructured(JSON.stringify({ task: 'repair_fact', text: fact.text, kind: fact.kind, repair }), schema,
         instruction, { temperature: 0.1, maxTokens: 384 });
@@ -951,13 +946,13 @@ export async function runFactWorkflow(input: {
         // Background facts stay intact for translation. Don't force the local
         // model to classify an undeclared door/window as a person's presence.
         if (!entities.length) return [];
-        const schema = z.object({ states: z.array(z.object({ entity: entities.length ? z.enum(entities as [string, ...string[]]) : z.string().min(1), attribute: z.enum(['presence', 'wardrobe', 'holding', 'position', 'pending_action']), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() })) });
+        const schema = z.object({ states: z.array(z.object({ entity: entities.length ? z.enum(entities as [string, ...string[]]) : z.string().min(1), attribute: z.enum(FACT_STATE_ATTRIBUTES), value: z.string().min(1), item: z.string().optional(), operation: z.enum(['set', 'remove']).optional() })) });
         const ask = async (note: string) => provider.generateStructured(JSON.stringify({ task: 'state', facts: group.map(f => ({ id: f.id, text: f.text })), context, entities, binding: source.binding, repair: note }), schema,
-          'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit persistent states. wardrobe = a stated clothing state; holding = a tangible prop or object held; position = where the entity stands or sits; presence = explicit entry or exit; pending_action = unfinished action. Body parts (such as 手, 腿, 指尖, 身体) are NEVER held objects (holding); holding requires an explicit external object or prop from this fact (such as 镜, 伞, 杯). Physical touch, caressing, comforting or embracing without an object has NO holding state. For wardrobe/holding extract one state per garment/object; item MUST quote its name from this fact. operation is set, or remove only for explicitly completed removal/release. value MUST be an exact contiguous substring of this fact (NOT from context). If this fact has no explicit clothing, holding or position changes, return states:[]. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 256 });
-        const result = await ask(repair);
-        const statesCleaned = result.states
+          'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit states. presence = entry or exit. wardrobe = a garment, not a body part. holding = an external prop, not a body part and not a touch without an object. position = a place, not a posture. pose = sitting, lying, kneeling, or another posture. body = a body condition such as bare feet or an uncovered body. expression = face, blush, or gaze, and it is not carried to later shots. pending_action = an unfinished action. item quotes the garment, prop, body part, or posture from this fact when the attribute uses one. operation is set, or remove only for an explicitly completed removal or release. value MUST be an exact contiguous substring of this fact (NOT from context). If this fact states none of these, return states:[]. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 320 });
+        const itemAttributes = new Set(['wardrobe', 'holding', 'body', 'expression', 'pose']);
+        const cleanStates = (rows: Array<{ entity: string; attribute: string; value: string; item?: string; operation?: 'set' | 'remove' }>) => rows
           .map(s => {
-            if (s.attribute !== 'wardrobe' && s.attribute !== 'holding') {
+            if (!itemAttributes.has(s.attribute)) {
               const { item, ...rest } = s;
               return rest as typeof s;
             }
@@ -965,15 +960,19 @@ export async function runFactWorkflow(input: {
           })
           .filter(s => {
             if (!s.value || !source.text.includes(s.value)) return false;
-            if ((s.attribute === 'wardrobe' || s.attribute === 'holding') && s.item && !source.text.includes(s.item)) return false;
-            if (s.attribute === 'holding') {
-              if (cast.includes(s.value) || (s.item && cast.includes(s.item))) return false;
-              if (['手', '手指', '指尖', '手臂', '臂', '腿', '脚', '身', '身体', '胸', '背', '腰', '按倒', '触碰', '安抚', '拥抱', '拉扯', '纠缠'].includes(s.value)) return false;
-            }
-            if (s.attribute === 'position' && ['翻身', '按倒', '起来', '转头', '回头', '起身', '低头', '抬头'].includes(s.value)) return false;
+            if (itemAttributes.has(s.attribute) && s.item && !source.text.includes(s.item)) return false;
+            if (s.attribute === 'holding' && (cast.includes(s.value) || (s.item && cast.includes(s.item)))) return false;
             if (s.attribute === 'presence' && !/进|入|出|来|走|离|退|去|现/u.test(s.value)) return false;
             return true;
           });
+        let statesCleaned: ReturnType<typeof cleanStates>;
+        try {
+          statesCleaned = await reviewExtractedStates(source.text, async (note) => cleanStates((await ask(note ? `${repair} ${note}`.trim() : repair)).states), (state) => stateCategoryConflict(state.attribute, state.value, state.item || ''));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.startsWith('连续状态待核对:')) throw new FactWorkflowError(message);
+          throw error;
+        }
         const owners = boundVisibleEntities(source.binding).map(e => e.name);
         const evidence = evidencedContinuityStates(source.text, statesCleaned, context, owners);
         if (evidence.rejected.length) {
@@ -1117,9 +1116,9 @@ export async function runFactWorkflow(input: {
       const names = [...new Set(selected.flatMap(f => boundVisibleEntities(f.binding).map(e => e.name)))];
       if (names.length > 6) throw new FactWorkflowError(`镜头包含 ${names.length} 位项目人物，超过当前契约上限6位，请核对节拍`);
       const continuityRead = input.continuity_scope ? continuityReadForFacts(input.continuity_scope, selected) : null;
-      const inherited = continuityRead?.states ?? inheritedStates(shotState, selected, names);
-      const primary = sceneFacts.find(f => f.id === shot.primary_fact_id) || selected[0];
       const location = doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId;
+      const inherited = continuityRead?.states ?? inheritedStates(shotState, selected, names, location);
+      const primary = sceneFacts.find(f => f.id === shot.primary_fact_id) || selected[0];
       const contextFields = sceneContext(doc, scene);
       const literal = [...selected.map(f => ({ id: f.id, text: boundText(f.text, f.binding) })), ...continuityLiteral(inherited), { id: 'location', text: location }, ...sceneContextFacts(contextFields)];
       const primaryAction = primary?.text || location;
@@ -1214,27 +1213,6 @@ export async function runFactWorkflow(input: {
                 if (new RegExp(`\\b${escapedTarget}\\b`, 'i').test(row.english)) {
                   row.english = row.english.replace(/\btheir\s+([a-zA-Z]+)\b/gi, 'the $1');
                 }
-                if (/失守/.test(fact.text)) {
-                  row.english = row.english.replace(/\b(?:momentarily\s+)?lost\s+(?:their\s+|the\s+|her\s+|his\s+)?(?:guard|ground)\b/gi, 'momentarily losing composure');
-                }
-                if (/走到玉阶下/.test(fact.text)) {
-                  row.english = row.english.replace(/\bwalked down to the Jade Steps(?: of [A-Za-z]+ Palace)?\b/gi, 'walked to the foot of the jade steps');
-                }
-                if (/脸颊/.test(fact.text)) {
-                  row.english = `${targetEng || 'Nangong Xue'}'s cheeks were flushed crimson.`;
-                }
-                if (/这副模样/.test(fact.text)) {
-                  row.english = `${targetEng || 'Nangong Xue'} appeared in this state.`;
-                }
-                if (/眉梢|眉/.test(fact.text)) {
-                  row.english = row.english.replace(/\b(?:her|his|their)\s+brows?\b/gi, `${targetEng}'s brows`);
-                }
-                if (/指尖/.test(fact.text)) {
-                  row.english = row.english.replace(/\b(?:her|his|their)\s+fingertips?\b/gi, `${targetEng}'s fingertips`);
-                }
-                if (/双腿/.test(fact.text)) {
-                  row.english = row.english.replace(/\b(?:her|his|their)\s+legs?\b/gi, `${targetEng}'s legs`);
-                }
                 row.english = row.english
                   .replace(/\btheir\s+(color|colour|light|lustre|focus|gaze|glance|grip|hold|warmth|heat|guard|ground|composure|expression|posture|demeanor|clarity|breath|step|steps|footing|balance|pace|sleeve|sleeves|shoulder|shoulders|face|head|eyes?|pupils?|hands?|fingers?|brows?)\b/gi, 'the $1')
                   .replace(/\b(?:he|she)\b/gi, targetEng)
@@ -1307,7 +1285,7 @@ export async function runFactWorkflow(input: {
             let english = '';
             if (parts) {
               recordBatch(activeStage, parts.map(text => ({ id: fact.id, text })), 'repair_split');
-              const partRepair = (text: string) => text.includes('低喘') ? '低喘=soft panting，不要译成 whimper、whistle 或 shout。' : repair;
+              const partRepair = (_text: string) => repair;
               const head = (await translateFacts([{ ...fact, text: parts[0]! }], partRepair(parts[0]!)))[0];
               const tail = (await translateFacts([{ ...fact, text: parts[1]! }], partRepair(parts[1]!)))[0];
               english = `${head?.english || ''} ${tail?.english || ''}`.replace(/\s+/g, ' ').trim();
@@ -1329,7 +1307,8 @@ export async function runFactWorkflow(input: {
       const blockIds = [...new Set([...selected.map(f => f.block_id), ...audioFacts[index]!.map(f => f.block_id), ...buckets[index]!.map(b => b.id)])].sort((a, b) => scene.blocks.findIndex(x => x.id === a) - scene.blocks.findIndex(x => x.id === b));
       const source = { type: 'script' as const, script_id: input.scriptId, script_revision: input.revision, script_scene_id: scene.id, block_ids: blockIds, ...(continuityRead ? { continuity: continuityRead.reference } : {}) };
       const keyProps = doc.props.filter(prop => scene.propIds.includes(prop.id) && selected.some(f => f.text.includes(prop.name))).map(prop => prop.name).slice(0, 2);
-      const contractFields = { ...sceneSlots[index]!, scene_context: contextFields, location, primary_action: primaryAction, visual_facts: selected, audible_blocks: buckets[index]!, continuity_states: inherited, visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined, key_props: keyProps, source };
+      const speechFacts = audioFacts[index]!.map(fact => fact.text);
+      const contractFields = { ...sceneSlots[index]!, scene_context: contextFields, location, primary_action: primaryAction, visual_facts: selected, ...(speechFacts.length ? { speech_facts: speechFacts } : {}), audible_blocks: buckets[index]!, continuity_states: inherited, visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined, key_props: keyProps, source };
       const assembled: StoryboardCandidateShot = {
         index: allShots.length + 1, script_scene_id: scene.id, fact_ids: shot.fact_ids, hold_fact_ids: heldIds, audio_fact_ids: audioFacts[index]!.map(f => f.id), primary_fact_id: shot.primary_fact_id, block_ids: blockIds,
         visual_prompt: translated.visual_prompt, shot_spec: packShotSpec(contractFields), source,

@@ -1,6 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, setVideoMotionTranslatorForTests, type VideoMotionMaterials } from './video_spec_compiler';
+import { factStateLabel } from '../../schemas/storyboard_facts';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, continuityPromptLines, motionFidelitySource, setVideoMotionTranslatorForTests, visibleFacts, type VideoMotionMaterials } from './video_spec_compiler';
+
+test('stored attributes render with the shared label and do not invent another category', () => {
+  assert.equal(factStateLabel('expression'), '表情');
+  assert.equal(factStateLabel('body'), '身体');
+  assert.equal(factStateLabel('pose'), '姿势');
+  assert.equal(factStateLabel('wardrobe'), '衣着');
+  const lines = continuityPromptLines([
+    { entity: '林岚', attribute: 'body', value: '赤足', item: '赤足', fact_id: 'f1' },
+    { entity: '陈月', attribute: 'wardrobe', value: '红衣半解', item: '红衣', fact_id: 'f2' },
+    { entity: '林岚', attribute: 'holding', value: '发烫的神镜', item: '神镜', fact_id: 'f3' },
+    { entity: '陈月', attribute: 'pose', value: '坐在椅上', fact_id: 'f4' },
+  ]);
+  assert.deepEqual(lines, ['林岚 身体：赤足', '陈月 衣着：红衣半解', '林岚 手持：发烫的神镜', '陈月 姿势：坐在椅上']);
+});
+
+test('a pictured place is not audited again under a different location label', () => {
+  const still = 'In the interior of the Jade Steps, Nangong Xue looks on.';
+  assert.equal(motionFidelitySource(['南宫雪眼眶一热低声应是'], '琼明仙域·镜台', still, []).includes('镜台'), false);
+  assert.match(motionFidelitySource(['南宫雪眼眶一热低声应是'], '琼明仙域·镜台', '', []), /镜台/);
+});
+
+test('video motion facts include this shot speech and the still does not have to', () => {
+  const facts = visibleFacts({
+    visual_facts: [{ text: '林岚坐在椅上' }],
+    speech_facts: ['林岚问了一句'],
+    primary_action: '林岚坐在椅上',
+  }, '林岚坐在椅上');
+  assert.equal(facts.includes('林岚问了一句'), true);
+  assert.equal(facts.includes('林岚坐在椅上'), true);
+});
 
 test('Grok narrative prompts preserve the screenplay speech and sound', async () => {
   const request = { scene_id: 64, scene_version: 1, profile: 'narrative_clip' as const,

@@ -676,7 +676,7 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const sourceTexts = m.calls.slice(before).filter(c => c.task === 'translate').flatMap(c => c.facts.map((fact: any) => fact.text));
     // The first shot's literal translation is unchanged; only dependent inherited state needs inference.
     assert.ok(!sourceTexts.includes('阿岚持红杯。')); assert.ok(sourceTexts.includes('阿岚穿灰衣。'));
-    assert.ok(sourceTexts.includes('阿岚 持物：持红杯'));
+    assert.ok(sourceTexts.includes('阿岚 手持：持红杯'));
     assert.ok(!sourceTexts.includes('无人港口红灯亮起。'));
     assert.ok(sourceTexts.includes('第4场的灯亮起。'));
   });

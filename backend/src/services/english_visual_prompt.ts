@@ -23,6 +23,7 @@ import {
 import { flattenVisualTagMap } from './reference_generation_policy';
 import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
 import { continuityVisualFact, charactersWithConfirmedWardrobe, type ContinuityVisualState } from './continuity_visual_state';
+import { factStateLabel } from '../schemas/storyboard_facts';
 
 const CJK = /[\u3400-\u9fff]/;
 const PEOPLE_BLOCKER = /^(?:no people|isolated|16:9)$/i;
@@ -180,9 +181,42 @@ function auditFactInput(fact: string, id: number) {
 
 function evidenceValid(evidence: string, text: string): boolean {
   const trimmed = String(evidence || '').trim();
-  if (!trimmed || trimmed.includes('...') || trimmed.includes('…')) return false;
+  if (!trimmed) return false;
+  // Dots alone are not a quote, even when the picture also pauses.
+  if (!trimmed.replace(/[.。…\s]+/gu, '')) return false;
+  const ellipsis = /\.{3}|…+/u;
+  if (ellipsis.test(trimmed)) {
+    const fold = (value: string) => value.replace(/…+/gu, '...');
+    return fold(text).toLowerCase().includes(fold(trimmed).toLowerCase());
+  }
   const normalize = (s: string) => s.replace(/[\s\p{P}]+/gu, ' ').trim().toLowerCase();
   return normalize(text).includes(normalize(trimmed));
+}
+
+function appearancePieceHolds(evidence: string, text: string, fact: string): boolean {
+  const appearance = fact.match(APPEARANCE_FACT);
+  if (!appearance || /\.{3}|…+/u.test(evidence)) return false;
+  const sourceTokens = new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5));
+  const normalize = (value: string) => value.replace(/[\s\p{P}]+/gu, ' ').trim().toLowerCase();
+  const haystack = normalize(text);
+  return evidence.split(/[,，;；]+/u).some((piece) => {
+    const quoted = normalize(piece);
+    if (quoted.length < 8 || !haystack.includes(quoted)) return false;
+    return quoted.split(/[^a-z0-9]+/i).some((word) => word.length >= 5 && sourceTokens.has(word));
+  });
+}
+
+function appearanceWordsHold(evidence: string, text: string, fact: string): boolean {
+  const appearance = fact.match(APPEARANCE_FACT);
+  if (!appearance || /\.{3}|…+/u.test(evidence)) return false;
+  const tokens = [...new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5))];
+  // A tag with fewer than three long words cannot pass on overlap alone.
+  if (tokens.length < 3) return false;
+  const words = (value: string) => ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+  const picture = words(text);
+  const quoted = words(evidence);
+  const found = tokens.filter((word) => picture.includes(` ${word} `) && quoted.includes(` ${word} `));
+  return found.length >= 3;
 }
 
 async function contradictionRelations(rejected: string[], english: string, report: FidelityReport): Promise<Map<number, 'same' | 'opposite' | 'unrelated'>> {
@@ -239,7 +273,7 @@ async function auditEnglishFidelity(source: string, english: string): Promise<vo
       const result = matches[0];
       if (matches.length !== 1 || !result) return [`${id}:absent:${fact}`];
       if (result.status === 'preserved') {
-        if (result.evidence && evidenceValid(result.evidence, text)) return [];
+        if (result.evidence && (evidenceValid(result.evidence, text) || appearancePieceHolds(result.evidence, text, fact) || appearanceWordsHold(result.evidence, text, fact))) return [];
       }
       return [`${id}:${result.status}:${fact}`];
     });
@@ -462,6 +496,8 @@ export type AppearanceFields = {
 export type ShotCharacterAppearance = {
   name: string;
   appearance: AppearanceFields;
+  /** Posture from a pose state. Body appearance stays build, not this pose. */
+  pose?: string;
   /** Original lock string when the card was not split into fields. Not rewritten. */
   recorded_appearance?: string;
 };
@@ -572,8 +608,8 @@ export function shotImageMaterialsFromSpec(
     const value = String(row.value || '').trim();
     if (!value || facts.some((fact) => fact.text.includes(value))) continue;
     if (row.attribute === 'holding' && row.entity && value.includes(row.entity)) continue;
-    const attr = (row.attribute === 'wardrobe' && row.item && /脸|面|颊|神|眼|唇|额/.test(row.item)) ? row.item : row.attribute;
-    pushFact(facts, `state:${row.fact_id || value}`, [row.entity, attr, value].filter(Boolean).join('：'));
+    const label = factStateLabel(String(row.attribute || ''));
+    pushFact(facts, `state:${row.fact_id || value}`, [row.entity, label, value].filter(Boolean).join('：'));
   }
 
   const names: string[] = [];
@@ -604,38 +640,49 @@ export function shotImageMaterialsFromSpec(
     }
   }
 
+  const poseByName = new Map<string, string>();
+  const rememberPose = (entity: unknown, attribute: unknown, value: unknown) => {
+    if (attribute === 'pose') {
+      const name = String(entity || '').trim();
+      const pose = String(value || '').trim();
+      if (name && pose) poseByName.set(name, pose);
+    }
+  };
+  for (const state of states) {
+    if (state && typeof state === 'object') {
+      const row = state as { entity?: string; attribute?: string; value?: string };
+      rememberPose(row.entity, row.attribute, row.value);
+    }
+  }
+  for (const fact of visualFacts) {
+    if (fact && typeof fact === 'object' && Array.isArray((fact as { states?: unknown[] }).states)) {
+      for (const state of (fact as { states: Array<{ entity?: string; attribute?: string; value?: string }> }).states) rememberPose(state?.entity, state?.attribute, state?.value);
+    }
+  }
   const byName = new Map(characters.map((character) => [String(character.name || '').trim(), character]));
   const glossary = { ...(options.glossary || {}) };
   const shotCharacters: ShotCharacterAppearance[] = names.map((name) => {
     const row = byName.get(name);
     const englishName = String(row?.english_name || '').trim();
     if (englishName && !glossary[name]) glossary[name] = englishName;
+    const pose = poseByName.get(name);
     return {
       name,
       appearance: row ? appearanceFieldsFromTags(row.visual_tags, options.chapterId) : emptyAppearance(),
+      ...(pose ? { pose } : {}),
     };
   });
   const trackedWardrobe = charactersWithConfirmedWardrobe(physicalStates);
   for (const s of states) {
     if (s && typeof s === 'object') {
       const stateObj = s as Record<string, unknown>;
-      if (stateObj.attribute === 'wardrobe' && stateObj.entity) {
-        const item = String(stateObj.item || '');
-        if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
-          trackedWardrobe.add(String(stateObj.entity).trim());
-        }
-      }
+      if (stateObj.attribute === 'wardrobe' && stateObj.entity) trackedWardrobe.add(String(stateObj.entity).trim());
     }
   }
   for (const fact of visualFacts) {
     if (fact && typeof fact === 'object' && Array.isArray((fact as any).states)) {
       for (const s of (fact as any).states) {
-        if (s?.attribute === 'wardrobe' && s?.entity) {
-          const item = String(s.item || '');
-          if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
-            trackedWardrobe.add(String(s.entity).trim());
-          }
-        }
+        if (s?.attribute === 'wardrobe' && s?.entity) trackedWardrobe.add(String(s.entity).trim());
       }
     }
   }
@@ -734,6 +781,7 @@ function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string 
     engine,
     'Write every visible_facts text. Clothing, position, and action each stay visible. Use as many sentences as those facts need.',
     'For every character in characters, explicitly describe their hair, face (facial features, expression, smile, lips, or eyes from appearance.face), body (build, figure, breasts, waist, hips), clothing, and accessories from their appearance object in natural English prose. Never omit any character\'s hair, face/expression, body figure, clothing, or accessories.',
+    'appearance.body is build. pose, when present, is that person\'s posture. Describe the posture. Do not turn build wording into standing, sitting, or kneeling.',
     'Use shot_type, camera_angle and camera_movement for the framing. Respect scene_context, continuity_states and must_not.',
     'spoken_not_painted lists words for the audio track. Do not write those words into the picture.',
     'No weight syntax and no booru tag soup.',
@@ -892,21 +940,20 @@ export async function compileEnglishShotPrompt(
     for (const s of (materials.continuity_states || [])) {
       if (s && typeof s === 'object') {
         const stateObj = s as Record<string, unknown>;
-        if (stateObj.attribute === 'wardrobe' && stateObj.entity) {
-          const item = String(stateObj.item || '');
-          if (!/脸|面|颊|神|眼|唇|额/.test(item)) {
-            tracked.add(String(stateObj.entity).trim());
-          }
-        }
+        if (stateObj.attribute === 'wardrobe' && stateObj.entity) tracked.add(String(stateObj.entity).trim());
       }
     }
+    const poseByName = new Map(materials.characters.filter((character) => character.pose).map((character) => [character.name, character.pose]));
     for (const character of locked) if (tracked.has(character.name)) {
       character.appearance.clothing = ''; character.appearance.accessories = '';
       // An unstructured lock cannot safely separate default clothing from identity.
       // Keep structured hair/face/body, and require explicit garment facts instead.
       delete character.recorded_appearance;
     }
-    materials.characters = locked;
+    materials.characters = locked.map((character) => {
+      const pose = poseByName.get(character.name);
+      return pose ? { ...character, pose } : character;
+    });
   }
   const visualPrompt = await composeShotImagePrompt(materials, options);
   return {

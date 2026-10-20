@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { continuityVisualFact, type ContinuityVisualState } from '../continuity_visual_state';
+import { factStateLabel } from '../../schemas/storyboard_facts';
+import { appendSpeechFacts } from '../fact_state';
 import {
   VideoPreset,
   VideoSpec,
@@ -11,7 +13,7 @@ import { LLMService } from '../llm';
 import { InferenceCache, isNodeTest, textModelFingerprint } from '../inference_cache';
 import { withLocalTextInference } from '../local_text_inference';
 
-export const VIDEO_PROMPT_RULE_VERSION = `video-motion-v2:${FIDELITY_RULE_VERSION}`;
+export const VIDEO_PROMPT_RULE_VERSION = `video-motion-v4:${FIDELITY_RULE_VERSION}`;
 const motionCache = new InferenceCache<string>('video-motion');
 
 export interface CompileVideoSpecOptions {
@@ -172,13 +174,23 @@ export async function echoVideoMotion(materials: VideoMotionMaterials): Promise<
 
 const VideoMotionSchema = z.object({ prompt: z.string().min(1) }).strict();
 
+/** The still already names the place. A second location label must not contradict that picture. */
+export function motionFidelitySource(facts: readonly string[], location: string, still: string, appearanceLines: readonly string[]): string {
+  const parts = [...facts];
+  if (!still.trim() && location.trim()) parts.push(location.trim());
+  parts.push(...appearanceLines);
+  return parts.filter(Boolean).join('，');
+}
+
 async function composeVideoMotion(materials: VideoMotionMaterials, translator?: VideoMotionTranslator | null): Promise<string> {
   const translate = translator || motionTranslator || (isNodeTest() ? echoVideoMotion : null);
   const system = [
     'Write one English motion prompt for a 5-second video.',
     'Use the visible facts, appearance fields, the still paragraph, location, shot type, and requested camera move.',
     'Preserve continuity_states and use camera_angle, shot_intent, subject_scale and style for the framing and lighting.',
-    'The still paragraph is the picture. Do not replace that picture with only primary_action.',
+    'The still paragraph is the picture. Do not replace that picture with only primary_action. Keep the still\'s place name.',
+    'A fact labeled 姿势 is posture. Appearance body is build only. When a posture fact is present, describe that posture and do not turn build wording into standing, sitting, or kneeling.',
+    'Speech facts are spoken. Do not paint them as clothing, a held object, or only a facial expression.',
     'Write appearance fields as hair, face, body, clothing, and accessories. Do not write that a costume must remain strictly consistent.',
     'Do not add cloth or hair breeze unless a visible fact says the air moves.',
     'If profile is character_loop and primary_action is empty, write a short idle from the appearance fields.',
@@ -206,14 +218,14 @@ async function composeVideoMotion(materials: VideoMotionMaterials, translator?: 
   if (!paragraph) throw new Error('视频运动提示词为空');
   if (containsCjk(paragraph) && translate !== echoVideoMotion) throw new Error('视频运动提示词仍含中文');
   if (!translate) {
-    const source = [...effectiveMaterials.visible_facts, effectiveMaterials.location,
-      ...effectiveMaterials.appearance.flatMap(person => ([['hair', '头发'], ['face', '五官'], ['body', '体型'], ['clothing', '服装'], ['accessories', '配饰']] as const).map(([field, label]) => {
-        const key = field as keyof VideoAppearanceFields;
-        const val = person[key];
-        if (!val) return '';
-        if ((field === 'clothing' || field === 'accessories') && (hasShotWardrobe || (stillLower && !val.toLowerCase().split(/[,\s_()]+/).filter(w => w.length >= 4).some(w => stillLower.includes(w))))) return '';
-        return `${person.name}的${label}：${val}`;
-      }))].filter(Boolean).join('，');
+    const appearanceLines = effectiveMaterials.appearance.flatMap(person => ([['hair', '头发'], ['face', '五官'], ['body', '体型'], ['clothing', '服装'], ['accessories', '配饰']] as const).map(([field, label]) => {
+      const key = field as keyof VideoAppearanceFields;
+      const val = person[key];
+      if (!val) return '';
+      if ((field === 'clothing' || field === 'accessories') && (hasShotWardrobe || (stillLower && !val.toLowerCase().split(/[,\s_()]+/).filter(w => w.length >= 4).some(w => stillLower.includes(w))))) return '';
+      return `${person.name}的${label}：${val}`;
+    }));
+    const source = motionFidelitySource(effectiveMaterials.visible_facts, effectiveMaterials.location, effectiveMaterials.still_paragraph, appearanceLines);
     try {
       await assertEnglishFidelity(source, paragraph);
     } catch (firstError) {
@@ -260,7 +272,7 @@ function appearanceFromCharacter(character: CompileVideoSpecOptions['character']
   }];
 }
 
-function continuityPromptLines(states: unknown[]): string[] {
+export function continuityPromptLines(states: unknown[]): string[] {
   return states.flatMap(state => {
     if (!state || typeof state !== 'object') return [];
     const row = state as Record<string, unknown>;
@@ -283,12 +295,11 @@ function continuityPromptLines(states: unknown[]): string[] {
     const value = String(row.value || '').trim();
     if (!value) return [];
     if (attribute === 'holding' && row.entity && value.includes(String(row.entity))) return [];
-    const label = ({ presence: '在场', wardrobe: '衣着', holding: '手持', position: '位置' } as Record<string, string>)[attribute] || attribute;
-    return [`${row.entity} ${label}：${value}`];
+    return [`${row.entity} ${factStateLabel(attribute)}：${value}`];
   }).filter(Boolean);
 }
 
-function visibleFacts(spec: Record<string, any>, primaryAction: string): string[] {
+export function visibleFacts(spec: Record<string, any>, primaryAction: string): string[] {
   const facts: string[] = [];
   const listed = Array.isArray(spec.visual_facts) ? spec.visual_facts : [];
   for (const fact of listed) {
@@ -300,7 +311,7 @@ function visibleFacts(spec: Record<string, any>, primaryAction: string): string[
     if (prop) facts.push(String(prop).trim());
   }
   if (primaryAction && !facts.includes(primaryAction)) facts.push(primaryAction);
-  return facts.filter(Boolean);
+  return appendSpeechFacts(facts.filter(Boolean), spec.speech_facts);
 }
 
 export const VideoSpecCompiler = {

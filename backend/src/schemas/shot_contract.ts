@@ -51,6 +51,7 @@ export type ShotSourceReference = z.infer<typeof ShotSourceReferenceSchema>;
 export const ShotContractFieldsSchema = z.object({
   scene_context: z.object({ location_description: z.string(), interior_exterior: z.enum(['interior', 'exterior']), time_of_day: z.string() }).optional(),
   visual_facts: z.array(VisualFactSchema).optional(),
+  speech_facts: z.array(z.string()).optional(),
   audible_blocks: z.array(AudibleBlockSchema).optional(),
   continuity_states: z.array(ContinuityStateSchema).optional(),
   shot_intent: ShotIntentSchema.optional(),
@@ -90,6 +91,7 @@ export const buildUniquenessKey = (input: {
 export const packShotSpec = (shot: {
   scene_context?: { location_description: string; interior_exterior: 'interior' | 'exterior'; time_of_day: string };
   visual_facts?: VisualFact[];
+  speech_facts?: string[];
   audible_blocks?: z.infer<typeof AudibleBlockSchema>[];
   continuity_states?: z.infer<typeof ContinuityStateSchema>[];
   shot_intent?: string | null;
@@ -134,6 +136,7 @@ export const packShotSpec = (shot: {
   const payload = {
     ...(shot.scene_context ? { scene_context: shot.scene_context } : {}),
     ...(shot.visual_facts ? { visual_facts: shot.visual_facts } : {}),
+    ...(shot.speech_facts?.length ? { speech_facts: shot.speech_facts } : {}),
     ...(shot.audible_blocks ? { audible_blocks: shot.audible_blocks } : {}),
     ...(shot.continuity_states ? { continuity_states: shot.continuity_states } : {}),
     shot_intent: shot.shot_intent || null,

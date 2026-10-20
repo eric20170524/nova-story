@@ -99,6 +99,28 @@ test('appearance fields stay intact for the text model', () => {
   );
 });
 
+test('a timeline lock keeps the shot pose that was read from the contract', async () => {
+  let seenUser = '';
+  setVisualPromptTranslatorForTests(async (prompt) => {
+    seenUser = prompt;
+    return 'Lin Lan sits on the chair with black hair.';
+  });
+  setVisualPromptVerifierForTests(async (facts, english) => ({
+    facts: facts.map((_, id) => ({ id, status: 'preserved' as const, evidence: english })),
+  }));
+  await compileEnglishShotPrompt(
+    {
+      location: '房间',
+      primary_action: '林岚坐在椅上',
+      primary_subject: '林岚',
+      visible_subjects: ['林岚'],
+      continuity_states: [{ entity: '林岚', attribute: 'pose', value: '坐在椅上', fact_id: 'pose' }],
+    },
+    [{ name: '林岚', lock: '', appearance: { hair: 'black hair' } }],
+  );
+  assert.match(seenUser, /"pose":"坐在椅上"/);
+});
+
 test('an appearance field with commas stays one fidelity clause', async () => {
   let seen: string[] = [];
   setVisualPromptVerifierForTests(async (facts, english) => {
@@ -449,6 +471,68 @@ test('an audit that never returns a verdict keeps the paragraph unverified', asy
   }
 });
 
+test('one real piece of an appearance list keeps a preserved face', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'preserved' as const,
+      evidence: 'East Asian tender realistic young woman, delicate real skin with a light blush, clear watery eyes',
+    }],
+  }));
+  await assertEnglishFidelity(
+    '南宫雪的五官：East Asian tender realistic young woman, delicate real skin with a light blush, clear watery eyes',
+    'Her face features delicate real skin with a light blush and clear watery eyes.',
+  );
+});
+
+test('a preserved body tag counts when the picture uses those words', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'preserved' as const,
+      evidence: 'petite slender soft mature figure, gentle proportions',
+    }],
+  }));
+  await assertEnglishFidelity(
+    '南宫雪的体型：petite slender soft mature figure, gentle proportions',
+    'Her body is petite, slender, and softly mature with gentle proportions.',
+  );
+});
+
+test('a preserved body tag fails when the picture lacks the figure', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'preserved' as const,
+      evidence: 'petite slender soft mature figure, gentle proportions',
+    }],
+  }));
+  await assert.rejects(
+    () => assertEnglishFidelity(
+      '南宫雪的体型：petite slender soft mature figure, gentle proportions',
+      'She stands in the jade hall and answers yes in a low voice.',
+    ),
+    /dropped visible facts/,
+  );
+});
+
+test('a preserved accessory quote still fails when no piece is in the picture', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'preserved' as const,
+      evidence: 'simple jade hairpin, soft immortal glow',
+    }],
+  }));
+  await assert.rejects(
+    () => assertEnglishFidelity(
+      '南宫雪的配饰：simple jade hairpin, soft immortal glow',
+      'She steps onto the polished jade steps and grips a hand.',
+    ),
+    /dropped visible facts/,
+  );
+});
+
 test('appearance words do not turn a missing or swapped attribute into a pass', async () => {
   setVisualPromptVerifierForTests(async () => ({
     facts: [{ id: 0, status: 'missing' as const, evidence: '' }],
@@ -698,4 +782,43 @@ test('a GPU owner verifies before a queued shared audit and releases subsequent 
       }
     });
   }
+});
+
+test('a pause written in the picture can be quoted as evidence', async () => {
+  const english = "She asks, 'Master... the spring tide has arrived,' before adding, 'Shall we cross it together?'";
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{ id: 0, status: 'preserved' as const, evidence: "'Master... the spring tide has arrived,' before adding, 'Shall we cross it together?'" }],
+  }));
+  await assertEnglishFidelity('我们……要一起渡吗？', english);
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{ id: 0, status: 'preserved' as const, evidence: 'She asks ... together' }],
+  }));
+  await assert.rejects(() => assertEnglishFidelity('另一句对白要一起走吗？', english));
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{ id: 0, status: 'preserved' as const, evidence: '...' }],
+  }));
+  await assert.rejects(() => assertEnglishFidelity('我们……要一起渡吗？', english), /dropped visible facts/);
+});
+
+test('a one-word appearance tag does not pass on a single shared word', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{ id: 0, status: 'preserved' as const, evidence: 'beautiful gown in the hall' }],
+  }));
+  await assert.rejects(
+    () => assertEnglishFidelity('南宫雪的服装：beautiful', 'A beautiful window.'),
+    /dropped visible facts/,
+  );
+});
+
+test('a still leaves speech facts unpainted and keeps a stored pose beside the person', () => {
+  const materials = shotImageMaterialsFromSpec({
+    location: '房间',
+    primary_action: '林岚坐在椅上',
+    visual_facts: [{ id: 'f1', kind: 'visual', text: '林岚坐在椅上' }],
+    speech_facts: ['林岚问了一句'],
+    continuity_states: [{ entity: '林岚', attribute: 'pose', value: '坐在椅上', fact_id: 'pose' }],
+    visible_subjects: ['林岚'],
+  }, [{ name: '林岚', visual_tags: { hair: 'black hair' } }]);
+  assert.equal(materials.facts.some((fact) => fact.text.includes('问了一句')), false);
+  assert.equal(materials.characters[0]?.pose, '坐在椅上');
 });
