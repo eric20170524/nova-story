@@ -50,7 +50,24 @@ test('剧本自动解析在条数一致时按顺序对齐错误索引，合法�
     ] });
   } } as AIProvider;
   const aligned = await resolveScriptBindings(misaligned, bindEntities(text, roster), text, '两人同在厅内。', roster);
-  assert.equal(materializeScriptReferences(text, aligned).text, '林岚看着陈月。陈月把蓝伞递给林岚。');
+  assert.equal(needsBindingReview(aligned), true);
+  assert.equal(aligned.mentions[2]?.confirmed, false);
+  assert.equal(aligned.mentions[2]?.entity?.name, '陈月');
+  assert.equal(materializeScriptReferences(text, aligned).text, '林岚看着陈月。她把蓝伞递给她。');
+  for (const rows of [
+    [
+      { index: 0, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' },
+      { index: 0, entity_id: roster[0]!.id, status: 'resolved', visibility: 'visible' },
+    ],
+    [
+      { index: 3, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' },
+      { index: 9, entity_id: roster[0]!.id, status: 'resolved', visibility: 'visible' },
+    ],
+  ]) {
+    const invalid = { async generateStructured(_prompt: string, schema: any) { return schema.parse({ bindings: rows }); } } as AIProvider;
+    await assert.rejects(() => resolveScriptBindings(invalid, bindEntities(text, roster), text, '两人同在厅内。', roster), /缺项或重复/);
+    assert.equal(text, '林岚看着陈月。她把蓝伞递给她。');
+  }
   const swapped = { async generateStructured(_prompt: string, schema: any) {
     return schema.parse({ bindings: [
       { index: 3, entity_id: roster[1]!.id, status: 'resolved', visibility: 'visible' },

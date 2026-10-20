@@ -4,7 +4,7 @@ import { db } from '../db/database';
 import type { AIProvider } from './ai/base';
 import type { ScriptDocument, StoryboardCandidatePayload, StoryboardCandidateShot } from '../schemas/script';
 import { FACT_POLICY_VERSION, FACT_STATE_ATTRIBUTES, FactKindSchema, FactStateSchema, factStateLabel, type VisualFact, type StoryboardFactContract } from '../schemas/storyboard_facts';
-import { positionApplies, reviewExtractedStates, stateCategoryConflict } from './fact_state';
+import { isFactStateAttribute, positionApplies, reviewExtractedStates, stateCategoryConflict } from './fact_state';
 
 export const FACT_CLASSIFY_INSTRUCTION = [
   'Classify each unchanged ID only.',
@@ -85,24 +85,6 @@ export function locateSpanInSource(source: string, spanText: string, cursor: num
       const matchEnd = sourceCleanIndices[cleanMatchIdx + cleanSpan.length - 1]! + 1;
       return { start: matchStart, end: matchEnd, resolvedText: source.slice(matchStart, matchEnd) };
     }
-
-    // 4. Fuzzy prefix + suffix window match (when AI omits modifiers or transition words)
-    if (cleanSpan.length >= 6) {
-      const prefixLen = Math.min(4, Math.floor(cleanSpan.length / 2));
-      const suffixLen = Math.min(4, Math.floor(cleanSpan.length / 2));
-      const prefix = cleanSpan.slice(0, prefixLen);
-      const suffix = cleanSpan.slice(-suffixLen);
-
-      const pIdx = cleanSourceSlice.indexOf(prefix);
-      if (pIdx >= 0) {
-        const sIdx = cleanSourceSlice.indexOf(suffix, pIdx + prefixLen);
-        if (sIdx >= 0 && (sIdx + suffixLen - pIdx) <= cleanSpan.length * 1.5) {
-          const matchStart = sourceCleanIndices[pIdx]!;
-          const matchEnd = sourceCleanIndices[sIdx + suffixLen - 1]! + 1;
-          return { start: matchStart, end: matchEnd, resolvedText: source.slice(matchStart, matchEnd) };
-        }
-      }
-    }
   }
 
   return null;
@@ -125,13 +107,8 @@ export function anchorSpans(sceneId: string, blockId: string, source: string, ou
     }
     const { start, end, resolvedText } = located;
     const gap = source.slice(cursor, start);
-    const isGapAllowed = cursor === 0
-      ? (start <= 40 || isPunctuationOrFiller(gap))
-      : isPunctuationOrFiller(gap);
-
-    if (!isGapAllowed) {
-      throw new FactWorkflowError(`来源片段遗漏或无法定位: ${blockId}@${cursor}`);
-    }
+    const isGapAllowed = isPunctuationOrFiller(gap);
+    if (!isGapAllowed) throw new FactWorkflowError(`来源片段遗漏或无法定位: ${blockId}@${cursor}`);
     if (span.beat < lastBeat) throw new FactWorkflowError(`事实节拍乱序: ${blockId}`);
     if (span.kind !== 'visual' && span.states.length) throw new FactWorkflowError(`非视觉片段不能改变连续状态: ${blockId}`);
     if (span.states.length) {
@@ -226,10 +203,10 @@ export function stateResourceKey(s: { entity: string; attribute: string; value: 
   return `${s.entity}:${s.attribute}:${item}`;
 }
 export function continuityAfter(previous: State[], facts: VisualFact[]): State[] {
-  const states = new Map(previous.map(s => [stateResourceKey(s), s]));
+  const states = new Map(previous.filter(s => isFactStateAttribute(s.attribute)).map(s => [stateResourceKey(s), s]));
   for (const fact of facts.filter(f => f.kind === 'visual')) {
     for (const s of fact.states) {
-      if (s.attribute === 'expression') continue;
+      if (!isFactStateAttribute(s.attribute) || s.attribute === 'expression') continue;
       const key = stateResourceKey(s);
       if (s.operation === 'remove' && s.attribute !== 'wardrobe') states.delete(key);
       else states.set(key, { ...s, fact_id: fact.id });
@@ -342,14 +319,10 @@ export function verbatimActionSplit(source: string, spans: string[]): string[] |
     adjusted[adjusted.length - 1] += source.slice(joined.length);
     if (adjusted.join('') === source) return adjusted;
   }
-  const aligned = alignSpansToSource(source, spans.map(text => ({ text })));
-  if (aligned.length >= 2 && aligned.map(a => a.text).join('') === source) {
-    return aligned.map(a => a.text);
-  }
   return null;
 }
 
-export function alignSpansToSource<T extends { text: string }>(source: string, spans: T[]): T[] {
+export function alignSpansToSource<T extends { text: string }>(source: string, spans: T[]): T[] | null {
   if (spans.length === 0) return spans;
   const clean = (s: string) => s.replace(/[\s\p{P}]/gu, '');
   const cleanSource = clean(source);
@@ -361,30 +334,7 @@ export function alignSpansToSource<T extends { text: string }>(source: string, s
     return spans;
   }
   const cleanSpans = spans.map(s => clean(s.text));
-  if (cleanSpans.join('') !== cleanSource) {
-    const cuts: number[] = [0];
-    let searchFrom = 0;
-    let matched = true;
-    for (let i = 1; i < spans.length; i++) {
-      const cleanPrefix = cleanSpans[i]!.slice(0, 4);
-      if (!cleanPrefix) { matched = false; break; }
-      let cut = -1;
-      for (let pos = searchFrom; pos <= source.length - cleanPrefix.length; pos++) {
-        if (clean(source.slice(pos)).startsWith(cleanPrefix)) {
-          cut = pos;
-          break;
-        }
-      }
-      if (cut <= cuts[cuts.length - 1]!) { matched = false; break; }
-      cuts.push(cut);
-      searchFrom = cut + 1;
-    }
-    if (matched) {
-      cuts.push(source.length);
-      return spans.map((s, i) => ({ ...s, text: source.slice(cuts[i]!, cuts[i + 1]!) }));
-    }
-    return spans;
-  }
+  if (cleanSpans.join('') !== cleanSource) return null;
 
   const aligned: T[] = [];
   let sourceCursor = 0;
@@ -504,21 +454,6 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (fact.id === 'location' && glossary[fact.text] && new RegExp(`\\b${glossary[fact.text].replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english)) {
       return;
     }
-    if (fact.text.includes('软榻') || /\b(?:couch|sofa|bed|daybed)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('袖袍') || fact.text.includes('拂') || /\b(?:sleeve|brushed|waved)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('转身') || /\bturned\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('应是') || /\b(?:responded|answered|agreed)\b/i.test(english)) {
-      return;
-    }
-    if (fact.text.includes('点头') || /\bnodded\b/i.test(english)) {
-      return;
-    }
   }
   const schema = z.object({ faithful: z.boolean() }).strict();
   let result: z.infer<typeof schema>;
@@ -529,18 +464,7 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (error instanceof z.ZodError) throw new FactWorkflowError('审核格式错误: 事实核对结果不完整或含未知 ID', 502);
     throw error;
   }
-  if (!result.faithful) {
-    if (facts.length === 1) {
-      const visibleNames = (context as any)?.visible_names || [];
-      const glossary = (context as any)?.glossary || {};
-      const knownEngNames = visibleNames.map((zh: string) => glossary[zh] || zh);
-      const engHasKnown = knownEngNames.some((eng: string) => new RegExp(`\\b${eng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english));
-      if (engHasKnown) {
-        return;
-      }
-    }
-    throw new FactWorkflowError(`译文待核对: ${facts.map(f => f.id).join(', ')} 存在遗漏、矛盾、新增或不确定性`, 502);
-  }
+  if (!result.faithful) throw new FactWorkflowError(`译文待核对: ${facts.map(f => f.id).join(', ')} 存在遗漏、矛盾、新增或不确定性`, 502);
 }
 
 export const shotEvidenceIds = (shot: StoryboardCandidateShot) => [...(shot.fact_ids || []), ...(shot.hold_fact_ids || [])];
@@ -882,6 +806,7 @@ export async function runFactWorkflow(input: {
       const result = await provider.generateStructured(JSON.stringify({ task: 'repair_fact', text: fact.text, kind: fact.kind, repair }), schema,
         instruction, { temperature: 0.1, maxTokens: 384 });
       const spans = alignSpansToSource(fact.text, result.spans);
+      if (!spans) throw new FactWorkflowError(`连续动作未能拆成可核对的原文片段: ${fact.text}`);
       try {
         let valid = spans.length > 0;
         for (let index = 0; index < spans.length - 1; index++) {
@@ -890,10 +815,7 @@ export async function runFactWorkflow(input: {
             break;
           }
         }
-        if (!valid) {
-          const fallbackKind = spans[0]?.kind === 'mixed' || spans[0]?.kind === 'uncertain' ? 'visual' : (spans[0]?.kind || 'visual');
-          return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: [{ text: fact.text, kind: fallbackKind, beat: fact.beat, states: [] as [] }] }, fact.start);
-        }
+        if (!valid) throw new FactWorkflowError(`分句边界不符: ${fact.text}`);
         return anchorSpans(fact.scene_id, fact.block_id, fact.text, { spans: spans.map(span => ({ ...span, beat: fact.beat, states: [] as [] })) }, fact.start);
       } catch (error) { throw error; }
     }, [fact.id, fact.text, fact.kind, fact.beat, fact.start, fact.scene_id, fact.block_id]);
@@ -959,7 +881,7 @@ export async function runFactWorkflow(input: {
             return s;
           })
           .filter(s => {
-            if (!s.value || !source.text.includes(s.value)) return false;
+            if (!s.value) return false;
             if (itemAttributes.has(s.attribute) && s.item && !source.text.includes(s.item)) return false;
             if (s.attribute === 'holding' && (cast.includes(s.value) || (s.item && cast.includes(s.item)))) return false;
             if (s.attribute === 'presence' && !/进|入|出|来|走|离|退|去|现/u.test(s.value)) return false;
@@ -1154,77 +1076,7 @@ export async function runFactWorkflow(input: {
             if (containsCjk(row.english)) problems.push(`${fact.id} 仍含中文「${row.english}」`);
             const missingTerms = bodyOwnerTerms(fact.text, input.glossary).filter(term => !row.english.toLowerCase().includes(term.toLowerCase()));
             if (missingTerms.length) throw new FactWorkflowError(`译文待核对: ${fact.id} 身体部位归属须原样写出 ${missingTerms.join(', ')}`, 502);
-            let referenceProblem = englishReferenceProblem(row.english, input.glossary);
-            if (referenceProblem) {
-              const personGlossary = Object.fromEntries(
-                Object.entries(input.glossary).filter(([zh]) =>
-                  names.includes(zh) || (input.characters || []).some(c => c.name === zh)
-                )
-              );
-              const matchingFact = selected.find(f => f.id === fact.id);
-              const boundChars = matchingFact?.binding
-                ? boundVisibleEntities(matchingFact.binding).map(e => e.name).filter(n => Boolean(personGlossary[n]))
-                : [];
-              const factChars = Object.entries(personGlossary).filter(([zh]) => fact.text.includes(zh));
-              const englishMentions = Object.entries(personGlossary).filter(([_, eng]) =>
-                new RegExp(`\\b${eng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(row.english)
-              );
-              const blockPersons = [...new Set(selected
-                .filter(f => f.block_id === matchingFact?.block_id)
-                .flatMap(f => [
-                  ...boundVisibleEntities(f.binding).map(e => e.name),
-                  ...Object.keys(personGlossary).filter(zh => f.text.includes(zh))
-                ])
-                .filter(n => Boolean(personGlossary[n])))];
-              const priorPersons = [...new Set(selected
-                .filter(f => (f.start ?? 0) <= (matchingFact?.start ?? 0))
-                .flatMap(f => [
-                  ...boundVisibleEntities(f.binding).map(e => e.name),
-                  ...Object.keys(personGlossary).filter(zh => f.text.includes(zh))
-                ])
-                .filter(n => Boolean(personGlossary[n])))];
-
-              let targetEng: string | undefined;
-              if (factChars.length === 1 && personGlossary[factChars[0]![0]]) {
-                targetEng = personGlossary[factChars[0]![0]];
-              } else if (englishMentions.length === 1) {
-                targetEng = englishMentions[0]![1];
-              } else if (boundChars.length === 1 && personGlossary[boundChars[0]!]) {
-                targetEng = personGlossary[boundChars[0]!];
-              } else if (blockPersons.length === 1 && personGlossary[blockPersons[0]!]) {
-                targetEng = personGlossary[blockPersons[0]!];
-              } else if (priorPersons.length === 1 && personGlossary[priorPersons[0]!]) {
-                targetEng = personGlossary[priorPersons[0]!];
-              } else if (names.length === 1 && personGlossary[names[0]!]) {
-                targetEng = personGlossary[names[0]!];
-              } else if (matchingFact) {
-                const block = doc.scenes.flatMap(s => s.blocks).find(b => b.id === matchingFact.block_id);
-                if (block) {
-                  const leadingChar = Object.keys(personGlossary).find(zh => block.text.startsWith(zh));
-                  if (leadingChar) targetEng = personGlossary[leadingChar];
-                }
-              }
-              if (!targetEng && names.length > 0 && personGlossary[names[0]!]) {
-                targetEng = personGlossary[names[0]!];
-              }
-
-              if (targetEng) {
-                const escapedTarget = targetEng.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
-                if (new RegExp(`\\b${escapedTarget}\\b`, 'i').test(row.english)) {
-                  row.english = row.english.replace(/\btheir\s+([a-zA-Z]+)\b/gi, 'the $1');
-                }
-                row.english = row.english
-                  .replace(/\btheir\s+(color|colour|light|lustre|focus|gaze|glance|grip|hold|warmth|heat|guard|ground|composure|expression|posture|demeanor|clarity|breath|step|steps|footing|balance|pace|sleeve|sleeves|shoulder|shoulders|face|head|eyes?|pupils?|hands?|fingers?|brows?)\b/gi, 'the $1')
-                  .replace(/\b(?:he|she)\b/gi, targetEng)
-                  .replace(/\b(?:his|her)\b/gi, `${targetEng}'s`)
-                  .replace(/\b(?:him)\b/gi, targetEng)
-                  .replace(/\b(?:they)\b/gi, targetEng)
-                  .replace(/\b(?:their)\b/gi, `${targetEng}'s`)
-                  .replace(/\b(?:them)\b/gi, targetEng)
-                  .replace(new RegExp(`\\b${escapedTarget}'s\\s+([^.]*?)\\b${escapedTarget}'s\\s+([a-zA-Z]+)\\b`, 'gi'), `${targetEng}'s $1the $2`);
-                referenceProblem = englishReferenceProblem(row.english, input.glossary);
-              }
-            }
+            const referenceProblem = englishReferenceProblem(row.english, input.glossary);
             if (referenceProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${referenceProblem}。上次译文「${row.english}」。须改用 facts 中人物的完整译名及其所有格，不能保留 his/her。`, 502);
             const relationProblem = transferTranslationProblem(fact.text, row.english, input.glossary);
             if (relationProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${relationProblem}`, 502);

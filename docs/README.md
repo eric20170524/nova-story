@@ -45,6 +45,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | 本地 LLM（Ollama Qwen 等）部署与显存互斥 | [local_language_model_deployment_cn.md](./deployment/local_language_model_deployment_cn.md) |
 | 本机中文 TTS、音色目录与角色绑音 | [local_chinese_tts_voice_cn.md](./deployment/local_chinese_tts_voice_cn.md) |
 | 系统整体分层架构与运行时数据流 | [architecture_cn.md](./architecture/architecture_cn.md) |
+| 弱模型只出语义、Harness 管协议的准入方案 | [model_semantics_harness_protocol_2026-10-20.md](./architecture/model_semantics_harness_protocol_2026-10-20.md) |
 | 后端已实现能力完整清单 | [backend_implemented_features.md](./architecture/backend_implemented_features.md) |
 | Agent OS / 小说创作核心落地计划 | [agent_os_plan_cn.md](./architecture/agent_os_plan_cn.md) |
 | 新书与 Agent OS 对齐核查、10 万字内小说故事建设方案 | [creation_alignment_review_2026-09-28.md](./architecture/creation_alignment_review_2026-09-28.md) |
@@ -77,6 +78,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [novel_creation_frontend_tasks_2026-09-30.md](./architecture/novel_creation_frontend_tasks_2026-09-30.md) | 📝 前端交接 | Agent 模式、规划与候选卡、类型/API、重试及编辑保护核心代码 |
 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) | ✅ S0–S4 已闭环 | 故事→改编提纲→分场剧本→安全交接导演分镜；支持备份往返、级联清理、项目复制与来源过期检测 |
 | [scene_continuity_workflow_2026-10-09.md](./architecture/scene_continuity_workflow_2026-10-09.md) | 📝 Track 5 S5 评审修订方案 | 确认状态契约、九机位接口边界、保留旧图的失效、独立夹具与 9B 建议验收；人工分轮制作不等待模型；任务状态见 0_TASKLIST.md 的 CT00–CT22 |
+| [model_semantics_harness_protocol_2026-10-20.md](./architecture/model_semantics_harness_protocol_2026-10-20.md) | ✅ 已落地 | 模型出语义、Harness 管协议：原文切片、人物下标、译文、连续状态、年龄与参考图只拒绝，不改写通过 |
 
 阶段基线、验收报告及 JSON 结果统一放在 `archive/`，架构目录保留设计与实施方案。
 

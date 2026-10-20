@@ -102,7 +102,9 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     assert.deepEqual(facts.map(f => f.kind), ['visual', 'audio', 'internal']);
     const span = { text: '阿岚持红杯', kind: 'visual' as const, beat: 0, states: [{ entity: '阿岚', attribute: '持物', value: '红杯' }] };
     const stateFacts = anchorSpans('s', 'b', span.text, { spans: [span] });
-    assert.equal(continuityAfter([], stateFacts)[0]!.fact_id, stateFacts[0]!.id);
+    assert.equal(continuityAfter([], stateFacts).length, 0);
+    const held = { ...stateFacts[0]!, states: [{ entity: '阿岚', attribute: 'holding', value: '红杯' }] };
+    assert.equal(continuityAfter([], [held])[0]!.fact_id, held.id);
     span.states[0]!.value = '蓝杯'; assert.throws(() => anchorSpans('s', 'b', span.text, { spans: [span] }), /缺少原文证据/);
     const text = '裴雨涵在陆嘉静身下微微战栗，';
     const split = evidencedContinuityStates(text, [
@@ -144,6 +146,9 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     assert.equal(f3.length, 2);
     assert.equal(f3[0]!.beat, 0);
     assert.equal(f3[1]!.beat, 1);
+    assert.throws(() => anchorSpans('s', 'b', '陈月走进房间举起蓝伞看着窗外的雨。', { spans: [{ text: '看着窗外的雨。', kind: 'visual', beat: 0, states: [] }] }), /来源片段遗漏/);
+    const quoted = anchorSpans('s', 'b', '陈月走进房间，只见举起蓝伞。', { spans: [{ text: '陈月走进房间只见举起蓝伞', kind: 'visual', beat: 0, states: [] }] });
+    assert.equal(quoted[0]!.text, '陈月走进房间，只见举起蓝伞');
   });
   await t.test('对白引号后的动作不把整段算成一条超长语音', () => {
     const doc = document();
@@ -796,6 +801,27 @@ test('双向审核区分语义问题与格式失败', async () => {
   }
   const provider = { ...providerFixture().provider, async generateStructured(_p: string, schema: any) { return schema.parse({}); } } as AIProvider;
   await assert.rejects(() => auditFacts(provider, [{ id: 'f', text: '无人街道' }], 'An empty street.'), /审核格式错误/);
+  const turned = { async generateStructured(_p: string, schema: any) { return schema.parse({ faithful: false }); } } as AIProvider;
+  await assert.rejects(() => auditFacts(turned, [{ id: 'f', text: '林岚举起蓝伞' }], 'Lin Lan turned away.', { glossary: { 林岚: 'Lin Lan' }, visible_names: ['林岚'] }), /译文待核对/);
+});
+
+test('英文代词留在待核对译文里，不会改成姓名所有格', async () => {
+  const doc = document();
+  doc.scenes[0]!.blocks[0]!.text = '林岚把蓝伞递给陈月。';
+  const progress: WorkflowProgress = { input_hash: 'pronoun-keep', phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [] };
+  const m = providerFixture();
+  const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
+    const input = JSON.parse(prompt);
+    if (input.task === 'translate') {
+      return schema.parse({ translations: input.facts.map((fact: any) => ({ id: fact.id, english: String(fact.text).includes('递给') ? 'Lin Lan hands the blue umbrella to her.' : 'An empty harbor.' })) });
+    }
+    return m.provider.generateStructured(prompt, schema, system, options);
+  } };
+  await assert.rejects(() => runFactWorkflow({ doc, scriptId: 91, revision: 1, provider, model: 'mock', characters: [{ id: 1, name: '林岚' }, { id: 2, name: '陈月' }], glossary: { 林岚: 'Lin Lan', 陈月: 'Chen Yue' }, locks: [], instructions: '', progress, persist: async () => {} }), (error: any) => {
+    assert.match(String(error?.message), /to her/);
+    assert.doesNotMatch(String(error?.message), /Lin Lan's/);
+    return true;
+  });
 });
 
 test('多人离场带前文建议仍停在待核对，不调用翻译也不把候选都画出来', async () => {

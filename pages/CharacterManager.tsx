@@ -37,7 +37,7 @@ export const CharacterManager: React.FC = () => {
   const [isPromptLoading, setIsPromptLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
-  const [useRefPortrait, setUseRefPortrait] = useState<boolean>(true);
+  const [useRefPortrait, setUseRefPortrait] = useState<boolean>(false);
   const [refImageUrl, setRefImageUrl] = useState<string | null>(null);
 
   // Project policy for consistent style/NSFW on character gens
@@ -402,9 +402,7 @@ export const CharacterManager: React.FC = () => {
     const initialGenType = overrideGenType || ((!char.avatar_url && !char.turnaround_url) ? 'portrait' : 'turnaround');
     setGenType(initialGenType);
 
-    const availableRef = initialGenType === 'turnaround'
-      ? (char.avatar_url || char.turnaround_url || null)
-      : (char.avatar_url || null);
+    const availableRef = char.avatar_url || null;
     const initialUseRef = initialGenType === 'turnaround' ? Boolean(availableRef) : false;
     setUseRefPortrait(initialUseRef);
     setRefImageUrl(availableRef);
@@ -490,16 +488,11 @@ export const CharacterManager: React.FC = () => {
         composition_ref_url: null,
       };
 
-      // Tier A: single character ref → classic img2img / IP-Adapter for portrait/turnaround
-      const effectiveRef = (useRefPortrait && refImageUrl)
-        ? refImageUrl
-        : (genType === 'turnaround' ? (sheetModalChar.avatar_url || null) : null);
-      if (effectiveRef) {
-        payload.ref_image_url = effectiveRef;
-        payload.character_ref_url = effectiveRef;
-        if (genType === 'turnaround') {
-          payload.turnaround_front_adapter = true;
-        }
+      payload.use_ref_portrait = useRefPortrait === true;
+      if (useRefPortrait && refImageUrl) {
+        payload.ref_image_url = refImageUrl;
+        payload.character_ref_url = refImageUrl;
+        if (genType === 'turnaround') payload.turnaround_front_adapter = true;
       }
 
 
@@ -523,6 +516,7 @@ export const CharacterManager: React.FC = () => {
       }
 
       const imageUrl = await waitForAssetTask(taskId);
+      if (genType === 'portrait') setRefImageUrl(imageUrl);
       setGeneratedImageUrl(imageUrl);
       showToast(t("characters.gen_success", "Image generated successfully"), 'success');
       setIsGenerating(false);

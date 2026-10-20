@@ -33,6 +33,10 @@ const CORE_TESTS = [
   'src/services/project_settings.test.ts',
   'src/services/formal_storyboard_capability.test.ts',
   'src/services/formal_storyboard_plan.test.ts',
+  'src/services/fact_state.test.ts',
+  'src/services/ai/storyboard_generation_service.test.ts',
+  'src/services/entity_binding.test.ts',
+  'src/routes/character_age_and_turnaround.test.ts',
   'src/services/video/video_spec_compiler.test.ts',
   'src/services/video/video_workflow_compiler.test.ts',
 ];

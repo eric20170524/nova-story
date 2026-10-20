@@ -33,6 +33,7 @@ import {
     buildCharacterAppearanceSnippet,
     mergeAppearanceIntoPrompt,
     planReferenceGeneration,
+    visiblePeopleFromWorkflow,
     resolveReferenceImg2ImgPolicy,
     resolveReferenceUrls,
     type AdapterAvailability
@@ -484,6 +485,13 @@ const injectImg2ImgReference = (
 export const resolveImg2ImgDenoise = (workflowData: any): number =>
     resolveReferenceImg2ImgPolicy(workflowData).denoise;
 
+/** Character sheets and shots with a visible person keep the oriental face negative. Empty shots do not. */
+export function shotUsesOrientalFaceNegative(workflowData: any): boolean {
+    const gen = String(workflowData?.gen_type || '');
+    if (/portrait|turnaround|face/i.test(gen)) return true;
+    return visiblePeopleFromWorkflow(workflowData).length > 0;
+}
+
 export const compileComfyWorkflow = async (
     workflowData: any,
     finalPrompt: string,
@@ -601,7 +609,7 @@ export const compileComfyWorkflow = async (
         ? [
             String(workflowData?.negative_prompt || '').trim(),
             CHILD_SAFETY_NEGATIVE,
-            orientalRealistic ? ORIENTAL_REALISTIC_NEGATIVE : '',
+            orientalRealistic && shotUsesOrientalFaceNegative(enrichedWorkflowData) ? ORIENTAL_REALISTIC_NEGATIVE : '',
         ]
         : [
             sanitizeNegativePromptForSubject(
@@ -1132,7 +1140,7 @@ export class GenerationService {
                             characterVersion = Number(charRow.active_version || 1);
                             if (
                                 String(effectiveWorkflowData?.gen_type || '').toLowerCase() === 'turnaround'
-                                && effectiveWorkflowData?.use_ref_portrait !== false
+                                && effectiveWorkflowData?.use_ref_portrait === true
                                 && !effectiveWorkflowData?.character_ref_url
                                 && !effectiveWorkflowData?.ref_image_url
                             ) {
@@ -1190,10 +1198,20 @@ export class GenerationService {
                 const rawPrompt = effectiveWorkflowData?.prompt || effectiveWorkflowData?.text || effectiveWorkflowData?.description || JSON.stringify(effectiveWorkflowData);
                 finalPrompt = Prompts.buildCinematicGridImagePrompt(rawPrompt);
             } else if (contractShot) {
-                const characters = productionPin ? productionPin.text_characters : await db.all(
-                    'SELECT id, name, english_name, visual_tags FROM character WHERE project_id = ?',
+                const characters: Array<{ id?: number; version?: number; name?: string | null; english_name?: string | null; visual_tags?: unknown; age?: string | number | null }> = productionPin ? productionPin.text_characters.map((character) => ({ ...character })) : await db.all(
+                    'SELECT id, name, english_name, visual_tags, age FROM character WHERE project_id = ?',
                     sceneProjectId
                 );
+                if (productionPin) {
+                    for (const character of characters) {
+                        const version = await db.get(
+                            'SELECT age FROM character_version WHERE character_id = ? AND version = ?',
+                            character.id,
+                            character.version
+                        );
+                        character.age = version?.age ?? null;
+                    }
+                }
                 for (const ref of productionPin?.references || []) if (ref.kind === 'character') {
                     const character = characters.find(row => Number(row.id) === ref.id);
                     if (character) character.visual_tags = ref.visual_tags;

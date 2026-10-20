@@ -14,6 +14,8 @@ function exactTerm(text: string, terms: ReadonlySet<string>): boolean {
 
 /** Reject only an exact illegal pair. The note must not name a replacement category. */
 export function stateCategoryConflict(attribute: string, value: string, item = ''): string | null {
+  if (!isFactStateAttribute(attribute)) return '未知连续状态';
+  if (attribute === 'position' && (CONTACT.has(value.trim()) || CONTACT.has(item.trim()))) return 'position 与取值不符';
   const body = exactTerm(item, BODY_EXACT) || exactTerm(value, BODY_EXACT) || BODY_PHRASES.some((term) => value.trim() === term || item.trim() === term);
   const pose = POSE_PHRASES.some((term) => value.trim() === term) || POSE_MARKS.some((term) => value.trim() === term);
   if ((attribute === 'wardrobe' || attribute === 'holding') && body) return `${attribute} 与取值不符`;

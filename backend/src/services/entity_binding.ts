@@ -88,6 +88,19 @@ export function boundText(text: string, binding?: EntityBinding): string {
   return result;
 }
 
+/** A complete off-by-one index list is only a suggestion. A legal permutation is kept. Mixed or duplicate indexes are not repaired. */
+export function admitBindingRows<T extends { index: number }>(rows: T[], pending: number[]): { rows: T[]; repaired: boolean } {
+  if (rows.length !== pending.length) throw new Error('人物自动解析缺项或重复');
+  const indexes = rows.map(row => row.index);
+  if (new Set(indexes).size !== rows.length) throw new Error('人物自动解析缺项或重复');
+  const pendingSet = new Set(pending);
+  if (indexes.every(index => pendingSet.has(index))) return { rows, repaired: false };
+  if (indexes.every(index => !pendingSet.has(index))) {
+    return { rows: rows.map((row, i) => ({ ...row, index: pending[i]! })), repaired: true };
+  }
+  throw new Error('人物自动解析缺项或重复');
+}
+
 /** Model resolution is a proposal, even when it returns status=resolved. */
 export async function proposeBindings(provider: AIProvider, binding: EntityBinding, text: string, context: string, roster: EntityRef[], scene?: { location: string; interior_exterior?: string; time_of_day?: string }): Promise<EntityBinding> {
   const pending = binding.mentions.map((m, index) => ({ ...m, index })).filter(m => !m.confirmed);
@@ -97,10 +110,8 @@ export async function proposeBindings(provider: AIProvider, binding: EntityBindi
   const result = await provider.generateStructured(JSON.stringify({ task: 'entity_binding', text, context, scene, entities: roster, mentions: pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end })) }), schema,
     '为当前动作的代词或省略主语建议人物绑定。按前文先判断谁离开、谁留下，再判断当前 scene 地点内谁能够执行动作。已离开当前地点的人，除非原文明确跟随、转场或画外，不作为当前现场动作的执行者。不要仅按最近人名选择，也不要根据姓名猜性别。只剩一名有明确现场依据的候选时，status=resolved，entity_id=该ID。确有多种有依据的解释时，status=ambiguous，entity_id=null。没有依据时，status=unknown，entity_id=null。照片、提及和画外声音不证明本人在现场。每个 index 返回一项，只有 resolved 可以填写 entity_id。结果仅为待核对建议，不能自行标记为已确认。', { temperature: 0.1, maxTokens: 256 });
   const pendingIndices = new Set(pending.map(m => m.index));
-  let proposals = result.bindings;
-  if (proposals.length === pending.length && proposals.some(b => !pendingIndices.has(b.index))) {
-    proposals = proposals.map((b, i) => ({ ...b, index: pending[i]!.index }));
-  }
+  const admitted = admitBindingRows(result.bindings, pending.map(m => m.index));
+  const proposals = admitted.rows;
   const byIndex = new Map(proposals.map(b => [b.index, b]));
   return { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((m, index) => {
     const proposal = byIndex.get(index) || (pendingIndices.has(index) ? { index, status: 'unknown' as const, entity_id: null } : undefined);
@@ -162,18 +173,16 @@ export async function resolveScriptBindings(provider: AIProvider, binding: Entit
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']), visibility: z.enum(['visible', 'mentioned', 'uncertain']) })) });
   const result = schema.parse(await provider.generateStructured(JSON.stringify(input), schema,
     '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。', { temperature: 0.1, maxTokens: 1024 }));
-  const pendingIndices = new Set(pending.map(m => m.index));
-  if (result.bindings.length === pending.length && result.bindings.some(b => !pendingIndices.has(b.index))) {
-    result.bindings = result.bindings.map((b, i) => ({ ...b, index: pending[i]!.index }));
-  }
-  if (result.bindings.length !== pending.length || new Set(result.bindings.map(b => b.index)).size !== pending.length || result.bindings.some(b => !pendingIndices.has(b.index))) throw new Error('人物自动解析缺项或重复');
+  const admitted = admitBindingRows(result.bindings, pending.map(m => m.index));
   const resolved: EntityBinding = { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((mention, index) => {
-    const row = result.bindings.find(b => b.index === index);
+    const row = admitted.rows.find(b => b.index === index);
     if (!row) return mention;
     const localSubject = localSubjectForReference(text, mention, roster);
-    if (row.status === 'resolved' && localSubject && localSubject.id !== row.entity_id) return { ...mention, entity: null, candidates: roster, status: 'ambiguous', visibility: 'uncertain', authority: 'model_proposal', confirmed: false };
+    if (!admitted.repaired && row.status === 'resolved' && localSubject && localSubject.id !== row.entity_id) return { ...mention, entity: null, candidates: roster, status: 'ambiguous', visibility: 'uncertain', authority: 'model_proposal', confirmed: false };
     const entity = row.status === 'resolved' ? roster.find(e => e.id === row.entity_id) || null : null;
-    const accepted = Boolean(entity && row.visibility !== 'uncertain' && roster.filter(e => e.name === entity.name).length === 1);
+    const unique = Boolean(entity && roster.filter(e => e.name === entity.name).length === 1);
+    const contradicts = Boolean(localSubject && localSubject.id !== row.entity_id);
+    const accepted = !admitted.repaired && row.status === 'resolved' && Boolean(entity) && row.visibility !== 'uncertain' && unique && !contradicts;
     const visibility = row.visibility;
     return { ...mention, entity, candidates: roster, status: entity ? 'resolved' : row.status === 'resolved' ? 'unknown' : row.status,
       visibility, authority: accepted ? 'model_resolution' : 'model_proposal', confirmed: accepted };

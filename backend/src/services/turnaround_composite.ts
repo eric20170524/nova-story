@@ -25,6 +25,7 @@ import {
 import { resolveTierBFromSettings } from './tier_b_adapters';
 import {
   normalizeImageModelFamily,
+  ORIENTAL_REALISTIC_FACE_LOCK,
   readStoredCharacterSheet,
   type ImageModelFamily
 } from './image_generation_policy';
@@ -95,12 +96,35 @@ export function extractAppearanceBase(prompt: string): string {
     .join(', ');
 }
 
+const FACE_LOCK_CLAUSES = new Set(
+  `${ORIENTAL_REALISTIC_FACE_LOCK}, delicate classical oriental bone structure, East Asian facial features`
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+/** Side and back views cannot show the locked face, so those clauses leave the appearance. */
+export function stripOrientalFaceLock(prompt: string): string {
+  return String(prompt || '')
+    .split(/[,，]/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      const key = part.toLowerCase();
+      if (!key || FACE_LOCK_CLAUSES.has(key)) return false;
+      if (/east asian facial/i.test(part)) return false;
+      if (/oriental bone structure/i.test(part)) return false;
+      if (/east asian eyelids/i.test(part)) return false;
+      return true;
+    })
+    .join(', ');
+}
+
 export function buildTurnaroundViewPrompt(
   basePrompt: string,
   view: TurnaroundViewSpec,
   modelFamily: ImageModelFamily
 ): { prompt: string; negative_prompt: string } {
-  const appearance = extractAppearanceBase(basePrompt);
+  const appearance = extractAppearanceBase(view.id === 'front' ? basePrompt : stripOrientalFaceLock(basePrompt));
   const quality =
     modelFamily === 'pony'
       ? 'score_9, score_8_up, score_7_up, source_anime, masterpiece, best quality'
@@ -283,7 +307,7 @@ export async function generateTurnaroundComposite(
     throw new Error('Failed to start or connect to ComfyUI');
   }
 
-  // A portrait reference is used for the turnaround when available (unless explicitly disabled).
+  // A stored portrait is loaded only when the request explicitly opts in.
   let refUrl =
     (input.workflowData?.character_ref_url as string | undefined)
     || (input.workflowData?.ref_image_url as string | undefined)
@@ -333,7 +357,7 @@ export async function generateTurnaroundComposite(
           } else if (storedSheet.gender === 'male') {
             inferredSubjectType = 'male_human';
           }
-          if (!refUrl && input.workflowData?.use_ref_portrait !== false) {
+          if (!refUrl && input.workflowData?.use_ref_portrait === true) {
             let storedAvatar = tags?.assets?.avatar_url || tags?.avatar_url || (charRow as any).avatar_url;
             if (!storedAvatar && version) {
               const verRow = await db.get(
@@ -358,7 +382,7 @@ export async function generateTurnaroundComposite(
   }
 
   const enableFrontAdapter = Boolean(
-    refUrl && input.workflowData.turnaround_front_adapter !== false
+    refUrl && input.workflowData.turnaround_front_adapter === true
   );
 
   if (refUrl && enableFrontAdapter && !comfyService.isRemote) {

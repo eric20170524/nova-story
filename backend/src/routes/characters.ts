@@ -114,11 +114,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
           }
         }
 
-        const visualTags = profile.visual_tags || {};
+        const visualTags = { ...(profile.visual_tags || {}) };
         const profileAge = (profile.age && String(profile.age).trim()) || (visualTags.age && String(visualTags.age).trim()) || null;
-        if (profileAge) {
-          visualTags.age = profileAge;
-        }
+        if (profileAge) visualTags.age = profileAge;
+        else delete visualTags.age;
         const mergedTags: any = {
           ...existingTags,
           timeline_map: existingTags.timeline_map || {},
@@ -439,7 +438,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const bodySchema = z.object({
       gen_type: z.string().default('turnaround'),
       custom_description: z.string().optional().nullable(),
-      use_ref_portrait: z.boolean().default(true),
+      use_ref_portrait: z.boolean().optional(),
       ref_image_url: z.string().optional().nullable()
     });
     const req = bodySchema.parse(request.body);
@@ -455,7 +454,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       stored.appearance.age = String(dbChar.age).trim();
     }
     const assets = tags?.assets || {};
-    const refUrl = req.ref_image_url || assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url;
+    const storedAvatar = assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url || null;
+    const refUrl = req.use_ref_portrait === true ? (req.ref_image_url || storedAvatar || null) : null;
     const codexImage = SettingsManager.loadSettings().image_provider === 'codex';
 
     const project = await db.get('SELECT settings FROM project WHERE id = ?', dbChar.project_id);
@@ -484,7 +484,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     let refHint = "";
-    if (req.use_ref_portrait && refUrl) {
+    if (req.use_ref_portrait === true && refUrl) {
       refHint = ", matching reference character design, consistent face hair and clothing across views";
     }
 
@@ -542,7 +542,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const activeRefUrl = (req.gen_type === 'turnaround' && req.use_ref_portrait !== false) ? (refUrl || null) : (req.use_ref_portrait ? (refUrl || null) : null);
+    const activeRefUrl = req.use_ref_portrait === true ? (refUrl || null) : null;
     return {
       prompt,
       negative_prompt: negativePrompt,

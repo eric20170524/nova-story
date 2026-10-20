@@ -281,11 +281,11 @@ class ApiService {
       `/characters/${characterId}/build-prompt`, 
       { 
         method: 'POST', 
-        body: { 
+        body: {
           gen_type: genType,
           custom_description: customDesc,
-          use_ref_portrait: useRefPortrait ?? true,
-          ref_image_url: refImageUrl
+          use_ref_portrait: useRefPortrait === true,
+          ...(useRefPortrait === true && refImageUrl ? { ref_image_url: refImageUrl } : {}),
         } 
       }
     );

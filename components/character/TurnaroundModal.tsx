@@ -108,7 +108,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const nextRef = character.avatar_url || refImageUrl || character.turnaround_url || null;
+                    const nextRef = refImageUrl || character.avatar_url || null;
                     const nextUseRef = Boolean(nextRef);
                     if (setRefImageUrl && nextRef !== refImageUrl) {
                       setRefImageUrl(nextRef);

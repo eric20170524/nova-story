@@ -43,6 +43,16 @@ test('an exact illegal pair is rejected without naming another category', async 
   assert.equal(stateCategoryConflict('wardrobe', '脸颊发红'), null);
   assert.equal(stateCategoryConflict('position', '坐忘观'), null);
   assert.equal(stateCategoryConflict('position', '坐在椅上'), null);
+  const pinned = stateCategoryConflict('position', '按倒');
+  assert.match(pinned || '', /position 与取值不符/);
+  assert.doesNotMatch(pinned || '', /姿势|身体|pose|body/);
+  assert.equal(stateCategoryConflict('mood', '平静'), '未知连续状态');
+  let moodCalls = 0;
+  await assert.rejects(() => reviewExtractedStates('林岚被按倒。', async () => {
+    moodCalls += 1;
+    return [{ attribute: 'mood', value: '平静' }];
+  }, (state) => stateCategoryConflict(state.attribute, state.value)), /连续状态待核对/);
+  assert.equal(moodCalls, 2);
   let calls = 0;
   await assert.rejects(() => reviewExtractedStates('林岚赤足。', async (note) => {
     calls += 1;
@@ -61,8 +71,11 @@ test('expression does not carry, pose and body do, and a foreign place does not'
     { entity: '林岚', attribute: 'position', value: '花海深处' },
     { entity: '林岚', attribute: 'wardrobe', value: '灰外套', item: '外套' },
   ];
-  const carried = continuityAfter([], [seated]);
+  seated.states.push({ entity: '林岚', attribute: 'mood', value: '平静' });
+  const carried = continuityAfter([{ entity: '林岚', attribute: 'mood', value: '旧心情', fact_id: 'old' }], [seated]);
   assert.equal(carried.some((state) => state.attribute === 'expression'), false);
+  assert.equal(carried.some((state) => state.attribute === 'mood'), false);
+  assert.equal(carried.some((state) => state.attribute === 'pose' && state.value === '坐在椅上'), true);
   assert.equal(carried.some((state) => state.attribute === 'pose'), true);
   assert.equal(carried.some((state) => state.attribute === 'body'), true);
   assert.equal(carried.filter((state) => state.attribute === 'wardrobe').length, 1);

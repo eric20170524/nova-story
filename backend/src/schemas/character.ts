@@ -46,7 +46,11 @@ export const CharacterCreateSchema = z.object({
   avatar_url: z.string().nullable().optional(),
   turnaround_url: z.string().nullable().optional(),
   face_url: z.string().nullable().optional(),
-  age: z.union([z.string(), z.number()]).nullable().optional().transform(v => (v !== undefined && v !== null && v !== '') ? String(v) : null),
+  age: z.union([z.string(), z.number()]).nullable().optional().transform(v => {
+    if (v === undefined) return undefined;
+    if (v === null || v === '') return null;
+    return String(v);
+  }),
 });
 
 export const CharacterUpdateSchema = z.object({
@@ -63,7 +67,11 @@ export const CharacterUpdateSchema = z.object({
   avatar_url: z.string().nullable().optional(),
   turnaround_url: z.string().nullable().optional(),
   face_url: z.string().nullable().optional(),
-  age: z.union([z.string(), z.number()]).nullable().optional().transform(v => (v !== undefined && v !== null && v !== '') ? String(v) : null),
+  age: z.union([z.string(), z.number()]).nullable().optional().transform(v => {
+    if (v === undefined) return undefined;
+    if (v === null || v === '') return null;
+    return String(v);
+  }),
 });
 
 export type Character = z.infer<typeof CharacterSchema>;

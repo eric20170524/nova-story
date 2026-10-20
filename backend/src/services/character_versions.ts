@@ -11,6 +11,7 @@ export interface CharacterVersionRow {
   label?: string | null;
   description?: string | null;
   visual_tags?: string | null;
+  age?: string | null;
   created_at?: string;
 }
 
@@ -61,10 +62,11 @@ export async function ensureCharacterVersionBaseline(characterId: number): Promi
   }
 
   await db.run(
-    `INSERT INTO character_version (character_id, version, label, description, visual_tags)
-     VALUES (?, 1, 'v1', NULL, ?)`,
+    `INSERT INTO character_version (character_id, version, label, description, visual_tags, age)
+     VALUES (?, 1, 'v1', NULL, ?, ?)`,
     characterId,
-    tagsToString(char.visual_tags)
+    tagsToString(char.visual_tags),
+    char.age ?? null
   );
   await db.run('UPDATE character SET active_version = 1 WHERE id = ?', characterId);
 }
@@ -92,10 +94,12 @@ export async function activateCharacterVersion(
   await db.run(
     `UPDATE character SET
       active_version = ?,
-      visual_tags = ?
+      visual_tags = ?,
+      age = ?
     WHERE id = ?`,
     version,
     ver.visual_tags,
+    ver.age ?? null,
     characterId
   );
 
@@ -138,12 +142,13 @@ export async function commitCharacterEdits(characterId: number, previousVisualTa
   );
   const nextVersion = Number((maxRow as { m?: number } | undefined)?.m || 0) + 1;
   await db.run(
-    `INSERT INTO character_version (character_id, version, label, description, visual_tags)
-     VALUES (?, ?, ?, NULL, ?)`,
+    `INSERT INTO character_version (character_id, version, label, description, visual_tags, age)
+     VALUES (?, ?, ?, NULL, ?, ?)`,
     characterId,
     nextVersion,
     `v${nextVersion}`,
-    tagsToString(char.visual_tags)
+    tagsToString(char.visual_tags),
+    char.age ?? null
   );
   await db.run('UPDATE character SET active_version = ? WHERE id = ?', nextVersion, characterId);
 }
@@ -156,9 +161,10 @@ export async function syncActiveCharacterVersion(characterId: number): Promise<v
   const active = Number(char.active_version || 1);
 
   await db.run(
-    `UPDATE character_version SET visual_tags = ?
+    `UPDATE character_version SET visual_tags = ?, age = ?
      WHERE character_id = ? AND version = ?`,
     tagsToString(char.visual_tags),
+    char.age ?? null,
     characterId,
     active
   );
@@ -210,13 +216,14 @@ export async function createCharacterVersion(
 
   const label = options.label || `v${nextVersion}`;
   await db.run(
-    `INSERT INTO character_version (character_id, version, label, description, visual_tags)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO character_version (character_id, version, label, description, visual_tags, age)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     characterId,
     nextVersion,
     label,
     null,
-    tagsToString(visualTags)
+    tagsToString(visualTags),
+    char.age ?? null
   );
 
   let resultChar = char;

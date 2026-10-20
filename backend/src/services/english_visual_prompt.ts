@@ -578,7 +578,7 @@ function pushFact(facts: ShotImageFact[], id: string, text: string, binding: Sho
 /** Chinese visible facts and confirmed bindings. Appearance fields are not rewritten here. */
 export function shotImageMaterialsFromSpec(
   spec: Record<string, unknown> | null | undefined,
-  characters: Array<{ name?: string | null; english_name?: string | null; visual_tags?: unknown }> = [],
+  characters: Array<{ name?: string | null; english_name?: string | null; visual_tags?: unknown; age?: string | number | null }> = [],
   options: EnglishPromptOptions = {},
 ): ShotImageMaterials {
   const source = spec || {};
@@ -666,9 +666,14 @@ export function shotImageMaterialsFromSpec(
     const englishName = String(row?.english_name || '').trim();
     if (englishName && !glossary[name]) glossary[name] = englishName;
     const pose = poseByName.get(name);
+    const appearance = row ? appearanceFieldsFromTags(row.visual_tags, options.chapterId) : emptyAppearance();
+    if (!appearance.age) {
+      const columnAge = String(row?.age ?? '').trim();
+      if (columnAge) appearance.age = columnAge;
+    }
     return {
       name,
-      appearance: row ? appearanceFieldsFromTags(row.visual_tags, options.chapterId) : emptyAppearance(),
+      appearance,
       ...(pose ? { pose } : {}),
     };
   });
