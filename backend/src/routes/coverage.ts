@@ -9,6 +9,8 @@ import {
   ensureSceneVersionBaseline,
   syncActiveVersionFromScene,
 } from '../services/scene_versions';
+import { storedDesignIsFrozen } from '../services/image_generation_policy';
+import { appearanceFieldsFromTags } from '../services/english_visual_prompt';
 import { formatVisualLockTokens } from '../services/reference_generation_policy';
 import { type CharacterLockRef } from '../services/pony_prompt_compiler';
 import { compileNegativePrompt } from '../services/negative_prompt_compiler';
@@ -35,10 +37,12 @@ const buildCharacterLockRefs = (characters: any[], chapterId?: string | number |
       const aliases = Array.isArray(tags?.aliases)
         ? tags.aliases.map((a: unknown) => String(a || '').trim()).filter(Boolean)
         : [];
+      const costume_locked = storedDesignIsFrozen(tags);
       return {
         name: String(c.name || '').trim() || null,
         aliases,
         lock,
+        ...(costume_locked ? { costume_locked, appearance: appearanceFieldsFromTags(tags, chapterId) } : {}),
       } satisfies CharacterLockRef;
     })
     .filter(Boolean) as CharacterLockRef[];

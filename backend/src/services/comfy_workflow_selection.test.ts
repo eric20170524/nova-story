@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import {
+  inferComfyWorkflowFamily,
   selectComfyWorkflow,
   type ComfyWorkflowRow,
   type ComfyWorkflowLookup
@@ -23,7 +26,7 @@ const lookup: ComfyWorkflowLookup = {
   byId: async (id) => rows.find((row) => row.id === id) || null,
   byName: async (name) => rows.find((row) => row.name === name) || null
 };
-const image = (model: 'pony' | 'sd15' | 'redcraft_krea2', workflow_id: number | null = null) => ({
+const image = (model: 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image', workflow_id: number | null = null) => ({
   image_generation: { model, workflow_id, style: 'xianxia_immortal',
     output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
     nsfw_mode: 'inherit' }
@@ -74,6 +77,35 @@ test('missing model family never falls back to an incompatible Pony workflow', a
   await assert.rejects(
     selectComfyWorkflow({ project_settings: image('sd15') }, { comfyui: {} }, ponyOnly),
     /No ComfyUI workflow is configured for model 'sd15'/
+  );
+});
+
+test('qwen-image 2.1 graph is its own family and is the automatic match', async () => {
+  const content = fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8');
+  const graph = JSON.parse(content);
+  assert.equal(graph['4'].inputs.unet_name, 'qwen_image_2.1_int8_convrot.safetensors');
+  assert.equal(graph['6'].class_type, 'TextEncodeQwenImage21');
+  assert.equal(graph['10'].inputs.type, 'qwen_image');
+  assert.equal(inferComfyWorkflowFamily({ id: 11, name: 'qwen_image_2_1', content }), 'qwen_image');
+  const krea = fs.readFileSync(path.resolve('static/workflows/redcraft_krea2_12gb.json'), 'utf8');
+  assert.equal(inferComfyWorkflowFamily({ id: 8, name: 'redcraft_krea2_12gb', content: krea }), 'redcraft_krea2');
+
+  const qwenRow = { id: 11, name: 'qwen_image_2_1', content };
+  const withQwen: ComfyWorkflowLookup = {
+    byId: async (id) => id === 11 ? qwenRow : lookup.byId(id),
+    byName: async (name) => name === 'qwen_image_2_1' ? qwenRow : lookup.byName(name)
+  };
+  const selected = await selectComfyWorkflow(
+    { project_settings: image('qwen_image') },
+    { comfyui: { selected_workflow_file: 'autismmix_pony_l40.json' } },
+    withQwen
+  );
+  assert.equal(selected.row.name, 'qwen_image_2_1');
+  assert.equal(selected.family, 'qwen_image');
+  assert.equal(selected.source, 'model');
+  await assert.rejects(
+    selectComfyWorkflow({ project_settings: image('qwen_image', 7) }, { comfyui: {} }, withQwen),
+    /uses pony/
   );
 });
 

@@ -11,6 +11,8 @@ import {
 test('parseProjectSettings accepts JSON string and object', () => {
   assert.equal(getProjectImageSettings(parseProjectSettings('{"image_generation":{"model":"sd15"}}')).model, 'sd15');
   assert.equal(getProjectImageSettings(parseProjectSettings({ image_generation: { model: 'pony' } as any })).model, 'pony');
+  assert.equal(getProjectImageSettings(parseProjectSettings({ image_generation: { model: 'qwen_image' } })).model, 'qwen_image');
+  assert.equal(getProjectImageSettings(parseProjectSettings({ image_generation: { model: 'qwen-image-2.1' } as any })).model, 'pony');
   assert.deepEqual(parseProjectSettings(null), {});
 });
 

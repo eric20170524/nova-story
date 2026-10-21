@@ -52,14 +52,75 @@ export const resolveProjectVideoWorkflow = (
   };
 };
 
+export type IdentityPlateHint = {
+  characterId?: number | null;
+  face?: string | null;
+  body?: string | null;
+};
+
+const referenceSlot = (asset: MediaAsset): 'face' | 'body' | null => {
+  if (!asset.metadata_json) return null;
+  try {
+    const slot = JSON.parse(asset.metadata_json).source_slot;
+    return slot === 'face' || slot === 'body' ? slot : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Face then body for one character.
+ * A pinned plate URL wins. Slotted assets ignore a newer portrait with no slot.
+ * Assets with no slots keep the two newest ids. Keep this in step with
+ * scripts/production-references.mjs selectIdentityReferenceIds.
+ */
+export const selectIdentityReferenceIds = (
+  assets: MediaAsset[],
+  characterId: number,
+  plates?: { face?: string | null; body?: string | null } | null,
+): number[] => {
+  const refs = assets.filter(asset => asset.role === 'character_reference' && asset.status === 'ready'
+    && asset.character_id === characterId && asset.id != null);
+  const face = String(plates?.face || '').trim();
+  const body = String(plates?.body || '').trim();
+  if (face || body) {
+    const ids: number[] = [];
+    const match = (url: string) => refs
+      .filter(asset => asset.url === url)
+      .sort((a, b) => Number(b.id) - Number(a.id))[0];
+    const faceAsset = face ? match(face) : undefined;
+    const bodyAsset = body && body !== face ? match(body) : undefined;
+    if (faceAsset?.id != null) ids.push(faceAsset.id);
+    if (bodyAsset?.id != null) ids.push(bodyAsset.id);
+    if (ids.length) return ids;
+  }
+  const slotted = refs.filter(asset => referenceSlot(asset));
+  if (slotted.length) {
+    const newest = (slot: 'face' | 'body') => slotted
+      .filter(asset => referenceSlot(asset) === slot)
+      .sort((a, b) => Number(b.id) - Number(a.id))[0];
+    return [newest('face')?.id, newest('body')?.id].filter((id): id is number => id != null);
+  }
+  return refs.sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 2).map(asset => asset.id!);
+};
+
 /** Choose at most two recent views of one bound character for the initial UI state. */
-export const defaultIdentityReferenceIds = (assets: MediaAsset[]): number[] => {
+export const defaultIdentityReferenceIds = (assets: MediaAsset[], pin?: IdentityPlateHint): number[] => {
   const refs = assets.filter(asset => asset.role === 'character_reference' && asset.id != null
     && asset.status === 'ready')
     .sort((a, b) => Number(b.id) - Number(a.id));
   const first = refs[0];
-  if (!first) return [];
-  return refs.filter(asset => asset.character_id === first.character_id).slice(0, 2).map(asset => asset.id!);
+  const characterId = pin?.characterId ?? first?.character_id;
+  if (characterId == null) return [];
+  if (pin && (pin.face || pin.body)) {
+    const picked = selectIdentityReferenceIds(assets, Number(characterId), pin);
+    if (picked.length) return picked;
+  }
+  const mine = refs.filter(asset => asset.character_id === characterId);
+  if (mine.some(asset => referenceSlot(asset))) {
+    return selectIdentityReferenceIds(assets, Number(characterId));
+  }
+  return mine.slice(0, 2).map(asset => asset.id!);
 };
 
 export const appendUploadedIdentityReference = (

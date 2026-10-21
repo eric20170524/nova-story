@@ -9,7 +9,7 @@ import { createEmptyScriptDocument, StoryboardCandidatePayloadSchema, type Scrip
 import { SettingsManager } from '../../core/settings_manager';
 import { LLMService } from '../llm';
 import type { AIProvider } from './base';
-import { anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, evidencedContinuityStates, groupAdjacentClauseFragments, hash, promptContainsTranslation, verbatimActionSplit, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { CHAPTER_SHOT_LIMIT, anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, directionPlace, directionPlaceProblem, directionPlaceSettled, evidencedContinuityStates, groupAdjacentClauseFragments, groupShotCounts, hash, promptContainsTranslation, verbatimActionSplit, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, visualPlanGroups, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
 import { compileNegativePrompt } from '../negative_prompt_compiler';
 import { sanitizeVisualPrompt } from '../visual_prompt_sanitizer';
 
@@ -91,6 +91,38 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     const next = fact('next', 1, '窗');
     assert.deepEqual(assignFactSlots([open, next], 2).map(group => group.map(item => item.id)), [['open'], ['next']]);
     assert.throws(() => assignFactSlots([collar, arm], 1), /同镜互斥状态需要 2 镜/);
+    const doc = document(1, 1);
+    const sceneId = doc.scenes[0]!.id;
+    const row = (id: string, beat: number, value?: string) => ({
+      id, scene_id: sceneId, block_id: 'b', start: 0, end: 1, text: '短句。', kind: 'visual' as const, beat,
+      states: value ? [{ entity: '裴雨涵', attribute: 'expression', value }] : [],
+    });
+    const chapter = [row('a', 0, '笑'), row('b', 0, '挑衅而诱惑的笑容'), row('c', 1), row('d', 2), row('e', 3), row('f', 4)];
+    const budget = allocateBudgets(doc, chapter, 26);
+    assert.equal(budget[0]!.minimum, 6);
+    assert.deepEqual(groupShotCounts(visualPlanGroups(chapter), budget[0]!.minimum), [5, 1]);
+    assert.throws(() => allocateBudgets(doc, chapter, 5), /最少需要 6 镜/);
+    const candidateShot = { index: 1, script_scene_id: 's', shot_spec: '{}' };
+    const candidateBase = { schemaVersion: 3 as const, scriptId: 1, scriptRevision: 1, chapterId: 'c', coverageReport: { coveredSceneIds: [], totalScenes: 1, coveredBlockIds: [], totalAudibleBlocks: 0, coveredMustKeepEventIds: [], totalMustKeepEvents: 0 } };
+    assert.equal(StoryboardCandidatePayloadSchema.safeParse({ ...candidateBase, shots: Array.from({ length: CHAPTER_SHOT_LIMIT }, (_, index) => ({ ...candidateShot, index: index + 1 })) }).success, true);
+    assert.equal(StoryboardCandidatePayloadSchema.safeParse({ ...candidateBase, shots: Array.from({ length: CHAPTER_SHOT_LIMIT + 1 }, (_, index) => ({ ...candidateShot, index: index + 1 })) }).success, false);
+    assert.equal(directionPlace('朝清暮宫的方向走来，'), '清暮宫');
+    assert.equal(directionPlace('朝玉楼方向笑了，'), null);
+    assert.match(directionPlaceProblem('朝清暮宫的方向走来，', 'Walk towards the direction of Mu Gong,') || '', /整词保留/);
+    assert.match(directionPlaceProblem('朝清暮宫的方向走来，', 'Zhao Qing walks toward the direction of the evening palace.') || '', /新人名/);
+    assert.equal(directionPlaceProblem('朝清暮宫的方向走来，', 'walking toward the direction of Qingmu Palace,'), null);
+    assert.equal(directionPlaceSettled('朝清暮宫的方向走来，', 'Walk towards the direction of Qingmu Palace.'), true);
+    assert.equal(directionPlaceSettled('朝清暮宫的方向走来，', 'Walk towards the direction of Qingmu Palace and draws a sword.'), false);
+  });
+  await t.test('完整的朝向地名不再交给模型否定', async () => {
+    let called = 0;
+    const provider = {
+      async generateStructured() { called += 1; return { faithful: false }; },
+      async generateText() { throw new Error('no text'); },
+      async generateImage() { throw new Error('no image'); },
+    };
+    await auditFacts(provider, [{ id: 'f', text: '朝清暮宫的方向走来，' }], 'Walk towards the direction of Qingmu Palace.');
+    assert.equal(called, 0);
   });
   await t.test('完整分区、重复片段偏移、非视觉分类与状态证据', () => {
     assert.throws(() => anchorSpans('s', 'b', '门半开且三只白猫站在门外', { spans: [{ text: '门半开', kind: 'visual', beat: 0, states: [] }] }), /尾部遗漏/);
@@ -342,7 +374,7 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene')).n, 0);
   });
   await t.test('超预算停在翻译之前，混合事实由文本模型修好后再生成候选', async () => {
-    const f = await confirmed(document(12, 2)); const m = providerFixture();
+    const f = await confirmed(document(12, 3)); const m = providerFixture();
     await assert.rejects(() => StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider: m.provider }), /预算冲突/);
     assert.equal(m.calls.filter(c => c.task === 'plan' || c.task === 'translate').length, 0);
     const next = await confirmed(document());

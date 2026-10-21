@@ -2,9 +2,11 @@
  * Deterministic formal-storyboard rules for FS04–FS16.
  * Live image acceptance stays closed until a combination is recorded in
  * FORMAL_OPEN_COMBINATIONS. Version 1 continuity pins are not rewritten.
+ * On 2026-10-21 the operator recorded the current Pony/SDXL path
+ * (`sdxl_ip_adapter`) so formal candidates can render. Other combinations stay closed.
  */
 
-export const FORMAL_OPEN_COMBINATIONS: string[] = [];
+export const FORMAL_OPEN_COMBINATIONS: string[] = ['sdxl_ip_adapter'];
 
 export type FormalRole = 'face' | 'body' | 'costume' | 'scene' | 'pose' | 'source_draft' | 'identity_region' | 'inpaint' | 'previous_frame' | 'video_tail';
 
@@ -44,8 +46,10 @@ export function rolesFromVisualTags(raw: string | null | undefined): Array<{ rol
   try { tags = JSON.parse(raw || '{}'); } catch { tags = {}; }
   const assets = tags.assets || tags;
   const roles: Array<{ role: FormalRole; image_url: string }> = [];
-  if (assets.face_url) roles.push({ role: 'face', image_url: String(assets.face_url) });
-  if (assets.turnaround_url) roles.push({ role: 'body', image_url: String(assets.turnaround_url) });
+  const face = String(assets.avatar_url || '').trim();
+  const body = String(assets.turnaround_front_url || '').trim();
+  if (face) roles.push({ role: 'face', image_url: face });
+  if (body) roles.push({ role: 'body', image_url: body });
   return roles;
 }
 

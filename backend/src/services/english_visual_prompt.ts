@@ -14,7 +14,7 @@ import { LLMService } from './llm';
 import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
 import { withLocalTextInference } from './local_text_inference';
 export { setLocalTextModelEnsureForTests } from './local_text_inference';
-import { NSFW_ATMOSPHERE_SENTENCE, ORIENTAL_REALISTIC_FACE_LOCK } from './image_generation_policy';
+import { NSFW_ATMOSPHERE_SENTENCE, ORIENTAL_REALISTIC_FACE_LOCK, storedDesignIsFrozen } from './image_generation_policy';
 import {
   type CharacterLockRef,
   type CompilePonyPromptResult,
@@ -195,7 +195,7 @@ function evidenceValid(evidence: string, text: string): boolean {
 
 function appearancePieceHolds(evidence: string, text: string, fact: string): boolean {
   const appearance = fact.match(APPEARANCE_FACT);
-  if (!appearance || /\.{3}|…+/u.test(evidence)) return false;
+  if (!appearance || !appearance[3] || /\.{3}|…+/u.test(evidence)) return false;
   const sourceTokens = new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5));
   const normalize = (value: string) => value.replace(/[\s\p{P}]+/gu, ' ').trim().toLowerCase();
   const haystack = normalize(text);
@@ -206,9 +206,17 @@ function appearancePieceHolds(evidence: string, text: string, fact: string): boo
   });
 }
 
+function ageRangeHolds(text: string, fact: string): boolean {
+  const appearance = fact.match(APPEARANCE_FACT);
+  if (!appearance || appearance[2] !== '年龄' || !appearance[3]) return false;
+  const value = appearance[3].trim();
+  if (!/^\d{1,3}(?:\s*-\s*\d{1,3})?$/.test(value)) return false;
+  return text.toLowerCase().includes(value.toLowerCase());
+}
+
 function appearanceWordsHold(evidence: string, text: string, fact: string): boolean {
   const appearance = fact.match(APPEARANCE_FACT);
-  if (!appearance || /\.{3}|…+/u.test(evidence)) return false;
+  if (!appearance || !appearance[3] || /\.{3}|…+/u.test(evidence)) return false;
   const tokens = [...new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5))];
   // A tag with fewer than three long words cannot pass on overlap alone.
   if (tokens.length < 3) return false;
@@ -275,6 +283,7 @@ async function auditEnglishFidelity(source: string, english: string): Promise<vo
       if (result.status === 'preserved') {
         if (result.evidence && (evidenceValid(result.evidence, text) || appearancePieceHolds(result.evidence, text, fact) || appearanceWordsHold(result.evidence, text, fact))) return [];
       }
+      if (result.status === 'missing' && ageRangeHolds(text, fact)) return [];
       return [`${id}:${result.status}:${fact}`];
     });
   };
@@ -490,12 +499,16 @@ export type AppearanceFields = {
   face: string;
   body: string;
   clothing: string;
+  /** This shot's wardrobe state. It does not replace the regular costume. */
+  clothing_state?: string;
   accessories: string;
 };
 
 export type ShotCharacterAppearance = {
   name: string;
   appearance: AppearanceFields;
+  /** The regular costume is frozen on visual_tags.design. */
+  costume_locked?: boolean;
   /** Posture from a pose state. Body appearance stays build, not this pose. */
   pose?: string;
   /** Original lock string when the card was not split into fields. Not rewritten. */
@@ -567,6 +580,34 @@ function confirmedVisibleMentions(binding: unknown): Array<{ text: string; name:
     if (!mention?.confirmed || mention.visibility !== 'visible' || !entity?.name) return [];
     return [{ text: String(mention.text || ''), name: String(entity.name) }];
   });
+}
+
+function wardrobeStateText(name: string, states: unknown[]): string {
+  const parts: string[] = [];
+  for (const state of states) {
+    if (!state || typeof state !== 'object') continue;
+    const row = state as { entity?: string; attribute?: string; value?: string; canonical_value?: string };
+    if (row.attribute !== 'wardrobe' || String(row.entity || '').trim() !== name) continue;
+    const value = String(row.value || row.canonical_value || '').trim();
+    if (value && !parts.includes(value)) parts.push(value);
+  }
+  return parts.join(', ');
+}
+
+function applyTrackedWardrobe(
+  character: ShotCharacterAppearance,
+  tracked: Set<string>,
+  states: unknown[],
+) {
+  if (!tracked.has(character.name)) return;
+  if (character.costume_locked) {
+    const stateText = wardrobeStateText(character.name, states);
+    if (stateText) character.appearance.clothing_state = stateText;
+    return;
+  }
+  character.appearance.clothing = '';
+  character.appearance.accessories = '';
+  delete character.recorded_appearance;
 }
 
 function pushFact(facts: ShotImageFact[], id: string, text: string, binding: ShotImageFact['binding'] = []) {
@@ -671,9 +712,11 @@ export function shotImageMaterialsFromSpec(
       const columnAge = String(row?.age ?? '').trim();
       if (columnAge) appearance.age = columnAge;
     }
+    const costume_locked = row ? storedDesignIsFrozen(row.visual_tags) : false;
     return {
       name,
       appearance,
+      ...(costume_locked ? { costume_locked } : {}),
       ...(pose ? { pose } : {}),
     };
   });
@@ -691,10 +734,15 @@ export function shotImageMaterialsFromSpec(
       }
     }
   }
-  for (const character of shotCharacters) if (trackedWardrobe.has(character.name)) {
-    character.appearance.clothing = '';
-    character.appearance.accessories = '';
-  }
+  const wardrobeStates = [
+    ...states,
+    ...visualFacts.flatMap((fact) => (
+      fact && typeof fact === 'object' && Array.isArray((fact as { states?: unknown[] }).states)
+        ? (fact as { states: unknown[] }).states
+        : []
+    )),
+  ];
+  for (const character of shotCharacters) applyTrackedWardrobe(character, trackedWardrobe, wardrobeStates);
 
   const explicitIntent = String(source.shot_intent || '').trim().toLowerCase();
   return {
@@ -723,6 +771,7 @@ function appearanceFactLines(characters: ShotCharacterAppearance[]): string[] {
     ['face', '五官'],
     ['body', '体型'],
     ['clothing', '服装'],
+    ['clothing_state', '本镜衣着'],
     ['accessories', '配饰'],
   ];
   const lines: string[] = [];
@@ -778,9 +827,11 @@ export function splitSpokenFromPicture(text: string): { picture: string; spoken:
 }
 
 function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string {
-  const engine = modelFamily === 'redcraft_krea2' || modelFamily === 'flux'
-    ? 'Engine RedCraft: write natural English prose.'
-    : 'Write natural English prose.';
+  const engine = modelFamily === 'qwen_image'
+    ? 'Engine Qwen-Image: write natural English prose. Do not use score tags.'
+    : modelFamily === 'redcraft_krea2' || modelFamily === 'flux'
+      ? 'Engine RedCraft: write natural English prose.'
+      : 'Write natural English prose.';
   return [
     'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
     engine,
@@ -792,6 +843,7 @@ function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string 
     'No weight syntax and no booru tag soup.',
     'Write hair as hair. A hair color is not clothing.',
     'When clothing changes, name the person who changes. Keep every other person\'s clothing field.',
+    'appearance.clothing is the regular costume. appearance.clothing_state, when present, is only this shot.',
     'Keep this shot\'s own location visible and explicitly named. Do not let the location overshadow the characters\' actions, and do not substitute a place from another story.',
     'style_lighting is only light and material. Do not append a style sentence about silk, crimson accents, or an environment-dominant composition. A clothing color already present in the facts stays, including red clothing.',
     'Translate visual concepts into vivid, concrete English: write ethereal magical mist or glowing aura for mystical aura, trailing behind in a soft flowing path or soft trajectory for trailing effects, and moon-white robes flowing with the wind or fluttering gently in the wind.',
@@ -923,6 +975,7 @@ function charactersFromLocks(
     return {
       name: String(ref.name || '').trim(),
       appearance,
+      ...(ref.costume_locked ? { costume_locked: true } : {}),
       ...(filled ? {} : { recorded_appearance: String(ref.lock || '') }),
     };
   });
@@ -949,12 +1002,7 @@ export async function compileEnglishShotPrompt(
       }
     }
     const poseByName = new Map(materials.characters.filter((character) => character.pose).map((character) => [character.name, character.pose]));
-    for (const character of locked) if (tracked.has(character.name)) {
-      character.appearance.clothing = ''; character.appearance.accessories = '';
-      // An unstructured lock cannot safely separate default clothing from identity.
-      // Keep structured hair/face/body, and require explicit garment facts instead.
-      delete character.recorded_appearance;
-    }
+    for (const character of locked) applyTrackedWardrobe(character, tracked, materials.continuity_states || []);
     materials.characters = locked.map((character) => {
       const pose = poseByName.get(character.name);
       return pose ? { ...character, pose } : character;

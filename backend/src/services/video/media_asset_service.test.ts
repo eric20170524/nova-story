@@ -185,10 +185,9 @@ test('Character Center images become reusable no-copy MediaAsset references idem
       JSON.stringify({
         assets: {
           face_url: faceUrl,
-          // Same physical image exposed through two Character Center slots must not
-          // create duplicate MediaAsset rows.
           avatar_url: faceUrl,
-          turnaround_url: turnaroundUrl
+          turnaround_url: '/static/generated/do-not-use-sheet.png',
+          turnaround_front_url: turnaroundUrl
         }
       })
     );
@@ -231,12 +230,10 @@ test('Character Center images become reusable no-copy MediaAsset references idem
       .sort();
     assert.deepEqual(secondIds, firstIds, 'repeated scene loads must reuse MediaAsset identities');
 
-    // Character Center changed: the old face becomes stale while the existing
-    // turnaround becomes the only active identity. The adapter archives only its own
-    // stale row instead of deleting/copying physical assets.
+    // The portrait is replaced by the front panel. The stitched sheet stays unregistered.
     await db.run(
       'UPDATE character SET visual_tags = ? WHERE id = ?',
-      JSON.stringify({ assets: { face_url: turnaroundUrl } }),
+      JSON.stringify({ assets: { avatar_url: turnaroundUrl, turnaround_url: faceUrl } }),
       characterId
     );
     const afterChange = await MediaAssetService.listSceneContextAssets(sceneId, 1);
@@ -261,5 +258,69 @@ test('Character Center images become reusable no-copy MediaAsset references idem
     await db.run('DELETE FROM project WHERE id = ?', projectId);
     try { fs.unlinkSync(facePath); } catch {}
     try { fs.unlinkSync(turnaroundPath); } catch {}
+  }
+});
+
+test('a plate still stored on a character version stays ready after the live tags move on', async () => {
+  const projectId = 9914;
+  const chapterId = 'character_version_plate_chapter';
+  const sceneId = 99141;
+  const characterId = 991401;
+  const generatedDir = getGeneratedDirectory();
+  fs.mkdirSync(generatedDir, { recursive: true });
+  const facePath = path.join(generatedDir, 'version_plate_face.png');
+  const bodyPath = path.join(generatedDir, 'version_plate_body.png');
+  fs.writeFileSync(facePath, Buffer.from('version-face'));
+  fs.writeFileSync(bodyPath, Buffer.from('version-body'));
+  const faceUrl = '/static/generated/version_plate_face.png';
+  const bodyUrl = '/static/generated/version_plate_body.png';
+  try {
+    await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+    await db.run('DELETE FROM character_version WHERE character_id = ?', characterId);
+    await db.run('DELETE FROM character WHERE id = ?', characterId);
+    await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+    await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+    await db.run('DELETE FROM project WHERE id = ?', projectId);
+    await db.run('INSERT INTO project (id, title) VALUES (?, ?)', projectId, 'Version Plate Test');
+    await db.run(
+      'INSERT INTO chapter (id, project_id, "index", title) VALUES (?, ?, 1, ?)',
+      chapterId, projectId, 'Chapter',
+    );
+    await db.run(
+      'INSERT INTO scene (id, chapter_id, "index", visual_prompt) VALUES (?, ?, 1, ?)',
+      sceneId, chapterId, 'test',
+    );
+    const pinned = JSON.stringify({ assets: { avatar_url: faceUrl, turnaround_front_url: bodyUrl } });
+    await db.run(
+      'INSERT INTO character (id, project_id, name, visual_tags) VALUES (?, ?, ?, ?)',
+      characterId, projectId, 'Pinned Hero', pinned,
+    );
+    await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    await db.run(
+      'INSERT INTO character_version (character_id, version, label, visual_tags) VALUES (?, 2, ?, ?)',
+      characterId, 'v2', pinned,
+    );
+    await db.run(
+      'UPDATE character SET visual_tags = ? WHERE id = ?',
+      JSON.stringify({ assets: { avatar_url: bodyUrl } }),
+      characterId,
+    );
+    await MediaAssetService.listSceneContextAssets(sceneId, 1);
+    const kept = await db.get(
+      `SELECT status, metadata_json FROM media_asset
+       WHERE character_id = ? AND url = ? AND role = 'character_reference'`,
+      characterId, faceUrl,
+    );
+    assert.equal(kept?.status, 'ready');
+    assert.equal(JSON.parse(String(kept?.metadata_json || '{}')).character_version, 2);
+  } finally {
+    await db.run('DELETE FROM media_asset WHERE project_id = ?', projectId);
+    await db.run('DELETE FROM character_version WHERE character_id = ?', characterId);
+    await db.run('DELETE FROM character WHERE id = ?', characterId);
+    await db.run('DELETE FROM scene WHERE id = ?', sceneId);
+    await db.run('DELETE FROM chapter WHERE id = ?', chapterId);
+    await db.run('DELETE FROM project WHERE id = ?', projectId);
+    try { fs.unlinkSync(facePath); } catch { /* already gone */ }
+    try { fs.unlinkSync(bodyPath); } catch { /* already gone */ }
   }
 });

@@ -6,7 +6,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId, coreCharactersReadyForAcceptance } from './production-references.mjs';
+import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+
+test('pinned face and body plates beat a newer portrait with no slot', () => {
+  const refs = [
+    { id: 12, role: 'character_reference', status: 'ready', character_id: 1, url: '/body.png', metadata_json: JSON.stringify({ source_slot: 'body' }) },
+    { id: 13, role: 'character_reference', status: 'ready', character_id: 1, url: '/face.png', metadata_json: JSON.stringify({ source_slot: 'face' }) },
+    { id: 14, role: 'character_reference', status: 'ready', character_id: 1, url: '/new.png' },
+  ];
+  assert.deepEqual(selectIdentityReferenceIds(refs, 1), [13, 12]);
+  assert.deepEqual(selectIdentityReferenceIds(refs, 1, { face: '/face.png', body: '/body.png' }), [13, 12]);
+  const legacy = [
+    { id: 12, role: 'character_reference', status: 'ready', character_id: 1, url: '/a.png' },
+    { id: 13, role: 'character_reference', status: 'ready', character_id: 1, url: '/b.png' },
+  ];
+  assert.deepEqual(selectIdentityReferenceIds(legacy, 1), [13, 12]);
+  assert.deepEqual(
+    platesFromCharacter({ visual_tags: { assets: { avatar_url: '/face.png', turnaround_url: '/sheet.png', turnaround_front_url: '/front.png' } } }),
+    { face: '/face.png', body: '/front.png' },
+  );
+  assert.deepEqual(platesFromCharacter({ avatar_url: '/column.png' }), { face: '/column.png', body: null });
+});
 
 test('production requires an explicit project id', async () => {
   const child = spawn(process.execPath, ['scripts/full-production.mjs', '--stage', 'preflight'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -386,6 +406,29 @@ test('identity acceptance checks the actual generated manifest instead of merely
   } finally { await f.close(); }
 });
 
+test('scene images stop when the formal combination is not live verified', async () => {
+  const calls = [];
+  const f = await fixture((url, method) => {
+    calls.push(`${method} ${url}`);
+    if (url === '/api/settings/') return { body: { image_provider: 'comfyui', comfyui: { enabled: true } } };
+    if (url === '/api/projects/90713823') return { body: { id: 90713823, title: '测试', settings: {} } };
+    if (url.startsWith('/api/chapters/?')) return { body: [{ id: 'ch-1', index: 1, title: '第一章', content: '山风吹过石阶。', status: 'completed', finalized_content_hash: 'abc' }] };
+    if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 71, chapter_id: 'ch-1', index: 1, asset_status: 'pending', shot_spec: { source: { type: 'script', script_id: 10, script_scene_id: 'sc-1', block_ids: [] } } }] } };
+    if (url.includes('/asset-library')) return { body: [] };
+    if (url.endsWith('/asset-references')) return { body: [] };
+    if (url.startsWith('/api/characters/')) return { body: [] };
+    if (url.endsWith('/export')) return { body: { asset_library: { image_snapshots: [] } } };
+    if (url.startsWith('/api/settings/tier-b-status')) return { body: { formal: { capabilities: [{ id: 'sdxl_ip_adapter', family_match: true, chain_ready: false, live_verified: false, reason: 'not_live_verified' }] } } };
+    return { status: 500, body: { error: `unexpected ${method} ${url}` } };
+  });
+  try {
+    const result = await f.run('images', ['--chapter-limit', '1']);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /只提交正式图/);
+    assert.equal(calls.some(call => call.includes('/api/assets/generate')), false);
+  } finally { await f.close(); }
+});
+
 test('full run waits for current image approval before video generation or starting the next chapter', async () => {
   const content = '山风吹过石阶，铜铃仍在掌心。';
   const contentHash = createHash('sha256').update(content).digest('hex');
@@ -421,7 +464,14 @@ test('full run waits for current image approval before video generation or start
     if (url.includes('/asset-library')) return { body: [] };
     if (url.endsWith('/export')) return { body: { asset_library: { image_snapshots: [{ scene_id: 71, image_url: '/static/shot-1.png', references_json: '[]', character_versions_json: JSON.stringify([{ id: 2, version: 1 }]) }] } } };
     if (url.endsWith('/asset-references')) return { body: [] };
-    if (url === '/api/assets/generate') return { body: { task_id: 'image-71' } };
+    if (url.startsWith('/api/settings/tier-b-status')) return { body: { formal: { capabilities: [{ id: 'sdxl_ip_adapter', family_match: true, chain_ready: true, live_verified: true }] } } };
+    if (/\/api\/scripts\/\d+\/production\/frames\/\d+$/.test(url.split('?')[0])) return { body: { scene_version: 1, reference_hash: 'a'.repeat(64), available_references: [] } };
+    if (url === '/api/assets/generate') {
+      assert.equal(body.production_stage, 'production');
+      assert.equal(body.workflow.production_guard.redraw, false);
+      assert.match(body.workflow.production_guard.reference_hash, /^[a-f0-9]{64}$/);
+      return { body: { task_id: 'image-71' } };
+    }
     if (url === '/api/assets/status/image-71') return { body: { status: 'completed', image_url: '/static/shot-1.png' } };
     if (url.includes('/media?')) return { body: { assets: [{ id: 82, character_id: 2, role: 'character_reference', status: 'ready' }] } };
     if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
@@ -514,7 +564,7 @@ test('rebuild flags regenerate an existing screenplay and storyboard instead of 
     if (url.includes('/candidates/') && url.endsWith('/apply')) return { body: { script: { ...script, revision: url.includes('outline') ? 5 : 6, status: 'draft' } } };
     if (url === '/api/scripts/10/confirm') return { body: { script: { ...script, revision: 7, status: 'confirmed' } } };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 202, active_version: 1, shot_spec: { source: { type: 'script', script_id: 10, script_revision: 4 } } }] } };
-    if (url.includes('/media?')) return { body: { assets: [] } };
+    if (url.includes('/media')) return { body: { assets: [] } };
     if (url.includes('/storyboard-candidates')) return { body: { candidate: { id: 'board-1', state: 'pending', base_revision: 4, candidate_revision: 5 } } };
     return { status: 500, body: { error: `unexpected ${method} ${url}` } };
   });
@@ -556,7 +606,7 @@ test('--reproduce-from-b3 archives B3..D artifacts into history while preserving
     if (url === '/api/chapters/?project_id=90713823') return { body: [{ id: 'ch-1', index: 1 }] };
     if (url === '/api/chapters/ch-1/script') return { body: { script } };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 202, active_version: 1, shot_spec: { source: { type: 'script', script_id: 10, script_revision: 4 } } }] } };
-    if (url.includes('/media?')) return { body: { assets: [{ id: 501, role: 'narrative_final', status: 'ready' }] } };
+    if (url.includes('/media')) return { body: { assets: [{ id: 501, role: 'narrative_final', status: 'ready' }] } };
     if (url === '/api/videos/assets/501/archive' && method === 'POST') return { body: { id: 501, status: 'archived' } };
     if (url === '/api/scripts/10/storyboard-candidates' && method === 'POST') return { body: { candidate: { id: 'board-repro', state: 'pending', base_revision: 4, candidate_revision: 5 } } };
     if (url === '/api/scripts/10/storyboard-candidates/board-repro/apply' && method === 'POST') {

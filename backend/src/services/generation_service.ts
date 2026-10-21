@@ -1,4 +1,4 @@
-import { ComfyUIService } from './ai/comfyui_service';
+import { ComfyUIService, applyRemoteLoraCatalog } from './ai/comfyui_service';
 import { MediaService } from './media_service';
 import { SettingsManager } from '../core/settings_manager';
 import { db, withImmediateTransaction } from '../db/database';
@@ -51,6 +51,7 @@ import { persistFormalCandidateResult, retainUnverifiedPrompt } from './formal_s
 import { formalRenderAllowed } from './formal_storyboard_plan';
 import { requireProductionReferencePin, persistProductionImageResult, type ProductionReferencePin } from './scene_production_media';
 import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
+import { resolveSceneIdentityPlate } from './character_reference_plates';
 import {
     createProgressPublisher,
     runVramHandoffForImageGen,
@@ -298,10 +299,11 @@ const injectLora = (
     );
     if (alreadyPresent) return;
 
+    const diffusionOnly = modelType === 'flux' || modelType === 'redcraft_krea2' || modelType === 'qwen_image';
     const modelLoaderId = findNodeId(workflow, (node) =>
         modelType === 'flux'
             ? node?.class_type === 'UnetLoaderGGUF'
-            : modelType === 'redcraft_krea2'
+            : diffusionOnly
                 ? (node?.class_type === 'UNETLoader' || node?.class_type === 'DiffusionModelLoader' || node?.class_type === 'CheckpointLoaderSimple')
                 : node?.class_type === 'CheckpointLoaderSimple'
     );
@@ -320,7 +322,7 @@ const injectLora = (
         ? textEncoderNode.inputs.clip
         : [modelLoaderId, 1];
     const loraNodeId = nextNodeId(workflow);
-    if (modelType === 'flux' || modelType === 'redcraft_krea2') {
+    if (diffusionOnly) {
         workflow[loraNodeId] = {
             inputs: {
                 lora_name: loraName,
@@ -328,7 +330,7 @@ const injectLora = (
                 model: currentModel
             },
             class_type: 'LoraLoaderModelOnly',
-            _meta: { title: modelType === 'redcraft_krea2' ? 'NovaStory RedCraft Krea2 LoRA' : 'NovaStory FLUX LoRA' }
+            _meta: { title: modelType === 'qwen_image' ? 'NovaStory Qwen-Image LoRA' : modelType === 'redcraft_krea2' ? 'NovaStory RedCraft Krea2 LoRA' : 'NovaStory FLUX LoRA' }
         };
     } else {
         workflow[loraNodeId] = {
@@ -350,8 +352,7 @@ const injectLora = (
         }
         // Pony + SD1.5 both use CLIP-aware LoraLoader
         if (
-            modelType !== 'flux'
-            && modelType !== 'redcraft_krea2'
+            !diffusionOnly
             && node?.class_type === 'CLIPTextEncode'
             && node.inputs
         ) {
@@ -481,6 +482,58 @@ const injectImg2ImgReference = (
     return wired;
 };
 
+/**
+ * Keep an opaque face and let the sampler draw the body.
+ * The canvas PNG stores the face in alpha; LoadImage turns transparency into the inpaint mask.
+ */
+const injectFaceLockInpaint = (
+    workflow: any,
+    imageFilename: string,
+    isSeparateVae: boolean
+) => {
+    const vaeSourceId = isSeparateVae
+        ? findNodeId(workflow, (node) => node?.class_type === 'VAELoader')
+        : findNodeId(workflow, (node) => node?.class_type === 'CheckpointLoaderSimple');
+    if (!vaeSourceId) {
+        logger.warn('Cannot inject face-lock inpaint: no VAE source node found');
+        return false;
+    }
+    const loadId = nextNodeId(workflow);
+    workflow[loadId] = {
+        inputs: { image: imageFilename },
+        class_type: 'LoadImage',
+        _meta: { title: 'NovaStory Face Lock' }
+    };
+    const encodeId = nextNodeId(workflow);
+    workflow[encodeId] = {
+        inputs: {
+            pixels: [loadId, 0],
+            vae: [vaeSourceId, isSeparateVae ? 0 : 2]
+        },
+        class_type: 'VAEEncode',
+        _meta: { title: 'NovaStory Face Lock Encode' }
+    };
+    const maskId = nextNodeId(workflow);
+    workflow[maskId] = {
+        inputs: {
+            samples: [encodeId, 0],
+            mask: [loadId, 1]
+        },
+        class_type: 'SetLatentNoiseMask',
+        _meta: { title: 'NovaStory Face Lock Mask' }
+    };
+    let wired = false;
+    for (const node of Object.values(workflow) as any[]) {
+        if (node?.class_type?.includes('KSampler') && node.inputs) {
+            node.inputs.latent_image = [maskId, 0];
+            node.inputs.denoise = 1;
+            wired = true;
+        }
+    }
+    if (wired) logger.info(`Injected face-lock inpaint ${imageFilename}`);
+    return wired;
+};
+
 /** @deprecated use resolveReferenceImg2ImgPolicy */
 export const resolveImg2ImgDenoise = (workflowData: any): number =>
     resolveReferenceImg2ImgPolicy(workflowData).denoise;
@@ -541,6 +594,15 @@ export const compileComfyWorkflow = async (
         || (node?.class_type === 'CLIPLoader' && /krea/i.test(node.inputs?.type || node.inputs?.clip_name || ''))
         || /redcraft|krea2/i.test(JSON.stringify(node))
     ));
+    const isQwenImage = !isRedCraftKrea2 && Boolean(findNodeId(workflow, (node) =>
+        node?.class_type === 'TextEncodeQwenImage21'
+        || (node?.class_type === 'UNETLoader' && /qwen[_-]?image/i.test(String(node.inputs?.unet_name || '')))
+        || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'qwen_image')
+    ));
+    const isAnimagineXl = Boolean(findNodeId(workflow, (node) =>
+        node?.class_type === 'CheckpointLoaderSimple'
+        && /animagine/i.test(String(node.inputs?.ckpt_name || ''))
+    ));
     const ckptLooksSd15 = Boolean(findNodeId(workflow, (node) =>
         node?.class_type === 'CheckpointLoaderSimple'
         && /sd\s*1\.?5|anything|counterfeit|meina|chillout|sd15/i.test(
@@ -548,7 +610,9 @@ export const compileComfyWorkflow = async (
         )
     ));
     // Graph detection wins for FLUX/RedCraft custom graphs; otherwise honor request / SD1.5 ckpt.
-    const modelFamily: ImageModelFamily = isFlux
+    const modelFamily: ImageModelFamily = isQwenImage
+        ? 'qwen_image'
+        : isFlux
         ? 'flux'
         : isRedCraftKrea2
             ? 'redcraft_krea2'
@@ -589,20 +653,39 @@ export const compileComfyWorkflow = async (
         workflowData: enrichedWorkflowData,
         basePrompt: subjectSafePrompt
     });
+    if (isAnimagineXl) {
+        plan.loras = plan.loras.filter((slot) => slot.role === 'character');
+        plan.enhancement.suffix = plan.enhancement.suffix
+            .split(',')
+            .map((part) => part.trim())
+            .filter((part) => part && !/^(score_\d+|source_anime|source_cartoon|rating_)/i.test(part))
+            .join(', ');
+    }
 
     const autismMixScene = modelFamily === 'pony'
+        && !isAnimagineXl
         && String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'autismmix_artist'
         && String(enrichedWorkflowData.gen_type || '').toLowerCase() === 'scene'
         && mode === 'standard';
+    const stripPonyTagsForAnimagine = (text: string): string =>
+        isAnimagineXl
+            ? String(text || '')
+                .split(',')
+                .map((part) => part.trim())
+                .filter((part) => part && !/^(score_\d+(?:_up)?|source_anime|source_cartoon|rating_\w+)$/i.test(part))
+                .concat(['masterpiece', 'best quality', 'very aesthetic', 'newest', 'absurdres'])
+                .filter((part, idx, arr) => arr.findIndex((x) => x.toLowerCase() === part.toLowerCase()) === idx)
+                .join(', ')
+            : text;
     const effectivePrompt = promptComposed
         ? subjectSafePrompt
-        : applyPromptEnhancement(
+        : stripPonyTagsForAnimagine(applyPromptEnhancement(
             subjectSafePrompt,
             plan.enhancement,
             { qualityFirst: autismMixScene }
-        );
+        ));
     const preserveTemplateConditioning =
-        modelFamily === 'pony' && /pony/i.test(JSON.stringify(workflow));
+        modelFamily === 'pony' && !isAnimagineXl && /pony/i.test(JSON.stringify(workflow));
 
     const orientalRealistic = String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'oriental_realistic';
     const negativeParts = promptComposed
@@ -640,14 +723,17 @@ export const compileComfyWorkflow = async (
     const defaultCfg = Number(
         generationParams?.cfg
         ?? samplerNodes[0]?.inputs?.cfg
-        ?? (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' ? 1.0 : 7)
+        ?? (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' ? 1.0 : 7)
     );
 
     for (const sampler of samplerNodes) {
         const positiveId = Array.isArray(sampler.inputs?.positive) ? String(sampler.inputs.positive[0]) : null;
         const negativeId = Array.isArray(sampler.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
 
-        if (positiveId && workflow[positiveId]?.inputs) {
+        if (positiveId && workflow[positiveId]?.class_type === 'TextEncodeQwenImage21' && workflow[positiveId].inputs) {
+            workflow[positiveId].inputs.prompt = promptComposed ? subjectSafePrompt : effectivePrompt;
+            workflow[positiveId].inputs.negative_prompt = negativePrompt;
+        } else if (positiveId && workflow[positiveId]?.inputs) {
             const templateText = String(workflow[positiveId].inputs.text || '').trim();
             // Keep template conditioning while applying the selected style's prompt order.
             workflow[positiveId].inputs.text = promptComposed
@@ -683,12 +769,12 @@ export const compileComfyWorkflow = async (
         sampler.inputs.cfg = defaultCfg;
         if (generationParams?.sampler_name) {
             sampler.inputs.sampler_name = generationParams.sampler_name;
-        } else if (modelFamily === 'redcraft_krea2' && !sampler.inputs.sampler_name) {
+        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') && !sampler.inputs.sampler_name) {
             sampler.inputs.sampler_name = 'euler';
         }
         if (generationParams?.scheduler) {
             sampler.inputs.scheduler = generationParams.scheduler;
-        } else if (modelFamily === 'redcraft_krea2' && !sampler.inputs.scheduler) {
+        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') && !sampler.inputs.scheduler) {
             sampler.inputs.scheduler = 'simple';
         }
     }
@@ -711,6 +797,9 @@ export const compileComfyWorkflow = async (
             node.inputs.width = width;
             node.inputs.height = height;
             node.inputs.batch_size = 1;
+        }
+        if (node?.class_type === 'TextEncodeQwenImage21' && node.inputs) {
+            node.inputs.resolution = Math.max(32, Math.round(Math.max(width, height) / 32) * 32);
         }
     }
 
@@ -815,14 +904,76 @@ export const compileComfyWorkflow = async (
 
     // Tier A img2img (only when character adapter is NOT handling identity)
     const characterRefUrl = refPlan.refs.characterRefUrl;
-    if (characterRefUrl) {
+    if (isQwenImage || (isRedCraftKrea2 && workflowData?.use_qwen_vl_ref === true && characterRefUrl)) {
+        // Qwen-Image 2.1 and RedCraft Krea2 (Qwen3-VL + Qwen Image VAE) read a reference through TextEncodeQwenImage21.
+        // VAEEncode into the sampler is a 4-channel SD latent and does not match this model.
+        let encoderId = findNodeId(workflow, (node) => node?.class_type === 'TextEncodeQwenImage21');
+        if (!encoderId && isRedCraftKrea2 && characterRefUrl) {
+            const sampler = samplerNodes[0];
+            const posId = Array.isArray(sampler?.inputs?.positive) ? String(sampler.inputs.positive[0]) : null;
+            const negId = Array.isArray(sampler?.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
+            const vaeId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
+            if (posId && workflow[posId]?.inputs) {
+                const clipRef = workflow[posId].inputs.clip;
+                const posText = String(workflow[posId].inputs.text || effectivePrompt);
+                const negText = String(
+                    (negId && workflow[negId]?.inputs?.text) || negativePrompt
+                );
+                workflow[posId] = {
+                    inputs: {
+                        clip: clipRef,
+                        prompt: posText,
+                        negative_prompt: negText,
+                        ...(vaeId ? { vae: [vaeId, 0] } : {}),
+                        resolution: 1024,
+                    },
+                    class_type: 'TextEncodeQwenImage21',
+                    _meta: { title: 'Text Encode Qwen Image 2.1 (Krea2 Reference)' }
+                };
+                if (sampler?.inputs) {
+                    sampler.inputs.positive = [posId, 0];
+                    sampler.inputs.negative = [posId, 1];
+                }
+                if (negId && negId !== posId) {
+                    delete workflow[negId];
+                }
+                encoderId = posId;
+            }
+        }
+        if (encoderId && characterRefUrl) {
+            const referenceFilename = path.basename(String(characterRefUrl));
+            let loadId = findNodeId(
+                workflow,
+                (node) => node?.class_type === 'LoadImage' && node?._meta?.title === 'NovaStory Character Reference'
+            );
+            if (!loadId) {
+                loadId = nextNodeId(workflow);
+                workflow[loadId] = {
+                    inputs: { image: referenceFilename },
+                    class_type: 'LoadImage',
+                    _meta: { title: 'NovaStory Character Reference' }
+                };
+            } else if (workflow[loadId]?.inputs) {
+                workflow[loadId].inputs.image = referenceFilename;
+            }
+            workflow[encoderId].inputs.image_1 = [loadId, 0];
+            const vaeId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
+            if (vaeId) workflow[encoderId].inputs.vae = [vaeId, 0];
+            logger.info(`Wired Qwen-VL character reference ${referenceFilename} as image_1`);
+        }
+        for (const node of Object.values(workflow) as any[]) {
+            if (node?.class_type?.includes('KSampler') && node.inputs) node.inputs.denoise = 1;
+        }
+    } else if (characterRefUrl) {
         const referenceFilename = path.basename(String(characterRefUrl));
         for (const node of Object.values(workflow) as any[]) {
             if (node?.class_type === 'LoadImage' && node.inputs && !node._meta?.title?.includes('NovaStory')) {
                 node.inputs.image = referenceFilename;
             }
         }
-        if (refPlan.img2img.useImg2Img) {
+        if (workflowData?.turnaround_face_lock === true) {
+            injectFaceLockInpaint(workflow, referenceFilename, isFlux || isRedCraftKrea2);
+        } else if (refPlan.img2img.useImg2Img) {
             injectImg2ImgReference(
                 workflow,
                 referenceFilename,
@@ -1120,10 +1271,8 @@ export class GenerationService {
                             effectiveWorkflowData.asset_references = assetRefs.map(ref => ({
                                 id: ref.id, revision: ref.revision, kind: ref.kind, image_url: ref.image_url,
                             }));
-                            const location = assetRefs.find(ref => ref.kind === 'location');
-                            if (location && !effectiveWorkflowData.composition_ref_url) {
-                                effectiveWorkflowData.composition_ref_url = location.image_url;
-                            }
+                            // Location concept art is not a pose, depth, or edge map.
+                            // Feeding it to OpenPose ControlNet produced a solid black frame.
                         }
                     }
                 } else if (workflowData?.library_asset_id) {
@@ -1394,6 +1543,14 @@ export class GenerationService {
                     throw new Error('Failed to start or connect to ComfyUI');
                 }
 
+                if (sceneProjectId != null && !['portrait', 'turnaround', 'turnaround_panel'].includes(String(effectiveWorkflowData?.gen_type || 'scene').toLowerCase())) {
+                    const plateCharacters = await db.all(
+                        'SELECT id, name, visual_tags FROM character WHERE project_id = ?',
+                        sceneProjectId
+                    );
+                    effectiveWorkflowData = resolveSceneIdentityPlate(effectiveWorkflowData, plateCharacters);
+                }
+
                 if (!comfyService.isRemote) {
                     copyReferenceImageToComfy(
                         effectiveWorkflowData,
@@ -1417,12 +1574,14 @@ export class GenerationService {
                     + `missing=${tierBCapability.missing.join(',') || 'none'}`
                 );
 
+                const compileSettings = await applyRemoteLoraCatalog(settings, comfyService);
+
                 const finalWorkflow = await compileComfyWorkflow(
                     effectiveWorkflowData,
                     finalPrompt,
                     mode,
                     generationParams,
-                    settings,
+                    compileSettings,
                     tierBCapability
                 );
 

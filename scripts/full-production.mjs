@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, coreCharactersReadyForAcceptance } from './production-references.mjs';
+import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
 import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, subtitles, assertReview } from './production-contracts.mjs';
@@ -223,7 +223,7 @@ async function generateImage(name, start, sceneId = null) {
     }
     const task = await step(`${name}:submit`, () => submitProductionTask('image', `${name}:submit`, () => start(key(`${name}:attempt:${state.imageAttempts?.[name] || 0}`))));
     const result = await waitTask(task.task_id);
-    if (sceneId && task.candidate_version && task.reference_hash) {
+    if (sceneId && task.candidate_version && task.reference_hash && task.production_stage !== 'production') {
       await request(`/assets/formal-decision/${sceneId}`, 'POST', {
         expected_version: task.candidate_version,
         reference_hash: task.reference_hash,
@@ -232,7 +232,11 @@ async function generateImage(name, start, sceneId = null) {
         note: 'Production pipeline activated new keyframe version; old version retained in scene_version history and chapter review-images gate enforces human sign-off',
       });
     }
-    return { ...result, artifact_sha256: fileHash(localMedia(result.image_url)) };
+    return {
+      ...result,
+      ...(task.production_stage ? { production_stage: task.production_stage, candidate_version: task.candidate_version ?? null, reference_hash: task.reference_hash ?? null } : {}),
+      artifact_sha256: fileHash(localMedia(result.image_url)),
+    };
   });
 }
 async function applyPlanCandidate(name, body) {
@@ -597,17 +601,26 @@ async function assets(selected = null) {
     for (const type of ['portrait', 'turnaround']) {
       const slot = type === 'portrait' ? 'avatar_url' : 'turnaround_url';
       const rebuildSlot = `${assetRebuildToken}:character:${character.id}:${type}`;
-      let fileExists = false; try { fileExists = fs.existsSync(localMedia(character[slot])); } catch {}
+      let fileExists = false;
+      try {
+        fileExists = fs.existsSync(localMedia(character[slot]));
+        const frontUrl = character.visual_tags?.assets?.turnaround_front_url || character.visual_tags?.turnaround_front_url;
+        if (fileExists && type === 'turnaround' && frontUrl) {
+          fileExists = fs.existsSync(localMedia(frontUrl));
+        }
+      } catch {}
       if (fileExists && (!rebuildAssets || (retryFailed && state.rebuiltAssets?.[rebuildSlot] === character[slot]))) continue;
       const visualDescription = character.visual_tags?.visual_bible?.portrait_description || character.description;
-      const referenceUrl = type === 'portrait' ? character.visual_tags?.visual_bible?.reference_image_url : character.avatar_url;
+      const referenceUrl = type === 'portrait' ? null : character.avatar_url;
       const promptInput = { gen_type: type, custom_description: visualDescription, use_ref_portrait: !!referenceUrl, ref_image_url: referenceUrl || undefined };
       const promptSignature = hash(JSON.stringify({ promptInput, version: character.active_version, settings: await request(`/projects/${projectId}`) })).slice(0, 16);
       const prompt = await step(`character-${character.id}:${type}:prompt:${promptSignature}${assetRebuildToken}`, () => request(`/characters/${character.id}/build-prompt`, 'POST', promptInput));
       const task = await generateImage(`character-${character.id}:${type}:${promptSignature}${assetRebuildToken}`, requestKey => request('/assets/generate', 'POST', {
         scene_id: 90_000_000 + character.id, request_key: requestKey, workflow: { ...prompt, character_id: character.id, gen_type: type, character_ref_url: referenceUrl || undefined, ref_image_url: referenceUrl || undefined, reference_tier: 'A' },
       }));
-      character = await request(`/characters/${character.id}`, 'PUT', { [slot]: task.image_url });
+      character = await request(`/characters/${character.id}`, 'PUT', type === 'portrait'
+        ? { avatar_url: task.image_url, face_url: task.image_url }
+        : { [slot]: task.image_url });
       if (rebuildAssets) { state.rebuiltAssets ||= {}; state.rebuiltAssets[rebuildSlot] = task.image_url; save(); }
     }
   }
@@ -693,10 +706,48 @@ async function storyboards(selected = null) {
   }
   write('07-storyboards.json', await shots());
 }
+function formalRenderOpen(status) {
+  const open = new Set(Array.isArray(status?.formal?.open_combinations) ? status.formal.open_combinations : []);
+  const rows = Array.isArray(status?.formal?.capabilities) ? status.formal.capabilities : [];
+  if (rows.some(row => open.has(row.id) && row.family_match !== false)) return true;
+  return rows.some(row => row.family_match !== false && row.chain_ready === true && row.live_verified === true);
+}
+async function assertFormalStoryboardRender(model) {
+  const status = await request(`/settings/tier-b-status?model=${encodeURIComponent(model || 'pony')}`);
+  if (formalRenderOpen(status)) return;
+  const reasons = [...new Set((status?.formal?.capabilities || []).map(row => row.reason).filter(Boolean))];
+  throw new Error(`分镜生图只提交正式图，不提交构图草稿。当前正式组合还没有通过实机验收${reasons.length ? `（${reasons.join('、')}）` : ''}，已停止。`);
+}
+async function formalProductionGuard(shot) {
+  const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
+  const scriptId = spec.source?.script_id;
+  if (!scriptId) throw new Error(`Shot ${shot.id}: 正式分镜需要剧本场次来源，不能改出草稿图`);
+  const frame = await request(`/scripts/${scriptId}/production/frames/${shot.id}`);
+  if (frame.issue) throw new Error(`Shot ${shot.id}: 正式分镜连续性未确认（${frame.issue}），不会改出草稿图`);
+  if (frame.reference_hash && frame.scene_version) {
+    return { expected_version: frame.scene_version, reference_hash: frame.reference_hash, redraw: false };
+  }
+  const chosen = [];
+  const seen = new Set();
+  for (const ref of frame.available_references || []) {
+    if (!ref?.entity_id || seen.has(ref.entity_id)) continue;
+    seen.add(ref.entity_id);
+    chosen.push({ entity_id: ref.entity_id, kind: ref.kind, id: ref.id, version: ref.version });
+    if (chosen.length === 5) break;
+  }
+  const bound = await request(`/scripts/${scriptId}/production/frames/${shot.id}/references`, 'POST', {
+    expected_version: frame.scene_version,
+    references: chosen,
+    reason: '制作链路按当前可见身份绑定参考，用于正式分镜',
+  });
+  if (!bound?.reference_hash) throw new Error(`Shot ${shot.id}: 正式分镜参考没有绑定成功，不会改出草稿图`);
+  return { expected_version: frame.scene_version, reference_hash: bound.reference_hash, redraw: false };
+}
 async function images(selected = null) {
   await assertComfyImages();
   const allAssets = await library();
   let knownCharacters;
+  let formalChecked = false;
   const snapshots = (await request(`/projects/${projectId}/export`)).asset_library?.image_snapshots || [];
   const imageSettings = projectSettingsOf(await request(`/projects/${projectId}`));
   const systemSettings = await request('/settings/');
@@ -717,8 +768,32 @@ async function images(selected = null) {
       || recorded?.signature !== signature || recorded?.url !== shot.asset_url || !currentImageHash || recorded?.sha256 !== currentImageHash
       || !keyframeUsesBindings(shot, refs, snapshots)
       || !keyframeUsesCharacterVersions(shot, knownCharacters, snapshots, visibleCast.map(character => character.id))) {
+      if (!formalChecked) {
+        formalChecked = true;
+        await assertFormalStoryboardRender(imageSettings.image_generation?.model || 'pony');
+      }
       const primary = resolveShotCharacter(shot, knownCharacters);
-      const task = await generateImage(`shot-${shot.id}:image:${signature.slice(0, 16)}`, requestKey => request('/assets/generate', 'POST', { scene_id: shot.id, request_key: requestKey, workflow: { gen_type: 'scene', character_ref_url: primary?.avatar_url || undefined, character_ref_urls: visibleCharacters.map(c => c.avatar_url), shot_master_character_ids: visibleCast.map(c => c.id) } }), shot.id);
+      const task = await generateImage(`shot-${shot.id}:image:${signature.slice(0, 16)}`, async requestKey => {
+        const guard = await formalProductionGuard(shot);
+        return request('/assets/generate', 'POST', {
+          scene_id: shot.id,
+          request_key: requestKey,
+          production_stage: 'production',
+          workflow: {
+            gen_type: 'scene',
+            production_guard: guard,
+            character_ref_url: primary?.avatar_url || undefined,
+            character_ref_urls: visibleCharacters.map(c => c.avatar_url),
+            shot_master_character_ids: visibleCast.map(c => c.id),
+          },
+        });
+      }, shot.id);
+      if (task.production_stage === 'production') {
+        const live = (await shots()).find(item => item.id === shot.id);
+        if (live?.asset_status !== 'completed' || live.asset_url !== task.image_url) {
+          throw new Error(`镜头 ${shot.id} 的正式候选已生成，活动画面还不是这张正式图。请在导演页核对服装、伤势、人数、持有、开口和空间六项后采纳。制作不会自动采纳，也不会改出构图草稿。`);
+        }
+      }
       state.imageInputs ||= {}; state.imageInputs[shot.id] = { signature, url: task.image_url, sha256: hash(fs.readFileSync(localMedia(task.image_url))) }; save();
     }
   }
@@ -735,6 +810,18 @@ async function assertComfyVideo() {
   }
   if (blockers.length) throw new Error(blockers.join('\n'));
 }
+async function identityPlatesForShot(shot, character) {
+  const live = platesFromCharacter(character);
+  const spec = typeof shot?.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot?.shot_spec || {});
+  const scriptId = spec?.source?.type === 'script' ? Number(spec.source.script_id) : 0;
+  if (!scriptId || !character) return live;
+  try {
+    const view = await request(`/scripts/${scriptId}/production/frames/${shot.id}`);
+    const pinned = (view?.reference_pin?.text_characters || []).find(row => Number(row.id) === Number(character.id));
+    if (pinned) return platesFromCharacter({ visual_tags: pinned.visual_tags });
+  } catch { /* A chapter without a pin keeps the live face and body plates. */ }
+  return live;
+}
 async function videoPreflight(selected = null) {
   await assertComfyVideo();
   const known = await characters();
@@ -743,7 +830,7 @@ async function videoPreflight(selected = null) {
     const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
     const primary = resolveShotCharacter(shot, known);
     const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride, await projectVideoDefault());
-    const references = (media.assets || []).filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(-2).map(asset => asset.id);
+    const references = primary ? selectIdentityReferenceIds(media.assets || [], primary.id, await identityPlatesForShot(shot, primary)) : [];
     const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, run_loop_closer: false };
     let check = await request('/videos/preflight', 'POST', body);
     if (!check.ready && continuityBlockerNeedsBind(check.blockers)) {
@@ -780,7 +867,7 @@ async function videos(selected = null) {
     const known = await characters();
     const refs = (available.assets || []).filter(a => a.role === 'character_reference' && a.character_id != null && a.status === 'ready');
     const primary = resolveShotCharacter(shot, known);
-    const selectedRefs = primary ? refs.filter(a => a.character_id === primary.id).slice(-2).map(a => a.id) : [];
+    const selectedRefs = primary ? selectIdentityReferenceIds(refs, primary.id, await identityPlatesForShot(shot, primary)) : [];
     const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault());
     if (primary && !selectedRefs.length && strategy.workflow_id !== 'minimax_h3_fl2va_official_12gb') throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
     const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false };
@@ -908,7 +995,7 @@ async function chapterSnapshot(chapter, includeVideos = false) {
       const provenance = videoProvenance(shot, media.assets, known);
       const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault());
       const primary = resolveShotCharacter(shot, known);
-      const refs = media.assets.filter(asset => asset.role === 'character_reference' && asset.status === 'ready' && asset.character_id === primary?.id).slice(-2).map(asset => asset.id);
+      const refs = primary ? selectIdentityReferenceIds(media.assets, primary.id, await identityPlatesForShot(shot, primary)) : [];
       const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, run_loop_closer: false });
       if (!flight.ready || !flight.input_signature || provenance.input_signature !== flight.input_signature || !provenance.source_current || !provenance.identity_current) throw new Error(`Shot ${shot.id}: final video inputs changed; regenerate and review`);
       const file = localMedia(final.url); assertChapterClipReady(probe(file), `Shot ${shot.id}`); decode(file);

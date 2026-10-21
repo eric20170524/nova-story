@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import sharp from 'sharp';
+import { resolveStaticAssetPath } from '../core/paths';
 
 process.env.DATABASE_URL = ':memory:';
 
@@ -85,6 +89,24 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     const avatarOnlyRow = await db.get('SELECT age FROM character WHERE id = ?', created.id);
     assert.equal(avatarOnlyRow.age, '26岁');
 
+    const storedTags = JSON.parse((await db.get('SELECT visual_tags FROM character WHERE id = ?', created.id)).visual_tags);
+    storedTags.gender = 'female';
+    await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(storedTags), created.id);
+
+    const missingGender = await app.inject({
+      method: 'POST',
+      url: '/api/characters/',
+      payload: { project_id: 1, name: '路人甲', role: 'extra', description: '路人走过。' },
+    });
+    const missing = JSON.parse(missingGender.payload);
+    const refusedSheet = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${missing.id}/build-prompt`,
+      payload: { gen_type: 'turnaround' },
+    });
+    assert.equal(refusedSheet.statusCode, 400);
+    assert.match(JSON.parse(refusedSheet.payload).detail, /缺少性别/);
+
     // 4. Test portrait prompt generation (upper-body front portrait, eye-level, visible shoulders, detailed face)
     const portraitPromptRes = await app.inject({
       method: 'POST',
@@ -97,15 +119,23 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     const portraitData = JSON.parse(portraitPromptRes.payload);
     assert.match(portraitData.prompt, /high quality character portrait/i);
     assert.match(portraitData.prompt, /upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes/i);
+    assert.match(portraitData.prompt, /neutral expression, clothes visible only at the collar and shoulders, empty hands/i);
+    assert.match(portraitData.negative_prompt, /holding a mirror, holding a sword, holding a flower/i);
     assert.match(portraitData.prompt, /26岁/);
 
     // 5. Test turnaround prompt generation with automatic reuse of portrait as IP-Adapter ref
     // First, set an avatar (定妆照)
+    const portraitUrl = '/static/generated/projects/1/characters/1/v1/portrait.png';
+    const portraitPath = resolveStaticAssetPath(portraitUrl);
+    fs.mkdirSync(path.dirname(portraitPath), { recursive: true });
+    await sharp({
+      create: { width: 64, height: 96, channels: 3, background: { r: 210, g: 186, b: 166 } },
+    }).png().toFile(portraitPath);
     await app.inject({
       method: 'PUT',
       url: `/api/characters/${created.id}`,
       payload: {
-        avatar_url: '/static/generated/projects/1/characters/1/v1/portrait.png',
+        avatar_url: portraitUrl,
       },
     });
 
@@ -171,6 +201,32 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     const beastPromptData = JSON.parse(beastPromptRes.payload);
     assert.doesNotMatch(beastPromptData.prompt, /East Asian facial features/i);
     assert.doesNotMatch(beastPromptData.negative_prompt, /caucasian|western face/i);
+    const beastTurn = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${beast.id}/build-prompt`,
+      payload: { gen_type: 'turnaround' },
+    });
+    assert.equal(beastTurn.statusCode, 200);
+
+    const bare = await app.inject({
+      method: 'POST',
+      url: '/api/characters/',
+      payload: {
+        project_id: 1,
+        name: '无定妆',
+        role: 'supporting',
+        description: '成年女子，黑发。',
+        visual_tags: { gender: 'female', hair: 'black hair' },
+      },
+    });
+    const bareId = JSON.parse(bare.payload).id;
+    const bareTurn = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${bareId}/build-prompt`,
+      payload: { gen_type: 'turnaround' },
+    });
+    assert.equal(bareTurn.statusCode, 400);
+    assert.match(JSON.parse(bareTurn.payload).detail, /还没有通过的定妆/);
 
     await db.run(
       'UPDATE project SET settings = ? WHERE id = 1',
@@ -179,8 +235,10 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     await db.run(
       'UPDATE character SET visual_tags = ? WHERE id = ?',
       JSON.stringify({
+        gender: 'female',
         face_features: 'refined classical East Asian mature beauty, delicate oriental bone structure',
         hair: 'long_silky_white',
+        assets: { avatar_url: portraitUrl },
       }),
       created.id,
     );
@@ -214,6 +272,7 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     assert.equal(refusedBody.ref_image_url, null);
     assert.equal(refusedBody.turnaround_front_adapter, false);
   } finally {
+    try { fs.unlinkSync(resolveStaticAssetPath('/static/generated/projects/1/characters/1/v1/portrait.png')); } catch { /* already gone */ }
     await app.close();
   }
 });
@@ -321,6 +380,8 @@ test('age survives an ageless extract and a version switch, and empty shots skip
     const lock = `${ORIENTAL_REALISTIC_FACE_LOCK}, long black hair, moon-white dress`;
     const back = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[2]!, 'pony');
     assert.doesNotMatch(back.prompt, /East Asian facial features/i);
+    const side = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[1]!, 'pony');
+    assert.match(side.prompt, /East Asian facial features/i);
     const front = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[0]!, 'pony');
     assert.match(front.prompt, /East Asian facial features/i);
     assert.equal(shotUsesOrientalFaceNegative({ gen_type: 'scene', shot_spec: { visible_subjects: [] } }), false);

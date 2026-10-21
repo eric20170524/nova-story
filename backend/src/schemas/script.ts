@@ -720,6 +720,9 @@ export const StoryboardCandidateShotSchema = z.object({
 });
 export type StoryboardCandidateShot = z.infer<typeof StoryboardCandidateShotSchema>;
 
+/** Chapter candidate cap. Scene allocation still defaults to 20 and only reaches this when the beats require it. */
+export const STORYBOARD_CANDIDATE_SHOT_LIMIT = 26;
+
 export const StoryboardCandidatePayloadSchema = z.object({
   scope: z.object({ kind: z.literal('scene'), target_scene_id: z.string().min(1), snapshot_id: z.string().min(1), snapshot_revision: z.number().int().positive(), source_hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
@@ -737,7 +740,7 @@ export const StoryboardCandidatePayloadSchema = z.object({
     coveredMustKeepEventIds: z.array(z.string()),
     totalMustKeepEvents: z.number().int(),
   }),
-  shots: z.array(StoryboardCandidateShotSchema).min(1).max(20),
+  shots: z.array(StoryboardCandidateShotSchema).min(1).max(STORYBOARD_CANDIDATE_SHOT_LIMIT),
 });
 export type StoryboardCandidatePayload = z.infer<typeof StoryboardCandidatePayloadSchema>;
 

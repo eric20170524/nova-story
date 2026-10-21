@@ -51,8 +51,8 @@ test('formal assembly resolves each person, keeps version 1 pins, and ignores cl
     locationName: '清暮宫内殿',
     sceneBoards: [{ id: 4, name: '清暮宫内殿', project_id: 2 }],
     characters: [
-      { id: 1, name: '南宫雪', project_id: 2, lora: 'xue.safetensors', visual_tags: JSON.stringify({ assets: { face_url: '/xue-face.png', turnaround_url: '/xue-body.png' } }) },
-      { id: 3, name: '裴雨涵', project_id: 2, lora: 'pei.safetensors', visual_tags: JSON.stringify({ assets: { face_url: '/pei-face.png' } }) },
+      { id: 1, name: '南宫雪', project_id: 2, lora: 'xue.safetensors', visual_tags: JSON.stringify({ assets: { avatar_url: '/xue-face.png', turnaround_front_url: '/xue-body.png', turnaround_url: '/xue-sheet.png' } }) },
+      { id: 3, name: '裴雨涵', project_id: 2, lora: 'pei.safetensors', visual_tags: JSON.stringify({ assets: { face_url: '/pei-crop.png', avatar_url: '/pei-portrait.png' } }) },
     ],
     clientWorkflow: { character_ref_url: '/client.png', force_character_adapter: true },
     loraSlots: 1,
@@ -61,6 +61,8 @@ test('formal assembly resolves each person, keeps version 1 pins, and ignores cl
   if (!assembled.ok) return;
   assert.deepEqual(assembled.ignored, ['character_ref_url', 'force_character_adapter']);
   assert.equal(assembled.entries.filter((entry) => entry.character_id === 1).map((entry) => entry.role).join(','), 'face,body');
+  assert.equal(assembled.entries.find((entry) => entry.character_id === 1 && entry.role === 'body')?.image_url, '/xue-body.png');
+  assert.equal(assembled.entries.find((entry) => entry.character_id === 3 && entry.role === 'face')?.image_url, '/pei-portrait.png');
   assert.equal(assembled.suggestion?.confirmed, false);
   assert.deepEqual(assembled.unused, ['multiple_character_loras_not_supported']);
   assert.equal(appearanceConflict('{"hair":"black"}', 'white hair'), true);
@@ -72,9 +74,11 @@ test('formal assembly resolves each person, keeps version 1 pins, and ignores cl
   assert.equal(suggestSceneBoard('清暮宫内殿', [{ id: 4, name: '清暮宫内殿' }])?.confirmed, false);
 });
 
-test('formal controls stay closed until a live combination is recorded', () => {
-  assert.deepEqual(FORMAL_OPEN_COMBINATIONS, []);
-  assert.equal(formalRenderAllowed('sdxl_ip_adapter'), false);
+test('pony formal combination is recorded and other combinations stay closed', () => {
+  assert.deepEqual(FORMAL_OPEN_COMBINATIONS, ['sdxl_ip_adapter']);
+  assert.equal(formalRenderAllowed('sdxl_ip_adapter'), true);
+  assert.equal(formalRenderAllowed('sdxl_unverified'), false);
+  assert.equal(formalRenderAllowed('krea2_native_reference'), false);
   const workflow = pony();
   const capability = {
     characterAdapter: true, compositionControl: false, modelFamilySupported: true, characterKind: 'ip_adapter', compositionKind: 'none',

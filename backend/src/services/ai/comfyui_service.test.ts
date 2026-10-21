@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { ComfyUIService } from './comfyui_service';
+import os from 'node:os';
+import path from 'node:path';
+import { ComfyUIService, applyRemoteLoraCatalog, comfyDownloadShouldRetry, comfyHistoryFailure, comfyPromptGiveUp, comfySocketDropShouldFinish, loraNamesFromObjectInfo, resolveComfyReferenceFile } from './comfyui_service';
 import { GpuLeaseService } from '../gpu_lease_service';
 import { SettingsManager } from '../../core/settings_manager';
 
@@ -24,6 +26,57 @@ const withMockFetch = async (
     GpuLeaseService.resetForTesting();
   }
 };
+
+test('a failed ComfyUI history row keeps the node error', () => {
+  assert.equal(comfyHistoryFailure(null), null);
+  assert.equal(comfyHistoryFailure({ status: { status_str: 'success', messages: [] } }), null);
+  assert.match(comfyHistoryFailure({
+    status: {
+      status_str: 'error',
+      messages: [['execution_error', { node_type: 'LoraLoader', exception_message: "Value not in list: lora_name: 'Pony_DetailV2.0.safetensors' not in []" }]],
+    },
+  }) || '', /LoraLoader.*Pony_DetailV2\.0/);
+  assert.deepEqual(loraNamesFromObjectInfo({ LoraLoader: { input: { required: { lora_name: [['H3_Combat_V2.safetensors']] } } } }), ['H3_Combat_V2.safetensors']);
+});
+
+test('remote LoRA catalog is attached for every image compile caller', async () => {
+  const local = await applyRemoteLoraCatalog(
+    { comfyui: { pony_lora: 'Pony_DetailV2.0.safetensors' } },
+    { isRemote: false, authenticatedFetch: async () => { throw new Error('fetch must not be called'); } }
+  );
+  assert.equal(local.comfyui.remote_lora_names, undefined);
+
+  const remote = await applyRemoteLoraCatalog(
+    { comfyui: { pony_lora: 'Pony_DetailV2.0.safetensors' } },
+    {
+      isRemote: true,
+      authenticatedFetch: async () => jsonResponse({
+        LoraLoader: { input: { required: { lora_name: [['H3_Combat_V2.safetensors']] } } },
+      }),
+    }
+  );
+  assert.deepEqual(remote.comfyui.remote_lora_names, ['H3_Combat_V2.safetensors']);
+});
+
+test('a dropped websocket keeps polling while the prompt is still active', () => {
+  assert.equal(comfySocketDropShouldFinish(false), false);
+  assert.equal(comfySocketDropShouldFinish(true), true);
+});
+
+test('ComfyUI image download retries a dropped connection', () => {
+    assert.equal(comfyDownloadShouldRetry(null, 'TypeError: terminated', 1), true);
+    assert.equal(comfyDownloadShouldRetry(525, '', 2), true);
+    assert.equal(comfyDownloadShouldRetry(403, 'Upload image through this account first', 1), false);
+    assert.equal(comfyDownloadShouldRetry(null, 'TypeError: terminated', 3), false);
+});
+
+test('ComfyUI prompt retries only an empty gateway timeout', () => {
+  assert.equal(comfyPromptGiveUp(525, 1), false);
+  assert.equal(comfyPromptGiveUp(522, 2), false);
+  assert.equal(comfyPromptGiveUp(524, 3), true);
+  assert.equal(comfyPromptGiveUp(400, 1), true);
+  assert.equal(comfyPromptGiveUp(500, 1), true);
+});
 
 test('image cancel without prompt id fails closed and never calls ComfyUI', async () => {
   let calls = 0;
@@ -216,6 +269,40 @@ test('SettingsManager masks remote_password in toPublicSettings and preserves on
             fs.writeFileSync(settingsPath, originalSettings, 'utf-8');
         }
     }
+});
+
+test('resolveComfyReferenceFile finds a plate stored under static/generated', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'comfy-ref-'));
+    const nested = path.join(root, 'generated', 'projects', '90713821', 'assets', '66', 'v2');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'plate.png'), 'png');
+    assert.equal(resolveComfyReferenceFile(root, 'plate.png'), path.join(nested, 'plate.png'));
+    fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('ComfyUIService uploadWorkflowReferences uploads a nested reference', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'comfy-upload-'));
+    const nested = path.join(root, 'generated', 'projects', 'x');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'plate.png'), 'png-bytes');
+    const service = ComfyUIService.fromSettings({
+        mode: 'remote',
+        remote_base_url: 'https://comfy.example.com',
+        remote_username: '',
+        remote_password: ''
+    });
+    let uploaded = '';
+    service.uploadImage = async (_buffer: Buffer, filename: string) => {
+        uploaded = filename;
+        return 'remote-plate.png';
+    };
+    const workflow = {
+        '1': { class_type: 'LoadImage', inputs: { image: 'plate.png' } }
+    };
+    const res = await service.uploadWorkflowReferences(workflow, root);
+    assert.equal(uploaded, 'plate.png');
+    assert.equal(res['1'].inputs.image, 'remote-plate.png');
+    fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('ComfyUIService uploadWorkflowReferences leaves local workflow intact', async () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appendUploadedIdentityReference, defaultIdentityReferenceIds, readProjectVideoWorkflow, recommendVideoWorkflow, resolveProjectVideoWorkflow } from './videoWorkflowPolicy';
+import { appendUploadedIdentityReference, defaultIdentityReferenceIds, selectIdentityReferenceIds, readProjectVideoWorkflow, recommendVideoWorkflow, resolveProjectVideoWorkflow } from './videoWorkflowPolicy';
 import type { MediaAsset } from '../types';
 
 const asset = (role: MediaAsset['role']): MediaAsset => ({
@@ -16,6 +16,18 @@ test('default identity uses two recent views of only one character', () => {
     { ...asset('character_reference'), id: 13, character_id: 1 },
   ];
   assert.deepEqual(defaultIdentityReferenceIds(refs), [13, 12]);
+});
+
+test('slotted face and body ignore a newer portrait that has no slot', () => {
+  const refs = [
+    { ...asset('character_reference'), id: 12, character_id: 1, url: '/body.png', metadata_json: JSON.stringify({ source_slot: 'body' }) },
+    { ...asset('character_reference'), id: 13, character_id: 1, url: '/face.png', metadata_json: JSON.stringify({ source_slot: 'face' }) },
+    { ...asset('character_reference'), id: 14, character_id: 1, url: '/new.png' },
+  ];
+  assert.deepEqual(defaultIdentityReferenceIds(refs), [13, 12]);
+  assert.deepEqual(selectIdentityReferenceIds(refs, 1, { face: '/face.png', body: '/body.png' }), [13, 12]);
+  assert.deepEqual(defaultIdentityReferenceIds(refs, { characterId: 1, face: '/body.png', body: '/face.png' }), [12, 13]);
+  assert.deepEqual(defaultIdentityReferenceIds(refs, { characterId: 1, face: '/missing.png', body: '/also-missing.png' }), [13, 12]);
 });
 
 test('consecutive identity uploads append same or unbound views and replace a different character', () => {

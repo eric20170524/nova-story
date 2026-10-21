@@ -122,6 +122,10 @@ const dimensionsFor = (
 const imageSizeFor = (resolution: ImageResolution): ImageOutputTarget['image_size'] =>
   resolution === 'draft' ? '512' : resolution === 'high' ? '2K' : '1K';
 
+/** Internal full-body panel. The stitched sheet is 16:9; these pixels are not a delivery ratio. */
+export const turnaroundPanelDimensions = (modelFamily: string): { width: number; height: number } =>
+  modelFamily === 'sd15' ? { width: 512, height: 768 } : { width: 768, height: 1152 };
+
 export const resolveImageOutputTarget = (options: {
   workflowData?: any;
   generationParams?: any;
@@ -153,6 +157,17 @@ export const resolveImageOutputTarget = (options: {
     };
   }
 
+  if (genType === 'turnaround_panel') {
+    return {
+      ...DEFAULT_IMAGE_OUTPUT_SPEC,
+      aspect_ratio: '9:16',
+      resolved_aspect_ratio: '9:16',
+      ...turnaroundPanelDimensions(modelFamily),
+      image_size: '1K',
+      source: 'generation_type',
+    };
+  }
+
   const directDimensions = explicitDimensions(generationParams);
   if (directDimensions) {
     const requestedRatio = directDimensions.width / directDimensions.height;
@@ -168,6 +183,18 @@ export const resolveImageOutputTarget = (options: {
       resolved_aspect_ratio: ratio,
       image_size: imageSizeFor(spec.resolution),
       source: 'request_dimensions',
+    };
+  }
+
+  // 定妆 is a vertical face plate. The project 16:9 storyboard canvas does not apply.
+  if (genType === 'portrait' && !requestHasSpec) {
+    return {
+      ...DEFAULT_IMAGE_OUTPUT_SPEC,
+      aspect_ratio: '9:16',
+      resolved_aspect_ratio: '9:16',
+      ...turnaroundPanelDimensions(modelFamily),
+      image_size: '1K',
+      source: 'generation_type',
     };
   }
 

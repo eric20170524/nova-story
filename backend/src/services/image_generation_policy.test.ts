@@ -120,6 +120,17 @@ test('detail slot stays Pony Detail; look LoRAs come from the style preset', () 
   }
 });
 
+test('remote catalog drops a style LoRA the live ComfyUI does not list', () => {
+  const stack = resolveLoraStack({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    allowRemoteUnverified: true,
+    styleLora: 'Pony_DetailV2.0.safetensors',
+    remoteLoraNames: ['H3_Combat_V2.safetensors'],
+  });
+  assert.deepEqual(stack.map((slot) => slot.name), []);
+});
+
 test('retired NSFW LoRA setting does not override the style preset', () => {
   const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-lora-dedupe-'));
   const loraDir = path.join(installPath, 'models', 'loras');
@@ -184,6 +195,77 @@ test('SFW prompt enhancement blocks NSFW; NSFW unlocks without forcing nude on l
   const applied = applyPromptEnhancement('hero opens a door', sfw);
   assert.match(applied, /hero opens a door/i);
   assert.match(applied, /source_anime/);
+});
+
+test('library location and prop plates stay empty of people', () => {
+  const sideHall = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: 'Side hall of a white jade celestial palace, elegant ancient Chinese architecture, ethereal lighting.',
+    genType: 'location',
+  });
+  assert.match(sideHall.suffix, /wide shot/);
+  assert.match(sideHall.suffix, /establishing shot/);
+  assert.match(sideHall.suffix, /rating_safe/);
+  assert.match(sideHall.suffix, /soft volumetric godrays/);
+  assert.match(sideHall.negativeExtra, /\b1girl\b/);
+  assert.doesNotMatch(sideHall.suffix, /rating_explicit|rating_questionable|detailed skin|refined anatomy|facial features/i);
+
+  const chamber = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: 'Inner chamber of a white jade palace, intimate and sacred atmosphere, soft celestial lighting, traditional immortal decor.',
+    genType: 'location',
+  });
+  assert.match(chamber.suffix, /rating_safe/);
+  assert.doesNotMatch(chamber.suffix, /refined anatomy|rating_explicit|detailed skin|facial features/i);
+
+  const incense = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: 'Traditional Chinese incense burner with aromatic incense, wisps of ethereal smoke rising, associated with desire and harmony.',
+    genType: 'prop',
+  });
+  assert.match(incense.suffix, /one physical object, centered product photograph/);
+  assert.doesNotMatch(incense.suffix, /design sheet|plain background/i);
+  assert.match(incense.negativeExtra, /character sheet|turnaround/);
+  assert.match(incense.negativeExtra, /\b1girl\b/);
+  assert.doesNotMatch(incense.suffix, /establishing shot|environment-dominant|facial features|rating_explicit|detailed skin/i);
+
+  const mirror = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: 'A single ancient circular immortal mirror with a plain bronze frame, reflective surface showing a distant landscape, isolated object, no people',
+    genType: 'prop',
+  });
+  assert.match(mirror.suffix, /one physical object/);
+  assert.doesNotMatch(mirror.suffix, /design sheet/i);
+  assert.doesNotMatch(mirror.suffix, /establishing shot|expansive detailed location|facial features|rating_explicit/i);
+
+  const orientalPlate = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'oriental_realistic',
+    existingPrompt: 'White jade stairs of a celestial palace, goddess statue motif.',
+    genType: 'location',
+  });
+  assert.doesNotMatch(orientalPlate.suffix, /facial features|skin texture|East Asian eyelids|beautiful East Asian woman/i);
+  assert.match(orientalPlate.suffix, /cinematic lighting/);
+
+  const personScene = buildPromptEnhancement({
+    modelFamily: 'pony',
+    nsfwEnabled: true,
+    stylePreset: 'xianxia_immortal',
+    existingPrompt: 'Inner chamber of a white jade palace, intimate and sacred atmosphere. An adult woman raises one hand.',
+    genType: 'scene',
+    hasVisiblePerson: true,
+  });
+  assert.match(personScene.suffix, /rating_explicit/);
+  assert.match(personScene.suffix, /refined anatomy/);
 });
 
 test('RedCraft NSFW unlocks cast sheets without forcing a landscape nude', () => {
@@ -439,6 +521,24 @@ test('environment shots skip portrait-detail style LoRA', () => {
     });
     const style = plan.loras.find((slot) => slot.role === 'style');
     assert.equal(style, undefined);
+
+    for (const genType of ['location', 'prop']) {
+      const plate = resolveGenerationPlan({
+        modelFamily: 'pony',
+        nsfwEnabled: true,
+        runtimeSettings: {
+          comfyui: {
+            install_path: installPath,
+            pony_lora: 'Pony_DetailV2.0.safetensors',
+            pony_lora_strength: 0.65
+          }
+        },
+        workflowData: { gen_type: genType, style_preset: 'xianxia_immortal' },
+        basePrompt: 'A white jade incense burner on a table.'
+      });
+      assert.equal(plate.loras.find((slot) => slot.role === 'style'), undefined);
+      assert.equal(plate.loras.find((slot) => slot.role === 'nsfw'), undefined);
+    }
   } finally {
     fs.rmSync(installPath, { recursive: true, force: true });
   }
@@ -670,6 +770,13 @@ test('normalizeImageModelFamily correctly normalizes redcraft and krea variants'
   assert.equal(normalizeImageModelFamily('krea'), 'redcraft_krea2');
   assert.equal(normalizeImageModelFamily('赤佬'), 'redcraft_krea2');
   assert.equal(normalizeImageModelFamily('chilao'), 'redcraft_krea2');
+  assert.equal(normalizeImageModelFamily('qwen_image'), 'qwen_image');
+  assert.equal(normalizeImageModelFamily('qwen-image-2.1'), 'qwen_image');
+  assert.equal(resolveStyleLora('qwen_image', true, {
+    installPath: null,
+    styleLora: 'Pony_DetailV2.0.safetensors',
+    allowRemoteUnverified: true
+  }), null);
   assert.equal(normalizeImageModelFamily('RedCraft 3.0 (Krea2)'), 'redcraft_krea2');
 });
 
@@ -827,7 +934,9 @@ test('character sheet header uses stored gender, age, and upper-body front portr
   assert.match(portrait.prefix, /long white hair/);
   assert.match(portrait.prefix, /moon-white robe/);
   assert.match(portrait.negative, /low quality/i);
+  assert.match(portrait.prefix, /neutral expression, clothes visible only at the collar and shoulders, empty hands/i);
   assert.match(portrait.negative, /side view, profile, back view, from behind/i);
+  assert.match(portrait.negative, /holding a mirror, holding a sword, holding a flower, handheld prop/i);
   assert.match(portrait.negative, /child, loli, shota/i);
   assert.doesNotMatch(portrait.prefix, /1girl|1boy|female|male|East Asian|fully clothed/i);
   assert.doesNotMatch(portrait.negative, /nsfw|nude/i);
@@ -841,8 +950,8 @@ test('character sheet header uses stored gender, age, and upper-body front portr
   assert.match(turnaround.prefix, /\bfemale\b/);
   assert.match(turnaround.prefix, /24-26 years old/);
   assert.match(turnaround.prefix, /crimson robe/);
-  assert.doesNotMatch(turnaround.prefix, /1girl|East Asian|fully clothed/i);
-  assert.doesNotMatch(turnaround.negative, /nsfw|nude/i);
+  assert.doesNotMatch(turnaround.prefix, /1girl|East Asian|fully clothed|empty hands/i);
+  assert.doesNotMatch(turnaround.negative, /nsfw|nude|holding a mirror/i);
 
   const male = buildCharacterPromptHeader('pony', false, 'portrait', 'male');
   assert.match(male.prefix, /\bmale\b/);
@@ -962,5 +1071,63 @@ test('semi_realistic and guofeng_xianxia presets inject East Asian facial featur
     { description: '一只白色灵狐，animal creature furry paw' }
   );
   assert.equal(nonhumanSheet.gender, 'unspecified');
+
+  const designSheet = readStoredCharacterSheet(
+    {
+      base_model: {
+        tags: {
+          hair: 'long hair',
+          eyes: 'ice blue eyes',
+          clothing: 'moon-white inner wear, half-open',
+          face_features: 'cold refined adult beauty, distant then melting expression, high cheekbones',
+        },
+      },
+      identity_lock: {
+        must_keep: [
+          'long straight black hair cascading like a waterfall, silver hairpin',
+          'pale ice-blue eyes, cold aloof frost gaze that softens under emotion',
+          'moon-white xianxia immortal dress, layered silk robes, silver and jade ornaments, often half-open inner robe in intimate scenes',
+        ],
+      },
+    },
+    { description: '清暮宫宫主。' }
+  );
+  assert.equal(designSheet.gender, 'female');
+  assert.match(designSheet.appearance.clothing || '', /moon-white xianxia immortal dress/);
+  assert.match(designSheet.appearance.clothing || '', /layered silk robes/);
+  assert.doesNotMatch(designSheet.appearance.clothing || '', /half-open/i);
+  assert.match(designSheet.appearance.hair || '', /long straight black hair/);
+  assert.match(designSheet.appearance.eyes || '', /pale ice-blue eyes/);
+  assert.doesNotMatch(designSheet.appearance.eyes || '', /softens under emotion/i);
+  const header = buildCharacterPromptHeader('pony', true, 'turnaround', designSheet.gender, designSheet.appearance);
+  assert.match(header.prefix, /xianxia immortal dress/);
+  assert.match(header.prefix, /pale ice-blue eyes/);
+  assert.match(header.prefix, /\bfemale\b/);
+  assert.doesNotMatch(header.prefix, /half-open/i);
 });
+
+test('turnaround and turnaround_panel never inject intimateCue or NSFW_ATMOSPHERE_SENTENCE even when nsfwEnabled is true', () => {
+  for (const genType of ['turnaround', 'turnaround_panel'] as const) {
+    const kreaEnh = buildPromptEnhancement({
+      modelFamily: 'redcraft_krea2',
+      nsfwEnabled: true,
+      existingPrompt: 'Full-length head-to-toe wide shot, female, red hanfu lowered to waist, bare shoulders',
+      genType,
+      subjectType: 'female_human',
+    });
+    assert.doesNotMatch(kreaEnh.suffix, /raw photo, analog film grain, subsurface scattering, detailed skin pores/i);
+    assert.match(kreaEnh.suffix, /highly detailed skin texture, delicate lighting, realistic anatomy/);
+
+    const ponyEnh = buildPromptEnhancement({
+      modelFamily: 'pony',
+      nsfwEnabled: true,
+      existingPrompt: 'full body, female, red hanfu lowered to waist, bare shoulders',
+      genType,
+      subjectType: 'female_human',
+    });
+    assert.doesNotMatch(ponyEnh.suffix, /rating_explicit|intimate lighting/i);
+    assert.match(ponyEnh.suffix, /rating_safe/);
+  }
+});
+
 

@@ -40,6 +40,7 @@ const assetSummary = (visualTagsRaw: unknown) => {
   return {
     avatar_url: assets.avatar_url || tags.avatar_url || null,
     turnaround_url: assets.turnaround_url || tags.turnaround_url || null,
+    turnaround_front_url: assets.turnaround_front_url || tags.turnaround_front_url || null,
     face_url: assets.face_url || tags.face_url || null,
     has_avatar: Boolean(assets.avatar_url || tags.avatar_url),
     has_turnaround: Boolean(assets.turnaround_url || tags.turnaround_url),
@@ -111,6 +112,7 @@ const appearanceUrls = (raw: unknown) => {
   return {
     avatar_url: summary.avatar_url,
     turnaround_url: summary.turnaround_url,
+    turnaround_front_url: summary.turnaround_front_url,
     face_url: summary.face_url,
   };
 };
@@ -120,6 +122,7 @@ const sameAppearance = (left: unknown, right: unknown) => {
   const b = appearanceUrls(right);
   return a.avatar_url === b.avatar_url
     && a.turnaround_url === b.turnaround_url
+    && a.turnaround_front_url === b.turnaround_front_url
     && a.face_url === b.face_url;
 };
 
@@ -209,6 +212,9 @@ export async function createCharacterVersion(
         ...(visualTags.assets || {}),
         avatar_url: null,
         turnaround_url: null,
+        turnaround_front_url: null,
+        turnaround_side_url: null,
+        turnaround_back_url: null,
         face_url: null
       }
     };

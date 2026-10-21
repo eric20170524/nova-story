@@ -20,7 +20,10 @@ import {
   ORIENTAL_REALISTIC_FACE_LOCK,
   ORIENTAL_REALISTIC_NEGATIVE,
   readStoredCharacterSheet,
+  sealCharacterDesign,
+  syncEditableCharacterDesign,
 } from '../services/image_generation_policy';
+import { PortraitPlateError, readPortraitPlate } from '../services/portrait_plate';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import {
   activateCharacterVersion,
@@ -167,19 +170,21 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
             }
           }
 
+          const sealedTags = sealCharacterDesign(existingTags, visualTags, mergedTags);
           await db.run(
             `UPDATE character
              SET role = ?, description = ?, visual_tags = ?, age = COALESCE(?, age)
              WHERE id = ?`,
             profile.role,
             profile.description,
-            JSON.stringify(mergedTags),
+            JSON.stringify(sealedTags),
             profileAge,
             existing.id
           );
           characterId = existing.id;
         } else {
           mergedTags.timeline_map[chapter_id] = 'v1_default';
+          const sealedTags = sealCharacterDesign({}, visualTags, mergedTags);
           const result = await db.run(
             `INSERT INTO character (project_id, name, role, description, visual_tags, age)
              VALUES (?, ?, ?, ?, ?, ?)`,
@@ -187,7 +192,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
             profile.name,
             profile.role,
             profile.description,
-            JSON.stringify(mergedTags),
+            JSON.stringify(sealedTags),
             profileAge
           );
           characterId = Number(result.lastID);
@@ -238,7 +243,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const tagsStr = JSON.stringify(tags);
+    const syncedTags = syncEditableCharacterDesign(tags, { description: data.description, age: ageVal });
+    const tagsStr = JSON.stringify(syncedTags);
 
     let voiceId: string | null = null;
     let voiceLabel: string | null = null;
@@ -375,10 +381,26 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Manage visual_tags and embedded properties
-    let tags = typeof char.visual_tags === 'string' ? JSON.parse(char.visual_tags) : (char.visual_tags || {});
+    const priorTags = typeof char.visual_tags === 'string' ? JSON.parse(char.visual_tags) : (char.visual_tags || {});
+    let tags = priorTags;
 
     if (data.visual_tags !== undefined) {
-      tags = typeof data.visual_tags === 'string' ? JSON.parse(data.visual_tags) : data.visual_tags;
+      const incomingTags = typeof data.visual_tags === 'string' ? JSON.parse(data.visual_tags) : data.visual_tags;
+      tags = {
+        ...incomingTags,
+        assets: {
+          ...(priorTags?.assets || {}),
+          ...(incomingTags?.assets || {}),
+        },
+      };
+      tags = syncEditableCharacterDesign(
+        tags,
+        {
+          description: data.description !== undefined ? data.description : char.description,
+          age: data.age !== undefined ? (data.age !== null ? String(data.age).trim() : null) : char.age,
+        },
+        { preferFlatEdits: true }
+      );
     }
 
     const assets = tags.assets || {};
@@ -391,16 +413,18 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     delete assets.model_type;
 
     if (data.age !== undefined) {
+      const design = tags.design && typeof tags.design === 'object' && !Array.isArray(tags.design)
+        ? tags.design
+        : null;
       if (data.age !== null && String(data.age).trim()) {
-        tags.age = String(data.age).trim();
-        if (tags.base_model?.tags) {
-          tags.base_model.tags.age = String(data.age).trim();
-        }
+        const ageVal = String(data.age).trim();
+        tags.age = ageVal;
+        if (tags.base_model?.tags) tags.base_model.tags.age = ageVal;
+        if (design) design.age = ageVal;
       } else {
         delete tags.age;
-        if (tags.base_model?.tags) {
-          delete tags.base_model.tags.age;
-        }
+        if (tags.base_model?.tags) delete tags.base_model.tags.age;
+        if (design) delete design.age;
       }
     }
 
@@ -439,7 +463,9 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       gen_type: z.string().default('turnaround'),
       custom_description: z.string().optional().nullable(),
       use_ref_portrait: z.boolean().optional(),
-      ref_image_url: z.string().optional().nullable()
+      ref_image_url: z.string().optional().nullable(),
+      wardrobe_variant: z.string().optional().nullable(),
+      turnaround_views: z.array(z.enum(['front', 'side', 'back'])).optional(),
     });
     const req = bodySchema.parse(request.body);
 
@@ -494,7 +520,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const subjectContext = [
       dbChar.name,
       dbChar.description,
-      header.prefix,
+      stored.appearance.hair,
+      stored.appearance.clothing,
       mustKeepText,
     ].filter(Boolean).join(', ');
     const inferredSubject = inferPromptSubjectType(
@@ -502,6 +529,23 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       tags?.subject_type || tags?.species || (stored.gender === 'female' ? 'female_human' : stored.gender === 'male' ? 'male_human' : null)
     );
     const isHumanCharacter = inferredSubject !== 'nonhuman' && inferredSubject !== 'environment';
+    if (
+      (req.gen_type === 'portrait' || req.gen_type === 'turnaround')
+      && isHumanCharacter
+      && stored.gender === 'unspecified'
+    ) {
+      return reply.status(400).send({ detail: '角色缺少性别，定妆已停止。请在角色设定中标明男女。' });
+    }
+    if (req.gen_type === 'turnaround' && isHumanCharacter) {
+      try {
+        await readPortraitPlate(storedAvatar);
+      } catch (error) {
+        if (error instanceof PortraitPlateError) {
+          return reply.status(400).send({ detail: error.message });
+        }
+        throw error;
+      }
+    }
     const isWesternStyle = /western_comic/i.test(stylePreset);
     const isOrientalRealistic = /oriental_realistic/i.test(stylePreset) || /oriental_realistic/i.test(projectSettings.style || '') || /oriental_realistic/i.test(projectSettings.image_generation?.style || '');
 
@@ -524,7 +568,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         : `${header.prefix}, full body, standing, character reference${refHint}`;
     } else {
       prompt = codexImage
-        ? `${header.prefix}. Upper-body front portrait, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, plain studio background, no writing, no watermark.`
+        ? `${header.prefix}. Upper-body front portrait, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background, no writing, no watermark.`
         : `${header.prefix}${refHint}`;
     }
 
@@ -555,7 +599,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       // Document composite pipeline for clients
       turnaround_pipeline: req.gen_type === 'turnaround'
         ? codexImage ? 'codex_single_sheet' : 'three_views_stitch'
-        : undefined
+        : undefined,
+      ...(req.gen_type === 'turnaround' && req.turnaround_views?.length
+        ? { turnaround_views: req.turnaround_views }
+        : {}),
+      ...(req.gen_type === 'turnaround' && String(req.wardrobe_variant || '').trim()
+        ? { wardrobe_variant: String(req.wardrobe_variant).trim() }
+        : {}),
     };
   });
 
@@ -570,10 +620,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
     const assets = tags.assets || {};
-    const srcUrl = assets.turnaround_url || assets.avatar_url;
+    const srcUrl = assets.avatar_url;
 
     if (!srcUrl) {
-      return reply.status(400).send({ detail: 'No turnaround or avatar image available for face cropping' });
+      return reply.status(400).send({ detail: '没有定妆照，不能裁脸。' });
     }
 
     const staticDir = getGeneratedDirectory();
@@ -591,10 +641,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       const sharp = require('sharp');
       const metadata = await sharp(filepath).metadata();
       if (metadata.width && metadata.height) {
-        const left = Math.floor(metadata.width * 0.05);
-        const top = Math.floor(metadata.height * 0.05);
-        const width = Math.floor(metadata.width * 0.40);
-        const height = Math.floor(metadata.height * 0.40);
+        const width = Math.floor(metadata.width * 0.60);
+        const height = Math.floor(metadata.height * 0.42);
+        const left = Math.floor((metadata.width - width) / 2);
+        const top = Math.floor(metadata.height * 0.04);
 
         const faceFilename = `face_${id}_${crypto.randomUUID().substring(0, 8)}.png`;
         const pathResult = getCharacterAssetPath({
@@ -714,6 +764,18 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       filename
     });
     await fs.promises.writeFile(pathResult.filepath, buffer);
+
+    if (assetType === 'avatar') {
+      try {
+        await readPortraitPlate(pathResult.url);
+      } catch (error) {
+        try { await fs.promises.unlink(pathResult.filepath); } catch { /* ignore */ }
+        if (error instanceof PortraitPlateError) {
+          return reply.status(400).send({ detail: error.message });
+        }
+        throw error;
+      }
+    }
 
     await ensureCharacterVersionBaseline(id);
     const previousVisualTags = dbChar.visual_tags;

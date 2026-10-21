@@ -16,6 +16,8 @@
  *   When adapters are unavailable, fall back to Tier A without failing the job.
  */
 
+import { resolveSheetDesign, storedDesignIsFrozen } from './image_generation_policy';
+
 export type ImageRefRole = 'character' | 'composition' | 'legacy';
 
 export interface ResolvedReferenceUrls {
@@ -178,6 +180,12 @@ const isSingleClose = (workflowData: any, people: string[]): boolean => {
 };
 
 /**
+ * Side and back must change the camera. 0.62 keeps the front-facing face.
+ * Krea 2 uses CFG 1, so the viewpoint has to move in the latent, not the negative prompt.
+ */
+export const TURNAROUND_ANGLE_DENOISE = 0.88;
+
+/**
  * Tier A img2img gate. Portrait latents collapse a multi-person shot into a
  * solo portrait, so those shots stay txt2img. The decision reads the shot
  * contract only: visible people, subject scale, shot intent, and shot type.
@@ -190,8 +198,18 @@ export const resolveReferenceImg2ImgPolicy = (
   const explicit = workflowData?.denoise;
   const hasExplicitDenoise = typeof explicit === 'number' && Number.isFinite(explicit);
 
-  // Per-panel full-body view in 3-view composite pipeline — never lock to portrait latent
+  // Front panel is txt2img. Side and back redraw that plate; a bust portrait is not the init.
   if (genType === 'turnaround_panel') {
+    if (workflowData?.turnaround_face_lock === true) {
+      return { useImg2Img: false, denoise: 1, reason: 'turnaround_face_lock' };
+    }
+    if (workflowData?.turnaround_from_front === true) {
+      return {
+        useImg2Img: true,
+        denoise: TURNAROUND_ANGLE_DENOISE,
+        reason: 'turnaround_from_front'
+      };
+    }
     return {
       useImg2Img: false,
       denoise: 1,
@@ -212,6 +230,11 @@ export const resolveReferenceImg2ImgPolicy = (
       denoise: hasExplicitDenoise ? Number(explicit) : 0.42,
       reason: 'portrait'
     };
+  }
+
+  // A full-body plate locks identity through the adapter. Img2img would copy its A-pose.
+  if (workflowData?.identity_plate === 'body' || workflowData?.identity_plate === 'none') {
+    return { useImg2Img: false, denoise: 1, reason: 'identity_plate_text_or_adapter' };
   }
 
   const people = visiblePeopleFromWorkflow(workflowData);
@@ -258,6 +281,12 @@ export const shouldAllowCharacterAdapter = (
 ): { allow: boolean; reason: string } => {
   if (workflowData?.force_no_character_adapter === true) {
     return { allow: false, reason: 'forced_off' };
+  }
+  if (workflowData?.turnaround_from_front === true) {
+    return { allow: false, reason: 'turnaround_from_front' };
+  }
+  if (workflowData?.identity_plate === 'face' || workflowData?.identity_plate === 'body') {
+    return { allow: true, reason: `identity_plate_${workflowData.identity_plate}` };
   }
   if (workflowData?.force_character_adapter === true) {
     return { allow: true, reason: 'forced_on' };
@@ -342,9 +371,10 @@ export const planReferenceGeneration = (
     );
   }
 
-  // When a real character adapter exists, prefer it over classic img2img for identity
+  // When a real character adapter exists, prefer it over classic img2img for identity.
+  // An angle panel already has its own init, so the missing-or-present adapter must not drop it.
   let img2img = img2imgBase;
-  if (useCharacterAdapter) {
+  if (useCharacterAdapter && img2imgBase.reason !== 'turnaround_from_front') {
     // Never stack IP-Adapter + portrait latent img2img — adapter owns identity
     img2img = {
       useImg2Img: false,
@@ -449,6 +479,29 @@ export const flattenVisualTagMap = (
     tagMap = Object.fromEntries(
       Object.entries(coerceTagRecord(visualTags)).filter(([k]) => !ASSET_META_KEYS.has(k))
     );
+  }
+
+  if (storedDesignIsFrozen(visualTags)) {
+    const design = resolveSheetDesign(visualTags);
+    const write = (key: string, value: string) => {
+      const text = String(value || '').trim();
+      if (text) tagMap[key] = text;
+    };
+    write('age', design.age);
+    write('hair', design.hair);
+    write('eyes', design.eyes);
+    write('body', design.body);
+    write('clothing', design.clothing);
+    write('accessories', design.accessories);
+    if (design.face) {
+      tagMap.face = design.face;
+      delete tagMap.face_features;
+      delete tagMap.facial_features;
+    }
+    if (design.skin) {
+      tagMap.skin = design.skin;
+      tagMap.skin_tone = design.skin;
+    }
   }
 
   if (options.wideShot) {

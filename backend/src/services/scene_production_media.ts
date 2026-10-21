@@ -28,10 +28,14 @@ async function choicesFor(scene: any, gate: Awaited<ReturnType<typeof requireCur
     if (entity.kind === 'character' && visible.has(Number(entity.character_id))) {
       await ensureCharacterVersionBaseline(entity.character_id);
       for (const row of await db.all('SELECT * FROM character_version WHERE character_id=? ORDER BY version', entity.character_id)) {
-        const tags = JSON.parse(row.visual_tags || '{}'), image = tags.assets?.face_url || tags.assets?.avatar_url || tags.face_url || tags.avatar_url || tags.assets?.turnaround_url || tags.turnaround_url;
+        const tags = JSON.parse(row.visual_tags || '{}');
+        const assets = tags.assets || {};
+        const face = String(assets.avatar_url || tags.avatar_url || '').trim();
+        const body = String(assets.turnaround_front_url || tags.turnaround_front_url || '').trim();
+        const image = face || body;
         const roles = [
-          ...(tags.assets?.face_url || tags.face_url ? [{ role: 'face', image_url: tags.assets?.face_url || tags.face_url }] : []),
-          ...(tags.assets?.turnaround_url || tags.turnaround_url ? [{ role: 'body', image_url: tags.assets?.turnaround_url || tags.turnaround_url }] : []),
+          ...(face ? [{ role: 'face', image_url: face }] : []),
+          ...(body ? [{ role: 'body', image_url: body }] : []),
         ];
         if (image) available.push({ entity_id: entity.entity_id, kind: 'character', id: entity.character_id, version: row.version, name: entity.display_name, image_url: image, roles });
       }

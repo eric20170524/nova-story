@@ -5,8 +5,9 @@ import { SettingsManager } from '../core/settings_manager';
 import { LLMService } from '../services/llm';
 import type { LLMProviderConfig } from '../services/llm';
 import { mergeVerifyLlmConfig } from '../services/llm_presets';
-import { fetchComfyObjectInfo, probeTierBCapability } from '../services/tier_b_adapters';
+import { resolveTierBFromSettings } from '../services/tier_b_adapters';
 import { assessFormalInstall } from '../services/formal_storyboard_capability';
+import { FORMAL_OPEN_COMBINATIONS } from '../services/formal_storyboard_plan';
 import { VramService } from '../services/vram_service';
 import { ComfyUIService } from '../services/ai/comfyui_service';
 import { GpuLeaseService } from '../services/gpu_lease_service';
@@ -51,23 +52,24 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const settings = SettingsManager.loadSettings();
     const comfy = settings.comfyui || {};
     const installPath = comfy.install_path || null;
-    const tierB = comfy.tier_b || {};
-    const objectInfo = await fetchComfyObjectInfo(comfy.base_url || 'http://127.0.0.1:8188');
-    const capability = probeTierBCapability(installPath, {
-      objectInfo,
-      enabled: tierB.enabled !== false,
-      configured: {
-        ipadapter: tierB.ipadapter_model,
-        clipVision: tierB.clip_vision_model,
-        controlnet: tierB.controlnet_model,
-      },
-    });
+    const capability = await resolveTierBFromSettings(settings);
+    let objectInfo: Record<string, any> | null = null;
+    try {
+      const { ComfyUIService } = await import('../services/ai/comfyui_service');
+      const response = await ComfyUIService.fromSettings(comfy).authenticatedFetch('/object_info', {}, 8000);
+      if (response.ok) objectInfo = await response.json() as Record<string, any>;
+    } catch {
+      objectInfo = null;
+    }
     const query = (request.query || {}) as Record<string, string>;
     let workflowFile = comfy.selected_workflow_file || comfy.default_workflow || 'pony_xl_12gb.json';
     let modelName = 'pony';
     if (query.model === 'redcraft_krea2') {
       modelName = 'redcraft_krea2';
       workflowFile = 'redcraft_krea2_12gb.json';
+    } else if (query.model === 'qwen_image') {
+      modelName = 'qwen-image-2.1';
+      workflowFile = 'qwen_image_2_1.json';
     } else if (query.model === 'pony') {
       modelName = 'pony';
       workflowFile = 'pony_xl_12gb.json';
@@ -84,6 +86,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       runtime: objectInfo ? 'online' : 'offline',
       objectInfo,
       hashFiles: false,
+      liveVerifiedIds: FORMAL_OPEN_COMBINATIONS,
     });
     return {
       ready: capability.characterAdapter || capability.compositionControl,
@@ -101,7 +104,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         model_label: formal.model_label,
         template: formal.template,
         workflow_file: formal.workflow_file,
-        live_verified: false,
+        open_combinations: FORMAL_OPEN_COMBINATIONS,
+        live_verified: formal.capabilities.some((row) => row.live_verified),
         capabilities: formal.capabilities.map((row) => ({
           id: row.id,
           installed: row.installed,

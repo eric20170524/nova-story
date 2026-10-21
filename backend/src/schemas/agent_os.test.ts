@@ -413,6 +413,40 @@ test('normalize and merge visual_tags preserve assets and base_model', async () 
   assert.equal(mergedDoc.hair, 'leopard-print hair');
   assert.equal(mergedDoc.variants[0].tags.hair, 'leopard-print hair');
 
+  const frozen = mergeVisualTagsDocument(
+    {
+      identity_lock: {
+        must_keep: ['pale lavender xianxia dress, soft layered pastel robes'],
+      },
+      base_model: { tags: { clothing: 'purple clothing', hair: 'soft long straight black hair' } },
+      design: {
+        gender: 'female',
+        clothing: 'pale lavender xianxia dress, soft layered pastel robes',
+        hair: 'soft long straight black hair',
+        eyes: 'light brown gentle watery eyes',
+      },
+    },
+    { clothing: 'purple clothing, lowered to waist' }
+  ) as any;
+  assert.equal(frozen.design.clothing, 'pale lavender xianxia dress, soft layered pastel robes');
+  assert.equal(frozen.base_model.tags.clothing, 'purple clothing, lowered to waist');
+  assert.match(frozen.scene_state.clothing, /lowered to waist/);
+
+  const seeded = mergeVisualTagsDocument(
+    {
+      identity_lock: {
+        must_keep: ['moon-white xianxia immortal dress, layered silk robes, often half-open inner robe in intimate scenes'],
+      },
+      base_model: { tags: { clothing: 'moon-white inner wear, half-open', eyes: 'ice blue eyes' } },
+    },
+    { clothing: 'red dress, lowered to waist' }
+  ) as any;
+  assert.match(seeded.design.clothing, /moon-white xianxia immortal dress/);
+  assert.match(seeded.design.clothing, /layered silk robes/);
+  assert.doesNotMatch(seeded.design.clothing, /half-open/);
+  assert.equal(seeded.base_model.tags.clothing, 'red dress, lowered to waist');
+  assert.equal(seeded.design.gender, 'female');
+
   const withVisual = mergeImpactWithCharacterAnalysis(
     {
       newOrUpdatedCharacters: [

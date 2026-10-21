@@ -227,6 +227,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const [additionalGuides, setAdditionalGuides] = useState<Array<{ assetId: number | null; frameIdx: number }>>([]);
   const loadedGuideFrameAssetId = useRef<number | null>(null);
   const [selectedCharacterRefIds, setSelectedCharacterRefIds] = useState<number[]>([]);
+  const identitySelectionTouched = useRef(false);
+  const [pinnedPlates, setPinnedPlates] = useState<Record<number, { face: string | null; body: string | null }>>({});
   const [selectedMotionRefId, setSelectedMotionRefId] = useState<number | null>(null);
 
   const mergedAssets = React.useMemo(() => {
@@ -301,6 +303,43 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   }, [selectedAssetId, preferredAsset?.id]);
 
   useEffect(() => {
+    identitySelectionTouched.current = false;
+    let spec: { source?: { type?: string; script_id?: number } } = {};
+    try {
+      spec = typeof scene.shot_spec === 'string' ? JSON.parse(scene.shot_spec || '{}') : (scene.shot_spec || {});
+    } catch {
+      spec = {};
+    }
+    const scriptId = spec?.source?.type === 'script' ? Number(spec.source.script_id) : 0;
+    if (!scriptId) {
+      setPinnedPlates({});
+      return;
+    }
+    let cancelled = false;
+    api.getProductionMedia(scriptId, Number(scene.id)).then((view) => {
+      if (cancelled) return;
+      const next: Record<number, { face: string | null; body: string | null }> = {};
+      for (const row of view?.reference_pin?.text_characters || []) {
+        let tags: { assets?: Record<string, string>; avatar_url?: string; turnaround_front_url?: string } = {};
+        try {
+          tags = typeof row.visual_tags === 'string' ? JSON.parse(row.visual_tags || '{}') : (row.visual_tags || {});
+        } catch {
+          tags = {};
+        }
+        const assets = tags.assets || {};
+        next[Number(row.id)] = {
+          face: String(assets.avatar_url || tags.avatar_url || '').trim() || null,
+          body: String(assets.turnaround_front_url || tags.turnaround_front_url || '').trim() || null,
+        };
+      }
+      setPinnedPlates(next);
+    }).catch(() => {
+      if (!cancelled) setPinnedPlates({});
+    });
+    return () => { cancelled = true; };
+  }, [scene.id, scene.shot_spec]);
+
+  useEffect(() => {
     if (!workflowManuallySelected) setWorkflowId(suggestedWorkflow.workflowId);
   }, [suggestedWorkflow.workflowId, workflowManuallySelected]);
 
@@ -316,10 +355,17 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     }
 
     const validCharIds = new Set(characterReferenceAssets.map((asset) => asset.id));
+    const newestCharacterId = [...characterReferenceAssets]
+      .filter((asset) => asset.status === 'ready' && asset.id != null)
+      .sort((a, b) => Number(b.id) - Number(a.id))[0]?.character_id;
+    const plates = newestCharacterId != null ? pinnedPlates[Number(newestCharacterId)] : undefined;
+    const pin = plates
+      ? { characterId: Number(newestCharacterId), face: plates.face, body: plates.body }
+      : undefined;
     setSelectedCharacterRefIds((current) => {
       const preserved = current.filter((id) => validCharIds.has(id)).slice(0, 3);
-      if (preserved.length > 0) return preserved;
-      return defaultIdentityReferenceIds(characterReferenceAssets);
+      if (identitySelectionTouched.current && preserved.length > 0) return preserved;
+      return defaultIdentityReferenceIds(characterReferenceAssets, pin);
     });
 
     const validMotionIds = new Set(motionReferenceAssets.map((asset) => asset.id));
@@ -336,6 +382,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
     scene.asset_url,
     lastFrameChoices.map((asset) => asset.id).join(','),
     characterReferenceAssets.map((asset) => asset.id).join(','),
+    JSON.stringify(pinnedPlates),
     motionReferenceAssets.map((asset) => asset.id).join(','),
     guideFrameChoices.map((asset) => asset.id).join(',')
   ]);
@@ -411,6 +458,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const isMultiframe = workflowId === 'minimax_h3_multiframe_official_12gb';
 
   const toggleCharacterRef = (assetId: number) => {
+    identitySelectionTouched.current = true;
     setSelectedCharacterRefIds((current) => {
       if (current.includes(assetId)) return current.filter((id) => id !== assetId);
       const nextAsset = characterReferenceAssets.find(asset => asset.id === assetId);
@@ -458,6 +506,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       if (role === 'guide_frame_reference' || role === 'composition_reference') setSelectedGuideFrameId(asset.id);
       if (role === 'motion_reference') setSelectedMotionRefId(asset.id);
       if (role === 'character_reference') {
+        identitySelectionTouched.current = true;
         setSelectedCharacterRefIds(current => appendUploadedIdentityReference(current, mergedAssets, asset));
       }
       showToast('参考素材已上传并绑定到当前 Scene', 'success');

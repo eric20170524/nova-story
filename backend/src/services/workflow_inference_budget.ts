@@ -10,7 +10,12 @@ export type WorkflowInferenceBudget = {
   calls: Array<{ stage: string; task: string; prompt_hash: string; kind: 'initial' | 'semantic_repair' | 'network_retry'; attempt_state: 'reserved' | 'completed' | 'error' | 'interrupted_unknown'; elapsed_ms: number; response?: unknown; error?: string; model?: string; usage?: unknown; finish_reason?: string | null }>;
 };
 export const newWorkflowInferenceBudget = (): WorkflowInferenceBudget => ({ version: 1, semantic_repairs: 0, network_retries: 0, batches: [], calls: [] });
-export const isInferenceTransportError = (error: any) => Boolean(error?.status === 429 || error?.status >= 500 || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT'].includes(error?.code) || ['APIConnectionError','APIConnectionTimeoutError'].includes(error?.name) || ['APIConnectionError','APIConnectionTimeoutError'].includes(error?.constructor?.name));
+/** One storyboard fact pass makes many calls. A few EdgeOne 524s must not end it; the cap still stops a dead endpoint. */
+export const NETWORK_RETRY_LIMIT = 6;
+export const isInferenceTransportError = (error: any) => {
+  const message = String(error?.message || '');
+  return Boolean(error?.status === 429 || (typeof error?.status === 'number' && error.status >= 500) || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(error?.code) || ['APIConnectionError','APIConnectionTimeoutError'].includes(error?.name) || ['APIConnectionError','APIConnectionTimeoutError'].includes(error?.constructor?.name) || message === 'terminated' || (/\b52[24]\b/.test(message) && /status code/.test(message)));
+};
 export class WorkflowTransportError extends Error {
   constructor(public cause: unknown) { super(cause instanceof Error ? cause.message : String(cause)); }
 }
@@ -45,7 +50,7 @@ export function workflowBudgetProvider(delegate: AIProvider, budget: WorkflowInf
           await persist();
           if (options?.signal?.aborted) throw options.signal.reason;
           if (!isInferenceTransportError(error)) throw error;
-          if (budget.network_retries >= 1) throw new WorkflowTransportError(error);
+          if (budget.network_retries >= NETWORK_RETRY_LIMIT) throw new WorkflowTransportError(error);
           budget.network_retries++;
           callKind = 'network_retry';
           await persist();

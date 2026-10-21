@@ -6,7 +6,8 @@ import {
   mergeAppearanceIntoPrompt,
   planReferenceGeneration,
   resolveReferenceImg2ImgPolicy,
-  resolveReferenceUrls
+  resolveReferenceUrls,
+  TURNAROUND_ANGLE_DENOISE
 } from './reference_generation_policy';
 
 test('resolveReferenceUrls maps legacy ref to character and keeps composition separate', () => {
@@ -29,10 +30,62 @@ test('character_ref_url wins over legacy ref_image_url', () => {
   assert.equal(refs.legacyRefUrl, '/static/generated/old.png');
 });
 
-test('img2img policy: turnaround_panel is pure txt2img', () => {
-  const panel = resolveReferenceImg2ImgPolicy({ gen_type: 'turnaround_panel' }, '');
-  assert.equal(panel.useImg2Img, false);
-  assert.equal(panel.denoise, 1);
+test('img2img policy: front panel is txt2img and angle panels follow the front plate', () => {
+  const front = resolveReferenceImg2ImgPolicy({ gen_type: 'turnaround_panel' }, '');
+  assert.equal(front.useImg2Img, false);
+  assert.equal(front.denoise, 1);
+  assert.equal(front.reason, 'turnaround_panel_txt2img');
+
+  const angle = resolveReferenceImg2ImgPolicy({
+    gen_type: 'turnaround_panel',
+    turnaround_from_front: true,
+    reference_tier: 'A',
+    denoise: 1,
+  }, '');
+  assert.equal(angle.useImg2Img, true);
+  assert.equal(angle.denoise, TURNAROUND_ANGLE_DENOISE);
+  assert.equal(angle.reason, 'turnaround_from_front');
+  const faceLock = resolveReferenceImg2ImgPolicy({
+    gen_type: 'turnaround_panel',
+    turnaround_face_lock: true,
+  }, '');
+  assert.equal(faceLock.useImg2Img, false);
+  assert.equal(faceLock.reason, 'turnaround_face_lock');
+
+  const plan = planReferenceGeneration(
+    {
+      gen_type: 'turnaround_panel',
+      turnaround_from_front: true,
+      reference_tier: 'A',
+      character_ref_url: '/static/generated/front.png',
+    },
+    '',
+    { characterAdapter: true, compositionControl: false }
+  );
+  assert.equal(plan.useCharacterAdapter, false);
+  assert.equal(plan.img2img.useImg2Img, true);
+  assert.equal(plan.img2img.reason, 'turnaround_from_front');
+  assert.equal(plan.img2img.denoise, TURNAROUND_ANGLE_DENOISE);
+
+  const body = resolveReferenceImg2ImgPolicy({
+    gen_type: 'scene',
+    identity_plate: 'body',
+    denoise: 0.62,
+  }, '');
+  assert.equal(body.useImg2Img, false);
+  assert.equal(body.reason, 'identity_plate_text_or_adapter');
+  const bodyPlan = planReferenceGeneration(
+    {
+      gen_type: 'scene',
+      identity_plate: 'body',
+      reference_tier: 'A',
+      character_ref_url: '/front.png',
+    },
+    '',
+    { characterAdapter: true, compositionControl: false }
+  );
+  assert.equal(bodyPlan.useCharacterAdapter, true);
+  assert.equal(bodyPlan.img2img.useImg2Img, false);
 });
 
 test('img2img policy allows turnaround and reads people from the contract', () => {

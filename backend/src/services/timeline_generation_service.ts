@@ -1,5 +1,6 @@
 import { db } from '../db/database';
 import { appearanceFieldsFromTags } from './english_visual_prompt';
+import { storedDesignIsFrozen } from './image_generation_policy';
 import { flattenVisualTagMap, formatVisualLockTokens } from './reference_generation_policy';
 import type { CharacterLockRef } from './pony_prompt_compiler';
 
@@ -20,7 +21,8 @@ export async function buildCharacterLockRefsForChapter(projectId: number, chapte
     const lock = compact.length ? compact.join(', ') : formatVisualLockTokens(tags, { chapterId });
     if (!lock || /^\(none/i.test(lock)) return null;
     const aliases = Array.isArray(tags?.aliases) ? tags.aliases.map((a: unknown) => String(a || '').trim()).filter(Boolean) : [];
-    return { name: String(c.name || '').trim() || null, aliases, lock, appearance } satisfies CharacterLockRef;
+    const costume_locked = storedDesignIsFrozen(tags);
+    return { name: String(c.name || '').trim() || null, aliases, lock, appearance, ...(costume_locked ? { costume_locked } : {}) } satisfies CharacterLockRef;
   }).filter(Boolean) as CharacterLockRef[];
 }
 

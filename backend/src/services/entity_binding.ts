@@ -101,6 +101,29 @@ export function admitBindingRows<T extends { index: number }>(rows: T[], pending
   throw new Error('人物自动解析缺项或重复');
 }
 
+/** Gemma sometimes puts the character id in resolved, or nests entity_id and status there. */
+function coerceBindingRow(row: Record<string, any>, roster: EntityRef[]): Record<string, any> {
+  const source = row && typeof row === 'object' ? row : {};
+  const resolved = source.resolved ?? source.resolution;
+  let entityId = source.entity_id;
+  let status = source.status;
+  let visibility = source.visibility;
+  if (typeof resolved === 'string') entityId = entityId ?? resolved;
+  else if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+    entityId = entityId ?? resolved.entity_id ?? null;
+    status = status ?? resolved.status;
+    visibility = visibility ?? resolved.visibility;
+  }
+  if (typeof entityId === 'string' && !roster.some(entity => entity.id === entityId)) {
+    const named = roster.filter(entity => entity.name === entityId);
+    entityId = named.length === 1 ? named[0]!.id : null;
+  } else if (typeof entityId !== 'string') entityId = null;
+  if (!['resolved', 'ambiguous', 'unknown'].includes(status)) status = entityId ? 'resolved' : 'unknown';
+  if (status !== 'resolved') entityId = null;
+  if (!['visible', 'mentioned', 'uncertain'].includes(visibility)) visibility = 'uncertain';
+  return { index: source.index, entity_id: entityId, status, visibility };
+}
+
 /** Model resolution is a proposal, even when it returns status=resolved. */
 export async function proposeBindings(provider: AIProvider, binding: EntityBinding, text: string, context: string, roster: EntityRef[], scene?: { location: string; interior_exterior?: string; time_of_day?: string }): Promise<EntityBinding> {
   const pending = binding.mentions.map((m, index) => ({ ...m, index })).filter(m => !m.confirmed);
@@ -108,7 +131,7 @@ export async function proposeBindings(provider: AIProvider, binding: EntityBindi
   if (context.length + text.length + JSON.stringify(roster).length + JSON.stringify(pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end }))).length > 2200) throw new Error('人物指代上下文超过预算，请核对或按完整语句拆分');
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']) })) });
   const result = await provider.generateStructured(JSON.stringify({ task: 'entity_binding', text, context, scene, entities: roster, mentions: pending.map(m => ({ index: m.index, text: m.text, start: m.start, end: m.end })) }), schema,
-    '为当前动作的代词或省略主语建议人物绑定。按前文先判断谁离开、谁留下，再判断当前 scene 地点内谁能够执行动作。已离开当前地点的人，除非原文明确跟随、转场或画外，不作为当前现场动作的执行者。不要仅按最近人名选择，也不要根据姓名猜性别。只剩一名有明确现场依据的候选时，status=resolved，entity_id=该ID。确有多种有依据的解释时，status=ambiguous，entity_id=null。没有依据时，status=unknown，entity_id=null。照片、提及和画外声音不证明本人在现场。每个 index 返回一项，只有 resolved 可以填写 entity_id。结果仅为待核对建议，不能自行标记为已确认。', { temperature: 0.1, maxTokens: 256 });
+    '为当前动作的代词或省略主语建议人物绑定。按前文先判断谁离开、谁留下，再判断当前 scene 地点内谁能够执行动作。已离开当前地点的人，除非原文明确跟随、转场或画外，不作为当前现场动作的执行者。不要仅按最近人名选择，也不要根据姓名猜性别。只剩一名有明确现场依据的候选时，status=resolved，entity_id=该ID。确有多种有依据的解释时，status=ambiguous，entity_id=null。没有依据时，status=unknown，entity_id=null。照片、提及和画外声音不证明本人在现场。每个 index 返回一项，只有 resolved 可以填写 entity_id。结果仅为待核对建议，不能自行标记为已确认。只返回 JSON，顶层键名必须是 bindings。', { temperature: 0.1, maxTokens: 256 });
   const pendingIndices = new Set(pending.map(m => m.index));
   const admitted = admitBindingRows(result.bindings, pending.map(m => m.index));
   const proposals = admitted.rows;
@@ -171,8 +194,10 @@ export async function resolveScriptBindings(provider: AIProvider, binding: Entit
   // Oversized or uncertain passages remain editable review items instead of being guessed.
   if (JSON.stringify(input).length > 6000) return binding;
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']), visibility: z.enum(['visible', 'mentioned', 'uncertain']) })) });
-  const result = schema.parse(await provider.generateStructured(JSON.stringify(input), schema,
-    '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。', { temperature: 0.1, maxTokens: 1024 }));
+  const loose = z.object({ bindings: z.array(z.record(z.string(), z.any())) });
+  const raw = await provider.generateStructured(JSON.stringify(input), loose,
+    '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。只返回 JSON，顶层键名必须是 bindings。', { temperature: 0.1, maxTokens: 1024 });
+  const result = schema.parse({ bindings: raw.bindings.map(row => coerceBindingRow(row, roster)) });
   const admitted = admitBindingRows(result.bindings, pending.map(m => m.index));
   const resolved: EntityBinding = { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((mention, index) => {
     const row = admitted.rows.find(b => b.index === index);
@@ -262,4 +287,11 @@ export function eventContentCovered(event: string, text: string): boolean {
   if (expected.length) return expected.every(e => actual.some(a => JSON.stringify(a) === JSON.stringify(e)));
   const needle = normalized(event);
   return Boolean(needle) && normalized(text).includes(needle);
+}
+
+/** A summarized event is not a quote. Keep the source sentences instead of the paraphrase. */
+export function groundedEventText(eventText: string, sourceText: string): { text: string; usedSource: boolean } | null {
+  if (eventContentCovered(eventText, sourceText)) return { text: eventText, usedSource: false };
+  if (sourceText.trim() && eventContentCovered(sourceText, sourceText)) return { text: sourceText, usedSource: true };
+  return null;
 }

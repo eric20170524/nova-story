@@ -12,7 +12,7 @@ import { requireCurrentContinuityShot } from './continuity_shot_gate';
 import { requireFormalPinStillCurrent, requireProductionReferencePin, type ProductionReferencePin } from './scene_production_media';
 import { createSceneVersion, ensureSceneVersionBaseline, activateSceneVersion } from './scene_versions';
 import { recordShotMasterSnapshot } from './video/shot_master_snapshot';
-import { assembleFormalReferences } from './formal_storyboard_plan';
+import { assembleFormalReferences, formalRenderAllowed } from './formal_storyboard_plan';
 
 export interface FormalCandidateMarker {
   publish: false;
@@ -20,6 +20,7 @@ export interface FormalCandidateMarker {
   scene_version: number;
   source_version: number;
   reference_hash: string;
+  combination?: string;
 }
 
 export interface FormalRequestRecord {
@@ -164,6 +165,8 @@ export async function beginFormalImage(sceneId: number, taskId: string, input: {
     'generating', taskId, sceneId, version
   );
   const referenceHash = continuityHash(pin);
+  const combination = input.model === 'redcraft_krea2' ? 'krea2_native_reference' : input.model === 'sd15' ? 'sdxl_unverified' : 'sdxl_ip_adapter';
+  const live = formalRenderAllowed(combination);
   await rememberCandidate(sceneId, version, {
     production_stage: 'production',
     source_version: sourceVersion,
@@ -171,10 +174,10 @@ export async function beginFormalImage(sceneId: number, taskId: string, input: {
     model_fingerprint: { model: input.model, style: input.style },
     request_snapshot: { mode: input.mode, generation_params: input.generationParams ?? null, production_stage: 'production' },
     control_branch: 'continuity_pin',
-    unused_reasons: ['formal_combination_not_live_verified', ...(!assembly.ok ? [] : assembly.unused)],
+    unused_reasons: [...(live ? [] : ['formal_combination_not_live_verified']), ...assembly.unused],
   }, candidatePin);
   return {
-    marker: { publish: false, production_stage: 'production', scene_version: version, source_version: sourceVersion, reference_hash: referenceHash },
+    marker: { publish: false, production_stage: 'production', combination, scene_version: version, source_version: sourceVersion, reference_hash: referenceHash },
     pin: candidatePin,
   };
 }

@@ -132,7 +132,7 @@ export const DirectorMode: React.FC = () => {
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image'>('pony');
   const [projectWorkflowId, setProjectWorkflowId] = useState<number | null>(null);
   const [projectVideoWorkflowId, setProjectVideoWorkflowId] = useState<VideoWorkflowId | null>(null);
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
@@ -208,7 +208,7 @@ export const DirectorMode: React.FC = () => {
             setSelectedStyle(imageSettings.style);
           }
         }
-        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image') {
           setProjectModelType(imageSettings.model);
         }
         setProjectWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
@@ -703,8 +703,8 @@ export const DirectorMode: React.FC = () => {
 
       if (mentionedChars.length > 0) {
         const char = mentionedChars[0];
-        if (char.avatar_url || char.turnaround_url || char.face_url) {
-          characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
+        if (char.avatar_url) {
+          characterRefUrl = char.avatar_url;
         }
       }
 
@@ -1014,8 +1014,8 @@ export const DirectorMode: React.FC = () => {
 
       if (mentionedChars.length > 0) {
         const char = mentionedChars[0];
-        if (char.avatar_url || char.turnaround_url || char.face_url) {
-          characterRefUrl = char.face_url || char.avatar_url || char.turnaround_url;
+        if (char.avatar_url) {
+          characterRefUrl = char.avatar_url;
         }
       }
 

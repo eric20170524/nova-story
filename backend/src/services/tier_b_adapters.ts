@@ -236,9 +236,36 @@ export const discoverTierBModels = (
   return { ipadapter, clipVision, controlnet, compositionKind };
 };
 
+const choiceList = (objectInfo: Record<string, any> | null, node: string, field: string): string[] => {
+  const raw = objectInfo?.[node]?.input?.required?.[field];
+  const list = Array.isArray(raw) ? raw[0] : [];
+  return Array.isArray(list) ? list.map((item) => String(item)) : [];
+};
+
+/** Model filenames advertised by a live ComfyUI, including a remote install. */
+export const modelChoicesFromObjectInfo = (objectInfo: Record<string, any> | null) => {
+  const ipadapterFiles = choiceList(objectInfo, 'IPAdapterModelLoader', 'ipadapter_file');
+  const clipFiles = choiceList(objectInfo, 'CLIPVisionLoader', 'clip_name');
+  const controlnetFiles = choiceList(objectInfo, 'ControlNetLoader', 'control_net_name');
+  const ipadapter = pickByPatterns(ipadapterFiles, [
+    /plus-face.*sdxl/i,
+    /plus_face.*sdxl/i,
+    /ip-adapter-plus.*sdxl/i,
+    /plus.*sdxl/i,
+    /sdxl/i,
+  ]);
+  const clipVision = pickByPatterns(clipFiles, [/CLIP-ViT-H-14/i, /ViT-H-14/i, /vit.?h/i]);
+  const openpose = controlnetFiles.find((file) => /openpose|pose/i.test(file) && /sdxl|xl/i.test(file));
+  const depth = controlnetFiles.find((file) => /depth/i.test(file) && /sdxl|xl/i.test(file));
+  const canny = controlnetFiles.find((file) => /canny|lineart/i.test(file) && /sdxl|xl/i.test(file));
+  const controlnet = openpose || depth || canny || null;
+  const compositionKind: CompositionControlKind = openpose ? 'openpose' : depth ? 'depth' : canny ? 'canny' : 'none';
+  return { ipadapter, clipVision, controlnet, compositionKind };
+};
+
 /**
  * Probe filesystem (+ optional object_info) for Tier B readiness.
- * Safe when ComfyUI is offline — uses install_path only.
+ * A remote ComfyUI reports its model names through object_info; the local install path is optional.
  */
 export const probeTierBCapability = (
   installPath: string | null | undefined,
@@ -275,6 +302,13 @@ export const probeTierBCapability = (
 
   const models = discoverTierBModelsSafe(installPath, options.configured);
   const objectInfo = options.objectInfo || null;
+  const remoteModels = modelChoicesFromObjectInfo(objectInfo);
+  if (!models.ipadapter && remoteModels.ipadapter) models.ipadapter = remoteModels.ipadapter;
+  if (!models.clipVision && remoteModels.clipVision) models.clipVision = remoteModels.clipVision;
+  if (!models.controlnet && remoteModels.controlnet) {
+    models.controlnet = remoteModels.controlnet;
+    models.compositionKind = remoteModels.compositionKind;
+  }
 
   const nodeNames = objectInfo ? new Set(Object.keys(objectInfo)) : null;
 
@@ -754,7 +788,17 @@ export const resolveTierBFromSettings = async (
   const baseUrl = comfy.base_url || 'http://127.0.0.1:8188';
   const tierB = comfy.tier_b || {};
 
-  const objectInfo = await fetchComfyObjectInfo(baseUrl);
+  let objectInfo: Record<string, any> | null = null;
+  if (comfy.mode === 'remote') {
+    try {
+      const { ComfyUIService } = await import('./ai/comfyui_service');
+      const response = await ComfyUIService.fromSettings(comfy).authenticatedFetch('/object_info', {}, 8000);
+      if (response.ok) objectInfo = await response.json() as Record<string, any>;
+    } catch {
+      objectInfo = null;
+    }
+  }
+  if (!objectInfo) objectInfo = await fetchComfyObjectInfo(baseUrl);
   const capability = probeTierBCapability(installPath, {
     objectInfo,
     enabled: tierB.enabled !== false && comfy.tier_b_enabled !== false,

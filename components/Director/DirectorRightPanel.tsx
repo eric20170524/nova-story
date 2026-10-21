@@ -373,6 +373,8 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                      <span className="text-indigo-600 dark:text-indigo-300 font-bold">
                        {projectModelType === 'sd15'
                          ? t('director.model_sd15', 'SD 1.5 Draft')
+                         : projectModelType === 'qwen_image'
+                         ? t('director.model_qwen_image', 'Qwen-Image 2.1')
                          : projectModelType === 'redcraft_krea2'
                          ? t('director.model_redcraft_krea2', 'RedCraft 3.0 (Krea2)')
                          : t('director.model_pony', 'Pony XL')}

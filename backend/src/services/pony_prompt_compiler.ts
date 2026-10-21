@@ -24,12 +24,14 @@ export type CharacterLockRef = {
   name?: string | null;
   aliases?: string[] | null;
   lock: string;
+  costume_locked?: boolean;
   appearance?: {
     age?: string;
     hair?: string;
     face?: string;
     body?: string;
     clothing?: string;
+    clothing_state?: string;
     accessories?: string;
   };
 };

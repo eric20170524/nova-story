@@ -183,6 +183,21 @@ test('实际状态核对接口接受跨块补回状态与删除错误状态，�
   }
 });
 
+test('主动作只忽略原文首尾空白，不同动作仍然拒绝', async () => {
+  const doc = document(['陈月穿蓝色外套。\n']);
+  const result = await run(doc, fixture());
+  const fact = result.contract.facts.find(f => f.text.includes('蓝色外套'))!;
+  assert.equal(fact.text, '陈月穿蓝色外套。\n');
+  const payload = { fact_contract: result.contract, shots: result.shots };
+  assert.doesNotThrow(() => validateFactPayload(doc, payload as any));
+  const changed = structuredClone(payload);
+  const shot = changed.shots.find(item => JSON.parse(item.shot_spec).primary_action === '陈月穿蓝色外套。')!;
+  const spec = JSON.parse(shot.shot_spec);
+  spec.primary_action = '陈月放下蓝伞。';
+  shot.shot_spec = JSON.stringify(spec);
+  assert.throws(() => validateFactPayload(doc, changed as any), /主动作与可追溯事实不符/);
+});
+
 test('服装变化留在镜头事实，外观锁原文保留，最终提示词通过后才缓存', async () => {
   const doc = document(['陈月穿蓝色外套。']);
   const mock = fixture();

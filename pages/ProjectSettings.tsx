@@ -135,7 +135,7 @@ export const ProjectSettings: React.FC = () => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [defaultStyle, setDefaultStyle] = useState(STANDARD_VISUAL_STYLES[0].value);
-  const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
+  const [defaultModelType, setDefaultModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image'>('pony');
   const [defaultWorkflowId, setDefaultWorkflowId] = useState<number | null>(null);
   const [videoWorkflowId, setVideoWorkflowId] = useState<VideoWorkflowId | null>(null);
   const [outputSpec, setOutputSpec] = useState<Required<ImageOutputSpec>>({
@@ -215,7 +215,7 @@ export const ProjectSettings: React.FC = () => {
           setSettingsBase(settingsObj && typeof settingsObj === 'object' ? { ...settingsObj } : {});
           const imageSettings = settingsObj.image_generation || {};
           if (imageSettings.style) setDefaultStyle(imageSettings.style);
-          if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+          if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image') {
               setDefaultModelType(imageSettings.model);
           }
           setDefaultWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);
@@ -562,11 +562,12 @@ export const ProjectSettings: React.FC = () => {
                     className={fieldClass}
                     value={defaultModelType}
                     onChange={(e) => {
-                      setDefaultModelType(e.target.value as 'pony' | 'sd15' | 'redcraft_krea2');
+                      setDefaultModelType(e.target.value as 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image');
                       setDefaultWorkflowId(null);
                     }}
                   >
                     <option value="pony">{t('project_settings.model_pony')}</option>
+                    <option value="qwen_image">{t('project_settings.model_qwen_image')}</option>
                     <option value="redcraft_krea2">{t('project_settings.model_redcraft')}</option>
                     <option value="sd15">{t('project_settings.model_sd15')}</option>
                   </select>
@@ -584,7 +585,7 @@ export const ProjectSettings: React.FC = () => {
                       }
                       const workflow = workflows.find((item) => String(item.id) === value);
                       const family = workflow?.model_family;
-                      if (family === 'pony' || family === 'sd15' || family === 'redcraft_krea2') {
+                      if (family === 'pony' || family === 'sd15' || family === 'redcraft_krea2' || family === 'qwen_image') {
                         setDefaultModelType(family);
                         setDefaultWorkflowId(Number(value));
                       }
@@ -593,11 +594,16 @@ export const ProjectSettings: React.FC = () => {
                     {defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId) && (
                       <option value={defaultWorkflowId}>{t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}</option>
                     )}
-                    {(['pony', 'redcraft_krea2', 'sd15'] as const).map((family) => {
+                    {(['pony', 'qwen_image', 'redcraft_krea2', 'sd15'] as const).map((family) => {
                       const familyWorkflows = workflows.filter((wf) => wf.model_family === family);
                       if (!familyWorkflows.length) return null;
+                      const familyLabel = family === 'redcraft_krea2'
+                        ? 'redcraft'
+                        : family === 'qwen_image'
+                          ? 'qwen_image'
+                          : family;
                       return (
-                        <optgroup key={family} label={t(`project_settings.model_${family === 'redcraft_krea2' ? 'redcraft' : family}`)}>
+                        <optgroup key={family} label={t(`project_settings.model_${familyLabel}`)}>
                           {familyWorkflows.map((wf) => (
                             <option key={wf.id} value={wf.id}>{wf.name}</option>
                           ))}

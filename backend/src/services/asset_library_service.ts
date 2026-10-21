@@ -7,6 +7,7 @@ import { AssetTaskStore } from './task_store';
 import { hashChapterContent } from '../schemas/story_plan';
 import { InferenceCache, textModelFingerprint, type InferenceReuseOptions } from './inference_cache';
 import { withLocalTextInference } from './local_text_inference';
+import { LIBRARY_PLATE_PERSON_NEGATIVE } from './image_generation_policy';
 
 export const LibraryAssetInput = z.object({
   kind: z.enum(['location', 'prop']),
@@ -20,7 +21,7 @@ export type LibraryAsset = z.infer<typeof LibraryAssetInput> & {
   status: string; task_id: string | null; source_chapter_ids: string;
 };
 const extractionCache = new InferenceCache<Array<z.infer<typeof LibraryAssetInput>>>('library-extraction');
-const EXTRACTION_RULES = 'library-extraction-v2-canonical-names';
+const EXTRACTION_RULES = 'library-extraction-v3-empty-plate';
 export class AssetLibraryError extends Error {
   constructor(message: string, public statusCode = 409) { super(message); }
 }
@@ -116,6 +117,7 @@ export class AssetLibraryService {
     const canonical = existingAssets.map(({ kind, name, description, visual_prompt }) => ({ kind, name, description, visual_prompt }));
     const promptFor = (canonicalAssets: typeof canonical) => `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
       `description 描述空间布局、材质、色彩及连续性；visual_prompt 用英文描述固定外观。` +
+      `visual_prompt 只写空间、材质、光线，或这一件物体的外形。不要写人物、身体、欲望、亲密和镜中人。` +
       `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind 和 name，不要改名，也不要为人物建档。kind 只能是 location 或 prop。` +
       `不同实体不能仅因材质、颜色或名称相近就合并；按原文分别管理各自的用途与位置。\n` +
       (instructions?.trim() ? `本次提取补充要求：${instructions.trim()}\n` : '') +
@@ -183,8 +185,8 @@ export class AssetLibraryService {
         await GenerationService.generateAssets(taskId, {
           library_asset_id: id, gen_type: asset.kind,
           ...(resumeJobId ? { codex_resume_job_id: resumeJobId } : {}),
-          prompt: `${asset.visual_prompt}, ${asset.kind === 'location' ? 'environment concept art, empty location, no people' : 'single prop design, isolated object, no people'}`,
-          negative_prompt: 'people, person, portrait, text, watermark',
+          prompt: `${asset.visual_prompt}, ${asset.kind === 'location' ? 'empty scenery, environment concept art, unoccupied location' : 'one physical object, centered product photograph, front view, simple backdrop'}`,
+          negative_prompt: `${LIBRARY_PLATE_PERSON_NEGATIVE}, text, watermark`,
         }, syntheticId);
         const task = await AssetTaskStore.get(taskId);
         await db.run('UPDATE library_asset SET status = ?, image_url = COALESCE(?, image_url), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND task_id = ?',

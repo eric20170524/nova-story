@@ -6,7 +6,8 @@ import { OpenAIProvider } from './openai_provider';
 
 async function withTextServer(
     respond: (response: http.ServerResponse, body: any) => void,
-    run: (provider: OpenAIProvider) => Promise<void>
+    run: (provider: OpenAIProvider) => Promise<void>,
+    model = 'fake-model'
 ) {
     const server = http.createServer(async (request, response) => {
         let body = '';
@@ -17,7 +18,7 @@ async function withTextServer(
     try {
         const address = server.address();
         assert(address && typeof address !== 'string');
-        await run(new OpenAIProvider('test-key', 'fake-model', `http://127.0.0.1:${address.port}/v1`));
+        await run(new OpenAIProvider('test-key', model, `http://127.0.0.1:${address.port}/v1`));
     } finally {
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
@@ -59,6 +60,194 @@ test('truncated, empty, and unterminated streams reject partial rewrites', async
             await assert.rejects(provider.generateText('rewrite', undefined, { stream: true }), /未完整结束/);
         });
     }
+});
+
+test('a one-field schema accepts the array when the model uses another key', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: {
+                    role: 'assistant',
+                    content: '{"resolutions":[{"index":0,"entity_id":"character:18","status":"resolved","visibility":"visible"}]}',
+                },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({
+            bindings: z.array(z.object({
+                index: z.number(),
+                entity_id: z.string(),
+                status: z.string(),
+                visibility: z.string(),
+            })),
+        });
+        const result = await provider.generateStructured('bind', schema);
+        assert.equal(result.bindings.length, 1);
+        assert.equal(result.bindings[0]?.entity_id, 'character:18');
+    });
+});
+
+test('a one-field items schema accepts an id-keyed object map', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: {
+                    role: 'assistant',
+                    content: '{"0":{"status":"preserved","evidence":"hands behind her back"},"1":{"status":"missing","evidence":""}}',
+                },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({
+            facts: z.array(z.object({
+                id: z.number().int(),
+                status: z.enum(['preserved', 'missing', 'contradicted']),
+                evidence: z.string(),
+            })),
+        });
+        const result = await provider.generateStructured('audit', schema);
+        assert.deepEqual(result.facts, [
+            { id: 0, status: 'preserved', evidence: 'hands behind her back' },
+            { id: 1, status: 'missing', evidence: '' },
+        ]);
+    });
+});
+
+test('a one-field items schema accepts an id-to-label map', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: {
+                    role: 'assistant',
+                    content: '{"u_1":"visual","u_2":"internal"}',
+                },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({
+            items: z.array(z.object({
+                id: z.enum(['u_1', 'u_2']),
+                kind: z.enum(['visual', 'audio', 'internal', 'figurative', 'mixed', 'uncertain']),
+            })),
+        });
+        const result = await provider.generateStructured('classify', schema);
+        assert.deepEqual(result.items, [
+            { id: 'u_1', kind: 'visual' },
+            { id: 'u_2', kind: 'internal' },
+        ]);
+    });
+});
+
+test('a one-field enum accepts the value when the model uses another key', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: { role: 'assistant', content: '{"label":"one_frame"}' },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({ result: z.enum(['one_frame', 'sequence', 'uncertain']) });
+        const result = await provider.generateStructured('atomicity', schema);
+        assert.equal(result.result, 'one_frame');
+    });
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: { role: 'assistant', content: '{"result":"sequential"}' },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({ relation: z.enum(['simultaneous', 'sequential', 'uncertain']) });
+        const result = await provider.generateStructured('beat_relation', schema);
+        assert.equal(result.relation, 'sequential');
+    });
+});
+
+test('a span list accepts strings when each item has one text field', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: { role: 'assistant', content: '{"spans":["视线从南宫雪绯红的脸颊移向","远方裴雨涵所在的方向，"]}' },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({ spans: z.array(z.object({ text: z.string().min(1) })).min(1) });
+        const result = await provider.generateStructured('split_actions', schema);
+        assert.deepEqual(result.spans, [
+            { text: '视线从南宫雪绯红的脸颊移向' },
+            { text: '远方裴雨涵所在的方向，' },
+        ]);
+    });
+});
+
+test('a spans schema accepts one span object flattened beside kind', async () => {
+    await withTextServer(response => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+            choices: [{
+                index: 0,
+                message: { role: 'assistant', content: '{"span":"春潮的门，","kind":"visual"}' },
+                finish_reason: 'stop',
+            }],
+        }));
+    }, async provider => {
+        const schema = z.object({
+            spans: z.array(z.object({
+                text: z.string().min(1),
+                kind: z.enum(['visual', 'audio', 'internal', 'figurative']),
+            })).min(1),
+        });
+        const result = await provider.generateStructured('repair_fact', schema);
+        assert.deepEqual(result.spans, [{ text: '春潮的门，', kind: 'visual' }]);
+    });
+});
+
+test('remote gemma streams structured JSON with thinking disabled', async () => {
+    let capturedBody: any;
+    await withTextServer((response, body) => {
+        capturedBody = body;
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '{"ok":');
+        sendChunk(response, 'true}', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        assert.deepEqual(await provider.generateStructured('check', z.object({ ok: z.boolean() })), { ok: true });
+        assert.equal(capturedBody.stream, true);
+        assert.equal(capturedBody.reasoning_effort, 'none');
+        assert.equal(capturedBody.chat_template_kwargs.enable_thinking, false);
+        assert.equal(capturedBody.response_format.type, 'json_object');
+    }, 'gemma-4-31b');
+});
+
+test('remote gemma text calls stream even when the caller does not ask', async () => {
+    await withTextServer((response, body) => {
+        assert.equal(body.stream, true);
+        assert.equal(body.reasoning_effort, 'none');
+        assert.equal(body.chat_template_kwargs.enable_thinking, false);
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '完成', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        assert.equal(await provider.generateText('rewrite'), '完成');
+    }, 'gemma-4-31b');
 });
 
 test('524 reports actionable upstream timeout instead of opaque status', async () => {

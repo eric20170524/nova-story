@@ -26,6 +26,113 @@ export interface ComfyUIServiceOptions {
     isRemote?: boolean;
 }
 
+/** A dropped download can be repeated. A real ComfyUI 4xx cannot. */
+export function comfyDownloadShouldRetry(status: number | null, message: string, attempt: number, limit = 3): boolean {
+    if (attempt >= limit) return false;
+    if (status === 502 || status === 522 || status === 524 || status === 525) return true;
+    return /\bterminated\b|\b52[245]\b|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message || '');
+}
+
+/** EdgeOne/Cloudflare handshake and origin timeouts. A real ComfyUI 4xx is not retried. */
+export function comfyPromptGiveUp(status: number, attempt: number, limit = 3): boolean {
+    const gateway = status === 522 || status === 524 || status === 525;
+    return !gateway || attempt >= limit;
+}
+
+/** LoadImage stores a basename, while project plates live under static/generated/. */
+export function resolveComfyReferenceFile(staticDir: string, imageName: string): string | null {
+    const raw = String(imageName || '').trim();
+    if (!raw || !staticDir) return null;
+    const base = path.basename(raw);
+    const relative = raw.replace(/^\/static\//, '').replace(/^static\//, '');
+    const candidates = [
+        path.isAbsolute(raw) ? raw : '',
+        path.join(staticDir, relative),
+        path.join(staticDir, base),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+        try {
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+        } catch {
+            /* try the next candidate */
+        }
+    }
+    const seen = new Set<string>();
+    const stack = [staticDir];
+    while (stack.length) {
+        const dir = stack.pop()!;
+        if (seen.has(dir)) continue;
+        seen.add(dir);
+        let entries: fs.Dirent[] = [];
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) stack.push(full);
+            else if (entry.isFile() && entry.name === base) return full;
+        }
+    }
+    return null;
+}
+
+type RemoteLoraCatalogSource = {
+    isRemote: boolean;
+    authenticatedFetch: (endpoint: string, init?: RequestInit, timeoutMs?: number) => Promise<Response>;
+};
+
+/**
+ * Portrait and turnaround compile through different callers. Both must see the
+ * live LoraLoader list, or a missing style LoRA is submitted and ComfyUI rejects it.
+ */
+export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
+    settings: T,
+    service: RemoteLoraCatalogSource,
+): Promise<T> {
+    if (!service.isRemote) return settings;
+    let remoteLoraNames: string[] = [];
+    try {
+        const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
+        if (infoRes.ok) remoteLoraNames = loraNamesFromObjectInfo(await infoRes.json());
+    } catch (error) {
+        logger.warn(`Remote LoRA catalog unavailable: ${error}`);
+    }
+    return {
+        ...settings,
+        comfyui: { ...(settings.comfyui || {}), remote_lora_names: remoteLoraNames },
+    };
+}
+
+export function loraNamesFromObjectInfo(objectInfo: unknown): string[] {
+    const raw = (objectInfo as { LoraLoader?: { input?: { required?: { lora_name?: unknown[] } } } })
+        ?.LoraLoader?.input?.required?.lora_name?.[0];
+    return Array.isArray(raw) ? raw.map((name) => String(name)).filter(Boolean) : [];
+}
+
+/**
+ * A proxy can close the websocket while ComfyUI is still rendering.
+ * Finish only after the prompt has left the queue. Otherwise keep the history poll.
+ */
+export function comfySocketDropShouldFinish(promptStopped: boolean): boolean {
+    return promptStopped;
+}
+
+/** A history row can exist because validation failed. That is not a finished image. */
+export function comfyHistoryFailure(entry: { status?: { status_str?: string; messages?: unknown[] } } | null | undefined): string | null {
+    if (!entry || entry.status?.status_str !== 'error') return null;
+    const messages = Array.isArray(entry.status.messages) ? entry.status.messages : [];
+    for (const message of messages) {
+        const body = (Array.isArray(message) ? message[1] : message) as { node_type?: string; exception_message?: string } | undefined;
+        if (body?.exception_message) {
+            const node = body.node_type || 'node';
+            return `ComfyUI Error [${node}]: ${String(body.exception_message).slice(0, 400)}`;
+        }
+    }
+    return 'ComfyUI prompt failed';
+}
+
 interface SessionCacheEntry {
     cookie: string;
     expiresAt: number;
@@ -296,8 +403,14 @@ export class ComfyUIService {
         if (await this.checkStatus()) return true;
 
         if (this.isRemote) {
-            logger.error(`Remote ComfyUI at ${this.baseUrl} is unreachable or not responding`);
-            return false;
+            // The 3s status probe often dies on an EdgeOne 522. One longer stats read is the same check the settings probe uses.
+            try {
+                await this.fetchSystemStats();
+                return true;
+            } catch (err) {
+                logger.error(`Remote ComfyUI at ${this.baseUrl} is unreachable or not responding: ${err}`);
+                return false;
+            }
         }
 
         if (!installPath) return false;
@@ -430,17 +543,32 @@ export class ComfyUIService {
                 };
             }
 
-            const response = await this.authenticatedFetch('/prompt', {
+            const submitPrompt = () => this.authenticatedFetch('/prompt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompt: workflow, client_id: this.clientId })
-            }, 10_000);
+            }, 30_000);
+
+            let response = await submitPrompt();
+            let attempt = 1;
+            while (!response.ok && !comfyPromptGiveUp(response.status, attempt)) {
+                const body = (await response.text()).trim();
+                logger.error(`ComfyUI /prompt Error: ${response.status} - ${body}`);
+                const stillOwner = await AssetTaskStore.get(ownerTaskId);
+                if (!stillOwner || stillOwner.status !== 'processing') {
+                    ws.close();
+                    return { status: 'error', message: `Queue failed: ${body || `HTTP ${response.status}`}` };
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+                attempt += 1;
+                response = await submitPrompt();
+            }
 
             if (!response.ok) {
-                const errText = await response.text();
+                const errText = (await response.text()).trim();
                 logger.error(`ComfyUI /prompt Error: ${response.status} - ${errText}`);
                 ws.close();
-                return { status: 'error', message: `Queue failed: ${errText}` };
+                return { status: 'error', message: `Queue failed: ${errText || `HTTP ${response.status}`}` };
             }
 
             const respData = await response.json() as Record<string, any>;
@@ -507,6 +635,22 @@ export class ComfyUIService {
             const generatedImages: any[] = [];
             const pendingDownloads: Promise<any>[] = [];
             const timeoutMs = options?.timeoutMs ?? 15 * 60 * 1000;
+            let cachedHistoryEntry: Record<string, any> | null = null;
+            const absorbHistoryOutputs = async (entry: Record<string, any> | null | undefined) => {
+                const promptOutput = entry?.outputs || {};
+                for (const nodeId of Object.keys(promptOutput)) {
+                    const nodeOut = promptOutput[nodeId];
+                    if (!nodeOut?.images) continue;
+                    for (const imgInfo of nodeOut.images) {
+                        const imgData = await this.downloadImage(
+                            imgInfo.filename,
+                            imgInfo.subfolder,
+                            imgInfo.type
+                        );
+                        if (imgData) generatedImages.push({ filename: imgInfo.filename, data: imgData });
+                    }
+                }
+            };
 
             return new Promise((resolve) => {
                 let checkHistoryInterval: NodeJS.Timeout | null = null;
@@ -553,27 +697,28 @@ export class ComfyUIService {
                         await Promise.allSettled(pendingDownloads);
                     }
 
+                    if (generatedImages.length === 0 && cachedHistoryEntry) {
+                        const failure = comfyHistoryFailure(cachedHistoryEntry);
+                        if (failure) {
+                            resolve({ status: 'error', message: failure, prompt_id: promptId || undefined });
+                            return;
+                        }
+                        try { await absorbHistoryOutputs(cachedHistoryEntry); } catch (e) {
+                            logger.error(`History output read error: ${e}`);
+                        }
+                    }
                     if (generatedImages.length === 0 && promptId) {
                         try {
-                            const histRes = await this.authenticatedFetch(`/history/${promptId}`, {}, 5000);
+                            const histRes = await this.authenticatedFetch(`/history/${promptId}`, {}, 20000);
                             if (histRes.ok) {
                                 const historyData = await histRes.json() as Record<string, any>;
-                                const promptOutput = historyData[promptId]?.outputs || {};
-                                for (const nodeId of Object.keys(promptOutput)) {
-                                    const nodeOut = promptOutput[nodeId];
-                                    if (nodeOut.images) {
-                                        for (const imgInfo of nodeOut.images) {
-                                            const imgData = await this.downloadImage(
-                                                imgInfo.filename,
-                                                imgInfo.subfolder,
-                                                imgInfo.type
-                                            );
-                                            if (imgData) {
-                                                generatedImages.push({ filename: imgInfo.filename, data: imgData });
-                                            }
-                                        }
-                                    }
+                                const entry = historyData[promptId];
+                                const failure = comfyHistoryFailure(entry);
+                                if (failure) {
+                                    resolve({ status: 'error', message: failure, prompt_id: promptId || undefined });
+                                    return;
                                 }
+                                await absorbHistoryOutputs(entry);
                             }
                         } catch (e) {
                             logger.error(`History fetch fallback error: ${e}`);
@@ -670,17 +815,13 @@ export class ComfyUIService {
                     setTimeout(async () => {
                         if (isFinished || !promptId) return;
                         const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 1500);
-                        if (stopped) {
-                            await finish(undefined, true);
-                        } else {
-                            await finish(
-                                {
-                                    status: 'error',
-                                    message: 'ComfyUI connection closed while prompt state is still active or unknown'
-                                },
-                                false
+                        if (!comfySocketDropShouldFinish(stopped)) {
+                            logger.warn(
+                                `ComfyUI websocket closed while prompt ${promptId} is still active; waiting on history`
                             );
+                            return;
                         }
+                        await finish(undefined, true);
                     }, 1500);
                 });
 
@@ -690,9 +831,17 @@ export class ComfyUIService {
                         const hRes = await this.authenticatedFetch(`/history/${promptId}`, {}, 5000);
                         if (hRes.ok) {
                             const hData = await hRes.json() as Record<string, any>;
-                            if (hData[promptId!]) {
-                                logger.info(`Prompt ${promptId} confirmed completed via polling.`);
-                                await finish(undefined, true);
+                            const entry = hData[promptId!];
+                            if (entry) {
+                                cachedHistoryEntry = entry;
+                                const failure = comfyHistoryFailure(entry);
+                                if (failure) {
+                                    logger.error(failure);
+                                    await finish({ status: 'error', message: failure }, true);
+                                } else {
+                                    logger.info(`Prompt ${promptId} confirmed completed via polling.`);
+                                    await finish(undefined, true);
+                                }
                             }
                         }
                     } catch {
@@ -764,17 +913,34 @@ export class ComfyUIService {
                     continue;
                 }
 
-                const localFilePath = path.join(staticDir, path.basename(originalFilename));
-                if (fs.existsSync(localFilePath)) {
-                    try {
-                        const buf = fs.readFileSync(localFilePath);
-                        const uploadedName = await this.uploadImage(buf, path.basename(originalFilename));
-                        uploadedCache.set(originalFilename, uploadedName);
-                        node.inputs.image = uploadedName;
-                    } catch (err) {
-                        logger.error(`Failed to upload reference image ${originalFilename}: ${err}`);
+                const localFilePath = resolveComfyReferenceFile(staticDir, originalFilename);
+                if (localFilePath) {
+                    const buf = fs.readFileSync(localFilePath);
+                    let uploadedName = '';
+                    let lastError: unknown;
+                    for (let attempt = 1; attempt <= 3; attempt += 1) {
+                        try {
+                            uploadedName = await this.uploadImage(buf, path.basename(originalFilename));
+                            break;
+                        } catch (err) {
+                            lastError = err;
+                            const retryable = /524|502|503|timeout|aborted|fetch failed|terminated|socket|econnreset/i.test(String(err));
+                            if (!retryable || attempt === 3) break;
+                            await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+                        }
                     }
+                    if (!uploadedName) {
+                        throw new Error(`Failed to upload reference image ${originalFilename}: ${lastError}`);
+                    }
+                    uploadedCache.set(originalFilename, uploadedName);
+                    node.inputs.image = uploadedName;
+                } else {
+                    throw new Error(`Reference image ${originalFilename} was not found under ${staticDir}`);
                 }
+            }
+            if (node?.class_type === 'TextEncodeQwenImage21' && node.inputs?.image_1 && !node.inputs['images.image_1']) {
+                node.inputs['images.image_1'] = node.inputs.image_1;
+                delete node.inputs.image_1;
             }
         }
 
@@ -783,16 +949,21 @@ export class ComfyUIService {
 
     private async downloadImage(filename: string, subfolder: string, type: string): Promise<Buffer | null> {
         const url = `/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
-        try {
-            const res = await this.authenticatedFetch(url, {}, 30_000);
-            if (res.ok) {
-                const arrayBuffer = await res.arrayBuffer();
-                return Buffer.from(arrayBuffer);
-            } else {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+            try {
+                const res = await this.authenticatedFetch(url, {}, 30_000);
+                if (res.ok) {
+                    const arrayBuffer = await res.arrayBuffer();
+                    return Buffer.from(arrayBuffer);
+                }
                 logger.error(`Failed to download image ${filename}: ${res.status}`);
+                if (!comfyDownloadShouldRetry(res.status, '', attempt)) return null;
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger.error(`Download exception for ${filename}: ${error}`);
+                if (!comfyDownloadShouldRetry(null, message, attempt)) return null;
             }
-        } catch (error) {
-            logger.error(`Download exception for ${filename}: ${error}`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
         return null;
     }

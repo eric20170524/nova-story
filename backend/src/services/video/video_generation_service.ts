@@ -22,6 +22,7 @@ import { textModelFingerprint } from '../inference_cache';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { MediaAssetService } from './media_asset_service';
 import { VideoReferenceIdentityService } from './video_reference_identity_service';
+import { identityReferenceBlockers, platesFromVisualTags } from './video_identity_plates';
 import { getShotVisibleCharacterIds, validateShotMasterCharacters } from './shot_master_snapshot';
 import { GpuLeaseCancelledError, GpuLeaseService, type GpuLease } from '../gpu_lease_service';
 import { ComfyH3Provider } from './comfy_h3_provider';
@@ -392,6 +393,7 @@ export class VideoGenerationService {
     // The service only validates supplied reference assets, avoiding contradictory
     // rules such as requiring Ref2VA inputs for the FL2VA boundary workflow.
     if (usesReferenceControl && request.character_reference_asset_ids?.length) {
+      const refsByCharacter = new Map<number, Array<{ url?: string | null; metadata_json?: string | null }>>();
       for (const charAssetId of request.character_reference_asset_ids) {
         const asset = await MediaAssetService.getAssetById(charAssetId);
         if (!asset) {
@@ -400,7 +402,34 @@ export class VideoGenerationService {
           blockers.push(`Character reference asset ID ${charAssetId} must be an image.`);
         } else if (projectId && asset.project_id !== projectId) {
           blockers.push(`Character reference asset ID ${charAssetId} belongs to a different project.`);
+        } else if (asset.character_id != null) {
+          const group = refsByCharacter.get(Number(asset.character_id)) || [];
+          group.push(asset);
+          refsByCharacter.set(Number(asset.character_id), group);
         }
+      }
+      const sceneVersion = request.scene_version || scene?.active_version || 1;
+      const frame = scene
+        ? await db.get(
+          'SELECT reference_versions_json FROM scene_production_frame WHERE scene_id = ? AND scene_version = ?',
+          scene.id,
+          sceneVersion,
+        )
+        : null;
+      let pinCharacters: Array<{ id: number; version: number; visual_tags: unknown }> = [];
+      try {
+        const pin = frame?.reference_versions_json ? JSON.parse(frame.reference_versions_json) : null;
+        pinCharacters = Array.isArray(pin?.text_characters) ? pin.text_characters : [];
+      } catch {
+        pinCharacters = [];
+      }
+      for (const [characterId, assets] of refsByCharacter) {
+        const character = await db.get('SELECT * FROM character WHERE id = ?', characterId);
+        if (!character) continue;
+        const pinned = pinCharacters.find((row) => Number(row.id) === characterId);
+        const plates = platesFromVisualTags(pinned ? pinned.visual_tags : character.visual_tags);
+        const version = pinned ? Number(pinned.version) : Number(character.active_version || 1);
+        blockers.push(...identityReferenceBlockers(version, plates, assets));
       }
     }
 

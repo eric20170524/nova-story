@@ -122,6 +122,54 @@ const PROJECT_VIDEO_WORKFLOW_IDS = new Set([
   'minimax_h3_hongchao_a2a_12gb',
 ]);
 
+function referenceSlot(asset) {
+  if (!asset?.metadata_json) return null;
+  try {
+    const slot = JSON.parse(asset.metadata_json).source_slot;
+    return slot === 'face' || slot === 'body' ? slot : null;
+  } catch {
+    return null;
+  }
+}
+
+export function platesFromCharacter(character) {
+  const tags = character?.visual_tags;
+  let parsed = {};
+  if (typeof tags === 'string') {
+    try { parsed = JSON.parse(tags || '{}'); } catch { parsed = {}; }
+  } else if (tags && typeof tags === 'object') parsed = tags;
+  const assets = parsed.assets && typeof parsed.assets === 'object' ? parsed.assets : {};
+  return {
+    face: String(assets.avatar_url || parsed.avatar_url || character?.avatar_url || '').trim() || null,
+    body: String(assets.turnaround_front_url || parsed.turnaround_front_url || '').trim() || null,
+  };
+}
+
+/**
+ * Face then body. Pinned URLs win. Slotted assets ignore a newer portrait with no slot.
+ * Assets with no slots keep the two newest ids. Keep this in step with
+ * services/videoWorkflowPolicy.ts selectIdentityReferenceIds.
+ */
+export function selectIdentityReferenceIds(assets, characterId, plates) {
+  const refs = (assets || []).filter(asset => asset.role === 'character_reference' && asset.status === 'ready'
+    && asset.character_id === characterId && asset.id != null);
+  const face = String(plates?.face || '').trim();
+  const body = String(plates?.body || '').trim();
+  if (face || body) {
+    const match = url => refs.filter(asset => asset.url === url).sort((a, b) => Number(b.id) - Number(a.id))[0];
+    const faceAsset = face ? match(face) : null;
+    const bodyAsset = body && body !== face ? match(body) : null;
+    const ids = [faceAsset?.id, bodyAsset?.id].filter(id => id != null);
+    if (ids.length) return ids;
+  }
+  const slotted = refs.filter(asset => referenceSlot(asset));
+  if (slotted.length) {
+    const newest = slot => slotted.filter(asset => referenceSlot(asset) === slot).sort((a, b) => Number(b.id) - Number(a.id))[0];
+    return [newest('face')?.id, newest('body')?.id].filter(id => id != null);
+  }
+  return refs.sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 2).map(asset => asset.id);
+}
+
 export function coreCharactersReadyForAcceptance(coreNames, characters, shots) {
   const appearing = new Set();
   for (const shot of shots || []) {

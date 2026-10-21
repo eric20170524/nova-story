@@ -12,9 +12,10 @@
 
 import fs from 'fs';
 import path from 'path';
+import { logger } from '../core/logging';
 
 /** Local Comfy model families. `flux` is legacy custom-graph only (GGUF retired 2026-08). */
-export type ImageModelFamily = 'pony' | 'sd15' | 'redcraft_krea2' | 'flux';
+export type ImageModelFamily = 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'flux';
 
 /**
  * Normalize free-form model_type / reference_model_type strings from UI or API.
@@ -40,6 +41,7 @@ export const normalizeImageModelFamily = (raw: unknown): ImageModelFamily => {
   ) {
     return 'sd15';
   }
+  if (/qwen[_-]?image/.test(s)) return 'qwen_image';
   return 'pony';
 };
 
@@ -89,6 +91,8 @@ export interface LoraResolveInput {
    * install_path — that directory is the local catalog, not the remote one.
    */
   allowRemoteUnverified?: boolean;
+  /** Live LoraLoader names from the ComfyUI that will run the prompt. */
+  remoteLoraNames?: readonly string[];
 }
 
 export interface ResolvedGenerationPlan {
@@ -303,6 +307,21 @@ export const NSFW_ATMOSPHERE_SENTENCE =
 
 export const CHILD_SAFETY_NEGATIVE =
   'low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota, blurry face, mutated hands';
+
+/** Booru subject tags. Natural-language "no people" does not keep AutismMix off a figure. */
+export const LIBRARY_PLATE_PERSON_NEGATIVE =
+  '1girl, 2girls, 1boy, solo, human, person, people, character, face, portrait, hands';
+
+const PLATE_BODY_CLAUSE_RE =
+  /\b(faces?|facial|skins?|anatomy|eyes?|portraits?|beauty|girls?|boys?|women|woman|men|man|humans?|persons?|people|characters?)\b/i;
+
+/** Style light and material for an empty plate. Face, skin, and anatomy clauses stay off. */
+const plateStyleLighting = (stylePreset?: string | null): string =>
+  styleLightingMaterial(stylePreset)
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part && !PLATE_BODY_CLAUSE_RE.test(part))
+    .join(', ');
 
 export type StyleShotMode = 'portrait' | 'action' | 'aftermath' | 'environment' | 'general';
 
@@ -624,8 +643,8 @@ export const resolveStyleLora = (
   nsfwEnabled: boolean,
   input: Pick<LoraResolveInput, 'installPath' | 'styleLora' | 'allowRemoteUnverified'>
 ): string | null => {
-  // SD1.5 draft stack: do not auto-attach Pony/SDXL LoRAs (wrong architecture).
-  if (modelFamily === 'sd15') {
+  // SD1.5 and Qwen-Image use different weights. Do not auto-attach Pony/SDXL LoRAs.
+  if (modelFamily === 'sd15' || modelFamily === 'qwen_image') {
     return null;
   }
 
@@ -732,8 +751,8 @@ export const resolveNsfwLora = (
   modelFamily: ImageModelFamily,
   input: Pick<LoraResolveInput, 'installPath' | 'nsfwLora' | 'allowRemoteUnverified'>
 ): string | null => {
-  // SD1.5 draft: skip Pony/Incase NSFW LoRAs (incompatible).
-  if (modelFamily === 'sd15') {
+  // SD1.5 and Qwen-Image: skip Pony/Incase NSFW LoRAs (incompatible).
+  if (modelFamily === 'sd15' || modelFamily === 'qwen_image') {
     return null;
   }
 
@@ -777,6 +796,13 @@ export const resolveLoraStack = (input: LoraResolveInput): LoraSlot[] => {
     if (!slot?.name) return;
     const key = path.basename(slot.name).toLowerCase();
     if (used.has(key)) return;
+    if (Array.isArray(input.remoteLoraNames)) {
+      const catalog = new Set(input.remoteLoraNames.map((name) => path.basename(String(name)).toLowerCase()));
+      if (!catalog.has(key)) {
+        logger.warn(`Remote ComfyUI has no LoRA ${path.basename(slot.name)}; this image will not use it`);
+        return;
+      }
+    }
     if (!remoteUnverified) {
       // Local install: skip missing files. Remote keeps the canonical name.
       if (input.installPath && !fileExistsInInstall(input.installPath, slot.name)) return;
@@ -960,6 +986,8 @@ export const buildPromptEnhancement = (options: {
   styleStrength?: number | null;
   /** Storyboard shots that actually show a person, even on a wide camera. */
   hasVisiblePerson?: boolean | null;
+  /** Turnaround panel angle ('front' | 'side' | 'back') to suppress face/eye boosters on rear views. */
+  turnaroundView?: string | null;
 }): PromptEnhancement => {
   const {
     modelFamily,
@@ -972,8 +1000,14 @@ export const buildPromptEnhancement = (options: {
     shotIntent = null,
     subjectType = null,
     styleStrength = null,
-    hasVisiblePerson = null
+    hasVisiblePerson = null,
+    turnaroundView = null,
   } = options;
+  const naturalLanguage = modelFamily === 'flux' || modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image';
+  const isTurnaroundBack = String(turnaroundView || '').toLowerCase().trim() === 'back';
+  const isTurnaroundSide = String(turnaroundView || '').toLowerCase().trim() === 'side';
+  const isTurnaroundPanel = String(genType || '').toLowerCase().trim() === 'turnaround_panel';
+  const isTurnaround = isTurnaroundPanel || String(genType || '').toLowerCase().trim() === 'turnaround';
   const lower = existingPrompt.toLowerCase();
   const prefixParts: string[] = [];
   const suffixParts: string[] = [];
@@ -1009,12 +1043,32 @@ export const buildPromptEnhancement = (options: {
     && intent !== 'reaction'
     && intent !== 'payoff'
     && (isEmptyShotIntent(intent) || shotMode === 'environment');
-  const isNarrativeScene = String(genType || '').toLowerCase() === 'scene';
+  const requestedGen = String(genType || '').toLowerCase();
+  const isNarrativeScene = requestedGen === 'scene';
+  const isLibraryLocation = requestedGen === 'location';
+  const isLibraryProp = requestedGen === 'prop';
+  const isLibraryPlate = isLibraryLocation || isLibraryProp;
   const isExplicitFemale = inferredSubject === 'female_human';
 
-  // Shot intent wins over location vocabulary. Composition cues belong in the
-  // CLIP *suffix* (after the scene action) so they do not steal the front window.
-  if (isNarrativeScene && isInsertShot) {
+  // Library plates are identified by gen_type. A period or the word "intimate"
+  // must not turn a location or prop into a person shot.
+  if (isLibraryProp) {
+    suffixParts.push(
+      'one physical object, centered product photograph, front view, simple backdrop'
+    );
+    negativeParts.push(
+      LIBRARY_PLATE_PERSON_NEGATIVE,
+      'character sheet, turnaround, multiple views, costume design, armor, weapon'
+    );
+  } else if (isLibraryLocation) {
+    suffixParts.push(
+      'scenery, wide shot, establishing shot, (environment-dominant cinematic composition:1.4), (expansive detailed location:1.3), clear foreground middle ground and background'
+    );
+    negativeParts.push(
+      'close-up, portrait, animal focus, solo focus, full-frame animal, face filling frame, oversized subject, centered character portrait, looking at viewer, studio background, plain background, simple background, shallow depth of field',
+      LIBRARY_PLATE_PERSON_NEGATIVE
+    );
+  } else if (isNarrativeScene && isInsertShot) {
     suffixParts.push(
       '(narrative insert shot:1.35), extreme detail of the specified prop or body part only, story environment still recognizable, no full face'
     );
@@ -1059,9 +1113,11 @@ export const buildPromptEnhancement = (options: {
   // East-Asian feminine beauty: skip environment; lighten on action/aftermath so combat wins
   // Never invent a female human subject. Beauty anchors are legal only when the
   // prompt or structured request explicitly says the subject is female.
-  if (isExplicitFemale && !isEnvironment && !keepWrittenParagraph) {
-    if (isActionLike) {
-      // Identity only — no heavy beauty-portrait stack
+  if (isExplicitFemale && !isEnvironment && !keepWrittenParagraph && !isLibraryPlate) {
+    if (isTurnaroundBack) {
+      suffixParts.push('adult East Asian woman, female, feminine silhouette');
+    } else if (isActionLike || isTurnaroundSide) {
+      // Identity only — no heavy frontal beauty-portrait stack
       if (modelFamily === 'pony' || modelFamily === 'sd15') {
         if (!/(east asian|chinese beauty)/i.test(existingPrompt)) {
           suffixParts.push('East Asian features, female');
@@ -1086,16 +1142,23 @@ export const buildPromptEnhancement = (options: {
   }
 
   if (modelFamily === 'pony') {
-    if (nsfwEnabled) {
+    if (nsfwEnabled && isLibraryPlate) {
+      if (!/\brating_/i.test(existingPrompt)) {
+        suffixParts.push('rating_safe');
+      }
+    } else if (nsfwEnabled) {
       const intimateCue =
-        /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
+        !isTurnaround
+        && /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
           existingPrompt
         );
       if (!/\brating_/i.test(existingPrompt)) {
         suffixParts.push(
-          intimateCue
-            ? 'rating_explicit, rating_questionable'
-            : 'rating_safe, rating_questionable, rating_explicit'
+          isTurnaround
+            ? 'rating_safe'
+            : intimateCue
+              ? 'rating_explicit, rating_questionable'
+              : 'rating_safe, rating_questionable, rating_explicit'
         );
       }
       suffixParts.push(intimateCue ? 'detailed skin, refined anatomy' : 'detailed skin');
@@ -1119,15 +1182,15 @@ export const buildPromptEnhancement = (options: {
     if (!/masterpiece|best quality/i.test(existingPrompt)) {
       suffixParts.push('masterpiece, best quality');
     }
-    if (nsfwEnabled) {
+    if (nsfwEnabled && !isLibraryPlate) {
       suffixParts.push('detailed skin');
-    } else {
+    } else if (!nsfwEnabled) {
       negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
       if (!isActionLike) {
         negativeParts.push('exposed breasts');
       }
     }
-  } else if (modelFamily === 'redcraft_krea2') {
+  } else if (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') {
     // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support).
     // oriental_realistic brings its own face lock. The ethereal suffix reads as a doll illustration.
     const orientalRealisticPreset = String(stylePreset || '').toLowerCase() === 'oriental_realistic';
@@ -1145,33 +1208,34 @@ export const buildPromptEnhancement = (options: {
       );
     }
     const intimateCue =
-      /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
+      !isTurnaround
+      && /(nude|naked|sex|breast|nipple|yuri|nsfw|intimate|penetration|tentacle|pussy|penis|topless|bottomless|undress|半裸|裸|乳|交合|春潮)/i.test(
         existingPrompt
       );
-    const castImage = /portrait|turnaround|face/i.test(String(genType || ''));
+    const castImage = /portrait|face/i.test(String(genType || ''));
     const personShot = hasVisiblePerson === true || castImage || shotHasVisiblePerson({
       prompt: existingPrompt,
       subjectType,
       genType,
     });
-    if (nsfwEnabled) {
-      // Cast sheets and any shot that shows a person get the unlock.
-      // Empty scenery stays free of forced nudity.
-      if (intimateCue || personShot) {
+    if (nsfwEnabled && !isLibraryPlate) {
+      // Cast portraits and narrative person shots get the atmosphere unlock.
+      // Turnaround generation never injects intimateCue or NSFW_ATMOSPHERE_SENTENCE.
+      if (!isTurnaround && (intimateCue || personShot)) {
         suffixParts.push(NSFW_ATMOSPHERE_SENTENCE);
       } else {
         suffixParts.push('highly detailed skin texture, delicate lighting, realistic anatomy');
       }
-    } else {
+    } else if (!nsfwEnabled) {
       negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
       if (!isActionLike) {
         negativeParts.push('exposed breasts');
       }
     }
   } else {
-    if (nsfwEnabled) {
+    if (nsfwEnabled && !isLibraryPlate) {
       suffixParts.push('detailed skin texture, natural anatomy');
-    } else {
+    } else if (!nsfwEnabled) {
       negativeParts.push('nsfw, nude, genitalia, sexual act, explicit sexual content');
       if (!isActionLike) {
         negativeParts.push('exposed breasts');
@@ -1188,50 +1252,65 @@ export const buildPromptEnhancement = (options: {
     || personSubject
     || /portrait|turnaround|face/i.test(String(genType || ''))
   );
-  const booster = presetKey === 'oriental_realistic' || keepWrittenParagraph
+  const booster = presetKey === 'oriental_realistic' || keepWrittenParagraph || isLibraryPlate
     ? undefined
     : (presetKey ? STYLE_PRESET_BOOSTERS[presetKey] : undefined);
-  if (presetKey === 'oriental_realistic') {
+  if (isLibraryPlate) {
+    const lighting = plateStyleLighting(stylePreset);
+    if (lighting) suffixParts.push(lighting);
+  } else if (presetKey === 'oriental_realistic') {
     if (orientalPerson) {
-      if (!/oriental realistic style/i.test(lower)) {
+      if (isTurnaroundBack) {
+        suffixParts.push('oriental realistic style, photorealistic, natural porcelain skin texture, subsurface scattering, realistic human anatomy');
+      } else if (!/oriental realistic style/i.test(lower)) {
         const lock = (modelFamily === 'pony' || modelFamily === 'sd15')
-          ? STYLE_PRESET_BOOSTERS.oriental_realistic.pony
+          ? (STYLE_PRESET_BOOSTERS.oriental_realistic?.pony ?? ORIENTAL_REALISTIC_FACE_LOCK)
           : ORIENTAL_REALISTIC_FACE_LOCK;
         suffixParts.push(lock);
       }
       negativeParts.push(ORIENTAL_REALISTIC_NEGATIVE);
-    } else if (!keepWrittenParagraph && !/subsurface scattering/i.test(lower)) {
+    } else if (!keepWrittenParagraph && !/subsurface scattering/i.test(lower) && STYLE_LIGHTING_MATERIAL.oriental_realistic) {
       suffixParts.push(STYLE_LIGHTING_MATERIAL.oriental_realistic);
     }
   } else if (booster) {
     // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
-    const boost = (modelFamily === 'flux' || modelFamily === 'redcraft_krea2') ? booster.flux : booster.pony;
+    let boost = naturalLanguage ? booster.flux : booster.pony;
+    if (isTurnaroundBack) {
+      boost = boost
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part && !/\b(face|facial|eyes?|eyelids?)\b/i.test(part))
+        .join(', ');
+    }
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
     const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
     if (!already && boost) {
       const strength = Number(styleStrength);
       suffixParts.push(
-        Number.isFinite(strength) && strength > 0 && Math.abs(strength - 1) > 0.001
+        !naturalLanguage && Number.isFinite(strength) && strength > 0 && Math.abs(strength - 1) > 0.001
           ? `(${boost}:${strength})`
           : boost
       );
     }
   } else if (
-    !keepWrittenParagraph
+    !isLibraryPlate
+    && !keepWrittenParagraph
     && /(xianxia|guofeng|hanfu|immortal|仙|古风|汉服|仙侠)/i.test(existingPrompt)
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
     suffixParts.push(
-      modelFamily === 'flux' || modelFamily === 'redcraft_krea2'
-        ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
-        : 'East Asian features, ancient chinese fantasy, guofeng'
+      isTurnaroundBack
+        ? (naturalLanguage ? 'ancient Chinese fantasy atmosphere' : 'ancient chinese fantasy, guofeng')
+        : naturalLanguage
+          ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
+          : 'East Asian features, ancient chinese fantasy, guofeng'
     ); // pony + sd15
   }
 
   // (1) Default: NO fully clothed / artistic portrait.
   // Portrait mode only: soft elegance (not clothing lock).
   // Action/aftermath: anti-fashion-pose negatives + combat-friendly positives.
-  if (!nsfwEnabled) {
+  if (!nsfwEnabled && !isLibraryPlate) {
     negativeParts.push('nude, nipples, explicit');
     if (isPortraitLike) {
       suffixParts.push('tasteful elegance');
@@ -1285,7 +1364,7 @@ export const resolveGenerationPlan = (options: {
   const styleLora =
     modelFamily === 'flux'
       ? comfy.flux_lora
-      : modelFamily === 'sd15'
+      : modelFamily === 'sd15' || modelFamily === 'qwen_image'
         ? null
         : modelFamily === 'redcraft_krea2'
           ? comfy.redcraft_krea2_lora
@@ -1337,7 +1416,8 @@ export const resolveGenerationPlan = (options: {
       ? DEFAULT_STRENGTHS.redcraft_krea2_nsfw
       : undefined,
     stylePreset,
-    allowRemoteUnverified: Boolean(comfy.mode === 'remote' || !comfy.install_path)
+    allowRemoteUnverified: Boolean(comfy.mode === 'remote' || !comfy.install_path),
+    remoteLoraNames: Array.isArray(comfy.remote_lora_names) ? comfy.remote_lora_names : undefined,
   });
   const strengthCapped = isNarrativeScene
     ? resolvedLoras.map((slot) => (
@@ -1354,7 +1434,10 @@ export const resolveGenerationPlan = (options: {
   });
   // Empty scenery and prop inserts stay spatially faithful. A wide shot that
   // still shows a person keeps the RedCraft NSFW LoRA and unlock prompt.
-  const loras = !hasPerson && (shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot)
+  const libraryPlate = ['location', 'prop'].includes(String(workflowData?.gen_type || '').toLowerCase());
+  // Detail and adult-look LoRAs pull a figure into an empty plate. Drop them
+  // for library locations and props even when the prompt has no "no people".
+  const loras = libraryPlate || (!hasPerson && (shotMode === 'environment' || isEmptyShotIntent(workflowShotIntent) || isInsertShot))
     ? strengthCapped.filter((slot) => slot.role === 'character')
     : strengthCapped;
 
@@ -1370,6 +1453,7 @@ export const resolveGenerationPlan = (options: {
     subjectType: workflowData?.subject_type ?? null,
     styleStrength: workflowData?.style_strength ?? null,
     hasVisiblePerson: hasPerson,
+    turnaroundView: workflowData?.turnaround_view ?? null,
   });
 
   return { loras, enhancement };
@@ -1418,12 +1502,27 @@ export type CharacterSheetGender = 'female' | 'male' | 'unspecified';
 export type CharacterAppearanceFields = {
   age?: string | null;
   hair?: string | null;
+  eyes?: string | null;
   face?: string | null;
+  skin?: string | null;
   body?: string | null;
   clothing?: string | null;
   accessories?: string | null;
   /** Structured flag from stored fields. True when those fields state the character is undressed. */
   undressed?: boolean | null;
+};
+
+export type CharacterDesign = {
+  gender: CharacterSheetGender;
+  age: string;
+  hair: string;
+  eyes: string;
+  face: string;
+  skin: string;
+  body: string;
+  clothing: string;
+  accessories: string;
+  undressed: boolean;
 };
 
 export class CharacterSheetError extends Error {
@@ -1447,7 +1546,330 @@ export function normalizeStoredGender(value: unknown): CharacterSheetGender {
 const appearanceText = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : '';
 
-/** Stored gender and appearance. Infers gender from human appearance/description cues when gender field is absent. */
+const SHEET_MOOD_RE =
+  /\b(aroused|seductive|alluring|melting expression|softens under emotion|half-lidded|blushing|smile|gaze)\b/i;
+const SCENE_WARDROBE_RE =
+  /half-open|lowered to (?:the )?waist|loosely worn|when aroused|intimate scenes?|unclothed|\bnude\b|barefoot/i;
+const COSTUME_RE = /\b(dress|robe|robes|hanfu|gown)\b|仙裙|汉服|裙|袍/i;
+const XIANXIA_DRESS_RE = /xianxia\b[^,]{0,48}\bdress\b/i;
+
+/** Split comma-separated clauses without splitting inside parentheses (...), and balance stray parens. */
+export const splitClauses = (value: string): string[] => {
+  const text = String(value || '');
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '(' || ch === '（') {
+      depth += 1;
+      current += '(';
+    } else if (ch === ')' || ch === '）') {
+      if (depth > 0) {
+        depth -= 1;
+        current += ')';
+      }
+    } else if ((ch === ',' || ch === '，') && depth === 0) {
+      const cleaned = current.trim();
+      if (cleaned) parts.push(cleaned);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  const tail = current.trim();
+  if (tail) parts.push(tail);
+  return parts.map((clause) => {
+    let open = 0;
+    let balanced = '';
+    for (const ch of clause) {
+      if (ch === '(') {
+        open += 1;
+        balanced += ch;
+      } else if (ch === ')') {
+        if (open > 0) {
+          open -= 1;
+          balanced += ch;
+        }
+      } else {
+        balanced += ch;
+      }
+    }
+    if (open > 0) {
+      balanced = balanced.replace(/\(/g, '');
+    }
+    return balanced.trim();
+  }).filter(Boolean);
+};
+
+/** Drop scene mood and the clothing state of one chapter. Keep the costume, hair, and eyes. */
+const sheetClauses = (value: string): string =>
+  splitClauses(value)
+    .filter((clause) => !SHEET_MOOD_RE.test(clause) && !SCENE_WARDROBE_RE.test(clause))
+    .join(', ');
+
+const mustKeepLines = (source: Record<string, any>): string[] =>
+  Array.isArray(source.identity_lock?.must_keep)
+    ? source.identity_lock.must_keep.map((line: unknown) => String(line || '').trim()).filter(Boolean)
+    : [];
+
+const classifyMustKeep = (lines: string[]): Partial<CharacterDesign> => {
+  const found: Partial<CharacterDesign> = {};
+  for (const line of lines) {
+    const usable = sheetClauses(line);
+    if (!usable) continue;
+    if (!found.eyes && /\beyes?\b|眼/.test(line)) {
+      found.eyes = usable;
+    } else if (!found.hair && /\bhair\b|发/.test(line)) {
+      found.hair = usable;
+    } else if (!found.clothing && COSTUME_RE.test(line)) {
+      found.clothing = usable;
+    } else if (!found.skin && /\bskin\b/i.test(line)) {
+      found.skin = usable;
+    } else if (!found.body && /\b(figure|posture|waist|curves|breasts?|build)\b/i.test(line)) {
+      found.body = usable;
+    } else if (!found.face && /\b(beauty|face|brows|expression|cheekbones)\b/i.test(line)) {
+      found.face = usable;
+    } else if (!found.accessories && /\b(hairpin|mirror|ornament|jade|sigil|aura|necklace)\b/i.test(line)) {
+      found.accessories = usable;
+    }
+  }
+  return found;
+};
+
+const designRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+
+const designIsFrozen = (design: Record<string, unknown> | null): boolean =>
+  Boolean(design && (appearanceText(design.clothing) || appearanceText(design.hair) || appearanceText(design.eyes)));
+
+/** True when visual_tags.design already holds clothing, hair, or eyes. */
+export function storedDesignIsFrozen(tags: unknown): boolean {
+  let parsed = tags;
+  if (typeof tags === 'string') {
+    try {
+      parsed = JSON.parse(tags || '{}');
+    } catch {
+      return false;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+  return designIsFrozen(designRecord((parsed as Record<string, unknown>).design));
+}
+
+/** Drop one chapter's wardrobe state. Keep the regular costume clause. */
+export function stripSceneWardrobeClauses(value: string): string {
+  return splitClauses(value)
+    .filter((clause) => !SCENE_WARDROBE_RE.test(clause))
+    .join(', ');
+}
+
+const inferSheetGender = (
+  gender: CharacterSheetGender,
+  hintText: string
+): CharacterSheetGender => {
+  if (gender !== 'unspecified') return gender;
+  if (!hintText || NONHUMAN_SUBJECT_RE.test(hintText)) return 'unspecified';
+  const isFemale =
+    FEMALE_HUMAN_RE.test(hintText)
+    || /\b(breasts?|hourglass|cleavage)\b/i.test(hintText)
+    || XIANXIA_DRESS_RE.test(hintText);
+  const isMale = MALE_HUMAN_RE.test(hintText);
+  if (isFemale && !isMale) return 'female';
+  if (isMale && !isFemale) return 'male';
+  return 'unspecified';
+};
+
+/**
+ * Design appearance for 定妆照 and 三视图.
+ * A frozen visual_tags.design wins. Otherwise the identity lock supplies the costume,
+ * and a chapter wardrobe such as "half-open" or "lowered to waist" stays out.
+ */
+export function resolveSheetDesign(
+  tags: Record<string, any> | null | undefined,
+  fallbackContext?: { description?: string | null }
+): CharacterDesign {
+  const source = tags && typeof tags === 'object' ? tags : {};
+  const stored = designRecord(source.design);
+  const base = source.base_model?.tags && typeof source.base_model.tags === 'object'
+    ? source.base_model.tags
+    : {};
+  const fromKeep = classifyMustKeep(mustKeepLines(source));
+  const baseClothing = appearanceText(base.clothing || source.clothing);
+  const pick = (key: keyof CharacterDesign, ...candidates: unknown[]): string => {
+    const storedValue = stored ? appearanceText(stored[key]) : '';
+    if (storedValue) return storedValue;
+    for (const candidate of candidates) {
+      const text = appearanceText(candidate);
+      if (text) return text;
+    }
+    return '';
+  };
+  const clothing = pick(
+    'clothing',
+    fromKeep.clothing,
+    sheetClauses(baseClothing)
+  );
+  const design: CharacterDesign = {
+    gender: 'unspecified',
+    age: pick('age', base.age, source.age),
+    hair: pick('hair', fromKeep.hair, sheetClauses(appearanceText(base.hair || source.hair))),
+    eyes: pick('eyes', fromKeep.eyes, sheetClauses(appearanceText(base.eyes || source.eyes))),
+    face: pick('face', fromKeep.face, sheetClauses(appearanceText(base.face || source.face || base.face_features || source.face_features))),
+    skin: pick('skin', fromKeep.skin, base.skin, source.skin, base.skin_tone),
+    body: pick('body', fromKeep.body, sheetClauses(appearanceText(base.body || source.body || base.build || source.build))),
+    clothing,
+    accessories: pick('accessories', fromKeep.accessories, base.accessories, source.accessories),
+    undressed: stored?.undressed === true,
+  };
+  const hintedGender = normalizeStoredGender(stored?.gender ?? source.gender ?? base.gender);
+  design.gender = inferSheetGender(
+    hintedGender,
+    [
+      design.face,
+      design.body,
+      design.clothing,
+      design.eyes,
+      mustKeepLines(source).join(', '),
+      fallbackContext?.description || '',
+    ].filter(Boolean).join(', ')
+  );
+  return design;
+}
+
+const sceneStateFromIncoming = (
+  previous: Record<string, any>,
+  incoming: Record<string, unknown>
+): Record<string, string> => {
+  const scene: Record<string, string> = {};
+  const prior = previous.scene_state;
+  if (prior && typeof prior === 'object' && !Array.isArray(prior)) {
+    for (const [key, value] of Object.entries(prior as Record<string, unknown>)) {
+      const text = appearanceText(value);
+      if (text) scene[key] = text;
+    }
+  }
+  for (const [key, value] of Object.entries(incoming || {})) {
+    const text = appearanceText(value);
+    if (text) scene[key] = text;
+  }
+  return scene;
+};
+
+/**
+ * Keep the sheet design stable. Chapter tags still update base_model and scene_state.
+ * Returns the design to store on the merged document.
+ */
+export function freezeCharacterDesign(
+  previous: Record<string, any> | null | undefined,
+  incoming: Record<string, unknown> = {}
+): CharacterDesign {
+  const prior = previous && typeof previous === 'object' ? previous : {};
+  const stored = designRecord(prior.design);
+  if (designIsFrozen(stored)) {
+    const frozen = resolveSheetDesign(prior);
+    const incomingGender = normalizeStoredGender(incoming.gender);
+    if (frozen.gender === 'unspecified' && incomingGender !== 'unspecified') {
+      frozen.gender = incomingGender;
+    }
+    return frozen;
+  }
+  const seeded = resolveSheetDesign(prior);
+  const fill = (key: 'age' | 'hair' | 'eyes' | 'face' | 'skin' | 'body' | 'clothing' | 'accessories') => {
+    if (seeded[key]) return;
+    const text = appearanceText(incoming[key]);
+    if (!text) return;
+    if (key === 'clothing' && SCENE_WARDROBE_RE.test(text)) return;
+    seeded[key] = text;
+  };
+  fill('age');
+  fill('hair');
+  fill('eyes');
+  fill('face');
+  fill('skin');
+  fill('body');
+  fill('clothing');
+  fill('accessories');
+  const incomingGender = normalizeStoredGender(incoming.gender);
+  if (seeded.gender === 'unspecified' && incomingGender !== 'unspecified') {
+    seeded.gender = incomingGender;
+  }
+  return seeded;
+}
+
+/** Attach design and scene_state onto a merged visual_tags document. */
+export function sealCharacterDesign(
+  previous: Record<string, any> | null | undefined,
+  incoming: Record<string, unknown>,
+  merged: Record<string, any>
+): Record<string, any> {
+  return {
+    ...merged,
+    design: freezeCharacterDesign(previous, incoming),
+    scene_state: sceneStateFromIncoming(previous || {}, incoming),
+  };
+}
+
+const EDITABLE_DESIGN_KEYS = ['gender', 'age', 'hair', 'eyes', 'face', 'skin', 'body', 'clothing', 'accessories'] as const;
+
+/**
+ * Sync visual_tags.design when a user explicitly creates or edits character appearance tags.
+ * Only activates when visual_tags contains appearance fields or design already exists.
+ */
+export function syncEditableCharacterDesign(
+  tags: Record<string, any> | null | undefined,
+  fallbackContext?: { description?: string | null; age?: string | null },
+  options: { preferFlatEdits?: boolean } = {}
+): Record<string, any> {
+  const doc = tags && typeof tags === 'object' ? { ...tags } : {};
+  const baseTags = doc.base_model?.tags && typeof doc.base_model.tags === 'object'
+    ? doc.base_model.tags as Record<string, unknown>
+    : {};
+  const existingDesign = designRecord(doc.design);
+  const hasAppearanceEdit = Boolean(
+    existingDesign
+    || appearanceText(baseTags.clothing || doc.clothing)
+    || appearanceText(baseTags.hair || doc.hair)
+    || appearanceText(baseTags.eyes || doc.eyes)
+    || appearanceText(baseTags.face || doc.face || baseTags.face_features || doc.face_features)
+    || appearanceText(baseTags.body || doc.body || baseTags.build || doc.build)
+    || appearanceText(baseTags.accessories || doc.accessories)
+    || (Array.isArray(doc.identity_lock?.must_keep) && doc.identity_lock.must_keep.length > 0)
+  );
+  if (!hasAppearanceEdit) return doc;
+
+  const baseResolved = resolveSheetDesign({ ...doc, design: undefined }, fallbackContext);
+  const preferFlat = options.preferFlatEdits === true || !Array.isArray(doc.identity_lock?.must_keep) || doc.identity_lock.must_keep.length === 0;
+  const pickField = (resolvedVal: string, flatVal: string, existingVal: string): string =>
+    preferFlat
+      ? (flatVal || resolvedVal || existingVal)
+      : (resolvedVal || flatVal || existingVal);
+  const nextDesign: CharacterDesign = {
+    gender: baseResolved.gender,
+    age: appearanceText(fallbackContext?.age ?? baseTags.age ?? doc.age) || baseResolved.age || appearanceText(existingDesign?.age),
+    hair: pickField(baseResolved.hair, sheetClauses(appearanceText(baseTags.hair || doc.hair)), appearanceText(existingDesign?.hair)),
+    eyes: pickField(baseResolved.eyes, sheetClauses(appearanceText(baseTags.eyes || doc.eyes)), appearanceText(existingDesign?.eyes)),
+    face: pickField(baseResolved.face, sheetClauses(appearanceText(baseTags.face || doc.face || baseTags.face_features || doc.face_features)), appearanceText(existingDesign?.face)),
+    skin: pickField(baseResolved.skin, appearanceText(baseTags.skin || doc.skin || baseTags.skin_tone), appearanceText(existingDesign?.skin)),
+    body: pickField(baseResolved.body, sheetClauses(appearanceText(baseTags.body || doc.body || baseTags.build || doc.build)), appearanceText(existingDesign?.body)),
+    clothing: pickField(baseResolved.clothing, sheetClauses(appearanceText(baseTags.clothing || doc.clothing)), appearanceText(existingDesign?.clothing)),
+    accessories: pickField(baseResolved.accessories, splitClauses(appearanceText(baseTags.accessories || doc.accessories)).join(', '), appearanceText(existingDesign?.accessories)),
+    undressed: Boolean(doc.undressed === true || baseTags.undressed === true || existingDesign?.undressed === true),
+  };
+  const explicitGender = normalizeStoredGender(baseTags.gender ?? doc.gender ?? existingDesign?.gender);
+  if (explicitGender !== 'unspecified') {
+    nextDesign.gender = explicitGender;
+  }
+  void EDITABLE_DESIGN_KEYS;
+  return {
+    ...doc,
+    design: nextDesign,
+  };
+}
+
+/** Stored gender and appearance. Sheet clothing and eyes come from the design lock. */
 export function readStoredCharacterSheet(
   tags: Record<string, any> | null | undefined,
   fallbackContext?: { description?: string | null }
@@ -1455,47 +1877,25 @@ export function readStoredCharacterSheet(
   gender: CharacterSheetGender;
   appearance: CharacterAppearanceFields;
 } {
+  const design = resolveSheetDesign(tags, fallbackContext);
   const source = tags && typeof tags === 'object' ? tags : {};
   const base = source.base_model?.tags && typeof source.base_model.tags === 'object'
     ? source.base_model.tags
     : {};
-  let gender = normalizeStoredGender(source.gender ?? base.gender);
-  const undressed = source.undressed === true || base.undressed === true;
-  const appearance: CharacterAppearanceFields = {
-    age: appearanceText(base.age || source.age),
-    hair: appearanceText(base.hair || source.hair),
-    face: appearanceText(base.face || source.face || base.face_features || source.face_features),
-    body: appearanceText(base.body || source.body || base.build || source.build),
-    clothing: appearanceText(base.clothing || source.clothing),
-    accessories: appearanceText(base.accessories || source.accessories),
-    undressed,
-  };
-  if (gender === 'unspecified') {
-    const mustKeep = Array.isArray(source.identity_lock?.must_keep)
-      ? source.identity_lock.must_keep.join(', ')
-      : '';
-    const hintText = [
-      appearance.face,
-      appearance.body,
-      appearance.clothing,
-      mustKeep,
-      fallbackContext?.description || '',
-    ].filter(Boolean).join(', ');
-    if (hintText && !NONHUMAN_SUBJECT_RE.test(hintText)) {
-      const isFemale =
-        FEMALE_HUMAN_RE.test(hintText)
-        || /\b(breasts?|hourglass|cleavage|xianxia dress)\b/i.test(hintText);
-      const isMale = MALE_HUMAN_RE.test(hintText);
-      if (isFemale && !isMale) {
-        gender = 'female';
-      } else if (isMale && !isFemale) {
-        gender = 'male';
-      }
-    }
-  }
+  const sceneUndressed = source.undressed === true || base.undressed === true;
   return {
-    gender,
-    appearance,
+    gender: design.gender,
+    appearance: {
+      age: design.age,
+      hair: design.hair,
+      eyes: design.eyes,
+      face: design.face,
+      skin: design.skin,
+      body: design.body,
+      clothing: design.clothing,
+      accessories: design.accessories,
+      undressed: design.clothing ? design.undressed : sceneUndressed || design.undressed,
+    },
   };
 }
 
@@ -1517,11 +1917,13 @@ export const buildCharacterPromptHeader = (
   const storedGender = gender === 'female' || gender === 'male' ? gender : 'unspecified';
   const layout = genType === 'turnaround'
     ? 'full body character design, consistent character identity, plain studio background'
-    : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, plain studio background';
+    : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background';
   const look = [
     appearance?.age,
     appearance?.hair,
+    appearance?.eyes,
     appearance?.face,
+    appearance?.skin,
     appearance?.body,
     appearance?.clothing,
     appearance?.accessories,
@@ -1531,7 +1933,7 @@ export const buildCharacterPromptHeader = (
     .join(', ');
   const angleNegative = genType === 'turnaround'
     ? ''
-    : ', side view, profile, back view, from behind';
+    : ', side view, profile, back view, from behind, holding a mirror, holding a sword, holding a flower, handheld prop';
   return {
     prefix,
     negative: `${CHILD_SAFETY_NEGATIVE}, distorted face, cluttered background, mismatched clothing, inconsistent face${angleNegative}`,

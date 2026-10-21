@@ -307,9 +307,9 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   {char.avatar_url && (
                     <div
                       className="absolute top-2 right-2 bg-emerald-950/85 backdrop-blur-sm text-[9px] text-emerald-300 font-medium px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1 pointer-events-none"
-                      title="三视图生成时自动参考上半身正面定妆照锁定五官与服饰"
+                      title="正面单独生成，侧视和背视以这张正面全身图为底图"
                     >
-                      <Link2 size={10} /> 自动复用定妆照垫图
+                      <Link2 size={10} /> 侧视和背视跟随正面全身图
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
@@ -348,7 +348,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   </span>
                   {char.avatar_url && (
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1 font-medium">
-                      <Link2 size={10} /> 自动复用定妆照为垫图
+                      <Link2 size={10} /> 侧视和背视跟随正面全身图
                     </span>
                   )}
                   <div className="flex flex-col gap-1.5 mt-0.5">

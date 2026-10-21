@@ -39,10 +39,12 @@ export const CharacterManager: React.FC = () => {
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [useRefPortrait, setUseRefPortrait] = useState<boolean>(false);
   const [refImageUrl, setRefImageUrl] = useState<string | null>(null);
+  const [turnaroundViews, setTurnaroundViews] = useState<'all' | 'front' | 'side' | 'back'>('all');
+  const [wardrobeVariant, setWardrobeVariant] = useState('');
 
   // Project policy for consistent style/NSFW on character gens
   const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image'>('pony');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -70,7 +72,7 @@ export const CharacterManager: React.FC = () => {
         const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
         const imageSettings = s.image_generation || {};
         if (imageSettings.style) setProjectStyle(imageSettings.style);
-        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2') {
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image') {
           setProjectModelType(imageSettings.model);
         }
         if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') {
@@ -214,6 +216,10 @@ export const CharacterManager: React.FC = () => {
     'lora_ready',
     'lora_name',
     'scene_modifiers',
+    'design',
+    'scene_state',
+    'identity_lock',
+    'visual_bible',
   ]);
 
   /** Flatten base_model.tags + top-level strings for the simple key/value editor. */
@@ -256,6 +262,15 @@ export const CharacterManager: React.FC = () => {
       }
     }
     Object.assign(next, flat);
+    if (full.design && typeof full.design === 'object' && !Array.isArray(full.design)) {
+      const nextDesign = { ...full.design };
+      for (const k of ['gender', 'age', 'hair', 'eyes', 'face', 'skin', 'body', 'clothing', 'accessories'] as const) {
+        if (flat[k] !== undefined) nextDesign[k] = flat[k];
+      }
+      if (flat.face_features && !flat.face) nextDesign.face = flat.face_features;
+      if (flat.skin_tone && !flat.skin) nextDesign.skin = flat.skin_tone;
+      next.design = nextDesign;
+    }
     if (Array.isArray(full.variants) && full.variants.length) {
       next.variants = full.variants.map((v: any, i: number) => {
         if (!v || typeof v !== 'object') return v;
@@ -408,6 +423,8 @@ export const CharacterManager: React.FC = () => {
     setRefImageUrl(availableRef);
 
     setGeneratedImageUrl(null);
+    setTurnaroundViews('all');
+    setWardrobeVariant('');
     setPrompt('');
     setNegativePrompt('');
     setIsPromptLoading(true);
@@ -425,7 +442,7 @@ export const CharacterManager: React.FC = () => {
     } catch (e) {
       // portrait: upper-body front view; turnaround: appearance base only (backend generates front/side/back then stitches)
       const fallbackComposition = initialGenType === 'portrait'
-        ? 'high quality character portrait, upper body, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, plain studio background'
+        ? 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background'
         : 'full body character design, standing, consistent identity';
       setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
       setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
@@ -493,6 +510,10 @@ export const CharacterManager: React.FC = () => {
         payload.ref_image_url = refImageUrl;
         payload.character_ref_url = refImageUrl;
         if (genType === 'turnaround') payload.turnaround_front_adapter = true;
+      }
+      if (genType === 'turnaround') {
+        if (turnaroundViews !== 'all') payload.turnaround_views = [turnaroundViews];
+        if (wardrobeVariant.trim()) payload.wardrobe_variant = wardrobeVariant.trim();
       }
 
 
@@ -618,15 +639,22 @@ export const CharacterManager: React.FC = () => {
     try {
       let charId = sheetModalChar.id;
       if (options.newVersion) {
-        // Fork look first (keep previous assets), then write into the new active version
+        // Fork look first while preserving existing plates (avatar/front/side/back), then write the new asset
         const forked = await api.createCharacterVersion(charId, {
-          clear_assets: true,
+          clear_assets: false,
           activate: true
         });
         if (forked?.character?.id) {
           charId = forked.character.id;
           setSheetModalChar((prev) => (prev ? { ...prev, ...forked.character } : prev));
         }
+      }
+
+      if (assetType === 'turnaround' && wardrobeVariant.trim()) {
+        showToast('变体三视图已另存，常服三视图没有改动。', 'success');
+        setSheetModalChar(null);
+        await loadCharacters();
+        return;
       }
 
       const updatePayload: any = {};
@@ -812,6 +840,10 @@ export const CharacterManager: React.FC = () => {
         onRebuildPrompt={(gt, useRef, refUrl) => handleRebuildPrompt(gt as any, useRef, refUrl)}
         onGenerateSheetImage={handleGenerateSheetImage}
         onSaveAssetToCharacter={saveAssetToCharacter}
+        turnaroundViews={turnaroundViews}
+        setTurnaroundViews={setTurnaroundViews}
+        wardrobeVariant={wardrobeVariant}
+        setWardrobeVariant={setWardrobeVariant}
         onUploadPortrait={async (file) => {
           if (sheetModalChar) {
             try {

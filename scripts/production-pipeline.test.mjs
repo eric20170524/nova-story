@@ -52,7 +52,15 @@ test('two chapters resume through image/video/chapter approvals and deliver full
       else if (url.includes('/asset-library')) result = [];
       else if (url.endsWith('/export')) result = { asset_library: { image_snapshots: shots.map(shot => ({ scene_id: shot.id, image_url: shot.asset_url, references_json: '[]', character_versions_json: '[]' })) } };
       else if (url === '/api/agent/consistency') result = { issues: [] };
-      else if (url === '/api/assets/generate') { counts.images[body.scene_id - 1]++; result = { task_id: `image-${body.scene_id}` }; }
+      else if (url.startsWith('/api/settings/tier-b-status')) result = { formal: { capabilities: [{ id: 'sdxl_ip_adapter', family_match: true, chain_ready: true, live_verified: true }] } };
+      else if (/\/api\/scripts\/\d+\/production\/frames\/\d+$/.test(url.split('?')[0])) result = { scene_version: 1, reference_hash: 'a'.repeat(64), available_references: [] };
+      else if (url === '/api/assets/generate') {
+        assert.equal(body.production_stage, 'production');
+        assert.equal(body.workflow.production_guard.redraw, false);
+        assert.match(body.workflow.production_guard.reference_hash, /^[a-f0-9]{64}$/);
+        counts.images[body.scene_id - 1]++;
+        result = { task_id: `image-${body.scene_id}` };
+      }
       else if (url.startsWith('/api/assets/status/')) result = { status: 'completed', image_url: `/static/frame-${Number(url.match(/image-(\d+)/)[1])}.png` };
       else if (url === '/api/videos/preflight') result = { ready: true, blockers: [], input_signature: inputSignature(body) };
       else if (url === '/api/videos/generate') {

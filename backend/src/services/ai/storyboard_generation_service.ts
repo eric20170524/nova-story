@@ -32,7 +32,7 @@ import {
 } from '../shot_intent_quota';
 import { ensureSceneVersionBaseline, syncActiveVersionFromScene } from '../scene_versions';
 import { AssetLibraryService } from '../asset_library_service';
-import { auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, serialWorkflow, shotEvidenceIds, shotSoundText, continuityLiteral, visiblePropEvidence, validateFactPayload, validateFactSources, anchorSpans, stabilizeFactBeats, ExtractionSchema, stateCheckKey, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { CHAPTER_SHOT_LIMIT, auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, serialWorkflow, shotEvidenceIds, shotSoundText, continuityLiteral, visiblePropEvidence, validateFactPayload, validateFactSources, anchorSpans, stabilizeFactBeats, ExtractionSchema, stateCheckKey, type WorkflowProgress } from '../storyboard_fact_workflow';
 import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
 import { actionBindingSource, boundText, entityRoster, needsBindingReview, textHash, validateBinding } from '../entity_binding';
 import { sceneContextFacts, scopedWardrobeLock } from '../storyboard_fact_workflow';
@@ -332,6 +332,7 @@ export class StoryboardGenerationService {
     if (reserved.progress.input_hash !== inputHash) throw new StoryboardGenerationError('同一请求键对应不同剧本、资产、模型或指令，请使用新的请求键', 409);
     if (['failed', 'interrupted', 'cancelled'].includes(reserved.status) && !reserved.progress.candidate_id) {
       const next = { ...reserved.progress, attempt: (reserved.progress.attempt || 0) + 1, phase: 'queued' };
+      if (next.inference_budget) next.inference_budget = { ...next.inference_budget, network_retries: 0 };
       delete next.error;
       const requeued = await db.run("UPDATE generation_task SET status='queued', error=NULL, progress_json=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=? AND status=? AND progress_json=?",
         JSON.stringify(next), taskId, reserved.status, JSON.stringify(reserved.progress));
@@ -438,8 +439,8 @@ export class StoryboardGenerationService {
 
   static validatePayload(payload: StoryboardCandidatePayload, script: ScriptWithDetails) {
     if (payload.scope) script = { ...script, document: continuitySceneDocument(script.document, payload.scope.target_scene_id) };
-    if (payload.shots.length > 20) {
-      throw new StoryboardGenerationError('候选分镜超过 20 镜预算上限', 400);
+    if (payload.shots.length > CHAPTER_SHOT_LIMIT) {
+      throw new StoryboardGenerationError(`候选分镜超过 ${CHAPTER_SHOT_LIMIT} 镜预算上限`, 400);
     }
     if (payload.scriptId !== script.id || payload.scriptRevision !== script.revision || payload.chapterId !== script.chapterId) {
       throw new StoryboardGenerationError('候选分镜的剧本来源版本或章节不匹配', 409);

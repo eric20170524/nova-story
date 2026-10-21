@@ -90,6 +90,27 @@ test('appearance fields stay intact for the text model', () => {
   assert.equal(pei?.appearance.clothing, 'low_cut_crimson');
   assert.equal(lu?.appearance.hair, 'long_silky_white');
   assert.equal(lu?.appearance.clothing, 'half_unraveled_moon_white');
+
+  const frozen = shotImageMaterialsFromSpec(
+    {
+      primary_action: '裴雨涵衣襟半开',
+      primary_subject: '裴雨涵',
+      visible_subjects: ['裴雨涵'],
+      continuity_states: [{ entity: '裴雨涵', attribute: 'wardrobe', value: '衣襟半开' }],
+    },
+    [{
+      name: '裴雨涵',
+      visual_tags: {
+        design: { gender: 'female', hair: 'long black hair', clothing: 'moon-white robe', eyes: 'ice blue eyes' },
+        base_model: { tags: { clothing: 'half-open inner robe', hair: 'short red hair' } },
+      },
+    }],
+  );
+  const locked = frozen.characters.find((row) => row.name === '裴雨涵');
+  assert.equal(locked?.costume_locked, true);
+  assert.equal(locked?.appearance.clothing, 'moon-white robe');
+  assert.equal(locked?.appearance.hair, 'long black hair');
+  assert.equal(locked?.appearance.clothing_state, '衣襟半开');
   assert.equal(materials.glossary['裴雨涵'], 'Pei Yuhan');
   assert.equal(materials.shot_type, 'Wide Shot');
   assert.equal(materials.styleLighting, 'dramatic chiaroscuro, rim light, semi-realistic material');
@@ -239,6 +260,17 @@ test('semantic fidelity rejects reversed clothing and facts outside the glossary
       return { facts: facts.map((_, id) => ({ id, status: item.status, evidence: english })) };
     });
     assert.equal(await englishCoversCues(item.source, item.english), false);
+  }
+});
+
+test('an exact age range in the English picture survives a missing audit', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{ id: 0, status: 'missing', evidence: '' }],
+  }));
+  try {
+    await assertEnglishFidelity('陆嘉静的年龄：24-26', 'Lu Jiajing is a 24-26 year old woman with long hair.');
+  } finally {
+    setVisualPromptVerifierForTests(null);
   }
 });
 

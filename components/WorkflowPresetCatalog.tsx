@@ -4,10 +4,11 @@ import { useLanguage } from '../LanguageContext';
 import { PROJECT_VIDEO_WORKFLOW_IDS } from '../services/videoWorkflowPolicy';
 import type { Workflow } from '../types';
 
-const IMAGE_FAMILIES = ['pony', 'redcraft_krea2', 'sd15', 'flux'] as const;
+const IMAGE_FAMILIES = ['pony', 'qwen_image', 'redcraft_krea2', 'sd15', 'flux'] as const;
 
 const familyLabelKey = (family: string) => {
   if (family === 'redcraft_krea2') return 'project_settings.model_redcraft';
+  if (family === 'qwen_image') return 'project_settings.model_qwen_image';
   if (family === 'sd15') return 'project_settings.model_sd15';
   if (family === 'pony') return 'project_settings.model_pony';
   if (family === 'flux') return 'workflow.family_flux';

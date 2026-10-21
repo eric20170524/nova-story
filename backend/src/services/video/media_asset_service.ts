@@ -10,6 +10,7 @@ import {
   normalizeReferenceTransportMode,
   shouldUseHttpReferenceTransport
 } from './comfy_input_transport';
+import { platesFromVisualTags } from './video_identity_plates';
 
 const inferReferenceMimeType = (asset: MediaAsset, sourcePath: string): string => {
   if (asset.mime_type) return asset.mime_type;
@@ -112,13 +113,11 @@ export class MediaAssetService {
     }
 
     const assets = visualTags?.assets || {};
-    // Face is the strongest identity signal, then avatar, then turnaround. Deduplicate
-    // exact URLs so one physical image never produces duplicate MediaAsset rows merely
-    // because Character Center exposes it through multiple slots.
+    // Video may see the portrait and the single front panel. The stitched sheet
+    // and a corner face crop are not identity references.
     const orderedCandidates: Array<{ slot: string; url: string }> = [
-      { slot: 'face_url', url: String(assets.face_url || visualTags.face_url || '').trim() },
-      { slot: 'avatar_url', url: String(assets.avatar_url || visualTags.avatar_url || '').trim() },
-      { slot: 'turnaround_url', url: String(assets.turnaround_url || visualTags.turnaround_url || '').trim() }
+      { slot: 'face', url: String(assets.avatar_url || visualTags.avatar_url || '').trim() },
+      { slot: 'body', url: String(assets.turnaround_front_url || visualTags.turnaround_front_url || '').trim() }
     ];
     const seenUrls = new Set<string>();
     const candidates = orderedCandidates.filter((candidate) => {
@@ -139,15 +138,42 @@ export class MediaAssetService {
     ) as any[];
 
     const currentUrls = new Set(candidates.map((candidate) => candidate.url));
+    const versionRows = await db.all(
+      'SELECT version, visual_tags FROM character_version WHERE character_id = ?',
+      Number(character.id),
+    ) as Array<{ version: number; visual_tags?: string | null }>;
+    const versionUrls = new Map<string, number>();
+    for (const versionRow of versionRows) {
+      const plates = platesFromVisualTags(versionRow.visual_tags);
+      for (const url of [plates.face, plates.body]) {
+        if (!url) continue;
+        const previous = versionUrls.get(url) || 0;
+        if (Number(versionRow.version) >= previous) versionUrls.set(url, Number(versionRow.version));
+      }
+    }
+    const retainedUrls = new Set<string>([...currentUrls, ...versionUrls.keys()]);
     for (const row of existingRows) {
       const metadata = parseMetadata(row.metadata_json);
-      if (
-        metadata.source === CHARACTER_CENTER_ADAPTER_SOURCE
-        && !currentUrls.has(String(row.url || ''))
-        && row.status !== 'archived'
-      ) {
-        await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'archived', row.id);
+      if (metadata.source !== CHARACTER_CENTER_ADAPTER_SOURCE) continue;
+      const url = String(row.url || '');
+      if (!retainedUrls.has(url)) {
+        if (row.status !== 'archived') {
+          await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'archived', row.id);
+        }
+        continue;
       }
+      if (currentUrls.has(url)) continue;
+      const metadataJson = JSON.stringify({
+        ...metadata,
+        source: CHARACTER_CENTER_ADAPTER_SOURCE,
+        character_version: versionUrls.get(url) || null,
+      });
+      await db.run(
+        'UPDATE media_asset SET status = ?, metadata_json = ? WHERE id = ?',
+        'ready',
+        metadataJson,
+        row.id,
+      );
     }
 
     const synced: MediaAsset[] = [];

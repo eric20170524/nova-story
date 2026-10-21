@@ -1,7 +1,7 @@
 import '../test_setup';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, materializeScriptReferences, needsBindingReview, proposeBindings, resolveScriptBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
+import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, groundedEventText, materializeScriptReferences, needsBindingReview, proposeBindings, resolveScriptBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { auditFacts, continuityAfter, continuityForScene, continuityLiteral, evidencedContinuityStates, factSourceHash, sceneContext, sceneContextFacts, scopedWardrobeLock } from './storyboard_fact_workflow';
 import { createEmptyScriptDocument, validateScriptForConfirmation } from '../schemas/script';
 import type { AIProvider } from './ai/base';
@@ -22,6 +22,25 @@ test('剧本自动解析仅接受明确身份和出场状态，照片提及不�
     assert.equal(expanded.text, visibility === 'uncertain' ? text : '陈月举起蓝伞。');
     validateBinding(expanded.binding, expanded.text, roster);
     assert.deepEqual(boundVisibleEntities(expanded.binding).map(e => e.name), visibility === 'visible' ? ['陈月'] : []);
+  }
+});
+
+test('概括出来的提纲事件改回原文句子', () => {
+  const source = '这日，仙域天光忽然发粉。\n百年一度的“春潮”到了。';
+  const summary = '百年一度的春潮降临，神女体内仙力躁动。';
+  assert.equal(eventContentCovered(summary, source), false);
+  assert.deepEqual(groundedEventText(summary, source), { text: source, usedSource: true });
+  assert.deepEqual(groundedEventText(source, source), { text: source, usedSource: false });
+});
+
+test('剧本自动解析接受嵌在 resolved 里的人物和状态', async () => {
+  const text = '她转身走来。';
+  for (const resolved of [{ entity_id: roster[1]!.id, status: 'resolved' }, roster[1]!.id]) {
+    const provider = { async generateStructured(_prompt: string, schema: any) {
+      return schema.parse({ bindings: [{ index: 0, text: '她', resolved, visibility: 'visible', status: 'resolved' }] });
+    } } as AIProvider;
+    const binding = await resolveScriptBindings(provider, bindEntities(text, roster), text, '林岚离开，陈月留下。', roster);
+    assert.equal(materializeScriptReferences(text, binding).text, '陈月转身走来。');
   }
 });
 

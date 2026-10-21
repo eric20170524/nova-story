@@ -1,5 +1,9 @@
 /** Project-owned image generation defaults. Legacy keys are migrated once in the database. */
-export type ProjectImageModel = 'pony' | 'sd15' | 'redcraft_krea2';
+export const PROJECT_IMAGE_MODELS = ['pony', 'sd15', 'redcraft_krea2', 'qwen_image'] as const;
+export type ProjectImageModel = typeof PROJECT_IMAGE_MODELS[number];
+
+export const isProjectImageModel = (value: unknown): value is ProjectImageModel =>
+  typeof value === 'string' && (PROJECT_IMAGE_MODELS as readonly string[]).includes(value);
 export type ProjectNsfwMode = 'inherit' | 'on' | 'off';
 export const PROJECT_VIDEO_WORKFLOW_IDS = [
   'grok_imagine_browser',
@@ -74,7 +78,7 @@ export const getProjectImageSettings = (settings: ProjectSettings | null | undef
   const raw = settings?.image_generation;
   const output = raw?.output_spec;
   return {
-    model: raw?.model === 'sd15' || raw?.model === 'redcraft_krea2' ? raw.model : 'pony',
+    model: isProjectImageModel(raw?.model) ? raw.model : 'pony',
     workflow_id: Number.isSafeInteger(raw?.workflow_id) && Number(raw?.workflow_id) > 0
       ? Number(raw?.workflow_id) : null,
     style: typeof raw?.style === 'string' && raw.style.trim() ? raw.style : DEFAULT_PROJECT_IMAGE_SETTINGS.style,

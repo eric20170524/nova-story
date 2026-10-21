@@ -14,8 +14,31 @@ export const ContentAnalysisSchema = z.object({
 export const CharacterTraitSchema = z.object({
   trait: z.string().describe('Personality or behavioral trait'),
   evidence: z.string().describe('Short quote or paraphrase from THIS chapter only'),
-  confidence: z.number().min(0).max(1).describe('0-1 confidence'),
+  confidence: z.number().min(0).max(1).optional().default(0.5).describe('0-1 confidence'),
 });
+
+/** Gemma often emits one confidence on the character and omits it on each trait. */
+export function inheritCharacterTraitConfidence<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value;
+  const root = value as Record<string, unknown>;
+  if (!Array.isArray(root.characters)) return value;
+  const characters = root.characters.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const record = row as Record<string, unknown>;
+    const parent = typeof record.confidence === 'number' ? record.confidence : undefined;
+    if (parent === undefined || !Array.isArray(record.traits)) return row;
+    return {
+      ...record,
+      traits: record.traits.map((trait) => {
+        if (!trait || typeof trait !== 'object') return trait;
+        const item = trait as Record<string, unknown>;
+        if (typeof item.confidence === 'number' && !Number.isNaN(item.confidence)) return trait;
+        return { ...item, confidence: parent };
+      }),
+    };
+  });
+  return { ...(value as object), characters } as T;
+}
 
 export const CANONICAL_CHARACTER_ROLES = ['protagonist', 'antagonist', 'supporting', 'extra'] as const;
 export type CanonicalCharacterRole = (typeof CANONICAL_CHARACTER_ROLES)[number];

@@ -1,8 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TimelineShotSchema } from './llm';
+import { z } from 'zod';
+import { ChapterCharacterAnalysisSchema, inheritCharacterTraitConfidence, TimelineShotSchema } from './llm';
 import { packShotSpec } from './shot_contract';
 import { compilePonyPrompt } from '../services/pony_prompt_compiler';
+
+test('chapter character analysis keeps a character-level confidence and defaults a missing one', () => {
+  z.toJSONSchema(ChapterCharacterAnalysisSchema);
+  const copied = ChapterCharacterAnalysisSchema.parse(inheritCharacterTraitConfidence({
+    characters: [{
+      name: '陆嘉静',
+      roleInChapter: 'protagonist',
+      confidence: 1,
+      traits: [{ trait: '克制', evidence: '把那夜封进镜底' }],
+    }],
+  }));
+  assert.equal(copied.characters[0]?.traits[0]?.confidence, 1);
+
+  const omitted = ChapterCharacterAnalysisSchema.parse({
+    characters: [{
+      name: '裴雨涵',
+      roleInChapter: 'protagonist',
+      traits: [{ trait: '坦率', evidence: '从不掩饰自己的本性' }],
+    }],
+  });
+  assert.equal(omitted.characters[0]?.traits[0]?.confidence, 0.5);
+});
 
 test('TimelineShotSchema rejects shots without location + primary_action', () => {
   const missingBoth = TimelineShotSchema.safeParse({

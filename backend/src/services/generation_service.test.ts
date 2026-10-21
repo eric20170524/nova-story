@@ -810,6 +810,42 @@ test('skips img2img when the contract names two people, not when the paragraph d
   assert.equal(compiled['3'].inputs.denoise, 1);
 });
 
+test('qwen-image 2.1 compile uses its encoder and keeps the SD latent path off', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8'));
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      character_ref_url: '/static/generated/face.png',
+      gen_type: 'portrait',
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'a woman in a moonlit courtyard',
+    'standard',
+    { width: 1280, height: 720 },
+    {
+      advanced: { nsfw_enabled: true },
+      comfyui: { mode: 'remote', pony_lora: 'Pony_DetailV2.0.safetensors' }
+    }
+  );
+  assert.match(compiled['6'].inputs.prompt, /moonlit courtyard/);
+  assert.doesNotMatch(compiled['6'].inputs.prompt, /score_9|rating_explicit/);
+  assert.ok(String(compiled['6'].inputs.negative_prompt).length > 0);
+  assert.equal(compiled['5'].inputs.width, 1280);
+  assert.equal(compiled['5'].inputs.height, 704);
+  assert.equal(compiled['3'].inputs.cfg, 1);
+  assert.equal(compiled['3'].inputs.steps, 25);
+  assert.equal(compiled['3'].inputs.denoise, 1);
+  assert.equal(compiled['4'].inputs.unet_name, 'qwen_image_2.1_int8_convrot.safetensors');
+  const loadId = String(compiled['6'].inputs.image_1[0]);
+  assert.equal(compiled[loadId].class_type, 'LoadImage');
+  assert.equal(compiled[loadId].inputs.image, 'face.png');
+  assert.equal(Object.values(compiled).some((node: any) => node.class_type === 'VAEEncode'), false);
+  assert.equal(Object.values(compiled).some((node: any) => node.class_type === 'CheckpointLoaderSimple'), false);
+  assert.equal(Object.values(compiled).some((node: any) => /pony/i.test(String(node.inputs?.lora_name || ''))), false);
+});
+
 test('character_ref_url drives img2img for turnaround (Tier A dual-field API)', async () => {
   const compiled = await compileComfyWorkflow(
     {

@@ -38,6 +38,7 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
         assert.match(prompt, /bronze bell, dark green patina/);
         assert.match(prompt, /old temple, stone steps/);
         assert.match(prompt, /不同实体不能仅因/);
+        assert.match(prompt, /不要写人物、身体、欲望、亲密和镜中人/);
         return schema.parse({ assets: [
         { kind: 'location', name: '山庙', description: '模型想改成金殿', visual_prompt: 'golden palace' },
         { kind: 'prop', name: '铜铃', description: '模型想改成银铃', visual_prompt: 'silver bell' },
@@ -108,7 +109,7 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
       let platePrompt = '';
       GenerationService.generateAssets = async (taskId, workflow, sceneId) => {
         platePrompt = String(workflow?.prompt || '');
-        assert.match(String(workflow?.negative_prompt || ''), /people, person, portrait/);
+        assert.match(String(workflow?.negative_prompt || ''), /1girl, 2girls, 1boy, solo, human, person, people, character, face, portrait, hands/);
         assert.equal(workflow?.gen_type, 'prop');
         await wait;
         await AssetTaskStore.completed(taskId, sceneId, '/static/generated/library-test.png');
@@ -122,8 +123,9 @@ test('asset library: ownership, continuity, durable generation and lifecycle', a
       const generated = await AssetLibraryService.requireAsset(prop.id);
       assert.equal(generated.status, 'completed'); assert.equal(generated.image_url, '/static/generated/library-test.png');
       assert.equal(generated.task_id, started.task_id); assert.equal(generated.revision, prop.revision + 1);
-      assert.match(platePrompt, /no people/);
-      assert.match(platePrompt, /isolated object/);
+      assert.doesNotMatch(platePrompt, /\bpeople\b/);
+      assert.match(platePrompt, /one physical object, centered product photograph, front view, simple backdrop/);
+      assert.doesNotMatch(platePrompt, /design sheet/);
     } finally { release(); GenerationService.generateAssets = original; }
   });
   await t.test('HTTP routes validate requests and surface revision conflicts', async () => {

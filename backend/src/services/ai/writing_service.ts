@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db } from '../../db/database';
 import { logger } from '../../core/logging';
+import { sealCharacterDesign } from '../image_generation_policy';
 import { parseProjectSettings } from '../project_settings';
 import { loadEnabledProjectDocumentContext } from '../project_documents';
 import { LLMService } from '../llm';
@@ -293,7 +294,7 @@ export function mergeVisualTagsDocument(
     },
     assets: existing.assets || {},
   };
-  return next;
+  return sealCharacterDesign(existing, incoming, next);
 }
 
 /** Remove only the program-owned personality section. Author lines stay. */

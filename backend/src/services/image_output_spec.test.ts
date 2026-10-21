@@ -87,16 +87,16 @@ test('request output spec overrides the project canvas', () => {
   assert.equal(target.source, 'request');
 });
 
-test('project canvas applies to character portraits', () => {
+test('character portraits ignore the project storyboard canvas', () => {
   const target = resolveImageOutputTarget({
     workflowData: { gen_type: 'portrait', project_settings: {
       image_generation: { output_spec: { aspect_ratio: '1:1', resolution: 'high' } }
     } },
     modelFamily: 'sd15',
   });
-  assert.equal(target.width, 1024);
-  assert.equal(target.height, 1024);
-  assert.equal(target.source, 'project');
+  assert.equal(target.width, 512);
+  assert.equal(target.height, 768);
+  assert.equal(target.source, 'generation_type');
 });
 
 test('explicit 1280×720 stays a 16:9 delivery; 64 alignment is only the Comfy latent', () => {
@@ -134,7 +134,7 @@ test('legacy project ratios normalize without creating new legacy output', () =>
   for (const aspect_ratio of ['3:4', '4:3']) {
     assert.equal(normalizeImageOutputSpec({ aspect_ratio }).aspect_ratio, '16:9');
     const target = resolveImageOutputTarget({
-      workflowData: { gen_type: 'portrait', project_settings: {
+      workflowData: { gen_type: 'scene', project_settings: {
         image_generation: { output_spec: { aspect_ratio, resolution: 'standard' } }
       } },
     });
@@ -173,6 +173,32 @@ test('cinematic grid and turnaround expose only supported output ratios', () => 
   assert.equal(turnaround.resolved_aspect_ratio, '16:9');
   assert.equal(turnaround.width, 1280);
   assert.equal(turnaround.height, 720);
+  const panel = resolveImageOutputTarget({
+    workflowData: {
+      gen_type: 'turnaround_panel',
+      project_settings: { image_generation: { output_spec: { aspect_ratio: '16:9' } } },
+    },
+    modelFamily: 'pony',
+  });
+  assert.equal(panel.width, 768);
+  assert.equal(panel.height, 1152);
+  assert.equal(panel.source, 'generation_type');
+  const sd15 = resolveImageOutputTarget({
+    workflowData: { gen_type: 'turnaround_panel' },
+    modelFamily: 'sd15',
+  });
+  assert.equal(sd15.width, 512);
+  assert.equal(sd15.height, 768);
+  const portrait = resolveImageOutputTarget({
+    workflowData: {
+      gen_type: 'portrait',
+      project_settings: { image_generation: { output_spec: { aspect_ratio: '16:9' } } },
+    },
+    modelFamily: 'pony',
+  });
+  assert.equal(portrait.width, 768);
+  assert.equal(portrait.height, 1152);
+  assert.equal(portrait.source, 'generation_type');
 });
 
 test('wide and vertical presets use exact ratios for both model families', () => {

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { ProjectImportInputError } from '../services/import/import_file';
 import { commitProjectImportFile } from '../services/import/project_import';
-import { DEFAULT_PROJECT_IMAGE_SETTINGS, PROJECT_VIDEO_WORKFLOW_IDS, canonicalProjectSettings, getProjectImageSettings, getProjectVideoSettings, parseProjectSettings } from '../services/project_settings';
+import { DEFAULT_PROJECT_IMAGE_SETTINGS, PROJECT_VIDEO_WORKFLOW_IDS, canonicalProjectSettings, getProjectImageSettings, getProjectVideoSettings, isProjectImageModel, parseProjectSettings } from '../services/project_settings';
 import { inferComfyWorkflowFamily } from '../services/comfy_workflow_selection';
 import { remapScriptDocumentCharacters, remapShotSpecScriptId, remapScriptSourceSnapshot } from '../schemas/script';
 import { remapCopiedScriptChanges } from '../services/script_copy';
@@ -67,7 +67,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       return null;
     }
     const image = settings.image_generation as Record<string, unknown>;
-    if (image.model !== 'pony' && image.model !== 'sd15' && image.model !== 'redcraft_krea2') {
+    if (!isProjectImageModel(image.model)) {
       reply.status(400).send({ detail: 'Invalid project image model' });
       return null;
     }

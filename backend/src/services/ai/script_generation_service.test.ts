@@ -995,13 +995,25 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
   await t.test('原文 ID 正确也不能把改编后的错误姓名确认为事实', async () => {
     const fix = await createFixture('林轩举起蓝伞。');
     const script = await ScriptService.createOrGetScript(fix.chapterId);
-    const provider = createMockProvider({ onOutline: () => ({ logline: '举伞', mustKeepEvents: [{ id: 'e1', text: '苏沐雪举起蓝伞。', sourceParagraphIds: ['p_1'] }], beats: [{ id: 'b1', purpose: '举伞', eventIds: ['e1'] }], endingHook: '门响' }) });
+    let scenePrompt = '';
+    const provider = createMockProvider({
+      onOutline: () => ({ logline: '举伞', mustKeepEvents: [{ id: 'e1', text: '苏沐雪举起蓝伞。', sourceParagraphIds: ['p_1'] }], beats: [{ id: 'b1', purpose: '举伞', eventIds: ['e1'] }], endingHook: '门响' }),
+      onScene: (prompt) => {
+        scenePrompt = prompt;
+        return { location: { name: '房间' }, blocks: [{ type: 'action', text: '林轩举起蓝伞。' }] };
+      },
+    });
     const candidate = await ScriptGenerationService.generateOutlineCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor', provider });
     const event = JSON.parse(candidate.after_json).mustKeepEvents[0];
     assert.equal(event.sourceBindings[0].binding.mentions[0].entity.name, '林轩');
     assert.equal(event.binding.mentions[0].confirmed, false);
     assert.equal(event.binding.mentions[0].authority, 'model_proposal');
-    await assert.rejects(() => ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor_script', provider }), /人物绑定待核对/);
+    const full = await ScriptGenerationService.generateFullScriptCandidate({ scriptId: script.id, expectedRevision: 1, requestKey: 'wrong_named_actor_script', provider });
+    const doc = JSON.parse(full.after_json);
+    assert.match(scenePrompt, /林轩举起蓝伞/);
+    assert.doesNotMatch(scenePrompt, /苏沐雪举起蓝伞/);
+    assert.match(doc.scenes[0].blocks.map((block: { text: string }) => block.text).join('\n'), /林轩举起蓝伞/);
+    assert.doesNotMatch(doc.outline.mustKeepEvents[0].text, /苏沐雪/);
   });
 
   await t.test('跨段人物自动解析为姓名，原文保留且可直接采纳确认；改写及对白也保持正确', async () => {

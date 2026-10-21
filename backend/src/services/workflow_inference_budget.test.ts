@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import type { AIProvider } from './ai/base';
 import { createEmptyScriptDocument } from '../schemas/script';
 import { runFactWorkflow, type WorkflowProgress } from './storyboard_fact_workflow';
-import { newWorkflowInferenceBudget, workflowBudgetProvider, WorkflowTransportError } from './workflow_inference_budget';
+import { NETWORK_RETRY_LIMIT, newWorkflowInferenceBudget, workflowBudgetProvider, WorkflowTransportError } from './workflow_inference_budget';
 import { z } from 'zod';
 
 const provider = (generateStructured: AIProvider['generateStructured']): AIProvider => ({ generateStructured, async generateText() { throw new Error('unexpected'); }, async generateImage() { throw new Error('unexpected'); } });
@@ -21,9 +21,24 @@ test('CT09 one shared transport allowance, reservation before inference, and raw
   }), budget, async () => { reservations = budget.calls.length; }, () => 'child', () => 'initial');
   await wrapped.generateStructured('{"task":"first"}', z.object({ ok: z.boolean() }));
   await assert.rejects(() => wrapped.generateStructured('{"task":"second"}', z.object({ ok: z.boolean() })), WorkflowTransportError);
-  assert.equal(calls, 3); assert.equal(budget.network_retries, 1); assert.equal(budget.semantic_repairs, 0);
-  assert.deepEqual(budget.calls.map(call => call.kind), ['initial', 'network_retry', 'initial']);
+  assert.equal(calls, 2 + NETWORK_RETRY_LIMIT); assert.equal(budget.network_retries, NETWORK_RETRY_LIMIT); assert.equal(budget.semantic_repairs, 0);
+  assert.deepEqual(budget.calls.map(call => call.kind), ['initial', 'network_retry', 'initial', ...Array(NETWORK_RETRY_LIMIT - 1).fill('network_retry')]);
   assert.deepEqual(budget.calls[1]?.usage, { total_tokens: 9 });
+});
+test('a terminated socket is a transport retry, not a semantic failure', async () => {
+  const budget = newWorkflowInferenceBudget();
+  let calls = 0;
+  const wrapped = workflowBudgetProvider(provider(async (_prompt, schema, _system, options) => {
+    calls++;
+    if (calls === 1) throw new TypeError('terminated');
+    options?.onInference?.({ model: 'test', elapsed_ms: 1, response: { ok: true } });
+    return schema.parse({ ok: true });
+  }), budget, async () => {}, () => 'child', () => 'initial');
+  await wrapped.generateStructured('{"task":"socket"}', z.object({ ok: z.boolean() }));
+  assert.equal(calls, 2);
+  assert.equal(budget.network_retries, 1);
+  assert.equal(budget.semantic_repairs, 0);
+  assert.equal(budget.calls[1]?.kind, 'network_retry');
 });
 
 function input(failTranslate = false) {
