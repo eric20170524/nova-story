@@ -35,7 +35,7 @@ import {
 import { readPortraitPlate } from './portrait_plate';
 import { commitCharacterEdits, ensureCharacterVersionBaseline } from './character_versions';
 import { GpuLeaseService } from './gpu_lease_service';
-import { turnaroundPanelDimensions } from './image_output_spec';
+import { resolveTurnaroundStrategy, turnaroundPanelDimensions } from './image_output_spec';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
 import { TURNAROUND_ANGLE_DENOISE } from './reference_generation_policy';
 import { isSyntheticCharacterSceneId, syntheticCharacterId } from './synthetic_scene_id';
@@ -64,7 +64,7 @@ export const TURNAROUND_VIEWS: TurnaroundViewSpec[] = [
     id: 'side',
     label: 'SIDE',
     poseTags:
-      'full body, head to toe, full-length wide shot, neutral standing A-pose, (strict 90 degree left side profile:1.6), entire figure from head to feet inside frame, long skirt hem and feet visible on studio floor, head and torso both turned left, shoulders and hips in profile, feet pointing left, exactly one eye visible, nose silhouette pointing left, arms slightly away from torso, orthographic side',
+      'full body, head to toe, full-length wide shot, neutral standing A-pose, (strict 90 degree left side profile:1.35), entire figure from head to feet inside frame, long skirt hem and feet visible on studio floor, head and torso both turned left, shoulders and hips in profile, feet pointing left, exactly one eye visible, nose silhouette pointing left, arms slightly away from torso, orthographic side',
     negativeExtra:
       'front view, frontal face, front-facing torso, facing viewer, looking at viewer, both eyes visible, back view, from behind, close-up, medium shot, cowboy shot, waist-up, knee-up, bust shot, upper body only, cropped legs, cropped feet, portrait crop, three-quarter view'
   },
@@ -72,7 +72,7 @@ export const TURNAROUND_VIEWS: TurnaroundViewSpec[] = [
     id: 'back',
     label: 'BACK',
     poseTags:
-      'full body, head to toe, full-length wide shot, neutral standing A-pose, (strict rear view from behind:1.6), entire figure from head to feet inside frame, long skirt hem and feet visible on studio floor, head and torso both facing away, back of head only, shoulders and hips facing away, arms slightly away from torso, hands and feet visible, orthographic back',
+      'full body, head to toe, full-length wide shot, neutral standing A-pose, (strict rear view from behind:1.35), entire figure from head to feet inside frame, long skirt hem and feet visible on studio floor, head and torso both facing away, occiput and nape of neck visible, continuous hair covering back of head, shoulder blades and back of garment visible, shoulders and hips facing away, arms slightly away from torso, hands and feet visible, orthographic back',
     negativeExtra:
       'front view, frontal figure, face visible, eyes, nose, turned head, looking over shoulder, looking at viewer, side view, profile, close-up, medium shot, cowboy shot, waist-up, knee-up, bust shot, upper body only, cropped legs, cropped feet, portrait crop'
   }
@@ -90,6 +90,73 @@ const STRIP_SIDE_FRONTAL_RE =
   /\b(both eyes|upper chest|cleavage|expression|breasts?|lips?|brows?|eyebrows?|cheekbones?)\b/i;
 const STRIP_TURNAROUND_HANDHELD_AURA_RE =
   /\b(divine mirror|handheld|(?:floating|swirling)(?:\s+[a-z-]+){0,3}\s+petals?|petal(?:\s+[a-z-]+){0,2}\s+aura|spirit aura|immortal glow)\b/i;
+
+/**
+ * Semantic substitutions that protect compound hair-length and garment structure
+ * descriptors from Scunthorpe truncation when frontal anatomy words are stripped.
+ */
+const SAFE_COMPOUND_REPLACEMENTS: ReadonlyArray< readonly [RegExp, string]> = [
+  [/\bcollarbone[- ]length\b/gi, 'shoulder-length'],
+  [/\bchest[- ]length\b/gi, 'mid-back length'],
+  [/\bdouble[- ]breasted\b/gi, 'tailored double-buttoned'],
+  [/\bsingle[- ]breasted\b/gi, 'tailored single-buttoned'],
+  [/\bchest[- ]plate\b/gi, 'torso plate'],
+  [/\bbreastplate\b/gi, 'cuirass torso'],
+  [/\b(?:no|without)\s+face(?:\s+visible)?\b/gi, 'occiput and nape of neck visible'],
+];
+
+const GARMENT_OR_HAIR_NOUN_RE =
+  /\b(hair|twintails|twin tails|ponytail|braids?|trench coat|coat|jacket|armor|cuirass|sweater|dress|robe|gown|shirt|blouse|top|skirt|suit|vest|corset|tunic|hanfu|cape|cloak|gloves)\b/i;
+
+const OCULAR_OCCLUSION_RE =
+  /\b(blindfold(?:ed)?|eyepatch|eye patch|covered eyes|eyes covered|bangs covering eyes|heavy bangs (?:covering|over) eyes|closed eyes|eyes closed|visored helmet)\b/i;
+
+export const normalizeCompoundAppearanceTerms = (text: string): string => {
+  let current = String(text || '');
+  for (const [pattern, replacement] of SAFE_COMPOUND_REPLACEMENTS) {
+    current = current.replace(pattern, replacement);
+  }
+  return current;
+};
+
+/**
+ * Strip participial handheld prop phrases ("holding a glowing lantern in her left hand")
+ * without devouring trailing wardrobe clauses ("while wearing long lace gloves").
+ */
+export const stripHandheldPropPhrases = (clause: string): string => {
+  let cleaned = String(clause || '')
+    .replace(
+      /\b(?:holding|wielding|carrying|grasping)\s+[^,;]+?(?=\s+(?:while|and)\s+(?:wearing|dressed|clad)\b)/gi,
+      ''
+    )
+    .replace(/\b(?:while|and)\s+(?=(?:wearing|dressed|clad)\b)/gi, '')
+    .replace(
+      /^(?:holding|wielding|carrying|grasping)\s+(?:a|an|the|her|his)?\s*[^,;]+$/i,
+      ''
+    )
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,;-]+|[\s,;-]+$/g, '')
+    .trim();
+  if (/^(?:in|with)\s+(?:her|his|both|left|right)\s+hands?$/i.test(cleaned)) {
+    cleaned = '';
+  }
+  return cleaned;
+};
+
+const sanitizeGarmentFrontalModifiers = (clause: string, stripRe: RegExp): string | null => {
+  const normalized = normalizeCompoundAppearanceTerms(clause);
+  if (!stripRe.test(normalized)) return normalized;
+  if (OCULAR_OCCLUSION_RE.test(normalized)) return normalized;
+  if (!GARMENT_OR_HAIR_NOUN_RE.test(normalized)) return null;
+  const surgicallyCleaned = normalized
+    .replace(/\b(?:deep\s+|open\s+|low-cut\s+)?cleavage(?:\s+window|\s+cutout)?\b/gi, '')
+    .replace(/\bupper\s+chest\b/gi, '')
+    .replace(/\b(?:full\s+)?breasts?\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,;-]+|[\s,;-]+$/g, '')
+    .trim();
+  return surgicallyCleaned && !stripRe.test(surgicallyCleaned) ? surgicallyCleaned : null;
+};
 
 const stripBooruWeights = (text: string): string =>
   String(text || '').replace(/\(([^():]+):[\d.]+\)/g, '$1');
@@ -160,11 +227,13 @@ export function mergeTurnaroundAssets(
 }
 
 export function extractAppearanceBase(prompt: string): string {
-  const normalized = normalizeBareAgeRange(
-    String(prompt || '').replace(STRIP_MULTI_VIEW, ' ')
+  const normalized = normalizeCompoundAppearanceTerms(
+    normalizeBareAgeRange(
+      String(prompt || '').replace(STRIP_MULTI_VIEW, ' ')
+    )
   );
   const clauses = splitClauses(normalized)
-    .map((clause) => clause.replace(/\s{2,}/g, ' ').trim())
+    .map((clause) => stripHandheldPropPhrases(clause.replace(/\s{2,}/g, ' ').trim()))
     .filter((clause) => clause
       && !STRIP_TURNAROUND_STAGING.test(clause)
       && !STRIP_TURNAROUND_MOOD.test(clause)
@@ -198,25 +267,40 @@ const FACE_LOCK_CLAUSES = new Set(
 
 /** Side and back views cannot show the locked face, so those clauses leave the appearance. */
 export function stripOrientalFaceLock(prompt: string): string {
-  return splitClauses(String(prompt || ''))
-    .map((part) => part.trim())
-    .filter((part) => {
-      const key = part.toLowerCase();
-      if (!key || FACE_LOCK_CLAUSES.has(key)) return false;
-      if (/east asian facial/i.test(part)) return false;
-      if (/oriental bone structure/i.test(part)) return false;
-      if (/east asian eyelids/i.test(part)) return false;
-      if (STRIP_BACK_FRONTAL_RE.test(part)) return false;
-      return true;
-    })
-    .join(', ');
+  const results: string[] = [];
+  for (const rawPart of splitClauses(normalizeCompoundAppearanceTerms(String(prompt || '')))) {
+    const part = rawPart.trim();
+    const key = part.toLowerCase();
+    if (!key || FACE_LOCK_CLAUSES.has(key)) continue;
+    if (/east asian facial/i.test(part)) continue;
+    if (/oriental bone structure/i.test(part)) continue;
+    if (/east asian eyelids/i.test(part)) continue;
+    if (STRIP_BACK_FRONTAL_RE.test(part)) {
+      const rescued = sanitizeGarmentFrontalModifiers(part, STRIP_BACK_FRONTAL_RE);
+      if (rescued && !/\b(?:eyes?|eyelids?|lips?|brows?|eyebrows?|cheekbones?|nose|facial|face|expression)\b/i.test(rescued)) {
+        results.push(rescued);
+      }
+      continue;
+    }
+    results.push(part);
+  }
+  return results.join(', ');
 }
 
-const filterSideAppearance = (prompt: string): string =>
-  splitClauses(String(prompt || ''))
-    .map((part) => part.trim())
-    .filter((part) => part && !STRIP_SIDE_FRONTAL_RE.test(part))
-    .join(', ');
+const filterSideAppearance = (prompt: string): string => {
+  const results: string[] = [];
+  for (const rawPart of splitClauses(normalizeCompoundAppearanceTerms(String(prompt || '')))) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    if (STRIP_SIDE_FRONTAL_RE.test(part)) {
+      const rescued = sanitizeGarmentFrontalModifiers(part, STRIP_SIDE_FRONTAL_RE);
+      if (rescued) results.push(rescued);
+      continue;
+    }
+    results.push(part);
+  }
+  return results.join(', ');
+};
 
 export function buildTurnaroundViewPrompt(
   basePrompt: string,
@@ -224,11 +308,12 @@ export function buildTurnaroundViewPrompt(
   modelFamily: ImageModelFamily
 ): { prompt: string; negative_prompt: string } {
   const naturalLanguage = modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'flux';
+  const hasOcularOcclusion = OCULAR_OCCLUSION_RE.test(String(basePrompt || ''));
   const rawFiltered = view.id === 'back'
     ? stripOrientalFaceLock(basePrompt)
     : view.id === 'side'
       ? filterSideAppearance(basePrompt)
-      : basePrompt;
+      : normalizeCompoundAppearanceTerms(basePrompt);
   const appearance = extractAppearanceBase(naturalLanguage ? stripBooruWeights(rawFiltered) : rawFiltered);
   const subjectKind = inferPromptSubjectType(basePrompt);
   const subjectNoun = subjectKind === 'female_human'
@@ -236,11 +321,14 @@ export function buildTurnaroundViewPrompt(
     : subjectKind === 'male_human'
       ? 'adult East Asian man, male'
       : 'standing character';
+  const sideEyeCameraClause = hasOcularOcclusion
+    ? 'The nose points left in strict profile.'
+    : 'The nose points left and only one eye is visible.';
   const camera = (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'flux')
     ? view.id === 'side'
-      ? `Full-length head-to-toe wide shot, strict 90 degree left profile of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor. The camera is directly beside them. Head, torso, and feet all point left. The nose points left and only one eye is visible. Both arms hang naturally at the sides with only the left arm in the foreground.`
+      ? `Full-length head-to-toe wide shot, strict 90 degree left profile of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor. The camera is directly beside them. Head, torso, and feet all point left. ${sideEyeCameraClause} Both arms hang naturally at the sides with only the left arm in the foreground.`
       : view.id === 'back'
-        ? `Full-length head-to-toe wide shot, strict rear view of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor, seen from directly behind. The camera is behind them. Only the back of the head, back of the hair, and back of the clothing are visible. The face and chest are completely hidden.`
+        ? `Full-length head-to-toe wide shot, strict rear view of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor, seen from directly behind. The camera is behind them. Occiput, nape of neck, shoulder blades, continuous hair covering the back of the head, and the back panel of the garment are clearly visible.`
         : `Full-length head-to-toe wide shot, direct front view of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor, facing the camera.`
     : '';
   const quality =
@@ -249,9 +337,12 @@ export function buildTurnaroundViewPrompt(
       : modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'flux'
         ? 'masterpiece quality, highly detailed, clean studio render'
         : 'masterpiece, best quality, highly detailed';
-  const poseTags = naturalLanguage ? stripBooruWeights(view.poseTags) : view.poseTags;
+  const rawPoseTags = view.id === 'side' && hasOcularOcclusion
+    ? view.poseTags.replace(/,\s*exactly one eye visible\b/i, '')
+    : view.poseTags;
+  const poseTags = naturalLanguage ? stripBooruWeights(rawPoseTags) : rawPoseTags;
   const framingDetails = view.id === 'back'
-    ? 'natural body proportions, clear silhouette, plain studio background, even flat studio lighting, solid opaque clothing'
+    ? 'occiput and nape of neck, shoulder blades, back of garment, natural body proportions, clear silhouette, plain studio background, even flat studio lighting, solid opaque clothing'
     : 'neutral expression, natural body proportions, clear silhouette, plain studio background, even flat studio lighting, solid opaque clothing';
 
   const prompt = [
@@ -364,6 +455,181 @@ export interface CompositeOptions {
   background?: string;
 }
 
+const parseHexRgb = (hex: string): { r: number; g: number; b: number } => {
+  const clean = String(hex || '#f5f5f5').trim().replace(/^#/, '');
+  if (clean.length === 3) {
+    const r = parseInt(clean[0]! + clean[0]!, 16);
+    const g = parseInt(clean[1]! + clean[1]!, 16);
+    const b = parseInt(clean[2]! + clean[2]!, 16);
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return { r, g, b };
+  }
+  if (clean.length === 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) return { r, g, b };
+  }
+  return { r: 245, g: 245, b: 245 };
+};
+
+/**
+ * Normalize studio background color drift (sampling 4 corners) and align the
+ * character's vertical bounding box (head top & foot baseline) across views.
+ */
+export async function normalizeAndAlignTurnaroundPanel(
+  buffer: Buffer,
+  panelWidth: number,
+  panelHeight: number,
+  backgroundHex: string = '#f5f5f5'
+): Promise<Buffer> {
+  const targetBg = parseHexRgb(backgroundHex);
+  const { data, info } = await sharp(buffer)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  const patch = Math.max(2, Math.min(16, Math.floor(Math.min(w, h) / 8)));
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let count = 0;
+
+  const samplePatch = (startX: number, startY: number) => {
+    for (let y = startY; y < startY + patch && y < h; y++) {
+      for (let x = startX; x < startX + patch && x < w; x++) {
+        const idx = (y * w + x) * 3;
+        sumR += data[idx] ?? targetBg.r;
+        sumG += data[idx + 1] ?? targetBg.g;
+        sumB += data[idx + 2] ?? targetBg.b;
+        count++;
+      }
+    }
+  };
+  samplePatch(0, 0);
+  samplePatch(Math.max(0, w - patch), 0);
+  samplePatch(0, Math.max(0, h - patch));
+  samplePatch(Math.max(0, w - patch), Math.max(0, h - patch));
+
+  const cornerR = count > 0 ? sumR / count : targetBg.r;
+  const cornerG = count > 0 ? sumG / count : targetBg.g;
+  const cornerB = count > 0 ? sumB / count : targetBg.b;
+
+  const fgThreshold = 22;
+  const featherThreshold = 44;
+  const minRowPixels = Math.max(2, Math.floor(w * 0.015));
+  let topY = -1;
+  let bottomY = -1;
+  let leftX = w;
+  let rightX = -1;
+
+  for (let y = 0; y < h; y++) {
+    let rowFg = 0;
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 3;
+      const dr = (data[idx] ?? 0) - cornerR;
+      const dg = (data[idx + 1] ?? 0) - cornerG;
+      const db = (data[idx + 2] ?? 0) - cornerB;
+      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+      if (dist >= fgThreshold) {
+        rowFg++;
+        if (x < leftX) leftX = x;
+        if (x > rightX) rightX = x;
+      }
+    }
+    if (rowFg >= minRowPixels) {
+      if (topY === -1) topY = y;
+      bottomY = y;
+    }
+  }
+
+  const hasSubject = topY >= 0 && bottomY > topY && (bottomY - topY) >= h * 0.15;
+  if (!hasSubject) {
+    return sharp(buffer)
+      .resize(panelWidth, panelHeight, {
+        fit: 'contain',
+        background: { ...targetBg, alpha: 1 }
+      })
+      .png()
+      .toBuffer();
+  }
+
+  const normalizedRaw = Buffer.from(data);
+  const gainR = cornerR > 16 ? targetBg.r / cornerR : 1;
+  const gainG = cornerG > 16 ? targetBg.g / cornerG : 1;
+  const gainB = cornerB > 16 ? targetBg.b / cornerB : 1;
+  const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+
+  for (let i = 0; i < normalizedRaw.length; i += 3) {
+    const r = normalizedRaw[i] ?? 0;
+    const g = normalizedRaw[i + 1] ?? 0;
+    const b = normalizedRaw[i + 2] ?? 0;
+    const dr = r - cornerR;
+    const dg = g - cornerG;
+    const db = b - cornerB;
+    const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+    if (dist <= fgThreshold) {
+      normalizedRaw[i] = targetBg.r;
+      normalizedRaw[i + 1] = targetBg.g;
+      normalizedRaw[i + 2] = targetBg.b;
+    } else if (dist < featherThreshold) {
+      const alpha = (dist - fgThreshold) / (featherThreshold - fgThreshold);
+      const corrR = clampByte(r * gainR);
+      const corrG = clampByte(g * gainG);
+      const corrB = clampByte(b * gainB);
+      normalizedRaw[i] = clampByte(targetBg.r * (1 - alpha) + corrR * alpha);
+      normalizedRaw[i + 1] = clampByte(targetBg.g * (1 - alpha) + corrG * alpha);
+      normalizedRaw[i + 2] = clampByte(targetBg.b * (1 - alpha) + corrB * alpha);
+    }
+  }
+
+  const subjectH = Math.max(1, bottomY - topY + 1);
+  const padX = Math.max(4, Math.round((rightX - leftX + 1) * 0.08));
+  const cropLeft = Math.max(0, leftX - padX);
+  const cropRight = Math.min(w - 1, rightX + padX);
+  const cropW = Math.max(1, cropRight - cropLeft + 1);
+
+  const croppedSubject = await sharp(normalizedRaw, {
+    raw: { width: w, height: h, channels: 3 }
+  })
+    .extract({ left: cropLeft, top: topY, width: cropW, height: subjectH })
+    .png()
+    .toBuffer();
+
+  // Align head top to 6% headroom and foot bottom to 94% baseline (88% figure height).
+  const targetTopY = Math.round(panelHeight * 0.06);
+  const targetFootY = Math.round(panelHeight * 0.94);
+  const targetSubjectH = Math.max(16, targetFootY - targetTopY);
+
+  const scaledSubject = await sharp(croppedSubject)
+    .resize(panelWidth, targetSubjectH, {
+      fit: 'inside',
+      withoutEnlargement: false
+    })
+    .png()
+    .toBuffer();
+
+  const scaledMeta = await sharp(scaledSubject).metadata();
+  const scaledW = scaledMeta.width || panelWidth;
+  const scaledH = scaledMeta.height || targetSubjectH;
+  const pasteLeft = Math.max(0, Math.floor((panelWidth - scaledW) / 2));
+  // Anchor feet to targetFootY so all 3 views stand on the same horizontal ground line.
+  const pasteTop = Math.max(0, targetFootY - scaledH);
+
+  return sharp({
+    create: {
+      width: panelWidth,
+      height: panelHeight,
+      channels: 3,
+      background: targetBg
+    }
+  })
+    .composite([{ input: scaledSubject, left: pasteLeft, top: pasteTop }])
+    .png()
+    .toBuffer();
+}
+
 /**
  * Stitch three full-body panels into one labeled turnaround sheet (left→right).
  */
@@ -401,13 +667,12 @@ export async function stitchTurnaroundSheet(
     const yLabel = offsetY + padding;
     const yImg = offsetY + padding + labelHeight;
 
-    const fitted = await sharp(panel.buffer)
-      .resize(panelWidth, panelHeight, {
-        fit: 'contain',
-        background: { r: 255, g: 255, b: 255, alpha: 1 }
-      })
-      .png()
-      .toBuffer();
+    const fitted = await normalizeAndAlignTurnaroundPanel(
+      panel.buffer,
+      panelWidth,
+      panelHeight,
+      background
+    );
 
     const labelSvg = Buffer.from(
       `<svg width="${panelWidth}" height="${labelHeight}" xmlns="http://www.w3.org/2000/svg">
@@ -636,14 +901,14 @@ export async function generateTurnaroundComposite(
       ? `${clientNeg}, ${built.negative_prompt}`
       : built.negative_prompt;
 
-    const useQwenRef = modelFamily === 'qwen_image';
-    const useKreaFrontRef = modelFamily === 'redcraft_krea2' && view.id === 'front' && Boolean(storedAvatarUrl);
+    const useVlmRef = modelFamily === 'qwen_image' || modelFamily === 'redcraft_krea2';
     const usePonyFrontAdapter = modelFamily === 'pony' && view.id === 'front' && Boolean(tierB.characterAdapter && storedAvatarUrl);
-    const panelRef = useQwenRef
+    const angleFrontPlate = !useVlmRef && view.id !== 'front' ? (frontPlateUrl || null) : null;
+    const panelRef = useVlmRef
       ? (view.id === 'front' ? (storedAvatarUrl || null) : (frontPlateUrl || storedAvatarUrl || null))
-      : (useKreaFrontRef || usePonyFrontAdapter)
+      : usePonyFrontAdapter
         ? storedAvatarUrl
-        : null;
+        : angleFrontPlate;
     if (panelRef && !comfyService.isRemote) {
       copyReferenceImageToComfy(
         { character_ref_url: panelRef, ref_image_url: panelRef },
@@ -658,7 +923,7 @@ export async function generateTurnaroundComposite(
         view,
         built.prompt,
         negative,
-        null,
+        angleFrontPlate,
         null
       ),
       turnaround_view: view.id,
@@ -666,7 +931,7 @@ export async function generateTurnaroundComposite(
         ? {
             character_ref_url: panelRef,
             ref_image_url: panelRef,
-            ...((useQwenRef || useKreaFrontRef) ? { use_qwen_vl_ref: true } : {}),
+            ...(useVlmRef ? { use_qwen_vl_ref: true } : {}),
           }
         : {}),
       ...(usePonyFrontAdapter
@@ -695,13 +960,15 @@ export async function generateTurnaroundComposite(
     );
 
     for (const node of Object.values(finalWorkflow) as any[]) {
-      if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
+      if ((node?.class_type === 'EmptyLatentImage' || node?.class_type === 'EmptySD3LatentImage') && node.inputs) {
         node.inputs.width = panelW;
         node.inputs.height = panelH;
         node.inputs.batch_size = 1;
       }
       if (node?.class_type?.includes('KSampler') && node.inputs) {
-        node.inputs.denoise = 1;
+        node.inputs.denoise = panelWorkflow.turnaround_from_front === true
+          ? TURNAROUND_ANGLE_DENOISE
+          : 1;
         if (modelFamily === 'redcraft_krea2' && !input.generationParams?.steps) {
           node.inputs.steps = Math.max(Number(node.inputs.steps) || 10, 16);
         }
@@ -838,13 +1105,15 @@ export async function generateTurnaroundComposite(
   };
 }
 
-/** Whether request should use 3-view composite path */
-export function shouldUseTurnaroundComposite(workflowData: any): boolean {
+/** Whether request should use 3-view composite path (decoupled via resolveTurnaroundStrategy) */
+export function shouldUseTurnaroundComposite(
+  workflowData: any,
+  options?: { imageProvider?: string | null }
+): boolean {
   const genType = String(workflowData?.gen_type || '').toLowerCase();
   if (genType !== 'turnaround') return false;
-  // Escape hatch for debugging single-shot multi-view
-  if (workflowData?.turnaround_mode === 'single' || workflowData?.turnaround_composite === false) {
-    return false;
-  }
-  return true;
+  return resolveTurnaroundStrategy({
+    imageProvider: options?.imageProvider,
+    workflowData,
+  }) === 'split_3_panel';
 }

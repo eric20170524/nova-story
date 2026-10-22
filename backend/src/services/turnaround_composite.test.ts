@@ -8,6 +8,7 @@ import {
   buildFaceLockCanvas,
   buildTurnaroundViewPrompt,
   buildTurnaroundPanelWorkflowData,
+  normalizeAndAlignTurnaroundPanel,
   stitchTurnaroundSheet,
   shouldUseTurnaroundComposite,
   TURNAROUND_VIEWS
@@ -305,6 +306,98 @@ test('turnaround strips soft hourglass, full breasts, delicate collarbones, and 
   const qwenNode = Object.values(compiled).find((n: any) => n?.class_type === 'TextEncodeQwenImage21') as any;
   assert.ok(qwenNode, 'Expected TextEncodeQwenImage21 node in compiled redcraft_krea2 front panel workflow');
   assert.ok(Array.isArray(qwenNode.inputs.image_1), 'Expected image_1 reference wired on TextEncodeQwenImage21');
+  const sd3Latent = Object.values(compiled).find((n: any) => n?.class_type === 'EmptySD3LatentImage') as any;
+  assert.equal(sd3Latent?.inputs?.width, 768);
+  assert.equal(sd3Latent?.inputs?.height, 1152);
 });
+
+test('prompt surgery preserves compound hair/garment descriptors, avoids face/chest tokens in back positive, handles blindfolds, and strips only handheld prop sub-phrases', () => {
+  const compoundPrompt =
+    'female, 22-24, collarbone-length black hair, chest-length twin tails, double-breasted trench coat, chest plate armor, off-shoulder cleavage sweater, holding a glowing lantern in her left hand while wearing long lace gloves, no face visible';
+  const back = buildTurnaroundViewPrompt(compoundPrompt, TURNAROUND_VIEWS[2]!, 'redcraft_krea2');
+  const side = buildTurnaroundViewPrompt(compoundPrompt, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
+
+  // Compound hair & garment descriptors survive without truncation or loss
+  assert.match(back.prompt, /shoulder-length black hair/);
+  assert.match(back.prompt, /mid-back length twin tails/);
+  assert.match(back.prompt, /tailored double-buttoned trench coat/);
+  assert.match(back.prompt, /torso plate armor/);
+  assert.match(back.prompt, /off-shoulder sweater/);
+  assert.match(side.prompt, /off-shoulder sweater/);
+
+  // Participial handheld prop stripped while trailing glove clause survives
+  assert.doesNotMatch(back.prompt, /glowing lantern|in her left hand/i);
+  assert.match(back.prompt, /wearing long lace gloves/);
+
+  // Back view positive prompt has zero 'face' or 'chest' tokens and includes dorsal anatomy anchors
+  assert.doesNotMatch(back.prompt, /\b(?:face|chest|breasts|cleavage)\b/i);
+  assert.match(back.prompt, /occiput and nape of neck/i);
+  assert.match(back.prompt, /shoulder blades/i);
+
+  // Blindfold / eyepatch characters do not force "one eye visible" in side view
+  const blindfoldPrompt = 'female, 24 years old, silver hair, black silk blindfold covering eyes, dark coat';
+  const blindfoldSide = buildTurnaroundViewPrompt(blindfoldPrompt, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
+  assert.doesNotMatch(blindfoldSide.prompt, /one eye is visible|exactly one eye visible/i);
+  assert.match(blindfoldSide.prompt, /black silk blindfold/i);
+});
+
+test('normalizeAndAlignTurnaroundPanel normalizes drifted backgrounds to #f5f5f5 and aligns subject head/foot baselines across views', async () => {
+  const createSyntheticCharacterPanel = async (
+    bg: { r: number; g: number; b: number },
+    charTopY: number,
+    charBottomY: number
+  ) => {
+    const w = 240;
+    const h = 360;
+    const raw = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 3;
+        const inChar = y >= charTopY && y <= charBottomY && x >= 80 && x <= 160;
+        raw[idx] = inChar ? 40 : bg.r;
+        raw[idx + 1] = inChar ? 55 : bg.g;
+        raw[idx + 2] = inChar ? 90 : bg.b;
+      }
+    }
+    return sharp(raw, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  };
+
+  // Three panels with drastically different vertical framing and background color drift
+  const frontRaw = await createSyntheticCharacterPanel({ r: 226, g: 226, b: 226 }, 12, 345); // 92% tall
+  const sideRaw = await createSyntheticCharacterPanel({ r: 248, g: 248, b: 245 }, 72, 288);  // 60% tall
+  const backRaw = await createSyntheticCharacterPanel({ r: 235, g: 232, b: 228 }, 40, 310);  // 75% tall
+
+  const measureAlignedBounds = async (panelBuf: Buffer) => {
+    const aligned = await normalizeAndAlignTurnaroundPanel(panelBuf, 256, 448, '#f5f5f5');
+    const { data, info } = await sharp(aligned).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    // Corner pixel should be normalized to #f5f5f5 (245, 245, 245)
+    assert.equal(data[0], 245);
+    assert.equal(data[1], 245);
+    assert.equal(data[2], 245);
+    let topY = -1;
+    let bottomY = -1;
+    for (let y = 0; y < info.height; y++) {
+      for (let x = 0; x < info.width; x++) {
+        const idx = (y * info.width + x) * 3;
+        if ((data[idx] ?? 245) < 150) {
+          if (topY === -1) topY = y;
+          bottomY = y;
+        }
+      }
+    }
+    return { topY, bottomY };
+  };
+
+  const bFront = await measureAlignedBounds(frontRaw);
+  const bSide = await measureAlignedBounds(sideRaw);
+  const bBack = await measureAlignedBounds(backRaw);
+
+  // All 3 panels now share the same foot baseline and aligned head height (within 2px rounding)
+  assert.ok(Math.abs(bFront.bottomY - bSide.bottomY) <= 2);
+  assert.ok(Math.abs(bFront.bottomY - bBack.bottomY) <= 2);
+  assert.ok(Math.abs(bFront.topY - bSide.topY) <= 2);
+  assert.ok(Math.abs(bFront.topY - bBack.topY) <= 2);
+});
+
 
 

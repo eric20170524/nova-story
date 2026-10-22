@@ -24,6 +24,7 @@ import {
   syncEditableCharacterDesign,
 } from '../services/image_generation_policy';
 import { PortraitPlateError, readPortraitPlate } from '../services/portrait_plate';
+import { resolveTurnaroundStrategy } from '../services/image_output_spec';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from '../services/project_settings';
 import {
   activateCharacterVersion,
@@ -482,7 +483,13 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const assets = tags?.assets || {};
     const storedAvatar = assets?.avatar_url || tags?.avatar_url || dbChar.avatar_url || null;
     const refUrl = req.use_ref_portrait === true ? (req.ref_image_url || storedAvatar || null) : null;
-    const codexImage = SettingsManager.loadSettings().image_provider === 'codex';
+    const systemSettings = SettingsManager.loadSettings();
+    const turnaroundStrategy = resolveTurnaroundStrategy({
+      imageProvider: systemSettings.image_provider,
+      workflowData: req,
+    });
+    const singleSheetTurnaround = turnaroundStrategy === 'single_sheet';
+    const codexImage = systemSettings.image_provider === 'codex';
 
     const project = await db.get('SELECT settings FROM project WHERE id = ?', dbChar.project_id);
     const projectSettings = parseProjectSettings(project?.settings);
@@ -562,8 +569,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (req.gen_type === "turnaround") {
-      // ComfyUI composes three panels; the built-in image tool draws the sheet in one generation.
-      prompt = codexImage
+      // Split-3-panel composes three panels; single_sheet strategy draws the sheet in one generation.
+      prompt = singleSheetTurnaround
         ? `${header.prefix}. Three equal full-body panels side by side: front view, left profile, back view. Neutral standing pose, feet visible, plain studio background, no labels, no letters, no watermark.${refUrl ? ' Match the supplied portrait for identity.' : ''}`
         : `${header.prefix}, full body, standing, character reference${refHint}`;
     } else {
@@ -596,9 +603,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       ref_image_url: activeRefUrl,
       character_ref_url: activeRefUrl,
       turnaround_front_adapter: req.gen_type === 'turnaround' ? Boolean(activeRefUrl) : undefined,
+      turnaround_strategy: req.gen_type === 'turnaround' ? turnaroundStrategy : undefined,
       // Document composite pipeline for clients
       turnaround_pipeline: req.gen_type === 'turnaround'
-        ? codexImage ? 'codex_single_sheet' : 'three_views_stitch'
+        ? singleSheetTurnaround ? 'codex_single_sheet' : 'three_views_stitch'
         : undefined,
       ...(req.gen_type === 'turnaround' && req.turnaround_views?.length
         ? { turnaround_views: req.turnaround_views }

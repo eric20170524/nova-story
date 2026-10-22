@@ -3,6 +3,8 @@ import sharp from 'sharp';
 export type ImageAspectRatio = '16:9' | '9:16' | '1:1' | 'auto';
 export type ImageResolution = 'draft' | 'standard' | 'high';
 export type ImageOrientationPolicy = 'fixed' | 'auto_by_shot';
+export type TurnaroundStrategy = 'single_sheet' | 'split_3_panel';
+export type InternalPanelAspectRatio = '2:3';
 
 export interface ImageOutputSpec {
   aspect_ratio: ImageAspectRatio;
@@ -14,6 +16,10 @@ export interface ImageOutputTarget extends ImageOutputSpec {
   width: number;
   height: number;
   resolved_aspect_ratio: Exclude<ImageAspectRatio, 'auto'>;
+  /** Explicit 2:3 native latent geometry for vertical portrait / turnaround panels (768x1152 or 512x768). */
+  panel_aspect_ratio?: InternalPanelAspectRatio;
+  /** Strategy used when rendering turnaround sheets, decoupled from concrete provider names. */
+  turnaround_strategy?: TurnaroundStrategy;
   image_size: '512' | '1K' | '2K';
   source: 'request_dimensions' | 'request' | 'project' | 'mode' | 'generation_type' | 'default';
 }
@@ -122,9 +128,33 @@ const dimensionsFor = (
 const imageSizeFor = (resolution: ImageResolution): ImageOutputTarget['image_size'] =>
   resolution === 'draft' ? '512' : resolution === 'high' ? '2K' : '1K';
 
-/** Internal full-body panel. The stitched sheet is 16:9; these pixels are not a delivery ratio. */
+/** Internal 2:3 full-body panel (768x1152 or 512x768). The stitched sheet is delivered at 16:9. */
 export const turnaroundPanelDimensions = (modelFamily: string): { width: number; height: number } =>
   modelFamily === 'sd15' ? { width: 512, height: 768 } : { width: 768, height: 1152 };
+
+/**
+ * Capability-driven turnaround execution strategy.
+ * Single-sheet VLM/API providers (such as codex) or explicit single-mode requests
+ * emit one composite sheet directly; local ComfyUI models use 3-panel split generation + stitch.
+ */
+export const resolveTurnaroundStrategy = (options?: {
+  imageProvider?: string | null;
+  workflowData?: Record<string, unknown> | null;
+}): TurnaroundStrategy => {
+  const wf = options?.workflowData || {};
+  const explicitStrategy = String(wf.turnaround_strategy || '').toLowerCase().trim();
+  if (explicitStrategy === 'single_sheet' || explicitStrategy === 'split_3_panel') {
+    return explicitStrategy;
+  }
+  if (wf.turnaround_mode === 'single' || wf.turnaround_composite === false) {
+    return 'single_sheet';
+  }
+  const provider = String(options?.imageProvider ?? wf.image_provider ?? '').toLowerCase().trim();
+  if (provider === 'codex') {
+    return 'single_sheet';
+  }
+  return 'split_3_panel';
+};
 
 export const resolveImageOutputTarget = (options: {
   workflowData?: any;
@@ -132,6 +162,7 @@ export const resolveImageOutputTarget = (options: {
   mode?: string;
   modelFamily?: string;
   finalPrompt?: string;
+  imageProvider?: string | null;
 }): ImageOutputTarget => {
   const workflowData = options.workflowData || {};
   const generationParams = options.generationParams || {};
@@ -162,6 +193,7 @@ export const resolveImageOutputTarget = (options: {
       ...DEFAULT_IMAGE_OUTPUT_SPEC,
       aspect_ratio: '9:16',
       resolved_aspect_ratio: '9:16',
+      panel_aspect_ratio: '2:3',
       ...turnaroundPanelDimensions(modelFamily),
       image_size: '1K',
       source: 'generation_type',
@@ -186,25 +218,30 @@ export const resolveImageOutputTarget = (options: {
     };
   }
 
-  // 定妆 is a vertical face plate. The project 16:9 storyboard canvas does not apply.
+  // 定妆 is a vertical 2:3 face plate. The project 16:9 storyboard canvas does not apply.
   if (genType === 'portrait' && !requestHasSpec) {
     return {
       ...DEFAULT_IMAGE_OUTPUT_SPEC,
       aspect_ratio: '9:16',
       resolved_aspect_ratio: '9:16',
+      panel_aspect_ratio: '2:3',
       ...turnaroundPanelDimensions(modelFamily),
       image_size: '1K',
       source: 'generation_type',
     };
   }
 
-  // A turnaround sheet is assembled from three panels by its compositor.
+  // A turnaround sheet is delivered at 16:9 (either split_3_panel stitched or single_sheet).
   if (genType === 'turnaround' && !requestHasSpec) {
     const dimensions = dimensionsFor(modelFamily, 'standard', '16:9');
     return {
       ...DEFAULT_IMAGE_OUTPUT_SPEC,
       aspect_ratio: '16:9',
       resolved_aspect_ratio: '16:9',
+      turnaround_strategy: resolveTurnaroundStrategy({
+        imageProvider: options.imageProvider,
+        workflowData,
+      }),
       ...dimensions,
       image_size: '1K',
       source: 'generation_type',

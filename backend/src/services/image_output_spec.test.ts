@@ -6,6 +6,7 @@ import {
   normalizeGeneratedImage,
   resolveComfyLatentDimensions,
   resolveImageOutputTarget,
+  resolveTurnaroundStrategy,
 } from './image_output_spec';
 
 test('defaults storyboard scenes to a fixed 16:9 standard canvas', () => {
@@ -182,6 +183,7 @@ test('cinematic grid and turnaround expose only supported output ratios', () => 
   });
   assert.equal(panel.width, 768);
   assert.equal(panel.height, 1152);
+  assert.equal(panel.panel_aspect_ratio, '2:3');
   assert.equal(panel.source, 'generation_type');
   const sd15 = resolveImageOutputTarget({
     workflowData: { gen_type: 'turnaround_panel' },
@@ -189,6 +191,7 @@ test('cinematic grid and turnaround expose only supported output ratios', () => 
   });
   assert.equal(sd15.width, 512);
   assert.equal(sd15.height, 768);
+  assert.equal(sd15.panel_aspect_ratio, '2:3');
   const portrait = resolveImageOutputTarget({
     workflowData: {
       gen_type: 'portrait',
@@ -198,7 +201,19 @@ test('cinematic grid and turnaround expose only supported output ratios', () => 
   });
   assert.equal(portrait.width, 768);
   assert.equal(portrait.height, 1152);
+  assert.equal(portrait.panel_aspect_ratio, '2:3');
   assert.equal(portrait.source, 'generation_type');
+
+  assert.equal(resolveTurnaroundStrategy({ imageProvider: 'comfyui' }), 'split_3_panel');
+  assert.equal(resolveTurnaroundStrategy({ imageProvider: 'codex' }), 'single_sheet');
+  assert.equal(
+    resolveTurnaroundStrategy({ imageProvider: 'comfyui', workflowData: { turnaround_mode: 'single' } }),
+    'single_sheet'
+  );
+  assert.equal(
+    resolveTurnaroundStrategy({ imageProvider: 'codex', workflowData: { turnaround_strategy: 'split_3_panel' } }),
+    'split_3_panel'
+  );
 });
 
 test('wide and vertical presets use exact ratios for both model families', () => {

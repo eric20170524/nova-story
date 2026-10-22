@@ -793,7 +793,7 @@ export const compileComfyWorkflow = async (
     );
 
     for (const node of Object.values(workflow) as any[]) {
-        if (node?.class_type === 'EmptyLatentImage' && node.inputs) {
+        if ((node?.class_type === 'EmptyLatentImage' || node?.class_type === 'EmptySD3LatentImage') && node.inputs) {
             node.inputs.width = width;
             node.inputs.height = height;
             node.inputs.batch_size = 1;
@@ -1068,8 +1068,9 @@ export class GenerationService {
             const { shouldUseTurnaroundComposite, generateTurnaroundComposite } = await import(
                 './turnaround_composite'
             );
-            if (!productionPin && shouldUseTurnaroundComposite(workflowData) && SettingsManager.loadSettings().image_provider !== 'codex') {
-                const settings = SettingsManager.loadSettings();
+            const currentSettings = SettingsManager.loadSettings();
+            if (!productionPin && shouldUseTurnaroundComposite(workflowData, { imageProvider: currentSettings.image_provider })) {
+                const settings = currentSettings;
                 if (!settings.comfyui?.enabled) {
                     throw new Error('Turnaround composite requires ComfyUI enabled');
                 }
