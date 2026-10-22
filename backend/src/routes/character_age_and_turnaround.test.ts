@@ -153,6 +153,10 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     assert.equal(turnaroundData.character_ref_url, '/static/generated/projects/1/characters/1/v1/portrait.png');
     assert.equal(turnaroundData.turnaround_front_adapter, true);
     assert.match(turnaroundData.prompt, /matching reference character design|Match the supplied portrait for identity/i);
+    assert.match(turnaroundData.prompt, /direct orthographic front view/i);
+    assert.match(turnaroundData.prompt, /solid pure white opaque studio background, completely opaque, no transparency, no checkerboard/i);
+    assert.doesNotMatch(turnaroundData.prompt, /side view|back view|left profile|Three equal full-body panels/i);
+    assert.match(turnaroundData.negative_prompt, /side view, profile, back view, from behind/i);
 
     // 6. Test LLM extraction prompt & schema for age dimension
     const extractPrompt = Prompts.extractCharacterProfiles('测试内容');
@@ -227,6 +231,22 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     });
     assert.equal(bareTurn.statusCode, 400);
     assert.match(JSON.parse(bareTurn.payload).detail, /还没有通过的定妆/);
+
+    // Unsaved session portrait passed via ref_image_url satisfies portrait plate check even when DB avatar_url is empty
+    const bareWithSessionRef = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${bareId}/build-prompt`,
+      payload: {
+        gen_type: 'turnaround',
+        use_ref_portrait: true,
+        ref_image_url: portraitUrl,
+      },
+    });
+    assert.equal(bareWithSessionRef.statusCode, 200);
+    const bareWithSessionBody = JSON.parse(bareWithSessionRef.payload);
+    assert.equal(bareWithSessionBody.ref_image_url, portraitUrl);
+    assert.equal(bareWithSessionBody.character_ref_url, portraitUrl);
+    assert.equal(bareWithSessionBody.turnaround_front_adapter, true);
 
     await db.run(
       'UPDATE project SET settings = ? WHERE id = 1',
@@ -378,12 +398,11 @@ test('age survives an ageless extract and a version switch, and empty shots skip
     assert.equal(columnShot.characters[0]?.appearance.age, '30岁');
 
     const lock = `${ORIENTAL_REALISTIC_FACE_LOCK}, long black hair, moon-white dress`;
-    const back = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[2]!, 'pony');
-    assert.doesNotMatch(back.prompt, /East Asian facial features/i);
-    const side = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[1]!, 'pony');
-    assert.match(side.prompt, /East Asian facial features/i);
+    assert.equal(TURNAROUND_VIEWS.length, 1);
+    assert.equal(TURNAROUND_VIEWS[0]?.id, 'front');
     const front = buildTurnaroundViewPrompt(lock, TURNAROUND_VIEWS[0]!, 'pony');
     assert.match(front.prompt, /East Asian facial features/i);
+    assert.match(front.prompt, /direct front view/i);
     assert.equal(shotUsesOrientalFaceNegative({ gen_type: 'scene', shot_spec: { visible_subjects: [] } }), false);
     assert.equal(shotUsesOrientalFaceNegative({ gen_type: 'scene', shot_spec: { visible_subjects: ['林岚'] } }), true);
     assert.equal(shotUsesOrientalFaceNegative({ gen_type: 'portrait' }), true);

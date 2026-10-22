@@ -18,6 +18,8 @@ export type PonyContract = {
   key_props?: string[] | null;
   subject_scale?: string | null;
   must_not?: string[] | null;
+  visual_facts?: unknown;
+  continuity_states?: unknown;
 };
 
 export type CharacterLockRef = {

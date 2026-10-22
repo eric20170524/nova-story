@@ -986,7 +986,7 @@ export const buildPromptEnhancement = (options: {
   styleStrength?: number | null;
   /** Storyboard shots that actually show a person, even on a wide camera. */
   hasVisiblePerson?: boolean | null;
-  /** Turnaround panel angle ('front' | 'side' | 'back') to suppress face/eye boosters on rear views. */
+  /** Turnaround panel angle ('front') for full-body front reference plates. */
   turnaroundView?: string | null;
 }): PromptEnhancement => {
   const {
@@ -1001,11 +1001,8 @@ export const buildPromptEnhancement = (options: {
     subjectType = null,
     styleStrength = null,
     hasVisiblePerson = null,
-    turnaroundView = null,
   } = options;
   const naturalLanguage = modelFamily === 'flux' || modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image';
-  const isTurnaroundBack = String(turnaroundView || '').toLowerCase().trim() === 'back';
-  const isTurnaroundSide = String(turnaroundView || '').toLowerCase().trim() === 'side';
   const isTurnaroundPanel = String(genType || '').toLowerCase().trim() === 'turnaround_panel';
   const isTurnaround = isTurnaroundPanel || String(genType || '').toLowerCase().trim() === 'turnaround';
   const lower = existingPrompt.toLowerCase();
@@ -1114,9 +1111,7 @@ export const buildPromptEnhancement = (options: {
   // Never invent a female human subject. Beauty anchors are legal only when the
   // prompt or structured request explicitly says the subject is female.
   if (isExplicitFemale && !isEnvironment && !keepWrittenParagraph && !isLibraryPlate) {
-    if (isTurnaroundBack) {
-      suffixParts.push('adult East Asian woman, female, feminine silhouette');
-    } else if (isActionLike || isTurnaroundSide) {
+    if (isActionLike) {
       // Identity only — no heavy frontal beauty-portrait stack
       if (modelFamily === 'pony' || modelFamily === 'sd15') {
         if (!/(east asian|chinese beauty)/i.test(existingPrompt)) {
@@ -1260,9 +1255,7 @@ export const buildPromptEnhancement = (options: {
     if (lighting) suffixParts.push(lighting);
   } else if (presetKey === 'oriental_realistic') {
     if (orientalPerson) {
-      if (isTurnaroundBack) {
-        suffixParts.push('oriental realistic style, photorealistic, natural porcelain skin texture, subsurface scattering, realistic human anatomy');
-      } else if (!/oriental realistic style/i.test(lower)) {
+      if (!/oriental realistic style/i.test(lower)) {
         const lock = (modelFamily === 'pony' || modelFamily === 'sd15')
           ? (STYLE_PRESET_BOOSTERS.oriental_realistic?.pony ?? ORIENTAL_REALISTIC_FACE_LOCK)
           : ORIENTAL_REALISTIC_FACE_LOCK;
@@ -1274,14 +1267,7 @@ export const buildPromptEnhancement = (options: {
     }
   } else if (booster) {
     // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
-    let boost = naturalLanguage ? booster.flux : booster.pony;
-    if (isTurnaroundBack) {
-      boost = boost
-        .split(',')
-        .map((part) => part.trim())
-        .filter((part) => part && !/\b(face|facial|eyes?|eyelids?)\b/i.test(part))
-        .join(', ');
-    }
+    const boost = naturalLanguage ? booster.flux : booster.pony;
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
     const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
     if (!already && boost) {
@@ -1299,11 +1285,9 @@ export const buildPromptEnhancement = (options: {
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
     suffixParts.push(
-      isTurnaroundBack
-        ? (naturalLanguage ? 'ancient Chinese fantasy atmosphere' : 'ancient chinese fantasy, guofeng')
-        : naturalLanguage
-          ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
-          : 'East Asian features, ancient chinese fantasy, guofeng'
+      naturalLanguage
+        ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
+        : 'East Asian features, ancient chinese fantasy, guofeng'
     ); // pony + sd15
   }
 
@@ -1916,7 +1900,7 @@ export const buildCharacterPromptHeader = (
   }
   const storedGender = gender === 'female' || gender === 'male' ? gender : 'unspecified';
   const layout = genType === 'turnaround'
-    ? 'full body character design, consistent character identity, plain studio background'
+    ? 'full body character design, direct orthographic front view, head to toe, neutral standing A-pose, entire figure and feet visible, unobstructed silhouette, consistent character identity, solid pure white opaque studio background, completely opaque, no transparency, no checkerboard, plain studio background'
     : 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background';
   const look = [
     appearance?.age,
@@ -1932,7 +1916,7 @@ export const buildCharacterPromptHeader = (
     .filter(Boolean)
     .join(', ');
   const angleNegative = genType === 'turnaround'
-    ? ''
+    ? ', side view, profile, back view, from behind, three-quarter view, turnaround sheet, multiple views, split panel, expression matrix, pose study, detail inset, before and after comparison, close-up, medium shot, cowboy shot, waist-up, knee-up, bust shot, upper body only, cropped legs, cropped feet, portrait crop, transparent background, checkerboard background'
     : ', side view, profile, back view, from behind, holding a mirror, holding a sword, holding a flower, handheld prop';
   return {
     prefix,

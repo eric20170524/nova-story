@@ -76,8 +76,6 @@
 | | `DELETE /characters/{id}` | 删除角色 |
 | | `POST /characters/extract` | 从章节提取角色并分析角色演化 |
 | | `POST /characters/{id}/build-prompt` | 构建角色生图提示词（`model_type`: `pony` \| `sd15`） |
-| | `POST /characters/{id}/crop-face` | 从角色素材裁剪头像 |
-| | `POST /characters/{id}/train-lora` | 登记角色 LoRA 资产 |
 | | `POST /characters/upload-image` | 上传角色图片 |
 | | `POST /characters/{id}/upload-asset` | 上传并绑定角色资产 |
 | | `GET /characters/{id}/versions` | 角色视觉版本列表 |

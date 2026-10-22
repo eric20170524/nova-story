@@ -947,9 +947,12 @@ test('character sheet header uses stored gender, age, and upper-body front portr
     clothing: 'crimson robe',
   });
   assert.match(turnaround.prefix, /full body character design|consistent character identity/i);
+  assert.match(turnaround.prefix, /direct orthographic front view/i);
+  assert.match(turnaround.prefix, /solid pure white opaque studio background, completely opaque, no transparency, no checkerboard/i);
   assert.match(turnaround.prefix, /\bfemale\b/);
   assert.match(turnaround.prefix, /24-26 years old/);
   assert.match(turnaround.prefix, /crimson robe/);
+  assert.match(turnaround.negative, /side view, profile, back view, from behind/i);
   assert.doesNotMatch(turnaround.prefix, /1girl|East Asian|fully clothed|empty hands/i);
   assert.doesNotMatch(turnaround.negative, /nsfw|nude|holding a mirror/i);
 

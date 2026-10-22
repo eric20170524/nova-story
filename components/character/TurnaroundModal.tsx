@@ -27,8 +27,6 @@ interface TurnaroundModalProps {
   onGenerateSheetImage: () => void;
   onSaveAssetToCharacter: (assetType: 'avatar' | 'turnaround', opts?: { newVersion?: boolean }) => void;
   onUploadPortrait: (file: File) => Promise<void>;
-  turnaroundViews?: 'all' | 'front' | 'side' | 'back';
-  setTurnaroundViews?: (value: 'all' | 'front' | 'side' | 'back') => void;
   wardrobeVariant?: string;
   setWardrobeVariant?: (value: string) => void;
 }
@@ -56,8 +54,6 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
   onGenerateSheetImage,
   onSaveAssetToCharacter,
   onUploadPortrait,
-  turnaroundViews = 'all',
-  setTurnaroundViews,
   wardrobeVariant = '',
   setWardrobeVariant,
 }) => {
@@ -187,10 +183,10 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-0.5">
-                    {useRefPortrait ? (genType === 'turnaround' ? '侧视和背视跟随本次正面全身图' : t('characters.ref_portrait_active')) : t("casting.ref_portrait_inactive")}
+                    {useRefPortrait ? (genType === 'turnaround' ? '全身正面图跟随定妆照身份参考' : t('characters.ref_portrait_active')) : t("casting.ref_portrait_inactive")}
                   </p>
                   <p className="text-[11px] text-slate-600 dark:text-slate-400 truncate font-medium">
-                    {character.name} - {genType === 'turnaround' ? '正面单独生成，侧视和背视以正面为底图' : t("casting.ref_portrait_feature")}
+                    {character.name} - {genType === 'turnaround' ? '以定妆照作为身份参考，生成单张纯净正面全身设定图' : t("casting.ref_portrait_feature")}
                   </p>
                   <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">
                     {t('characters.ref_tier_a_hint')}
@@ -220,32 +216,8 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
 
           {genType === 'turnaround' && (
             <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-3">
-              <label className="block text-xs uppercase font-bold tracking-wider text-slate-500 dark:text-slate-400">
-                重出范围
-              </label>
-              <div className="flex gap-2">
-                {([
-                  ['all', '正侧背'],
-                  ['front', '只重出正面'],
-                  ['side', '只重出侧面'],
-                  ['back', '只重出背面'],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setTurnaroundViews?.(value)}
-                    className={`flex-1 py-2 px-2 rounded-xl text-xs font-semibold border transition-all ${
-                      turnaroundViews === value
-                        ? 'bg-indigo-50 dark:bg-indigo-600/30 border-indigo-300 dark:border-indigo-500 text-indigo-700 dark:text-indigo-200'
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
               <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
-                变体衣着（留空则写入常服三视图）
+                变体衣着（留空则写入常服正面全身图）
                 <input
                   value={wardrobeVariant}
                   onChange={(event) => setWardrobeVariant?.(event.target.value)}
@@ -262,32 +234,32 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
               <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-1">{t('characters.quick_tags_label')}:</span>
               <button
                 type="button"
-                onClick={() => setPrompt((p) => (p ? `${p}, front view, side view, back view` : 'front view, side view, back view'))}
+                onClick={() => setPrompt((p) => (p ? `${p}, full body, direct front view, head to toe` : 'full body, direct front view, head to toe'))}
                 className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/50 rounded-lg text-[11px] font-mono transition-all font-medium"
               >
-                {t("casting.angle_full")}
+                {t("casting.angle_full", "正面全身正交")}
               </button>
               <button
                 type="button"
                 onClick={() =>
                   setPrompt((p) =>
-                    p ? `${p}, full body model sheet, 3 views turnaround sheet` : 'full body model sheet, 3 views turnaround sheet'
+                    p ? `${p}, neutral standing A-pose, hands and feet visible` : 'neutral standing A-pose, hands and feet visible'
                   )
                 }
                 className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/80 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/50 rounded-lg text-[11px] font-mono transition-all font-medium"
               >
-                {t("casting.angle_grid")}
+                {t("casting.angle_grid", "标准站姿 A-Pose")}
               </button>
               <button
                 type="button"
-                onClick={() => setPrompt((p) => (p ? `${p}, solid white background, clean simple background` : 'solid white background, clean simple background'))}
+                onClick={() => setPrompt((p) => (p ? `${p}, solid pure white opaque studio background` : 'solid pure white opaque studio background'))}
                 className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-mono transition-all font-medium"
               >
                 {t("casting.white_bg")}
               </button>
               <button
                 type="button"
-                onClick={() => setPrompt((p) => (p ? `${p}, consistent character design across all views` : 'consistent character design across all views'))}
+                onClick={() => setPrompt((p) => (p ? `${p}, consistent character identity and outfit` : 'consistent character identity and outfit'))}
                 className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/80 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 rounded-lg text-[11px] font-mono transition-all font-medium"
               >
                 {t("casting.consistent_outfit")}

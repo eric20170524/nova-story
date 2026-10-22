@@ -40,8 +40,6 @@ test('CharacterCard renders voice label when set', () => {
         onEdit={() => {}}
         onDelete={() => {}}
         onOpenSheetModal={() => {}}
-        onCropFace={() => {}}
-        onTrainLora={() => {}}
         onUploadAsset={() => {}}
         onSwitchVersion={() => {}}
         onCreateVersion={() => {}}
@@ -66,8 +64,6 @@ test('CharacterCard renders unassigned voice fallback when empty', () => {
         onEdit={() => {}}
         onDelete={() => {}}
         onOpenSheetModal={() => {}}
-        onCropFace={() => {}}
-        onTrainLora={() => {}}
         onUploadAsset={() => {}}
         onSwitchVersion={() => {}}
         onCreateVersion={() => {}}

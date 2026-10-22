@@ -45,12 +45,6 @@ test('img2img policy: front panel is txt2img and angle panels follow the front p
   assert.equal(angle.useImg2Img, true);
   assert.equal(angle.denoise, TURNAROUND_ANGLE_DENOISE);
   assert.equal(angle.reason, 'turnaround_from_front');
-  const faceLock = resolveReferenceImg2ImgPolicy({
-    gen_type: 'turnaround_panel',
-    turnaround_face_lock: true,
-  }, '');
-  assert.equal(faceLock.useImg2Img, false);
-  assert.equal(faceLock.reason, 'turnaround_face_lock');
 
   const plan = planReferenceGeneration(
     {

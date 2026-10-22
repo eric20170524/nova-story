@@ -31,8 +31,6 @@ test('full application exposes parity routes and API documentation', async () =>
       ['put', '/api/characters/{id}'],
       ['delete', '/api/characters/{id}'],
       ['post', '/api/characters/{id}/build-prompt'],
-      ['post', '/api/characters/{id}/crop-face'],
-      ['post', '/api/characters/{id}/train-lora'],
       ['post', '/api/characters/upload-image'],
       ['post', '/api/characters/{id}/upload-asset'],
       ['post', '/api/scenes/{scene_id}/coverage'],
@@ -73,7 +71,7 @@ test('full application exposes parity routes and API documentation', async () =>
       ['get', '/api/tts/voices'],
       ['post', '/api/tts/preview']
     ];
-    assert.equal(mainBaselineOperations.length, 54);
+    assert.equal(mainBaselineOperations.length, 52);
     for (const [method, routePath] of mainBaselineOperations) {
       assert.ok(
         document.paths[routePath]?.[method],

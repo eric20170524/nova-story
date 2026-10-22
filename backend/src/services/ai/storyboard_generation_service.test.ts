@@ -117,9 +117,9 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
   await t.test('完整的朝向地名不再交给模型否定', async () => {
     let called = 0;
     const provider = {
-      async generateStructured() { called += 1; return { faithful: false }; },
-      async generateText() { throw new Error('no text'); },
-      async generateImage() { throw new Error('no image'); },
+      async generateStructured<T>(): Promise<T> { called += 1; return { faithful: false } as unknown as T; },
+      async generateText(): Promise<string> { throw new Error('no text'); },
+      async generateImage(): Promise<never> { throw new Error('no image'); },
     };
     await auditFacts(provider, [{ id: 'f', text: '朝清暮宫的方向走来，' }], 'Walk towards the direction of Qingmu Palace.');
     assert.equal(called, 0);

@@ -289,8 +289,6 @@ class ApiService {
         } 
       }
     );
-  cropCharacterFace = (characterId: number) => this.request<any>(`/characters/${characterId}/crop-face`, { method: 'POST' });
-  trainCharacterLora = (characterId: number) => this.request<any>(`/characters/${characterId}/train-lora`, { method: 'POST' });
 
   uploadCharacterAsset = (characterId: number, assetType: 'avatar' | 'turnaround' | 'face', file: File) => {
     const formData = new FormData();

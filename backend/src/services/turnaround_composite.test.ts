@@ -5,16 +5,13 @@ import {
   canonicalTurnaroundPrompt,
   mergeTurnaroundAssets,
   parseTurnaroundViews,
-  buildFaceLockCanvas,
+  resolveTurnaroundIdentityReference,
   buildTurnaroundViewPrompt,
   buildTurnaroundPanelWorkflowData,
-  normalizeAndAlignTurnaroundPanel,
-  stitchTurnaroundSheet,
   shouldUseTurnaroundComposite,
   TURNAROUND_VIEWS
 } from './turnaround_composite';
 import { compileComfyWorkflow } from './generation_service';
-import sharp from 'sharp';
 
 test('extractAppearanceBase strips multi-view sheet jargon', () => {
   const raw =
@@ -26,7 +23,10 @@ test('extractAppearanceBase strips multi-view sheet jargon', () => {
   assert.match(cleaned, /moon-white dress/);
 });
 
-test('turnaround prompt keeps clothing state and removes scene mood', () => {
+test('turnaround prompt keeps clothing state and removes scene mood for front view', () => {
+  assert.equal(TURNAROUND_VIEWS.length, 1);
+  assert.equal(TURNAROUND_VIEWS[0]?.id, 'front');
+
   const cleaned = extractAppearanceBase(
     'long black hair, ice-blue eyes, melting expression, half-open inner robe, moon-white xianxia dress, enchanted mirror'
   );
@@ -35,12 +35,13 @@ test('turnaround prompt keeps clothing state and removes scene mood', () => {
   assert.match(cleaned, /half-open inner robe/);
   assert.doesNotMatch(cleaned, /melting/i);
   assert.match(cleaned, /enchanted mirror/);
-  const side = buildTurnaroundViewPrompt(cleaned, TURNAROUND_VIEWS[1]!, 'pony');
-  assert.match(side.prompt, /half-open inner robe/);
-  assert.match(side.prompt, /neutral expression|A-pose/i);
-  assert.match(side.prompt, /90 degree left side profile/i);
-  assert.doesNotMatch(side.prompt, /1girl|fully fastened|fully clothed/i);
-  assert.doesNotMatch(side.prompt, /character reference sheet|character design sheet panel/i);
+  const front = buildTurnaroundViewPrompt(cleaned, TURNAROUND_VIEWS[0]!, 'pony');
+  assert.match(front.prompt, /half-open inner robe/);
+  assert.match(front.prompt, /neutral expression|A-pose/i);
+  assert.match(front.prompt, /direct front view/i);
+  assert.match(front.prompt, /solid pure white opaque studio background/i);
+  assert.doesNotMatch(front.prompt, /1girl|fully fastened|fully clothed/i);
+  assert.doesNotMatch(front.prompt, /character reference sheet|character design sheet panel/i);
 });
 
 test('canonical turnaround drops scene wardrobe and a variant keeps its own clothing', () => {
@@ -54,33 +55,54 @@ test('canonical turnaround drops scene wardrobe and a variant keeps its own clot
   assert.match(extractAppearanceBase(prompt), /half-open inner robe/);
 });
 
-test('a side-only regen keeps the stored front plate and a variant stays off the canonical urls', () => {
-  assert.deepEqual(parseTurnaroundViews({}), ['front', 'side', 'back']);
-  assert.deepEqual(parseTurnaroundViews({ turnaround_views: 'all' }), ['front', 'side', 'back']);
-  assert.deepEqual(parseTurnaroundViews({ turnaround_views: ['side'] }), ['side']);
-  assert.throws(() => parseTurnaroundViews({ turnaround_views: ['top'] }), /只能指定/);
-  assert.throws(() => parseTurnaroundViews({ turnaround_views: [] }), /必须指定/);
+test('parseTurnaroundViews only allows front view and mergeTurnaroundAssets stores front plate and variant urls', () => {
+  assert.deepEqual(parseTurnaroundViews({}), ['front']);
+  assert.deepEqual(parseTurnaroundViews({ turnaround_views: 'all' }), ['front']);
+  assert.deepEqual(parseTurnaroundViews({ turnaround_views: ['front'] }), ['front']);
+  assert.deepEqual(parseTurnaroundViews({ turnaround_views: ['front', 'side', 'back'] }), ['front']);
+  assert.throws(() => parseTurnaroundViews({ turnaround_views: ['side'] }), /只支持生成正面/);
+  assert.throws(() => parseTurnaroundViews({ turnaround_views: ['back'] }), /只支持生成正面/);
+  assert.throws(() => parseTurnaroundViews({ turnaround_views: [] }), /必须指定正面/);
 
-  const tags = { assets: { avatar_url: '/face.png', turnaround_front_url: '/front.png', turnaround_url: '/sheet.png' } };
-  const sideOnly = mergeTurnaroundAssets(tags, { side: '/side.png' }, '/sheet2.png');
-  assert.equal(sideOnly.assets.turnaround_front_url, '/front.png');
-  assert.equal(sideOnly.assets.turnaround_side_url, '/side.png');
-  assert.equal(sideOnly.assets.turnaround_url, '/sheet2.png');
-  assert.equal(sideOnly.assets.avatar_url, '/face.png');
+  const tags = {
+    assets: {
+      avatar_url: '/face.png',
+      turnaround_front_url: '/front.png',
+      turnaround_side_url: '/legacy-side.png',
+      turnaround_back_url: '/legacy-back.png',
+      turnaround_url: '/front.png',
+      turnaround_variants: {
+        'inner robe lowered to the waist': {
+          front_url: '/old-vfront.png',
+          side_url: '/legacy-vside.png',
+          back_url: '/legacy-vback.png',
+          sheet_url: '/old-vsheet.png',
+        },
+      },
+    },
+  };
+  const frontUpdated = mergeTurnaroundAssets(tags, { front: '/front2.png' }, '/front2.png');
+  assert.equal(frontUpdated.assets.turnaround_front_url, '/front2.png');
+  assert.equal(frontUpdated.assets.turnaround_url, '/front2.png');
+  assert.equal(frontUpdated.assets.turnaround_side_url, undefined);
+  assert.equal(frontUpdated.assets.turnaround_back_url, undefined);
+  assert.equal(frontUpdated.assets.avatar_url, '/face.png');
 
   const variant = mergeTurnaroundAssets(
     tags,
-    { front: '/vfront.png', side: '/vside.png', back: '/vback.png' },
-    '/vsheet.png',
+    { front: '/vfront.png' },
+    '/vfront.png',
     { wardrobeVariant: 'inner robe lowered to the waist' },
   );
   assert.equal(variant.assets.turnaround_front_url, '/front.png');
-  assert.equal(variant.assets.turnaround_url, '/sheet.png');
+  assert.equal(variant.assets.turnaround_url, '/front.png');
   assert.equal(variant.assets.turnaround_variants['inner robe lowered to the waist'].front_url, '/vfront.png');
-  assert.equal(variant.assets.turnaround_variants['inner robe lowered to the waist'].sheet_url, '/vsheet.png');
+  assert.equal(variant.assets.turnaround_variants['inner robe lowered to the waist'].sheet_url, '/vfront.png');
+  assert.equal(variant.assets.turnaround_variants['inner robe lowered to the waist'].side_url, undefined);
+  assert.equal(variant.assets.turnaround_variants['inner robe lowered to the waist'].back_url, undefined);
 });
 
-test('front panel is txt2img; side and back img2img from the front plate', () => {
+test('buildTurnaroundPanelWorkflowData builds clean front-panel workflow state', () => {
   const base = {
     model_type: 'pony',
     nsfw_enabled: true,
@@ -95,96 +117,35 @@ test('front panel is txt2img; side and back img2img from the front plate', () =>
     TURNAROUND_VIEWS[0]!,
     'prompt',
     'negative',
-    null
   );
   assert.equal(front.character_ref_url, undefined);
   assert.equal(front.ref_image_url, undefined);
-  assert.equal(front.turnaround_from_front, false);
   assert.equal(front.denoise, 1);
   assert.equal(front.force_no_character_adapter, true);
   assert.equal(front.nsfw_enabled, true);
   assert.deepEqual(front.project_settings, { default_workflow_id: 7 });
-
-  const side = buildTurnaroundPanelWorkflowData(
-    base,
-    TURNAROUND_VIEWS[1]!,
-    'prompt',
-    'negative',
-    '/static/generated/front.png'
-  );
-  assert.equal(side.character_ref_url, '/static/generated/front.png');
-  assert.equal(side.ref_image_url, '/static/generated/front.png');
-  assert.equal(side.turnaround_from_front, true);
-  assert.equal(side.denoise, 0.88);
-  assert.equal(side.force_no_character_adapter, true);
-  assert.equal(side.reference_tier, 'A');
-
-  const backWithoutPlate = buildTurnaroundPanelWorkflowData(
-    base,
-    TURNAROUND_VIEWS[2]!,
-    'prompt',
-    'negative',
-    null
-  );
-  assert.equal(backWithoutPlate.character_ref_url, undefined);
-  assert.equal(backWithoutPlate.turnaround_from_front, false);
-  assert.equal(backWithoutPlate.denoise, 1);
-
-  const locked = buildTurnaroundPanelWorkflowData(
-    base,
-    TURNAROUND_VIEWS[0]!,
-    'prompt',
-    'negative',
-    null,
-    '/static/generated/face-lock.png'
-  );
-  assert.equal(locked.turnaround_face_lock, true);
-  assert.equal(locked.character_ref_url, '/static/generated/face-lock.png');
-  assert.equal(locked.denoise, 1);
-  assert.equal(locked.turnaround_from_front, false);
 });
 
-test('face lock canvas keeps an opaque face and a transparent body', async () => {
-  const portrait = await sharp({
-    create: { width: 80, height: 120, channels: 3, background: { r: 200, g: 160, b: 140 } }
-  }).png().toBuffer();
-  const canvas = await buildFaceLockCanvas(portrait, 64, 96);
-  const { width, height, channels } = await sharp(canvas).metadata();
-  const raw = await sharp(canvas).ensureAlpha().raw().toBuffer();
-  assert.equal(width, 64);
-  assert.equal(height, 96);
-  assert.equal(channels, 4);
-  let opaque = 0;
-  let clear = 0;
-  for (let i = 3; i < raw.length; i += 4) {
-    if ((raw[i] ?? 0) > 200) opaque += 1;
-    if ((raw[i] ?? 0) < 20) clear += 1;
-  }
-  assert.ok(opaque > 20);
-  assert.ok(clear > opaque);
-});
-
-test('buildTurnaroundViewPrompt is single-figure full body per angle', () => {
+test('buildTurnaroundViewPrompt produces clean single-figure front full-body reference prompt', () => {
   const base = 'long black hair, ice-blue eyes, moon-white xianxia dress';
-  for (const view of TURNAROUND_VIEWS) {
-    const { prompt, negative_prompt } = buildTurnaroundViewPrompt(base, view, 'pony');
-    assert.match(prompt, /full body/i);
-    assert.match(prompt, /moon-white xianxia dress/);
-    assert.match(prompt, /plain studio background/);
-    assert.doesNotMatch(prompt, /1girl|1boy|fully fastened|fully clothed/i);
-    assert.doesNotMatch(prompt, /multi-view layout/i);
-    assert.match(negative_prompt, /second person|duplicate figure/i);
-    assert.match(negative_prompt, /child, loli, shota/i);
-    if (view.id === 'front') assert.match(prompt, /front view/i);
-    if (view.id === 'side') assert.match(prompt, /side view|profile/i);
-    if (view.id === 'back') assert.match(prompt, /back view|from behind/i);
-  }
+  const { prompt, negative_prompt } = buildTurnaroundViewPrompt(base, TURNAROUND_VIEWS[0]!, 'pony');
+  assert.match(prompt, /full body/i);
+  assert.match(prompt, /moon-white xianxia dress/);
+  assert.match(prompt, /solid pure white opaque studio background, completely opaque, no transparency, no checkerboard/);
+  assert.match(prompt, /consistent character identity/);
+  assert.match(prompt, /front view/i);
+  assert.doesNotMatch(prompt, /1girl|1boy|fully fastened|fully clothed/i);
+  assert.doesNotMatch(prompt, /multi-view layout/i);
+  assert.match(negative_prompt, /second person|duplicate figure/i);
+  assert.match(negative_prompt, /child, loli, shota/i);
+  assert.match(negative_prompt, /side view, profile, back view, from behind/i);
+  assert.match(negative_prompt, /expression matrix, pose study, detail inset/i);
 });
 
 test('robe turnaround keeps the stored robe and excludes decorative background', () => {
   const { prompt, negative_prompt } = buildTurnaroundViewPrompt(
     'moon-white layered silk robes, black hair',
-    TURNAROUND_VIEWS[1]!,
+    TURNAROUND_VIEWS[0]!,
     'pony'
   );
   assert.match(prompt, /moon-white layered silk robes/);
@@ -207,73 +168,41 @@ test('shouldUseTurnaroundComposite respects escape hatch', () => {
   );
 });
 
-test('stitchTurnaroundSheet produces labeled wide sheet', async () => {
-  const mk = async (r: number, g: number, b: number) =>
-    sharp({
-      create: { width: 200, height: 400, channels: 3, background: { r, g, b } }
-    })
-      .png()
-      .toBuffer();
-
-  const sheet = await stitchTurnaroundSheet([
-    { buffer: await mk(200, 50, 50), label: 'FRONT' },
-    { buffer: await mk(50, 200, 50), label: 'SIDE' },
-    { buffer: await mk(50, 50, 200), label: 'BACK' }
-  ]);
-
-  const meta = await sharp(sheet).metadata();
-  assert.ok(meta.width && meta.width > 1400);
-  assert.ok(meta.height && meta.height > 900);
-  assert.equal(meta.width! / meta.height!, 16 / 9);
-  assert.equal(meta.format, 'png');
-});
-
-test('natural-language turnaround prompts strip Booru weights, balance parens, normalize bare age, and drop facial cues from rear view', () => {
+test('natural-language front turnaround prompt strips Booru weights, normalizes bare age, and follows clean_reference rules', () => {
   const raw = 'oriental realistic style, photorealistic, delicate East Asian facial features, full body character design, female, 23-25, long wavy auburn-brown hair, amber brown eyes, soft full lips, expressive brows, playful and inviting expression, full breasts, translucent peach-pink silk outer robe, Qiongming Divine Mirror (bronze rim, glowing), floating pink flower petals aura, consistent face hair and clothing across views';
   const front = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[0]!, 'redcraft_krea2');
-  const side = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
-  const back = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[2]!, 'redcraft_krea2');
 
   // No Booru weight syntax on VLM models
   assert.doesNotMatch(front.prompt, /:1\.\d+\)/);
-  assert.doesNotMatch(side.prompt, /:1\.\d+\)/);
-  assert.doesNotMatch(back.prompt, /:1\.\d+\)/);
 
   // Bare age 23-25 normalized to 23 to 25 years old
   assert.match(front.prompt, /23 to 25 years old/);
   assert.doesNotMatch(front.prompt, /,\s*23-25\s*,/);
 
-  // Explicit gender in camera sentence on all 3 views
-  assert.match(front.prompt, /^Full-length head-to-toe wide shot, direct front view of one adult East Asian woman, female/);
-  assert.match(side.prompt, /^Full-length head-to-toe wide shot, strict 90 degree left profile of one adult East Asian woman, female/);
-  assert.match(back.prompt, /^Full-length head-to-toe wide shot, strict rear view of one adult East Asian woman, female/);
+  // Explicit gender & clean_reference contract in camera sentence
+  assert.match(
+    front.prompt,
+    /^Full-length head-to-toe wide shot, direct orthographic front view of one adult East Asian woman, female/
+  );
+  assert.match(front.prompt, /solid pure white opaque studio background/i);
+  assert.match(front.prompt, /no before-and-after comparison, no inset boxes, and no text labels/i);
 
-  // Handheld mirror and floating petals stripped from turnaround panels
+  // Handheld mirror and floating petals stripped from turnaround panel
   assert.doesNotMatch(front.prompt, /Divine Mirror|floating pink flower petals|consistent face hair/i);
-
-  // Back view strips all facial / eye / lip / brow / chest clauses
-  assert.doesNotMatch(back.prompt, /amber brown eyes|soft full lips|expressive brows|full breasts|neutral expression/i);
-  assert.match(back.prompt, /long wavy auburn-brown hair/);
-  assert.match(back.prompt, /translucent peach-pink silk outer robe/);
 });
 
-test('turnaround strips soft hourglass, full breasts, delicate collarbones, and micro-facial cues across views, and wires use_qwen_vl_ref on front', async () => {
+test('turnaround strips soft hourglass, full breasts, delicate collarbones, and micro-facial cues, and wires use_qwen_vl_ref on front', async () => {
   const raw = 'oriental realistic style, photorealistic, female, 20-22, long black hair, flower hair ornaments, flower ornaments, pale ice-blue eyes, soft full lips, expressive brows, delicate collarbones, soft hourglass mature figure, full breasts, slender waist, elegant hips, crimson red hanfu xianxia dress';
   const cleaned = extractAppearanceBase(raw);
   assert.doesNotMatch(cleaned, /soft hourglass|full breasts|delicate collarbones|soft full lips|expressive brows/i);
 
   const front = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[0]!, 'redcraft_krea2');
-  const side = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
-  const back = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[2]!, 'redcraft_krea2');
   assert.doesNotMatch(front.prompt, /soft hourglass|full breasts|delicate collarbones|soft full lips|expressive brows/i);
-  assert.doesNotMatch(side.prompt, /soft hourglass|full breasts|delicate collarbones|soft full lips|expressive brows/i);
   // Deduplicates flower ornaments when flower hair ornaments is present
   assert.equal((front.prompt.match(/flower/gi) || []).length, 1);
   // Expands sleeve length for hanfu/xianxia dress
   assert.match(front.prompt, /long flowing wide sleeves/);
-  // Back view strips eye color to prevent head turning toward camera
-  assert.doesNotMatch(back.prompt, /ice-blue eyes/i);
-  // Negative prompt blocks cropped upper-body shots
+  // Negative prompt blocks cropped upper-body shots and side/back angles
   assert.match(front.negative_prompt, /medium shot, cowboy shot, waist-up, knee-up, bust shot, upper body only, cropped legs, cropped feet/);
 
   const kreaTemplate = {
@@ -294,8 +223,6 @@ test('turnaround strips soft hourglass, full breasts, delicate collarbones, and 
       TURNAROUND_VIEWS[0]!,
       front.prompt,
       front.negative_prompt,
-      null,
-      null
     ),
     turnaround_view: 'front',
     character_ref_url: '/static/generated/portrait.png',
@@ -311,93 +238,80 @@ test('turnaround strips soft hourglass, full breasts, delicate collarbones, and 
   assert.equal(sd3Latent?.inputs?.height, 1152);
 });
 
-test('prompt surgery preserves compound hair/garment descriptors, avoids face/chest tokens in back positive, handles blindfolds, and strips only handheld prop sub-phrases', () => {
+test('compound hair/garment descriptors and participial handheld prop stripping work cleanly on front view', () => {
   const compoundPrompt =
-    'female, 22-24, collarbone-length black hair, chest-length twin tails, double-breasted trench coat, chest plate armor, off-shoulder cleavage sweater, holding a glowing lantern in her left hand while wearing long lace gloves, no face visible';
-  const back = buildTurnaroundViewPrompt(compoundPrompt, TURNAROUND_VIEWS[2]!, 'redcraft_krea2');
-  const side = buildTurnaroundViewPrompt(compoundPrompt, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
+    'female, 22-24, collarbone-length black hair, chest-length twin tails, double-breasted trench coat, chest plate armor, holding a glowing lantern in her left hand while wearing long lace gloves';
+  const front = buildTurnaroundViewPrompt(compoundPrompt, TURNAROUND_VIEWS[0]!, 'redcraft_krea2');
 
-  // Compound hair & garment descriptors survive without truncation or loss
-  assert.match(back.prompt, /shoulder-length black hair/);
-  assert.match(back.prompt, /mid-back length twin tails/);
-  assert.match(back.prompt, /tailored double-buttoned trench coat/);
-  assert.match(back.prompt, /torso plate armor/);
-  assert.match(back.prompt, /off-shoulder sweater/);
-  assert.match(side.prompt, /off-shoulder sweater/);
+  assert.match(front.prompt, /shoulder-length black hair/);
+  assert.match(front.prompt, /mid-back length twin tails/);
+  assert.match(front.prompt, /tailored double-buttoned trench coat/);
+  assert.match(front.prompt, /torso plate armor/);
 
   // Participial handheld prop stripped while trailing glove clause survives
-  assert.doesNotMatch(back.prompt, /glowing lantern|in her left hand/i);
-  assert.match(back.prompt, /wearing long lace gloves/);
-
-  // Back view positive prompt has zero 'face' or 'chest' tokens and includes dorsal anatomy anchors
-  assert.doesNotMatch(back.prompt, /\b(?:face|chest|breasts|cleavage)\b/i);
-  assert.match(back.prompt, /occiput and nape of neck/i);
-  assert.match(back.prompt, /shoulder blades/i);
-
-  // Blindfold / eyepatch characters do not force "one eye visible" in side view
-  const blindfoldPrompt = 'female, 24 years old, silver hair, black silk blindfold covering eyes, dark coat';
-  const blindfoldSide = buildTurnaroundViewPrompt(blindfoldPrompt, TURNAROUND_VIEWS[1]!, 'redcraft_krea2');
-  assert.doesNotMatch(blindfoldSide.prompt, /one eye is visible|exactly one eye visible/i);
-  assert.match(blindfoldSide.prompt, /black silk blindfold/i);
+  assert.doesNotMatch(front.prompt, /glowing lantern|in her left hand/i);
+  assert.match(front.prompt, /wearing long lace gloves/);
 });
 
-test('normalizeAndAlignTurnaroundPanel normalizes drifted backgrounds to #f5f5f5 and aligns subject head/foot baselines across views', async () => {
-  const createSyntheticCharacterPanel = async (
-    bg: { r: number; g: number; b: number },
-    charTopY: number,
-    charBottomY: number
-  ) => {
-    const w = 240;
-    const h = 360;
-    const raw = Buffer.alloc(w * h * 3);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = (y * w + x) * 3;
-        const inChar = y >= charTopY && y <= charBottomY && x >= 80 && x <= 160;
-        raw[idx] = inChar ? 40 : bg.r;
-        raw[idx + 1] = inChar ? 55 : bg.g;
-        raw[idx + 2] = inChar ? 90 : bg.b;
-      }
-    }
-    return sharp(raw, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
-  };
-
-  // Three panels with drastically different vertical framing and background color drift
-  const frontRaw = await createSyntheticCharacterPanel({ r: 226, g: 226, b: 226 }, 12, 345); // 92% tall
-  const sideRaw = await createSyntheticCharacterPanel({ r: 248, g: 248, b: 245 }, 72, 288);  // 60% tall
-  const backRaw = await createSyntheticCharacterPanel({ r: 235, g: 232, b: 228 }, 40, 310);  // 75% tall
-
-  const measureAlignedBounds = async (panelBuf: Buffer) => {
-    const aligned = await normalizeAndAlignTurnaroundPanel(panelBuf, 256, 448, '#f5f5f5');
-    const { data, info } = await sharp(aligned).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-    // Corner pixel should be normalized to #f5f5f5 (245, 245, 245)
-    assert.equal(data[0], 245);
-    assert.equal(data[1], 245);
-    assert.equal(data[2], 245);
-    let topY = -1;
-    let bottomY = -1;
-    for (let y = 0; y < info.height; y++) {
-      for (let x = 0; x < info.width; x++) {
-        const idx = (y * info.width + x) * 3;
-        if ((data[idx] ?? 245) < 150) {
-          if (topY === -1) topY = y;
-          bottomY = y;
-        }
-      }
-    }
-    return { topY, bottomY };
-  };
-
-  const bFront = await measureAlignedBounds(frontRaw);
-  const bSide = await measureAlignedBounds(sideRaw);
-  const bBack = await measureAlignedBounds(backRaw);
-
-  // All 3 panels now share the same foot baseline and aligned head height (within 2px rounding)
-  assert.ok(Math.abs(bFront.bottomY - bSide.bottomY) <= 2);
-  assert.ok(Math.abs(bFront.bottomY - bBack.bottomY) <= 2);
-  assert.ok(Math.abs(bFront.topY - bSide.topY) <= 2);
-  assert.ok(Math.abs(bFront.topY - bBack.topY) <= 2);
+test('resolveTurnaroundIdentityReference respects use_ref_portrait=false and request-level session portrait', () => {
+  // Explicit opt-out disables reference even when DB has a stored avatar
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { use_ref_portrait: false, ref_image_url: '/session.png' },
+      '/stored-avatar.png'
+    ),
+    null
+  );
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { turnaround_front_adapter: false },
+      '/stored-avatar.png'
+    ),
+    null
+  );
+  // Request-scoped session portrait wins over DB stored avatar
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { use_ref_portrait: true, ref_image_url: '/session-new-portrait.png' },
+      '/stored-avatar.png'
+    ),
+    '/session-new-portrait.png'
+  );
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { character_ref_url: '/session-char-ref.png' },
+      ''
+    ),
+    '/session-char-ref.png'
+  );
+  // Fallback to DB stored avatar when request omits explicit ref URL
+  assert.equal(
+    resolveTurnaroundIdentityReference({}, '/stored-avatar.png'),
+    '/stored-avatar.png'
+  );
 });
 
+test('TurnaroundModal quick tags survive extractAppearanceBase and deduplicate cleanly in buildTurnaroundViewPrompt', () => {
+  const quickTaggedPrompt = [
+    'long black hair, silver hairpin',
+    'full body, direct front view, head to toe',
+    'neutral standing A-pose, hands and feet visible',
+    'solid pure white opaque studio background',
+    'consistent character identity and outfit',
+  ].join(', ');
 
+  const extracted = extractAppearanceBase(quickTaggedPrompt);
+  assert.match(extracted, /full body/i);
+  assert.match(extracted, /direct front view/i);
+  assert.match(extracted, /neutral standing A-pose/i);
+  assert.match(extracted, /hands and feet visible/i);
+  assert.match(extracted, /solid pure white opaque studio background/i);
+  assert.match(extracted, /consistent character identity and outfit/i);
 
+  const built = buildTurnaroundViewPrompt(quickTaggedPrompt, TURNAROUND_VIEWS[0]!, 'pony');
+  assert.match(built.prompt, /consistent character identity and outfit/i);
+  // Clauses already present in poseTags/framingDetails are deduplicated rather than doubled
+  assert.equal((built.prompt.match(/neutral standing A-pose/gi) || []).length, 1);
+  assert.equal((built.prompt.match(/hands and feet visible/gi) || []).length, 1);
+  assert.equal((built.prompt.match(/solid pure white opaque studio background/gi) || []).length, 1);
+});

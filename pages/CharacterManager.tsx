@@ -39,7 +39,6 @@ export const CharacterManager: React.FC = () => {
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [useRefPortrait, setUseRefPortrait] = useState<boolean>(false);
   const [refImageUrl, setRefImageUrl] = useState<string | null>(null);
-  const [turnaroundViews, setTurnaroundViews] = useState<'all' | 'front' | 'side' | 'back'>('all');
   const [wardrobeVariant, setWardrobeVariant] = useState('');
 
   // Project policy for consistent style/NSFW on character gens
@@ -423,7 +422,6 @@ export const CharacterManager: React.FC = () => {
     setRefImageUrl(availableRef);
 
     setGeneratedImageUrl(null);
-    setTurnaroundViews('all');
     setWardrobeVariant('');
     setPrompt('');
     setNegativePrompt('');
@@ -512,22 +510,7 @@ export const CharacterManager: React.FC = () => {
         if (genType === 'turnaround') payload.turnaround_front_adapter = true;
       }
       if (genType === 'turnaround') {
-        if (turnaroundViews !== 'all') payload.turnaround_views = [turnaroundViews];
         if (wardrobeVariant.trim()) payload.wardrobe_variant = wardrobeVariant.trim();
-      }
-
-
-
-
-
-
-
-
-      const loraPath = sheetModalChar?.visual_tags?.assets?.lora_ready
-        ? (sheetModalChar.visual_tags.assets.lora_path || sheetModalChar.visual_tags.assets.lora_name)
-        : null;
-      if (loraPath) {
-        payload.character_lora = loraPath;
       }
 
       const res = await api.generateAsset(payload, 999990 + sheetModalChar.id);
@@ -678,26 +661,6 @@ export const CharacterManager: React.FC = () => {
     }
   };
 
-  const handleCropFace = async (charId: number) => {
-    try {
-      const updated = await api.cropCharacterFace(charId);
-      showToast(t('characters.crop_face') + " Success!", 'success');
-      setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
-    } catch (e) {
-      showToast(t("characters.failed_crop", "Failed to crop face ref"), 'error');
-    }
-  };
-
-  const handleTrainLora = async (charId: number) => {
-    try {
-      const updated = await api.trainCharacterLora(charId);
-      showToast(t("characters.lora_ready", "Character LoRA Initialized & Ready!"), 'success');
-      setCharacters(prev => prev.map(c => c.id === charId ? updated : c));
-    } catch (e) {
-      showToast(t("characters.failed_lora", "Failed to initialize LoRA"), 'error');
-    }
-  };
-
   const handleDirectUploadAsset = async (e: React.ChangeEvent<HTMLInputElement>, assetType: 'avatar' | 'turnaround', charId?: number) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -799,8 +762,6 @@ export const CharacterManager: React.FC = () => {
             onEdit={(c) => openModal(c)}
             onDelete={(id) => handleDelete(id)}
             onOpenSheetModal={(c, initialGenType) => openSheetModal(c, initialGenType)}
-            onCropFace={(id) => handleCropFace(id)}
-            onTrainLora={(id) => handleTrainLora(id)}
             onUploadAsset={(e, assetType, charId) => handleDirectUploadAsset(e, assetType, charId)}
             onSwitchVersion={(charId, ver) => handleActivateCharacterVersion(charId, ver)}
             onCreateVersion={(charId) => handleCreateCharacterVersion(charId, true)}
@@ -840,8 +801,6 @@ export const CharacterManager: React.FC = () => {
         onRebuildPrompt={(gt, useRef, refUrl) => handleRebuildPrompt(gt as any, useRef, refUrl)}
         onGenerateSheetImage={handleGenerateSheetImage}
         onSaveAssetToCharacter={saveAssetToCharacter}
-        turnaroundViews={turnaroundViews}
-        setTurnaroundViews={setTurnaroundViews}
         wardrobeVariant={wardrobeVariant}
         setWardrobeVariant={setWardrobeVariant}
         onUploadPortrait={async (file) => {

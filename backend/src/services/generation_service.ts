@@ -482,58 +482,6 @@ const injectImg2ImgReference = (
     return wired;
 };
 
-/**
- * Keep an opaque face and let the sampler draw the body.
- * The canvas PNG stores the face in alpha; LoadImage turns transparency into the inpaint mask.
- */
-const injectFaceLockInpaint = (
-    workflow: any,
-    imageFilename: string,
-    isSeparateVae: boolean
-) => {
-    const vaeSourceId = isSeparateVae
-        ? findNodeId(workflow, (node) => node?.class_type === 'VAELoader')
-        : findNodeId(workflow, (node) => node?.class_type === 'CheckpointLoaderSimple');
-    if (!vaeSourceId) {
-        logger.warn('Cannot inject face-lock inpaint: no VAE source node found');
-        return false;
-    }
-    const loadId = nextNodeId(workflow);
-    workflow[loadId] = {
-        inputs: { image: imageFilename },
-        class_type: 'LoadImage',
-        _meta: { title: 'NovaStory Face Lock' }
-    };
-    const encodeId = nextNodeId(workflow);
-    workflow[encodeId] = {
-        inputs: {
-            pixels: [loadId, 0],
-            vae: [vaeSourceId, isSeparateVae ? 0 : 2]
-        },
-        class_type: 'VAEEncode',
-        _meta: { title: 'NovaStory Face Lock Encode' }
-    };
-    const maskId = nextNodeId(workflow);
-    workflow[maskId] = {
-        inputs: {
-            samples: [encodeId, 0],
-            mask: [loadId, 1]
-        },
-        class_type: 'SetLatentNoiseMask',
-        _meta: { title: 'NovaStory Face Lock Mask' }
-    };
-    let wired = false;
-    for (const node of Object.values(workflow) as any[]) {
-        if (node?.class_type?.includes('KSampler') && node.inputs) {
-            node.inputs.latent_image = [maskId, 0];
-            node.inputs.denoise = 1;
-            wired = true;
-        }
-    }
-    if (wired) logger.info(`Injected face-lock inpaint ${imageFilename}`);
-    return wired;
-};
-
 /** @deprecated use resolveReferenceImg2ImgPolicy */
 export const resolveImg2ImgDenoise = (workflowData: any): number =>
     resolveReferenceImg2ImgPolicy(workflowData).denoise;
@@ -971,9 +919,7 @@ export const compileComfyWorkflow = async (
                 node.inputs.image = referenceFilename;
             }
         }
-        if (workflowData?.turnaround_face_lock === true) {
-            injectFaceLockInpaint(workflow, referenceFilename, isFlux || isRedCraftKrea2);
-        } else if (refPlan.img2img.useImg2Img) {
+        if (refPlan.img2img.useImg2Img) {
             injectImg2ImgReference(
                 workflow,
                 referenceFilename,
@@ -1063,7 +1009,7 @@ export class GenerationService {
         logger.info(`[Task ${taskId}] Asset generation started for Scene ${sceneId} (Mode: ${mode})`);
         await AssetTaskStore.processing(taskId, sceneId);
 
-        // Character turnaround: 3 full-body views + stitch (reliable multi-angle sheet)
+        // Character turnaround: canonical front full-body reference plate
         try {
             const { shouldUseTurnaroundComposite, generateTurnaroundComposite } = await import(
                 './turnaround_composite'

@@ -128,14 +128,14 @@ const dimensionsFor = (
 const imageSizeFor = (resolution: ImageResolution): ImageOutputTarget['image_size'] =>
   resolution === 'draft' ? '512' : resolution === 'high' ? '2K' : '1K';
 
-/** Internal 2:3 full-body panel (768x1152 or 512x768). The stitched sheet is delivered at 16:9. */
+/** Vertical 2:3 full-body reference panel (768x1152 or 512x768). */
 export const turnaroundPanelDimensions = (modelFamily: string): { width: number; height: number } =>
   modelFamily === 'sd15' ? { width: 512, height: 768 } : { width: 768, height: 1152 };
 
 /**
  * Capability-driven turnaround execution strategy.
  * Single-sheet VLM/API providers (such as codex) or explicit single-mode requests
- * emit one composite sheet directly; local ComfyUI models use 3-panel split generation + stitch.
+ * emit the front full-body plate directly; local ComfyUI models use the dedicated front full-body pipeline.
  */
 export const resolveTurnaroundStrategy = (options?: {
   imageProvider?: string | null;
@@ -231,18 +231,18 @@ export const resolveImageOutputTarget = (options: {
     };
   }
 
-  // A turnaround sheet is delivered at 16:9 (either split_3_panel stitched or single_sheet).
+  // Full-body character turnaround is delivered as a vertical 2:3 front reference plate.
   if (genType === 'turnaround' && !requestHasSpec) {
-    const dimensions = dimensionsFor(modelFamily, 'standard', '16:9');
     return {
       ...DEFAULT_IMAGE_OUTPUT_SPEC,
-      aspect_ratio: '16:9',
-      resolved_aspect_ratio: '16:9',
+      aspect_ratio: '9:16',
+      resolved_aspect_ratio: '9:16',
+      panel_aspect_ratio: '2:3',
       turnaround_strategy: resolveTurnaroundStrategy({
         imageProvider: options.imageProvider,
         workflowData,
       }),
-      ...dimensions,
+      ...turnaroundPanelDimensions(modelFamily),
       image_size: '1K',
       source: 'generation_type',
     };

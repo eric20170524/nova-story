@@ -198,11 +198,8 @@ export const resolveReferenceImg2ImgPolicy = (
   const explicit = workflowData?.denoise;
   const hasExplicitDenoise = typeof explicit === 'number' && Number.isFinite(explicit);
 
-  // Front panel is txt2img. Side and back redraw that plate; a bust portrait is not the init.
+  // Front panel is txt2img.
   if (genType === 'turnaround_panel') {
-    if (workflowData?.turnaround_face_lock === true) {
-      return { useImg2Img: false, denoise: 1, reason: 'turnaround_face_lock' };
-    }
     if (workflowData?.turnaround_from_front === true) {
       return {
         useImg2Img: true,

@@ -429,19 +429,3 @@ export function formatVisualStyleLabel(
   return `${name} · ${model}${advancedTag}`;
 }
 
-export interface OpenPosePreset {
-  id: string;
-  name: string;
-  name_zh: string;
-  prompt_snippet: string;
-}
-
-export const OPENPOSE_PRESETS: OpenPosePreset[] = [
-  { id: 'standing_neutral', name: 'Standing Full-Body', name_zh: '标准站姿全景', prompt_snippet: 'standing, full body pose, front view, neutral posture' },
-  { id: 'running_action', name: 'Action Running', name_zh: '奔跑追逐动作', prompt_snippet: 'dynamic running pose, mid-stride, action shot, motion blur background' },
-  { id: 'sword_slash', name: 'Sword Slash / Fighting', name_zh: '挥刀/战斗招式', prompt_snippet: 'dynamic sword slashing pose, combat stance, intense action, heroic posture' },
-  { id: 'sitting_dialogue', name: 'Sitting Conversation', name_zh: '坐姿对话', prompt_snippet: 'sitting on chair, casual posture, medium shot, relaxed dialogue pose' },
-  { id: 'looking_back', name: 'Over the Shoulder Glance', name_zh: '回眸/侧颜特写', prompt_snippet: 'looking back over shoulder, close-up portrait, dramatic gaze, depth of field' },
-  { id: 'flying_dynamic', name: 'Floating / Dynamic Leap', name_zh: '跃空/飞天姿态', prompt_snippet: 'floating in mid-air, dynamic leaping pose, windblown hair and clothes' }
-];
-

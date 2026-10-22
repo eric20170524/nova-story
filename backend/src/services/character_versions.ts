@@ -206,17 +206,18 @@ export async function createCharacterVersion(
   let visualTags = parseTags(source.visual_tags);
   const clearAssets = options.clearAssets !== false;
   if (clearAssets) {
+    const nextAssets = {
+      ...(visualTags.assets || {}),
+      avatar_url: null,
+      turnaround_url: null,
+      turnaround_front_url: null,
+      face_url: null
+    };
+    delete nextAssets.turnaround_side_url;
+    delete nextAssets.turnaround_back_url;
     visualTags = {
       ...visualTags,
-      assets: {
-        ...(visualTags.assets || {}),
-        avatar_url: null,
-        turnaround_url: null,
-        turnaround_front_url: null,
-        turnaround_side_url: null,
-        turnaround_back_url: null,
-        face_url: null
-      }
+      assets: nextAssets
     };
   }
 

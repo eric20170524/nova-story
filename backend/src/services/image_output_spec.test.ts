@@ -171,9 +171,10 @@ test('cinematic grid and turnaround expose only supported output ratios', () => 
   const grid = resolveImageOutputTarget({ mode: 'cinematic_grid' });
   assert.equal(grid.resolved_aspect_ratio, '1:1');
   const turnaround = resolveImageOutputTarget({ workflowData: { gen_type: 'turnaround' } });
-  assert.equal(turnaround.resolved_aspect_ratio, '16:9');
-  assert.equal(turnaround.width, 1280);
-  assert.equal(turnaround.height, 720);
+  assert.equal(turnaround.resolved_aspect_ratio, '9:16');
+  assert.equal(turnaround.panel_aspect_ratio, '2:3');
+  assert.equal(turnaround.width, 768);
+  assert.equal(turnaround.height, 1152);
   const panel = resolveImageOutputTarget({
     workflowData: {
       gen_type: 'turnaround_panel',

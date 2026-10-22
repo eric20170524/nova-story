@@ -7,10 +7,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { LLMService } from '../services/llm';
 import {
-  getGeneratedDirectory,
   getCharacterAssetPath,
   getUploadAssetPath,
-  resolveStaticAssetPath
 } from '../core/paths';
 import { SettingsManager } from '../core/settings_manager';
 import {
@@ -466,7 +464,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       use_ref_portrait: z.boolean().optional(),
       ref_image_url: z.string().optional().nullable(),
       wardrobe_variant: z.string().optional().nullable(),
-      turnaround_views: z.array(z.enum(['front', 'side', 'back'])).optional(),
+      turnaround_views: z.array(z.enum(['front'])).optional(),
     });
     const req = bodySchema.parse(request.body);
 
@@ -518,7 +516,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     let refHint = "";
     if (req.use_ref_portrait === true && refUrl) {
-      refHint = ", matching reference character design, consistent face hair and clothing across views";
+      refHint = ", matching reference character design, consistent face hair and clothing";
     }
 
     const mustKeepText = Array.isArray(tags?.identity_lock?.must_keep)
@@ -545,7 +543,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
     if (req.gen_type === 'turnaround' && isHumanCharacter) {
       try {
-        await readPortraitPlate(storedAvatar);
+        const candidatePortrait = String(req.ref_image_url || storedAvatar || '').trim();
+        await readPortraitPlate(candidatePortrait);
       } catch (error) {
         if (error instanceof PortraitPlateError) {
           return reply.status(400).send({ detail: error.message });
@@ -569,10 +568,10 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (req.gen_type === "turnaround") {
-      // Split-3-panel composes three panels; single_sheet strategy draws the sheet in one generation.
+      // Simplified turnaround: generates only the canonical orthographic front full-body reference.
       prompt = singleSheetTurnaround
-        ? `${header.prefix}. Three equal full-body panels side by side: front view, left profile, back view. Neutral standing pose, feet visible, plain studio background, no labels, no letters, no watermark.${refUrl ? ' Match the supplied portrait for identity.' : ''}`
-        : `${header.prefix}, full body, standing, character reference${refHint}`;
+        ? `${header.prefix}. Full-body direct orthographic front view standing character reference, head to toe, neutral standing A-pose, unobstructed silhouette, feet visible, solid pure white opaque studio background, completely opaque, no transparency, no checkerboard, no labels, no letters, no watermark.${refUrl ? ' Match the supplied portrait for identity.' : ''}`
+        : `${header.prefix}, full body, direct orthographic front view, neutral standing A-pose, character reference${refHint}`;
     } else {
       prompt = codexImage
         ? `${header.prefix}. Upper-body front portrait, waist-up, front view, eye-level, facing camera, both shoulders visible, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background, no writing, no watermark.`
@@ -604,9 +603,8 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       character_ref_url: activeRefUrl,
       turnaround_front_adapter: req.gen_type === 'turnaround' ? Boolean(activeRefUrl) : undefined,
       turnaround_strategy: req.gen_type === 'turnaround' ? turnaroundStrategy : undefined,
-      // Document composite pipeline for clients
       turnaround_pipeline: req.gen_type === 'turnaround'
-        ? singleSheetTurnaround ? 'codex_single_sheet' : 'three_views_stitch'
+        ? singleSheetTurnaround ? 'codex_single_sheet' : 'front_full_body'
         : undefined,
       ...(req.gen_type === 'turnaround' && req.turnaround_views?.length
         ? { turnaround_views: req.turnaround_views }
@@ -615,95 +613,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
         ? { wardrobe_variant: String(req.wardrobe_variant).trim() }
         : {}),
     };
-  });
-
-  app.post('/:id/crop-face', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.coerce.number() });
-    const { id } = paramsSchema.parse(request.params);
-
-    const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    if (!dbChar) {
-      return reply.status(404).send({ detail: 'Character not found' });
-    }
-
-    const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
-    const assets = tags.assets || {};
-    const srcUrl = assets.avatar_url;
-
-    if (!srcUrl) {
-      return reply.status(400).send({ detail: '没有定妆照，不能裁脸。' });
-    }
-
-    const staticDir = getGeneratedDirectory();
-    const filepath = resolveStaticAssetPath(srcUrl);
-
-    if (!fs.existsSync(filepath)) {
-      assets.face_url = srcUrl;
-      tags.assets = assets;
-      await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
-      const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-      return serializeCharacter(updatedChar);
-    }
-
-    try {
-      const sharp = require('sharp');
-      const metadata = await sharp(filepath).metadata();
-      if (metadata.width && metadata.height) {
-        const width = Math.floor(metadata.width * 0.60);
-        const height = Math.floor(metadata.height * 0.42);
-        const left = Math.floor((metadata.width - width) / 2);
-        const top = Math.floor(metadata.height * 0.04);
-
-        const faceFilename = `face_${id}_${crypto.randomUUID().substring(0, 8)}.png`;
-        const pathResult = getCharacterAssetPath({
-          projectId: dbChar.project_id,
-          characterId: id,
-          version: dbChar.active_version || 1,
-          filename: faceFilename
-        });
-
-        await sharp(filepath)
-          .extract({ left, top, width, height })
-          .toFile(pathResult.filepath);
-
-        assets.face_url = pathResult.url;
-        tags.assets = assets;
-        await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
-      }
-    } catch (e) {
-      assets.face_url = srcUrl;
-      tags.assets = assets;
-      await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
-    }
-
-    const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    return serializeCharacter(updatedChar);
-  });
-
-  app.post('/:id/train-lora', async (request, reply) => {
-    const paramsSchema = z.object({ id: z.coerce.number() });
-    const { id } = paramsSchema.parse(request.params);
-
-    const dbChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    if (!dbChar) {
-      return reply.status(404).send({ detail: 'Character not found' });
-    }
-
-    const tags = typeof dbChar.visual_tags === 'string' ? JSON.parse(dbChar.visual_tags) : (dbChar.visual_tags || {});
-    const assets = tags.assets || {};
-
-    const loraFilename = `char_${id}_${dbChar.name.toLowerCase().replace(/ /g, '_')}.safetensors`;
-
-    // Simulate training logic that drops the dummy file in ComfyUI models dir
-    // Not actually spinning up Kohya_ss
-    assets.lora_path = loraFilename;
-    assets.lora_ready = true;
-    tags.assets = assets;
-
-    await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(tags), id);
-
-    const updatedChar = await db.get('SELECT * FROM character WHERE id = ?', id);
-    return serializeCharacter(updatedChar);
   });
 
   const ALLOWED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);

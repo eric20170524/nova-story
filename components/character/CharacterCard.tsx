@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, CheckCircle, Volume2, Link2 } from 'lucide-react';
+import { User, Edit2, Trash2, Sparkles, Image as ImageIcon, Upload, Volume2, Link2 } from 'lucide-react';
 import { Character } from '../../types';
 import { CHARACTER_ROLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
@@ -14,9 +14,7 @@ interface CharacterCardProps {
   onEdit: (char: Character) => void;
   onDelete: (id: number) => void;
   onOpenSheetModal: (char: Character, initialGenType?: 'turnaround' | 'portrait') => void;
-  onCropFace: (id: number) => void;
-  onTrainLora: (id: number) => void;
-  onUploadAsset: (e: React.ChangeEvent<HTMLInputElement>, assetType: 'avatar' | 'turnaround' | 'face', charId: number) => void;
+  onUploadAsset: (e: React.ChangeEvent<HTMLInputElement>, assetType: 'avatar' | 'turnaround', charId: number) => void;
   onSwitchVersion: (charId: number, version: number) => void;
   onCreateVersion: (charId: number) => void;
   onOpenPreview: (url?: string | null) => void;
@@ -31,8 +29,6 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
   onEdit,
   onDelete,
   onOpenSheetModal,
-  onCropFace,
-  onTrainLora,
   onUploadAsset,
   onSwitchVersion,
   onCreateVersion,
@@ -101,14 +97,6 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
             <div>
               <h3 className="font-bold text-slate-900 dark:text-white text-base sm:text-lg flex items-center gap-2">
                 {char.name}
-                {char.lora_ready && (
-                  <span
-                    className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/80 px-1.5 py-0.5 rounded-md font-mono font-medium"
-                    title={t("casting.lora_ready_hint")}
-                  >
-                    <CheckCircle size={10} /> LoRA
-                  </span>
-                )}
               </h3>
               <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                 <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium inline-block border border-slate-200 dark:border-slate-700">
@@ -302,14 +290,14 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                   />
                   <ZoomHint />
                   <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-sm text-[10px] text-indigo-300 font-semibold px-2 py-0.5 rounded-md border border-indigo-500/30 pointer-events-none">
-                    {t("casting.turnaround_sheet", "角色三视图")}
+                    {t("casting.turnaround_sheet", "角色正面全身图")}
                   </div>
                   {char.avatar_url && (
                     <div
                       className="absolute top-2 right-2 bg-emerald-950/85 backdrop-blur-sm text-[9px] text-emerald-300 font-medium px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1 pointer-events-none"
-                      title="正面单独生成，侧视和背视以这张正面全身图为底图"
+                      title="以定妆照作为身份参考，生成纯净正面全身设定图"
                     >
-                      <Link2 size={10} /> 侧视和背视跟随正面全身图
+                      <Link2 size={10} /> 跟随定妆照身份参考
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center gap-1.5 pointer-events-none">
@@ -344,11 +332,11 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
                     <ImageIcon size={18} />
                   </div>
                   <span className="font-semibold text-slate-600 dark:text-slate-300">
-                    {t("casting.turnaround_sheet", "角色三视图（正 / 侧 / 背）")}
+                    {t("casting.turnaround_sheet", "角色正面全身图")}
                   </span>
                   {char.avatar_url && (
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1 font-medium">
-                      <Link2 size={10} /> 侧视和背视跟随正面全身图
+                      <Link2 size={10} /> 跟随定妆照身份参考
                     </span>
                   )}
                   <div className="flex flex-col gap-1.5 mt-0.5">
@@ -425,7 +413,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
         </div>
       </div>
 
-      {/* Action Bar for Portrait, Turnaround, Face Crop, and LoRA */}
+      {/* Action Bar for Portrait and Turnaround */}
       <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col gap-2">
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -445,22 +433,6 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({
           >
             <Sparkles size={13} />
             {t('characters.generate_sheet')}
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            onClick={() => onCropFace(char.id)}
-            disabled={!char.turnaround_url && !char.avatar_url}
-            className="flex-1 flex items-center justify-center gap-1.5 bg-slate-50 hover:bg-amber-50 dark:bg-slate-900 dark:hover:bg-amber-900/40 text-slate-700 hover:text-amber-800 dark:text-slate-300 dark:hover:text-amber-200 border border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-700/50 disabled:opacity-40 px-2 py-1.5 rounded-xl text-[11px] font-medium transition-all"
-          >
-            {t('characters.crop_face')}
-          </button>
-          <button
-            onClick={() => onTrainLora(char.id)}
-            className="flex-1 flex items-center justify-center gap-1.5 bg-slate-50 hover:bg-emerald-50 dark:bg-slate-900 dark:hover:bg-emerald-900/40 text-slate-700 hover:text-emerald-800 dark:text-slate-300 dark:hover:text-emerald-200 border border-slate-200 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-700/50 px-2 py-1.5 rounded-xl text-[11px] font-medium transition-all"
-          >
-            {t('characters.train_lora')}
           </button>
         </div>
       </div>

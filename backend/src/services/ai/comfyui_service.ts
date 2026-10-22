@@ -90,8 +90,8 @@ type RemoteLoraCatalogSource = {
 export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
     settings: T,
     service: RemoteLoraCatalogSource,
-): Promise<T> {
-    if (!service.isRemote) return settings;
+): Promise<T & { comfyui: NonNullable<T['comfyui']> & { remote_lora_names?: string[] } }> {
+    if (!service.isRemote) return settings as T & { comfyui: NonNullable<T['comfyui']> & { remote_lora_names?: string[] } };
     let remoteLoraNames: string[] = [];
     try {
         const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
@@ -101,7 +101,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
     }
     return {
         ...settings,
-        comfyui: { ...(settings.comfyui || {}), remote_lora_names: remoteLoraNames },
+        comfyui: { ...(settings.comfyui || {}), remote_lora_names: remoteLoraNames } as NonNullable<T['comfyui']> & { remote_lora_names?: string[] },
     };
 }
 
