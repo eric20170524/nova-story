@@ -70,7 +70,34 @@ MODELS = [
         "hf_repo": "thibaud/controlnet-openpose-sdxl-1.0",
         "hf_file": "OpenPoseXL2.safetensors",
         "targets": ["all", "tier_b"]
-    }
+    },
+    {
+        "category": "ipadapter",
+        "subpath": "models/ipadapter/ip-adapter-faceid-plusv2_sdxl.bin",
+        "desc": "IP-Adapter FaceID Plus V2 SDXL (512维 ArcFace 强面容锁定)",
+        "hf_repo": "h94/IP-Adapter-FaceID",
+        "hf_file": "ip-adapter-faceid-plusv2_sdxl.bin",
+        "targets": ["all", "tier_b"]
+    },
+    {
+        "category": "loras",
+        "subpath": "models/loras/ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
+        "desc": "IP-Adapter FaceID Plus V2 SDXL 配套 LoRA",
+        "hf_repo": "h94/IP-Adapter-FaceID",
+        "hf_file": "ip-adapter-faceid-plusv2_sdxl_lora.safetensors",
+        "targets": ["all", "tier_b"]
+    },
+    *[
+        {
+            "category": "insightface",
+            "subpath": f"models/insightface/models/buffalo_l/{onnx_name}",
+            "desc": f"InsightFace buffalo_l ({onnx_name})",
+            "hf_repo": "public-data/insightface",
+            "hf_file": f"models/buffalo_l/{onnx_name}",
+            "targets": ["all", "tier_b"]
+        }
+        for onnx_name in ["1k3d68.onnx", "2d106det.onnx", "det_10g.onnx", "genderage.onnx", "w600k_r50.onnx"]
+    ]
 ]
 
 def download_with_resume(url: str, output_path: str, desc: str):

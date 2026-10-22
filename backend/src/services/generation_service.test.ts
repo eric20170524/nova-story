@@ -844,6 +844,32 @@ test('qwen-image 2.1 compile uses its encoder and keeps the SD latent path off',
   assert.equal(Object.values(compiled).some((node: any) => node.class_type === 'VAEEncode'), false);
   assert.equal(Object.values(compiled).some((node: any) => node.class_type === 'CheckpointLoaderSimple'), false);
   assert.equal(Object.values(compiled).some((node: any) => /pony/i.test(String(node.inputs?.lora_name || ''))), false);
+
+  const remoteCompiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      character_ref_url: '/static/generated/face.png',
+      gen_type: 'portrait',
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'a woman in a moonlit courtyard',
+    'standard',
+    { width: 1280, height: 720 },
+    {
+      advanced: { nsfw_enabled: true },
+      comfyui: {
+        mode: 'remote',
+        remote_unet_names: ['qwen_image_2.1_bf16.safetensors'],
+        remote_clip_names: ['qwen3vl_8b_bf16.safetensors'],
+        remote_vae_names: ['qwen_image_2.1_vae_bf16.safetensors'],
+      }
+    }
+  );
+  assert.equal(remoteCompiled['4'].inputs.unet_name, 'qwen_image_2.1_bf16.safetensors');
+  assert.equal(remoteCompiled['10'].inputs.clip_name, 'qwen3vl_8b_bf16.safetensors');
+  assert.equal(remoteCompiled['11'].inputs.vae_name, 'qwen_image_2.1_vae_bf16.safetensors');
 });
 
 test('character_ref_url drives img2img for turnaround (Tier A dual-field API)', async () => {

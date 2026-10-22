@@ -12,6 +12,7 @@ import {
   TURNAROUND_VIEWS
 } from './turnaround_composite';
 import { compileComfyWorkflow } from './generation_service';
+import { isFaceDetailStage2Node } from './tier_b_adapters';
 
 test('extractAppearanceBase strips multi-view sheet jargon', () => {
   const raw =
@@ -233,9 +234,102 @@ test('turnaround strips soft hourglass, full breasts, delicate collarbones, and 
   const qwenNode = Object.values(compiled).find((n: any) => n?.class_type === 'TextEncodeQwenImage21') as any;
   assert.ok(qwenNode, 'Expected TextEncodeQwenImage21 node in compiled redcraft_krea2 front panel workflow');
   assert.ok(Array.isArray(qwenNode.inputs.image_1), 'Expected image_1 reference wired on TextEncodeQwenImage21');
+  // The legacy single-stage reference path never swaps the Krea2 backbone for Qwen-Image.
+  assert.equal(compiled['4'].inputs.unet_name, 'krea2_raw_bf16.safetensors');
+  assert.equal(compiled['10'].inputs.clip_name, 'qwen3vl_4b_bf16.safetensors');
   const sd3Latent = Object.values(compiled).find((n: any) => n?.class_type === 'EmptySD3LatentImage') as any;
   assert.equal(sd3Latent?.inputs?.width, 768);
   assert.equal(sd3Latent?.inputs?.height, 1152);
+});
+
+test('redcraft_krea2 face_detail_stage2 keeps Krea2 Stage 1 and adds a Qwen-Image 2.1 face refine that restores onto it', async () => {
+  const kreaTemplate = {
+    '3': { inputs: { seed: 7, steps: 16, cfg: 1, sampler_name: 'euler', scheduler: 'simple', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] }, class_type: 'KSampler' },
+    '4': { inputs: { unet_name: 'krea2_raw_bf16.safetensors', weight_dtype: 'default' }, class_type: 'UNETLoader' },
+    '5': { inputs: { width: 832, height: 1216, batch_size: 1 }, class_type: 'EmptySD3LatentImage' },
+    '6': { inputs: { text: '', clip: ['10', 0] }, class_type: 'CLIPTextEncode' },
+    '7': { inputs: { text: '', clip: ['10', 0] }, class_type: 'CLIPTextEncode' },
+    '8': { inputs: { samples: ['3', 0], vae: ['11', 0] }, class_type: 'VAEDecode' },
+    '9': { inputs: { filename_prefix: 'NovaStory_RedCraft_Krea2', images: ['8', 0] }, class_type: 'SaveImage' },
+    '10': { inputs: { clip_name: 'qwen3vl_4b_bf16.safetensors', type: 'qwen_image', device: 'default' }, class_type: 'CLIPLoader' },
+    '11': { inputs: { vae_name: 'qwen_image_vae.safetensors' }, class_type: 'VAELoader' }
+  };
+  const front = buildTurnaroundViewPrompt('female, long black hair, crimson hanfu', TURNAROUND_VIEWS[0]!, 'redcraft_krea2');
+  const compiled: any = await compileComfyWorkflow(
+    {
+      ...kreaTemplate,
+      ...buildTurnaroundPanelWorkflowData(
+        { model_type: 'redcraft_krea2', nsfw_enabled: true },
+        TURNAROUND_VIEWS[0]!,
+        front.prompt,
+        front.negative_prompt,
+      ),
+      turnaround_view: 'front',
+      character_ref_url: '/static/generated/portrait.png',
+      ref_image_url: '/static/generated/portrait.png',
+      face_detail_stage2: true,
+      face_detail_canvas_width: 768,
+      face_detail_canvas_height: 1152,
+    },
+    front.prompt,
+    'standard',
+    undefined,
+    {
+      comfyui: {
+        remote_unet_names: ['krea2_raw_bf16.safetensors', 'qwen_image_2.1_bf16.safetensors'],
+        remote_clip_names: ['qwen3vl_4b_bf16.safetensors', 'qwen3vl_8b_bf16.safetensors'],
+        remote_vae_names: ['qwen_image_vae.safetensors', 'qwen_image_2.1_vae_bf16.safetensors'],
+      },
+    },
+  );
+  const nodes = Object.entries(compiled) as Array<[string, any]>;
+  const byClass = (cls: string) => nodes.filter(([, n]) => n?.class_type === cls);
+
+  // Stage 1: native Krea2 text-to-image, no reference encoder, full denoise.
+  assert.equal(compiled['4'].inputs.unet_name, 'krea2_raw_bf16.safetensors');
+  assert.equal(compiled['10'].inputs.clip_name, 'qwen3vl_4b_bf16.safetensors');
+  assert.equal(byClass('TextEncodeQwenImage21').length, 0);
+  assert.equal(compiled['3'].inputs.denoise, 1);
+  assert.equal(compiled['3'].inputs.steps, 16);
+  assert.equal(compiled['3'].inputs.latent_image[0], '5');
+
+  // Stage 2: Qwen-Image 2.1 face refine tagged so global resets skip it.
+  const [, stage2Sampler] = byClass('KSampler').find(([, n]) => isFaceDetailStage2Node(n))!;
+  assert.equal(stage2Sampler.inputs.denoise, 0.65);
+  const [unetId, unet] = byClass('UNETLoader').find(([, n]) => isFaceDetailStage2Node(n))!;
+  assert.equal(unet.inputs.unet_name, 'qwen_image_2.1_bf16.safetensors');
+  assert.equal(stage2Sampler.inputs.model[0], unetId);
+  const [, encode] = byClass('TextEncodeQwenImage21GH')[0]!;
+  const refNode = compiled[encode.inputs.image_02[0]];
+  assert.equal(refNode.class_type, 'LoadImage');
+  assert.equal(refNode.inputs.image, 'portrait.png');
+  const [cropId, crop] = byClass('GH_MaskCropV2')[0]!;
+  assert.deepEqual(crop.inputs['图像'], ['8', 0]);
+  assert.deepEqual(encode.inputs.image_01, [cropId, 1]);
+  const [pasteId, paste] = byClass('GH_CropRestore')[0]!;
+  assert.deepEqual(paste.inputs['背景图像'], ['8', 0]);
+  assert.deepEqual(compiled['9'].inputs.images, [pasteId, 0]);
+  const [, mask] = byClass('CreateShapeMask')[0]!;
+  assert.equal(mask.inputs.frame_width, 768);
+  assert.equal(mask.inputs.frame_height, 1152);
+  assert.equal(mask.inputs.location_x, 384);
+
+  // Missing Qwen-Image 2.1 models on ComfyUI: keep the Stage 1 result and submit nothing extra.
+  const fallback: any = await compileComfyWorkflow(
+    {
+      ...kreaTemplate,
+      ...buildTurnaroundPanelWorkflowData({ model_type: 'redcraft_krea2' }, TURNAROUND_VIEWS[0]!, front.prompt, front.negative_prompt),
+      character_ref_url: '/static/generated/portrait.png',
+      ref_image_url: '/static/generated/portrait.png',
+      face_detail_stage2: true,
+    },
+    front.prompt,
+    'standard',
+    undefined,
+    { comfyui: { remote_unet_names: ['krea2_raw_bf16.safetensors'] } },
+  );
+  assert.equal(Object.values(fallback).some((n: any) => isFaceDetailStage2Node(n)), false);
+  assert.deepEqual(fallback['9'].inputs.images, ['8', 0]);
 });
 
 test('compound hair/garment descriptors and participial handheld prop stripping work cleanly on front view', () => {

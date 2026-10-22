@@ -45,6 +45,7 @@ mkdir -p "$COMFY_ROOT/models/vae"
 mkdir -p "$COMFY_ROOT/models/ipadapter"
 mkdir -p "$COMFY_ROOT/models/clip_vision"
 mkdir -p "$COMFY_ROOT/models/controlnet"
+mkdir -p "$COMFY_ROOT/models/insightface/models/buffalo_l"
 
 download_file() {
     local url="$1"
@@ -135,6 +136,23 @@ if [ "$TARGET" = "all" ] || [ "$TARGET" = "tier_b" ]; then
         "$HF_BASE/thibaud/controlnet-openpose-sdxl-1.0/resolve/main/OpenPoseXL2.safetensors" \
         "$COMFY_ROOT/models/controlnet/OpenPoseXL2.safetensors" \
         "ControlNet OpenPose XL (姿势与构图控制)"
+
+    download_file \
+        "$HF_BASE/h94/IP-Adapter-FaceID/resolve/main/ip-adapter-faceid-plusv2_sdxl.bin" \
+        "$COMFY_ROOT/models/ipadapter/ip-adapter-faceid-plusv2_sdxl.bin" \
+        "IP-Adapter FaceID Plus V2 SDXL (512维 ArcFace 强面容锁定)"
+
+    download_file \
+        "$HF_BASE/h94/IP-Adapter-FaceID/resolve/main/ip-adapter-faceid-plusv2_sdxl_lora.safetensors" \
+        "$COMFY_ROOT/models/loras/ip-adapter-faceid-plusv2_sdxl_lora.safetensors" \
+        "IP-Adapter FaceID Plus V2 SDXL 配套 LoRA"
+
+    for onnx_model in 1k3d68.onnx 2d106det.onnx det_10g.onnx genderage.onnx w600k_r50.onnx; do
+        download_file \
+            "$HF_BASE/public-data/insightface/resolve/main/models/buffalo_l/$onnx_model" \
+            "$COMFY_ROOT/models/insightface/models/buffalo_l/$onnx_model" \
+            "InsightFace buffalo_l ($onnx_model)"
+    done
 fi
 
 echo ""

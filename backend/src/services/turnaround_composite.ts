@@ -26,7 +26,7 @@ import {
   compileComfyWorkflow,
   copyReferenceImageToComfy
 } from './generation_service';
-import { resolveTierBFromSettings } from './tier_b_adapters';
+import { isFaceDetailStage2Node, resolveTierBFromSettings } from './tier_b_adapters';
 import {
   inferPromptSubjectType,
   readStoredCharacterSheet,
@@ -546,21 +546,25 @@ export async function generateTurnaroundComposite(
   });
   logger.info(`[Task ${input.taskId}] Generating front full-body reference: ${view.id}`);
 
-  const useVlmRef = modelFamily === 'qwen_image' || modelFamily === 'redcraft_krea2';
+  // qwen_image reads the portrait natively in its single stage. redcraft_krea2 keeps its native Stage 1 render
+  // and gets the portrait only in the Qwen-Image 2.1 Stage 2 face refine (scheme 1B).
+  const useVlmRef = modelFamily === 'qwen_image';
+  const useKreaFaceStage2 = modelFamily === 'redcraft_krea2' && Boolean(activeAvatarUrl);
   const usePonyFrontAdapter = modelFamily === 'pony' && Boolean(tierB.characterAdapter && activeAvatarUrl);
   if (!activeAvatarUrl) {
     logger.warn(`[Task ${input.taskId}] Turnaround generation proceeding without active identity reference`);
   } else if (modelFamily === 'pony' && !tierB.characterAdapter) {
     logger.warn(`[Task ${input.taskId}] Pony turnaround proceeding without IP-Adapter (tierB.characterAdapter unavailable): face will NOT be locked`);
   }
-  const panelRef = useVlmRef
+  const panelRef = useVlmRef || useKreaFaceStage2
     ? activeAvatarUrl
     : usePonyFrontAdapter
       ? activeAvatarUrl
       : null;
 
+  // Krea2 Stage 1 has no reference image, so its prompt must not point at "image 1".
   const built = buildTurnaroundViewPrompt(panelPrompt, view, modelFamily, {
-    identityLocked: Boolean(panelRef),
+    identityLocked: Boolean(panelRef) && !useKreaFaceStage2,
   });
   const clientNeg = String(input.negative_prompt || '').trim();
   const negative = clientNeg
@@ -588,13 +592,18 @@ export async function generateTurnaroundComposite(
           character_ref_url: panelRef,
           ref_image_url: panelRef,
           ...(useVlmRef ? { use_qwen_vl_ref: true } : {}),
+          ...(useKreaFaceStage2 ? { face_detail_stage2: true } : {}),
         }
       : {}),
+    face_detail_canvas_width: panelW,
+    face_detail_canvas_height: panelH,
     ...(usePonyFrontAdapter
       ? {
           force_no_character_adapter: false,
           force_character_adapter: true,
           character_adapter_weight: 0.55,
+          faceid_weight: 0.85,
+          face_detail_stage2: true,
           turnaround_front_adapter: true,
         }
       : {}),
@@ -629,7 +638,8 @@ export async function generateTurnaroundComposite(
         node.inputs.height = panelH;
         node.inputs.batch_size = 1;
       }
-      if (node?.class_type?.includes('KSampler') && node.inputs) {
+      // Stage 2 face-detail samplers carry their own denoise/steps; the Stage 1 reset must not touch them.
+      if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) {
         node.inputs.denoise = 1;
         if (modelFamily === 'redcraft_krea2' && !input.generationParams?.steps) {
           node.inputs.steps = Math.max(Number(node.inputs.steps) || 10, 16);

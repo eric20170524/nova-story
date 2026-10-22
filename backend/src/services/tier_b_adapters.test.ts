@@ -7,6 +7,7 @@ import {
   discoverTierBModels,
   faceIdFromObjectInfo,
   injectTierBAdapters,
+  isFaceDetailStage2Node,
   modelChoicesFromObjectInfo,
   probeTierBCapability,
   type TierBCapability
@@ -377,4 +378,44 @@ test('probeTierBCapability enables characterAdapter when only FaceID Plus V2 is 
   });
   assert.equal(wired.characterWired, true);
   assert.ok(Object.values(wf).some((n: any) => n.class_type === 'IPAdapterFaceID'));
+});
+
+test('pony face_detail_stage2 keeps its own denoise through compile and sizes the head mask from the panel canvas', async () => {
+  const cap = { ...mockFullCapability(), faceId: { available: true, ipadapter: 'ip-adapter-faceid-plusv2_sdxl.bin', lora: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors', missing: [] } };
+  const compiled: any = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      character_ref_url: '/static/generated/char_face.png',
+      gen_type: 'turnaround',
+      prefer_faceid_adapter: true,
+      faceid_weight: 0.85,
+      face_detail_stage2: true,
+      face_detail_canvas_width: 768,
+      face_detail_canvas_height: 1152,
+    },
+    '1girl, silver hair, full body, standing, solo',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: { tier_b: { enabled: true } } },
+    cap
+  );
+  const nodes = Object.entries(compiled) as Array<[string, any]>;
+  const apply = nodes.find(([, n]) => n?.class_type === 'IPAdapterFaceID')?.[1];
+  assert.equal(apply?.inputs?.weight, 0.85);
+
+  const stage2Sampler = nodes.find(([, n]) => n?.class_type === 'KSampler' && isFaceDetailStage2Node(n))?.[1];
+  assert.ok(stage2Sampler, 'Stage 2 sampler injected');
+  assert.equal(stage2Sampler.inputs.denoise, 0.5);
+  assert.equal(compiled['3'].inputs.denoise, 1);
+  // Stage 2 samples with the FaceID-patched model, not the raw checkpoint.
+  assert.equal(stage2Sampler.inputs.model[0], compiled['3'].inputs.model[0]);
+
+  const mask = nodes.find(([, n]) => n?.class_type === 'CreateShapeMask')?.[1];
+  assert.equal(mask.inputs.frame_width, 768);
+  assert.equal(mask.inputs.frame_height, 1152);
+  assert.equal(mask.inputs.location_y, Math.round(1152 * 0.13));
+
+  const restore = nodes.find(([, n]) => n?.class_type === 'GH_CropRestore');
+  const save = nodes.find(([, n]) => n?.class_type === 'SaveImage')?.[1];
+  assert.deepEqual(save.inputs.images, [restore![0], 0]);
 });

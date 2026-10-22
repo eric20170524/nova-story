@@ -39,7 +39,10 @@ import {
     type AdapterAvailability
 } from './reference_generation_policy';
 import {
+    injectKrea2QwenFaceDetailStage2,
     injectTierBAdapters,
+    isFaceDetailStage2Node,
+    pickCatalogModel,
     probeTierBCapability,
     resolveTierBFromSettings,
     type TierBCapability
@@ -468,7 +471,7 @@ const injectImg2ImgReference = (
 
     let wired = false;
     for (const node of Object.values(workflow) as any[]) {
-        if (node?.class_type?.includes('KSampler') && node.inputs) {
+        if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) {
             node.inputs.latent_image = [encodeId, 0];
             node.inputs.denoise = Math.min(1, Math.max(0.05, denoise));
             wired = true;
@@ -762,6 +765,16 @@ export const compileComfyWorkflow = async (
         );
     }
 
+    // Stage 2 face detail masks follow the real panel size, which a caller may fix after compile.
+    const faceDetailCanvas = {
+        width: Number(workflowData?.face_detail_canvas_width) > 0
+            ? Number(workflowData.face_detail_canvas_width)
+            : width,
+        height: Number(workflowData?.face_detail_canvas_height) > 0
+            ? Number(workflowData.face_detail_canvas_height)
+            : height,
+    };
+
     // Resolve Tier B capability (caller may pass live probe; else filesystem-only)
     const comfyCfg = runtimeSettings?.comfyui || {};
     const tierBCfg = comfyCfg.tier_b || {};
@@ -840,6 +853,9 @@ export const compileComfyWorkflow = async (
             faceIdWeight: Number.isFinite(Number(workflowData?.faceid_weight))
                 ? Number(workflowData.faceid_weight)
                 : undefined,
+            enableFaceDetailStage2: workflowData?.face_detail_stage2 === true,
+            canvasWidth: faceDetailCanvas.width,
+            canvasHeight: faceDetailCanvas.height,
             isFlux,
             capability: injectCap
         });
@@ -856,8 +872,55 @@ export const compileComfyWorkflow = async (
 
     // Tier A img2img (only when character adapter is NOT handling identity)
     const characterRefUrl = refPlan.refs.characterRefUrl;
+    const krea2FaceDetailStage2 = isRedCraftKrea2
+        && workflowData?.face_detail_stage2 === true
+        && workflowData?.use_qwen_vl_ref !== true
+        && Boolean(characterRefUrl);
     if (isQwenImage || (isRedCraftKrea2 && workflowData?.use_qwen_vl_ref === true && characterRefUrl)) {
-        // Qwen-Image 2.1 and RedCraft Krea2 (Qwen3-VL + Qwen Image VAE) read a reference through TextEncodeQwenImage21.
+        // RedCraft Krea2 keeps its native backbone here; only the Stage 2 face refinement uses Qwen-Image 2.1.
+        // Pure Qwen-Image graphs reconcile precision variants against the live remote catalog.
+        if (isQwenImage) {
+            const unetId = findNodeId(workflow, (node) => node?.class_type === 'UNETLoader');
+            const currentUnet = String((unetId && workflow[unetId]?.inputs?.unet_name) || '');
+            const resolvedUnet = pickCatalogModel(
+                comfyCfg.remote_unet_names,
+                ['qwen_image_2.1_bf16.safetensors', 'qwen_image_2.1_int8_convrot.safetensors'],
+                /qwen[_-]?image[_-]?2[._-]?1/i,
+                currentUnet,
+                true
+            );
+            if (unetId && workflow[unetId]?.inputs && resolvedUnet && resolvedUnet !== currentUnet) {
+                workflow[unetId].inputs.unet_name = resolvedUnet;
+                logger.info(`Reconciled UNETLoader from ${currentUnet} to ${resolvedUnet} for native Qwen-Image 2.1 reference_latents`);
+            }
+            if (/qwen[_-]?image/i.test(resolvedUnet)) {
+                const clipId = findNodeId(workflow, (node) => node?.class_type === 'CLIPLoader');
+                if (clipId && workflow[clipId]?.inputs) {
+                    const currentClip = String(workflow[clipId].inputs.clip_name || '');
+                    workflow[clipId].inputs.clip_name = pickCatalogModel(
+                        comfyCfg.remote_clip_names,
+                        ['qwen3vl_8b_bf16.safetensors', 'qwen3vl_8b_int8_convrot.safetensors', 'qwen3vl_4b_bf16.safetensors'],
+                        /qwen3vl/i,
+                        currentClip || 'qwen3vl_8b_bf16.safetensors',
+                        true
+                    );
+                    workflow[clipId].inputs.type = 'qwen_image';
+                }
+                const vaeLoaderId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
+                if (vaeLoaderId && workflow[vaeLoaderId]?.inputs) {
+                    const currentVae = String(workflow[vaeLoaderId].inputs.vae_name || '');
+                    workflow[vaeLoaderId].inputs.vae_name = pickCatalogModel(
+                        comfyCfg.remote_vae_names,
+                        ['qwen_image_2.1_vae_bf16.safetensors', 'qwen_image_vae.safetensors'],
+                        /qwen[_-]?image.*vae/i,
+                        currentVae || 'qwen_image_2.1_vae_bf16.safetensors',
+                        true
+                    );
+                }
+            }
+        }
+
+        // Qwen-Image 2.1 reads a reference through TextEncodeQwenImage21 (native reference_latents + image_slots).
         // VAEEncode into the sampler is a 4-channel SD latent and does not match this model.
         let encoderId = findNodeId(workflow, (node) => node?.class_type === 'TextEncodeQwenImage21');
         if (!encoderId && isRedCraftKrea2 && characterRefUrl) {
@@ -877,10 +940,10 @@ export const compileComfyWorkflow = async (
                         prompt: posText,
                         negative_prompt: negText,
                         ...(vaeId ? { vae: [vaeId, 0] } : {}),
-                        resolution: 1024,
+                        resolution: Math.max(32, Math.round(Math.max(width, height) / 32) * 32),
                     },
                     class_type: 'TextEncodeQwenImage21',
-                    _meta: { title: 'Text Encode Qwen Image 2.1 (Krea2 Reference)' }
+                    _meta: { title: 'Text Encode Qwen Image 2.1 (Reference Lock)' }
                 };
                 if (sampler?.inputs) {
                     sampler.inputs.positive = [posId, 0];
@@ -914,6 +977,11 @@ export const compileComfyWorkflow = async (
             logger.info(`Wired Qwen-VL character reference ${referenceFilename} as image_1`);
         }
         for (const node of Object.values(workflow) as any[]) {
+            if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) node.inputs.denoise = 1;
+        }
+    } else if (characterRefUrl && krea2FaceDetailStage2) {
+        // Stage 1 stays the native Krea2 text-to-image render; the portrait is only consumed by Stage 2.
+        for (const node of Object.values(workflow) as any[]) {
             if (node?.class_type?.includes('KSampler') && node.inputs) node.inputs.denoise = 1;
         }
     } else if (characterRefUrl) {
@@ -938,17 +1006,68 @@ export const compileComfyWorkflow = async (
                 + `character_ref ${referenceFilename} kept for future adapters only`
             );
             for (const node of Object.values(workflow) as any[]) {
-                if (node?.class_type?.includes('KSampler') && node.inputs) {
+                if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) {
                     node.inputs.denoise = 1;
                 }
             }
         } else {
             // Adapter path: ensure pure noise latent
             for (const node of Object.values(workflow) as any[]) {
-                if (node?.class_type?.includes('KSampler') && node.inputs) {
+                if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) {
                     node.inputs.denoise = 1;
                 }
             }
+        }
+    }
+
+    // RedCraft Krea2 scheme 1B: Qwen-Image 2.1 re-draws the head crop with the portrait as reference.
+    if (krea2FaceDetailStage2 && characterRefUrl) {
+        const unetName = pickCatalogModel(
+            comfyCfg.remote_unet_names,
+            ['qwen_image_2.1_bf16.safetensors', 'qwen_image_2.1_int8_convrot.safetensors'],
+            /qwen[_-]?image[_-]?2[._-]?1/i,
+            'qwen_image_2.1_bf16.safetensors',
+            false
+        );
+        const clipName = pickCatalogModel(
+            comfyCfg.remote_clip_names,
+            ['qwen3vl_8b_bf16.safetensors', 'qwen3vl_8b_int8_convrot.safetensors'],
+            /qwen3vl[_-]?8b/i,
+            'qwen3vl_8b_bf16.safetensors',
+            false
+        );
+        const vaeName = pickCatalogModel(
+            comfyCfg.remote_vae_names,
+            ['qwen_image_2.1_vae_bf16.safetensors', 'qwen_image_vae.safetensors'],
+            /qwen[_-]?image.*vae/i,
+            'qwen_image_2.1_vae_bf16.safetensors',
+            false
+        );
+        const missingFromCatalog = [
+            [comfyCfg.remote_unet_names, unetName],
+            [comfyCfg.remote_clip_names, clipName],
+            [comfyCfg.remote_vae_names, vaeName],
+        ].filter(([catalog, name]) =>
+            Array.isArray(catalog) && catalog.length > 0 && !(catalog as unknown[]).includes(name as string)
+        ).map(([, name]) => String(name));
+        if (missingFromCatalog.length > 0) {
+            logger.warn(`[face-detail-stage2] Qwen-Image 2.1 models missing on ComfyUI (${missingFromCatalog.join(', ')}); keeping Stage 1 Krea2 render`);
+        } else {
+            const stage2Sampler = samplerNodes[0];
+            const wired = injectKrea2QwenFaceDetailStage2(workflow, {
+                width: faceDetailCanvas.width,
+                height: faceDetailCanvas.height,
+                referenceFilename: path.basename(String(characterRefUrl)),
+                seed: Number(stage2Sampler?.inputs?.seed ?? 1),
+                unetName,
+                clipName,
+                vaeName,
+            });
+            logger.info(
+                wired
+                    ? `[face-detail-stage2] Krea2 Stage 1 + Qwen-Image 2.1 face refine wired (${unetName})`
+                    : '[face-detail-stage2] Krea2 Stage 2 not wired (no SaveImage/stage 1 image)'
+            );
         }
     }
 

@@ -83,32 +83,75 @@ type RemoteLoraCatalogSource = {
     authenticatedFetch: (endpoint: string, init?: RequestInit, timeoutMs?: number) => Promise<Response>;
 };
 
+export interface RemoteModelCatalog {
+    remote_lora_names?: string[];
+    remote_unet_names?: string[];
+    remote_clip_names?: string[];
+    remote_vae_names?: string[];
+}
+
 /**
  * Portrait and turnaround compile through different callers. Both must see the
- * live LoraLoader list, or a missing style LoRA is submitted and ComfyUI rejects it.
+ * live LoraLoader / UNETLoader / CLIPLoader / VAELoader lists so a missing style LoRA
+ * or precision variant is reconciled before submission.
  */
 export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
     settings: T,
     service: RemoteLoraCatalogSource,
-): Promise<T & { comfyui: NonNullable<T['comfyui']> & { remote_lora_names?: string[] } }> {
-    if (!service.isRemote) return settings as T & { comfyui: NonNullable<T['comfyui']> & { remote_lora_names?: string[] } };
+): Promise<T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog }> {
+    if (!service.isRemote) return settings as T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog };
     let remoteLoraNames: string[] = [];
+    let remoteUnetNames: string[] | undefined;
+    let remoteClipNames: string[] | undefined;
+    let remoteVaeNames: string[] | undefined;
     try {
         const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
-        if (infoRes.ok) remoteLoraNames = loraNamesFromObjectInfo(await infoRes.json());
+        if (infoRes.ok) {
+            const info = await infoRes.json();
+            remoteLoraNames = loraNamesFromObjectInfo(info);
+            remoteUnetNames = unetNamesFromObjectInfo(info);
+            remoteClipNames = clipNamesFromObjectInfo(info);
+            remoteVaeNames = vaeNamesFromObjectInfo(info);
+        }
     } catch (error) {
         logger.warn(`Remote LoRA catalog unavailable: ${error}`);
     }
     return {
         ...settings,
-        comfyui: { ...(settings.comfyui || {}), remote_lora_names: remoteLoraNames } as NonNullable<T['comfyui']> & { remote_lora_names?: string[] },
+        comfyui: {
+            ...(settings.comfyui || {}),
+            remote_lora_names: remoteLoraNames,
+            ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
+            ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
+            ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
+        } as NonNullable<T['comfyui']> & RemoteModelCatalog,
     };
 }
 
-export function loraNamesFromObjectInfo(objectInfo: unknown): string[] {
-    const raw = (objectInfo as { LoraLoader?: { input?: { required?: { lora_name?: unknown[] } } } })
-        ?.LoraLoader?.input?.required?.lora_name?.[0];
+const loaderChoicesFromObjectInfo = (
+    objectInfo: unknown,
+    loaderNode: string,
+    inputField: string,
+): string[] => {
+    const raw = (objectInfo as Record<string, { input?: { required?: Record<string, unknown[]> } }> | null | undefined)
+        ?.[loaderNode]?.input?.required?.[inputField]?.[0];
     return Array.isArray(raw) ? raw.map((name) => String(name)).filter(Boolean) : [];
+};
+
+export function loraNamesFromObjectInfo(objectInfo: unknown): string[] {
+    return loaderChoicesFromObjectInfo(objectInfo, 'LoraLoader', 'lora_name');
+}
+
+export function unetNamesFromObjectInfo(objectInfo: unknown): string[] {
+    return loaderChoicesFromObjectInfo(objectInfo, 'UNETLoader', 'unet_name');
+}
+
+export function clipNamesFromObjectInfo(objectInfo: unknown): string[] {
+    return loaderChoicesFromObjectInfo(objectInfo, 'CLIPLoader', 'clip_name');
+}
+
+export function vaeNamesFromObjectInfo(objectInfo: unknown): string[] {
+    return loaderChoicesFromObjectInfo(objectInfo, 'VAELoader', 'vae_name');
 }
 
 /**
