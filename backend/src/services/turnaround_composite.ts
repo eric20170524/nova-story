@@ -35,7 +35,7 @@ import {
   type ImageModelFamily
 } from './image_generation_policy';
 import { readPortraitPlate } from './portrait_plate';
-import { commitCharacterEdits, ensureCharacterVersionBaseline } from './character_versions';
+import { ensureCharacterVersionBaseline, syncActiveCharacterVersion } from './character_versions';
 import { GpuLeaseService } from './gpu_lease_service';
 import { resolveTurnaroundStrategy, turnaroundPanelDimensions } from './image_output_spec';
 import { getProjectImageSettings, parseProjectSettings, resolveEffectiveNsfw } from './project_settings';
@@ -66,7 +66,7 @@ export const TURNAROUND_VIEWS: TurnaroundViewSpec[] = [
 const STRIP_MULTI_VIEW =
   /\b(character turnaround sheet|multi-?view layout|multi-?view|3 views|three views|split view layout|complete 3-view|aligned character turnaround|front view,\s*side view,\s*back view|side view,\s*back view|turnaround sheet)\b/gi;
 const STRIP_TURNAROUND_STAGING =
-  /\b(portrait|upper body|bust shot|close-up|medium shot|side view|back view|matching reference character design|consistent (?:face(?:\s+hair\s+and\s+clothing)?|facial features|character design)(?:\s+across(?:\s+all)?\s+views)|same outfit and hair across all views|character reference)\b/i;
+  /\b(portrait|upper body|bust shot|close-up|medium shot|side view|back view|matching reference character design|consistent (?:face(?:\s+hair\s+and\s+clothing)?|facial features|character design)(?:\s+across(?:\s+all)?\s+views)?|same outfit and hair across all views|character reference)\b/i;
 const STRIP_TURNAROUND_MOOD =
   /\b(aroused|seductive|alluring|melting expression|softens under emotion|half-lidded|blushing|smile|gaze|intimate|erotic|playful|inviting|rating_explicit|rating_questionable|soft full lips|soft pink lips|expressive brows|delicate brows|full breasts|soft hourglass(?:\s+mature\s+figure)?|delicate collarbones)\b/i;
 const STRIP_TURNAROUND_HANDHELD_AURA_RE =
@@ -184,15 +184,19 @@ export function mergeTurnaroundAssets(
 
 /**
  * Resolve the effective identity reference URL for turnaround generation.
- * - Explicit `use_ref_portrait === false` disables identity reference binding.
+ * - A human character's full-body plate always follows the approved portrait: the plate is
+ *   worthless if it shows another person, so `use_ref_portrait === false` is ignored (`mandatory`).
+ * - Otherwise explicit `use_ref_portrait === false` disables identity reference binding.
  * - Request-scoped `character_ref_url` / `ref_image_url` (e.g. an unsaved session portrait)
  *   takes precedence over the database `storedAvatarUrl`.
  */
 export function resolveTurnaroundIdentityReference(
   workflowData: Record<string, unknown> | null | undefined,
   storedAvatarUrl?: string | null,
+  options: { mandatory?: boolean } = {},
 ): string | null {
-  if (workflowData?.use_ref_portrait === false) {
+  const mandatory = options.mandatory === true;
+  if (!mandatory && workflowData?.use_ref_portrait === false) {
     return null;
   }
   const requestRef = String(
@@ -201,7 +205,7 @@ export function resolveTurnaroundIdentityReference(
   if (requestRef) {
     return requestRef;
   }
-  if (workflowData?.turnaround_front_adapter === false) {
+  if (!mandatory && workflowData?.turnaround_front_adapter === false) {
     return null;
   }
   const fallback = String(storedAvatarUrl || '').trim();
@@ -240,24 +244,60 @@ export function extractAppearanceBase(prompt: string): string {
   return joined;
 }
 
+/** Face-structure wording that fights a bound identity reference instead of helping it. */
+const FACE_TEXT_RE =
+  /\b(face|facial|cheekbones?|brows?|eyebrows?|nose|lips?|jaw(?:line)?|eyelids?|bone structure|complexion)\b/i;
+const FACE_ACCESSORY_OR_MARK_RE =
+  /\b(mask|veil|scar|mark|mole|freckles?|tattoo|glasses|spectacles|monocle|eyepatch|blindfold|goggles|facepaint)\b/i;
+
+export function stripConflictingFaceText(text: string): string {
+  return splitClauses(text)
+    .filter((clause) => FACE_ACCESSORY_OR_MARK_RE.test(clause) || !FACE_TEXT_RE.test(clause))
+    .join(', ');
+}
+
 export function buildTurnaroundViewPrompt(
   basePrompt: string,
   view: TurnaroundViewSpec = TURNAROUND_VIEWS[0]!,
-  modelFamily: ImageModelFamily = 'pony'
+  modelFamily: ImageModelFamily = 'pony',
+  options: { identityLocked?: boolean } = {}
 ): { prompt: string; negative_prompt: string } {
   const naturalLanguage = modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'flux';
+  // Qwen-VL models read the portrait as image 1; its face must win over any face text.
+  const vlmLocked = options.identityLocked === true
+    && (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image');
   const rawFiltered = normalizeCompoundAppearanceTerms(basePrompt);
-  const appearance = extractAppearanceBase(naturalLanguage ? stripBooruWeights(rawFiltered) : rawFiltered);
+  const extracted = extractAppearanceBase(naturalLanguage ? stripBooruWeights(rawFiltered) : rawFiltered);
+  const appearance = vlmLocked
+    ? stripConflictingFaceText(extracted)
+    : extracted;
   const subjectKind = inferPromptSubjectType(basePrompt);
   const subjectNoun = subjectKind === 'female_human'
     ? 'adult East Asian woman, female'
     : subjectKind === 'male_human'
       ? 'adult East Asian man, male'
       : 'standing character';
+  const lockedNoun = subjectKind === 'female_human'
+    ? 'woman'
+    : subjectKind === 'male_human'
+      ? 'man'
+      : 'character';
+  // Eyes are a few pixels in a full-body frame, so the model drops their colour first.
+  // Name the stored colour next to the copy instruction instead of leaving it only in the tag list.
+  const eyeClause = vlmLocked
+    ? splitClauses(extracted).find((clause) => /\beyes?\b/i.test(clause) && !/\b(shape|eyelids?)\b/i.test(clause))
+    : undefined;
+  const eyeColorLock = eyeClause
+    ? ` Keep the exact eye color from the reference image (${eyeClause.trim()}); the irises must not turn dark brown or black.`
+    : vlmLocked
+      ? ' Keep the exact eye color from the reference image.'
+      : '';
 
-  const camera = naturalLanguage
-    ? `Full-length head-to-toe wide shot, direct orthographic front view of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor, facing the camera on a solid pure white opaque studio background. Preserve recognizable facial structure, hairstyle, body proportions, and canonical outfit from the identity reference; show only this single current appearance state with no before-and-after comparison, no inset boxes, and no text labels.`
-    : '';
+  const camera = vlmLocked
+    ? `Full-length head-to-toe wide shot, direct orthographic front view of the exact same ${lockedNoun} shown in the reference image (image 1), standing from head to toe with entire figure, dress hem, and feet visible on the floor, facing the camera on a solid pure white opaque studio background. Copy the face from the reference image exactly: identical facial structure, eye shape, eye color, nose, lips, skin tone, hairstyle, hair color, and body proportions; do not redesign or beautify or replace the face.${eyeColorLock} Keep the canonical outfit; show only this single current appearance state with no before-and-after comparison, no inset boxes, and no text labels.`
+    : naturalLanguage
+      ? `Full-length head-to-toe wide shot, direct orthographic front view of one ${subjectNoun} standing from head to toe with entire figure, dress hem, and feet visible on the floor, facing the camera on a solid pure white opaque studio background. Preserve recognizable facial structure, hairstyle, body proportions, and canonical outfit from the identity reference; show only this single current appearance state with no before-and-after comparison, no inset boxes, and no text labels.`
+      : '';
   const quality =
     modelFamily === 'pony'
       ? 'score_9, score_8_up, score_7_up, source_anime, masterpiece, best quality'
@@ -295,6 +335,9 @@ export function buildTurnaroundViewPrompt(
     'text, title bar, character name label, view number, ruler, color palette swatch, letters, numbers, typography, watermark, logo, signature, UI, speech bubble, label, banner',
     'duplicate figure, second person, double head, two heads, collage, split panel, comic panel, grid, turnaround sheet, multiple views',
     'child, loli, shota, underage',
+    options.identityLocked === true
+      ? 'different person, different face, altered facial features, redesigned face, generic beauty face, face replaced'
+      : '',
     'blurry, cropped head, missing feet, floating limbs',
     'handheld prop, weapon, halo, helmet, space helmet, glowing ring, moon backdrop, gradient background, gray background, transparent background, checkerboard background, architecture, archway, doorway, columns, scenery, props, floating objects',
     view.negativeExtra
@@ -429,7 +472,14 @@ export async function generateTurnaroundComposite(
     }
   }
 
-  const activeAvatarUrl = resolveTurnaroundIdentityReference(input.workflowData, storedAvatarUrl);
+  const activeAvatarUrl = resolveTurnaroundIdentityReference(
+    input.workflowData,
+    storedAvatarUrl,
+    { mandatory: humanTurnaround },
+  );
+  if (humanTurnaround && input.workflowData?.use_ref_portrait === false) {
+    logger.warn(`[Task ${input.taskId}] use_ref_portrait=false ignored: a human full-body plate must follow the approved portrait`);
+  }
 
   let effectiveWorkflowData: Record<string, unknown> = {
     ...input.workflowData,
@@ -496,24 +546,26 @@ export async function generateTurnaroundComposite(
   });
   logger.info(`[Task ${input.taskId}] Generating front full-body reference: ${view.id}`);
 
-  const built = buildTurnaroundViewPrompt(panelPrompt, view, modelFamily);
-  const clientNeg = String(input.negative_prompt || '').trim();
-  const negative = clientNeg
-    ? `${clientNeg}, ${built.negative_prompt}`
-    : built.negative_prompt;
-
   const useVlmRef = modelFamily === 'qwen_image' || modelFamily === 'redcraft_krea2';
   const usePonyFrontAdapter = modelFamily === 'pony' && Boolean(tierB.characterAdapter && activeAvatarUrl);
   if (!activeAvatarUrl) {
     logger.warn(`[Task ${input.taskId}] Turnaround generation proceeding without active identity reference`);
   } else if (modelFamily === 'pony' && !tierB.characterAdapter) {
-    logger.warn(`[Task ${input.taskId}] Pony turnaround proceeding without IP-Adapter (tierB.characterAdapter unavailable)`);
+    logger.warn(`[Task ${input.taskId}] Pony turnaround proceeding without IP-Adapter (tierB.characterAdapter unavailable): face will NOT be locked`);
   }
   const panelRef = useVlmRef
     ? activeAvatarUrl
     : usePonyFrontAdapter
       ? activeAvatarUrl
       : null;
+
+  const built = buildTurnaroundViewPrompt(panelPrompt, view, modelFamily, {
+    identityLocked: Boolean(panelRef),
+  });
+  const clientNeg = String(input.negative_prompt || '').trim();
+  const negative = clientNeg
+    ? `${clientNeg}, ${built.negative_prompt}`
+    : built.negative_prompt;
 
   if (panelRef && !comfyService.isRemote) {
     copyReferenceImageToComfy(
@@ -548,55 +600,71 @@ export async function generateTurnaroundComposite(
       : {}),
   };
 
-  const finalWorkflow = await compileComfyWorkflow(
-    panelWorkflow,
-    built.prompt,
-    'standard',
-    {
-      steps: input.generationParams?.steps,
-      cfg: input.generationParams?.cfg,
-      sampler_name: input.generationParams?.sampler_name,
-      scheduler: input.generationParams?.scheduler,
-      seed: sheetSeed
-    },
-    compileSettings,
-    tierB
-  );
-
-  for (const node of Object.values(finalWorkflow) as any[]) {
-    if ((node?.class_type === 'EmptyLatentImage' || node?.class_type === 'EmptySD3LatentImage') && node.inputs) {
-      node.inputs.width = panelW;
-      node.inputs.height = panelH;
-      node.inputs.batch_size = 1;
-    }
-    if (node?.class_type?.includes('KSampler') && node.inputs) {
-      node.inputs.denoise = 1;
-      if (modelFamily === 'redcraft_krea2' && !input.generationParams?.steps) {
-        node.inputs.steps = Math.max(Number(node.inputs.steps) || 10, 16);
-      }
-    }
+  const wantFaceId = usePonyFrontAdapter && tierB.faceId?.available === true;
+  if (usePonyFrontAdapter && !wantFaceId) {
+    logger.info(
+      `[Task ${input.taskId}] FaceID unavailable, using plain IP-Adapter (face lock is weak): ${tierB.faceId?.missing?.join(', ') || 'unknown'}`
+    );
   }
 
-  const executableWorkflow = comfyService.isRemote
-    ? await comfyService.uploadWorkflowReferences(finalWorkflow, staticDir)
-    : finalWorkflow;
+  const runPanel = async (preferFaceId: boolean) => {
+    const compiled = await compileComfyWorkflow(
+      { ...panelWorkflow, prefer_faceid_adapter: preferFaceId },
+      built.prompt,
+      'standard',
+      {
+        steps: input.generationParams?.steps,
+        cfg: input.generationParams?.cfg,
+        sampler_name: input.generationParams?.sampler_name,
+        scheduler: input.generationParams?.scheduler,
+        seed: sheetSeed
+      },
+      compileSettings,
+      tierB
+    );
 
-  const result = await comfyService.generateImage(
-    executableWorkflow,
-    async (msgType, data) => {
-      await input.onProgress?.(msgType, { ...data, view: view.id });
-    },
-    {
-      onPromptQueued: async (promptId) => {
-        try {
-          const { AssetTaskStore } = await import('./task_store');
-          await AssetTaskStore.setComfyPromptId(input.taskId, promptId);
-        } catch {
-          /* ignore */
+    for (const node of Object.values(compiled) as any[]) {
+      if ((node?.class_type === 'EmptyLatentImage' || node?.class_type === 'EmptySD3LatentImage') && node.inputs) {
+        node.inputs.width = panelW;
+        node.inputs.height = panelH;
+        node.inputs.batch_size = 1;
+      }
+      if (node?.class_type?.includes('KSampler') && node.inputs) {
+        node.inputs.denoise = 1;
+        if (modelFamily === 'redcraft_krea2' && !input.generationParams?.steps) {
+          node.inputs.steps = Math.max(Number(node.inputs.steps) || 10, 16);
         }
       }
     }
-  );
+
+    const executable = comfyService.isRemote
+      ? await comfyService.uploadWorkflowReferences(compiled, staticDir)
+      : compiled;
+
+    return comfyService.generateImage(
+      executable,
+      async (msgType, data) => {
+        await input.onProgress?.(msgType, { ...data, view: view.id });
+      },
+      {
+        onPromptQueued: async (promptId) => {
+          try {
+            const { AssetTaskStore } = await import('./task_store');
+            await AssetTaskStore.setComfyPromptId(input.taskId, promptId);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    );
+  };
+
+  let result = await runPanel(wantFaceId);
+  if (wantFaceId && result?.status !== 'completed' && /faceid|insightface|ipadapter|ip-adapter/i.test(String(result?.message || ''))) {
+    // object_info cannot prove the InsightFace runtime works. Fall back instead of failing the plate.
+    logger.warn(`[Task ${input.taskId}] FaceID run failed (${result?.message}); retrying with plain IP-Adapter`);
+    result = await runPanel(false);
+  }
 
   if (result?.status !== 'completed' || !result.images?.[0]?.data) {
     throw new Error(
@@ -633,7 +701,12 @@ export async function generateTurnaroundComposite(
 
   logger.info(`[Task ${input.taskId}] Turnaround front full-body image saved ${sheetUrl}`);
 
-  if (characterId != null) {
+  if (characterId != null && !wardrobeVariant) {
+    // The regular plate is a candidate. It becomes the body identity plate (turnaround_front_url)
+    // only when the user adopts it, so a face that drifted from the portrait cannot spread
+    // into later shots and video.
+    logger.info(`[Task ${input.taskId}] Turnaround front plate is a candidate until adopted: ${sheetUrl}`);
+  } else if (characterId != null) {
     try {
       await ensureCharacterVersionBaseline(characterId);
       const row = await db.get('SELECT visual_tags FROM character WHERE id = ?', characterId);
@@ -648,9 +721,9 @@ export async function generateTurnaroundComposite(
         { wardrobeVariant }
       );
       await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify(merged), characterId);
-      if (!wardrobeVariant) await commitCharacterEdits(characterId, previous);
+      await syncActiveCharacterVersion(characterId);
     } catch (error) {
-      logger.warn(`[Task ${input.taskId}] Could not store the turnaround front plate: ${error}`);
+      logger.warn(`[Task ${input.taskId}] Could not store the wardrobe variant plate: ${error}`);
     }
   }
 

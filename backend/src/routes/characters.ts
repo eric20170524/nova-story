@@ -33,6 +33,8 @@ import {
   listCharacterVersions,
   commitCharacterEdits
 } from '../services/character_versions';
+import { applyTurnaroundPlate } from '../services/character_reference_plates';
+import { stripConflictingFaceText } from '../services/turnaround_composite';
 import { TtsService, formatVoiceLabel, TtsServiceError } from '../services/tts_service';
 
 // Dummy implementation of current_user auth
@@ -228,7 +230,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     // Additional fields are stored in the JSON in the python implementation.
     const assets = tags.assets || {};
     if (data.avatar_url) assets.avatar_url = data.avatar_url;
-    if (data.turnaround_url) assets.turnaround_url = data.turnaround_url;
+    if (data.turnaround_url) applyTurnaroundPlate(assets, data.turnaround_url, null);
     if (data.face_url) assets.face_url = data.face_url;
     tags.assets = assets;
     delete tags.model_type;
@@ -381,10 +383,12 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     // Manage visual_tags and embedded properties
     const priorTags = typeof char.visual_tags === 'string' ? JSON.parse(char.visual_tags) : (char.visual_tags || {});
+    const priorTurnaroundUrl = priorTags?.assets?.turnaround_url ?? priorTags?.turnaround_url ?? null;
     let tags = priorTags;
+    let incomingTags: any = undefined;
 
     if (data.visual_tags !== undefined) {
-      const incomingTags = typeof data.visual_tags === 'string' ? JSON.parse(data.visual_tags) : data.visual_tags;
+      incomingTags = typeof data.visual_tags === 'string' ? JSON.parse(data.visual_tags) : data.visual_tags;
       tags = {
         ...incomingTags,
         assets: {
@@ -404,7 +408,12 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
 
     const assets = tags.assets || {};
     if (data.avatar_url !== undefined) assets.avatar_url = data.avatar_url;
-    if (data.turnaround_url !== undefined) assets.turnaround_url = data.turnaround_url;
+    const nextTurnaroundUrl = data.turnaround_url !== undefined
+      ? data.turnaround_url
+      : (incomingTags?.assets?.turnaround_front_url === undefined ? incomingTags?.assets?.turnaround_url : undefined);
+    if (nextTurnaroundUrl !== undefined) {
+      applyTurnaroundPlate(assets, nextTurnaroundUrl, priorTurnaroundUrl);
+    }
     if (data.face_url !== undefined) assets.face_url = data.face_url;
     tags.assets = assets;
 
@@ -498,26 +507,6 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     const imageSettings = getProjectImageSettings(projectSettings);
     const effectiveModelType = imageSettings.model;
     const stylePreset = String(imageSettings.style || '').toLowerCase();
-    let header: { prefix: string; negative: string };
-    try {
-      header = buildCharacterPromptHeader(
-        effectiveModelType,
-        nsfwEnabled,
-        req.gen_type,
-        stored.gender,
-        stored.appearance,
-      );
-    } catch (error) {
-      if (error instanceof CharacterSheetError) {
-        return reply.status(400).send({ detail: error.message });
-      }
-      throw error;
-    }
-
-    let refHint = "";
-    if (req.use_ref_portrait === true && refUrl) {
-      refHint = ", matching reference character design, consistent face hair and clothing";
-    }
 
     const mustKeepText = Array.isArray(tags?.identity_lock?.must_keep)
       ? tags.identity_lock.must_keep.join(', ')
@@ -534,6 +523,40 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
       tags?.subject_type || tags?.species || (stored.gender === 'female' ? 'female_human' : stored.gender === 'male' ? 'male_human' : null)
     );
     const isHumanCharacter = inferredSubject !== 'nonhuman' && inferredSubject !== 'environment';
+    // A human full-body plate always follows the approved portrait; use_ref_portrait cannot turn that off.
+    const identityRefUrl = req.gen_type === 'turnaround' && isHumanCharacter
+      ? (String(req.ref_image_url || storedAvatar || '').trim() || null)
+      : refUrl;
+    const modelBindsTurnaroundRef =
+      effectiveModelType === 'redcraft_krea2'
+      || effectiveModelType === 'qwen_image'
+      || effectiveModelType === 'pony';
+    const identityLocked = req.gen_type === 'turnaround' && Boolean(identityRefUrl) && modelBindsTurnaroundRef;
+    const vlmFaceLocked = identityLocked && (effectiveModelType === 'redcraft_krea2' || effectiveModelType === 'qwen_image');
+    const effectiveAppearance = vlmFaceLocked
+      ? { ...stored.appearance, face: stripConflictingFaceText(stored.appearance.face || '') }
+      : stored.appearance;
+
+    let header: { prefix: string; negative: string };
+    try {
+      header = buildCharacterPromptHeader(
+        effectiveModelType,
+        nsfwEnabled,
+        req.gen_type,
+        stored.gender,
+        effectiveAppearance,
+      );
+    } catch (error) {
+      if (error instanceof CharacterSheetError) {
+        return reply.status(400).send({ detail: error.message });
+      }
+      throw error;
+    }
+
+    let refHint = "";
+    if (identityRefUrl && (req.use_ref_portrait === true || req.gen_type === 'turnaround')) {
+      refHint = ", matching reference character design, consistent face hair and clothing";
+    }
     if (
       (req.gen_type === 'portrait' || req.gen_type === 'turnaround')
       && isHumanCharacter
@@ -570,7 +593,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (req.gen_type === "turnaround") {
       // Simplified turnaround: generates only the canonical orthographic front full-body reference.
       prompt = singleSheetTurnaround
-        ? `${header.prefix}. Full-body direct orthographic front view standing character reference, head to toe, neutral standing A-pose, unobstructed silhouette, feet visible, solid pure white opaque studio background, completely opaque, no transparency, no checkerboard, no labels, no letters, no watermark.${refUrl ? ' Match the supplied portrait for identity.' : ''}`
+        ? `${header.prefix}. Full-body direct orthographic front view standing character reference, head to toe, neutral standing A-pose, unobstructed silhouette, feet visible, solid pure white opaque studio background, completely opaque, no transparency, no checkerboard, no labels, no letters, no watermark.${identityRefUrl ? ' Match the supplied portrait for identity.' : ''}`
         : `${header.prefix}, full body, direct orthographic front view, neutral standing A-pose, character reference${refHint}`;
     } else {
       prompt = codexImage
@@ -585,14 +608,19 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     } else if (isHumanCharacter && !isWesternStyle) {
       if (isOrientalRealistic) {
         if (!/^oriental realistic style\b/i.test(prompt)) {
-          prompt = `${ORIENTAL_REALISTIC_FACE_LOCK}, ${prompt}`;
+          // With a bound portrait the reference owns the face: keep the style, drop the face text.
+          prompt = identityLocked
+            ? `oriental realistic style, photorealistic, natural porcelain skin texture, subsurface scattering, realistic human anatomy, ${prompt}`
+            : `${ORIENTAL_REALISTIC_FACE_LOCK}, ${prompt}`;
         }
-      } else if (!/(east asian|oriental|chinese|asian)/i.test(prompt)) {
+      } else if (!identityLocked && !/(east asian|oriental|chinese|asian)/i.test(prompt)) {
         prompt += ', East Asian facial features, delicate classical oriental bone structure, soft East Asian eyelids';
       }
     }
 
-    const activeRefUrl = req.use_ref_portrait === true ? (refUrl || null) : null;
+    const activeRefUrl = req.gen_type === 'turnaround' && Boolean(identityRefUrl)
+      ? identityRefUrl
+      : (req.use_ref_portrait === true ? (identityRefUrl || null) : null);
     return {
       prompt,
       negative_prompt: negativePrompt,
@@ -703,7 +731,7 @@ export const characterRoutes: FastifyPluginAsync = async (app) => {
     if (assetType === 'avatar') {
       assets.avatar_url = assetUrl;
     } else if (assetType === 'turnaround') {
-      assets.turnaround_url = assetUrl;
+      applyTurnaroundPlate(assets, assetUrl);
     } else if (assetType === 'face') {
       assets.face_url = assetUrl;
     }

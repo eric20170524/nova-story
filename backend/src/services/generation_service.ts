@@ -836,6 +836,10 @@ export const compileComfyWorkflow = async (
                 : null,
             characterWeight: charWeight,
             compositionStrength: compStrength,
+            preferFaceId: workflowData?.prefer_faceid_adapter === true,
+            faceIdWeight: Number.isFinite(Number(workflowData?.faceid_weight))
+                ? Number(workflowData.faceid_weight)
+                : undefined,
             isFlux,
             capability: injectCap
         });

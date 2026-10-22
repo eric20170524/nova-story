@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { identityPlateForShot, resolveSceneIdentityPlate } from './character_reference_plates';
+import { applyTurnaroundPlate, characterPlates, identityPlateForShot, resolveSceneIdentityPlate } from './character_reference_plates';
 
 const character = {
   id: 17,
@@ -71,4 +71,37 @@ test('a single full-body shot uses the front panel and does not img2img it', () 
   }, [character]);
   assert.equal(zhFull.identity_plate, 'body');
   assert.equal(zhFull.character_ref_url, '/front.png');
+});
+
+test('adopting a full-body plate moves display and body plate together and drops legacy side/back', () => {
+  const assets: Record<string, any> = {
+    avatar_url: '/portrait.png',
+    turnaround_url: '/old-sheet.png',
+    turnaround_front_url: '/old-front.png',
+    turnaround_side_url: '/old-side.png',
+    turnaround_back_url: '/old-back.png',
+  };
+  assert.equal(applyTurnaroundPlate(assets, '/new-front.png'), true);
+  assert.equal(assets.turnaround_url, '/new-front.png');
+  assert.equal(assets.turnaround_front_url, '/new-front.png');
+  assert.equal(assets.turnaround_side_url, undefined);
+  assert.equal(assets.turnaround_back_url, undefined);
+  assert.equal(characterPlates({ assets }).body, '/new-front.png');
+  assert.equal(characterPlates({ assets }).face, '/portrait.png');
+
+  // clearing removes the body plate too
+  assert.equal(applyTurnaroundPlate(assets, null), true);
+  assert.equal(assets.turnaround_url, null);
+  assert.equal(characterPlates({ assets }).body, null);
+});
+
+test('saving an unchanged turnaround_url leaves a legacy separate front plate untouched', () => {
+  const assets: Record<string, any> = {
+    turnaround_url: '/legacy-sheet.png',
+    turnaround_front_url: '/legacy-front.png',
+    turnaround_side_url: '/legacy-side.png',
+  };
+  assert.equal(applyTurnaroundPlate(assets, '/legacy-sheet.png'), false);
+  assert.equal(assets.turnaround_front_url, '/legacy-front.png');
+  assert.equal(assets.turnaround_side_url, '/legacy-side.png');
 });

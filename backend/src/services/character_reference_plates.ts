@@ -40,6 +40,32 @@ export const characterPlates = (visualTags: unknown): CharacterPlates => {
   return { face: face || null, body: body || null };
 };
 
+/**
+ * Adopt a full-body plate. The single front plate is both the displayed turnaround image
+ * and the body identity plate, so both fields move together and legacy side/back urls go.
+ * A save that repeats the stored turnaround_url changes nothing: legacy characters keep a
+ * stitched sheet there and a separate front plate, and an unrelated edit must not clobber it.
+ * Returns true when the plate changed.
+ */
+export const applyTurnaroundPlate = (
+  assets: Record<string, any>,
+  url: string | null | undefined,
+  previousTurnaroundUrl?: string | null
+): boolean => {
+  const next = text(url);
+  const prev = previousTurnaroundUrl !== undefined
+    ? text(previousTurnaroundUrl)
+    : text(assets.turnaround_url);
+  if (next === prev && (previousTurnaroundUrl !== undefined || assets.turnaround_front_url !== undefined)) {
+    return false;
+  }
+  assets.turnaround_url = url ?? null;
+  assets.turnaround_front_url = next || null;
+  delete assets.turnaround_side_url;
+  delete assets.turnaround_back_url;
+  return true;
+};
+
 const shotText = (workflow: any): string => [
   workflow?.shot_type,
   workflow?.shot_intent,

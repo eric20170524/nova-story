@@ -1134,3 +1134,30 @@ test('turnaround and turnaround_panel never inject intimateCue or NSFW_ATMOSPHER
 });
 
 
+
+test('a bound identity reference stops the style layer from adding a generic beauty face', () => {
+  const base = {
+    modelFamily: 'redcraft_krea2' as const,
+    nsfwEnabled: false,
+    stylePreset: 'oriental_realistic',
+    existingPrompt: 'Full-length head-to-toe wide shot, direct orthographic front view of the exact same woman shown in the reference image (image 1). Copy the face from the reference image exactly, female, long black hair, moon-white dress',
+    genType: 'turnaround_panel',
+  };
+  const free = buildPromptEnhancement(base);
+  assert.match(free.suffix, /delicate East Asian facial features/i);
+
+  const bound = buildPromptEnhancement({ ...base, identityReferenceBound: true });
+  assert.doesNotMatch(bound.suffix, /facial (?:features|bone)|beautiful (?:young )?East Asian|soft East Asian eyelids|gentle nose bridge/i);
+  assert.match(bound.suffix, /adult woman, female/);
+  assert.match(bound.suffix, /oriental realistic style/);
+  assert.match(bound.negativeExtra, /western face/i);
+
+  // Non-oriental_realistic preset with multi-sentence turnaround prompt still runs the booster with face terms stripped
+  const xianxiaBound = buildPromptEnhancement({
+    ...base,
+    stylePreset: 'xianxia',
+    identityReferenceBound: true,
+  });
+  assert.match(xianxiaBound.suffix, /adult woman, female/);
+  assert.doesNotMatch(xianxiaBound.suffix, /\b(face|facial|eyes?|eyelids?|bone structure|nose|lips?)\b/i);
+});

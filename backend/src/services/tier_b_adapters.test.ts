@@ -5,7 +5,9 @@ import os from 'os';
 import path from 'path';
 import {
   discoverTierBModels,
+  faceIdFromObjectInfo,
   injectTierBAdapters,
+  modelChoicesFromObjectInfo,
   probeTierBCapability,
   type TierBCapability
 } from './tier_b_adapters';
@@ -216,4 +218,163 @@ test('compileComfyWorkflow injects Tier B when capability forced', async () => {
     ),
     false
   );
+});
+
+const choiceNode = (field: string, files: string[]) => ({ input: { required: { [field]: [files] } } });
+const faceIdObjectInfo = (opts: { weights?: boolean; lora?: boolean; nodes?: boolean } = {}) => ({
+  ...(opts.nodes === false ? {} : {
+    IPAdapterUnifiedLoaderFaceID: {},
+    IPAdapterFaceID: {},
+    IPAdapterInsightFaceLoader: {},
+  }),
+  IPAdapterModelLoader: choiceNode('ipadapter_file', [
+    'ip-adapter-plus_sdxl_vit-h.safetensors',
+    ...(opts.weights === false ? [] : ['ip-adapter-faceid-plusv2_sdxl.bin']),
+  ]),
+  LoraLoader: choiceNode('lora_name', [
+    'Pony_DetailV2.0.safetensors',
+    ...(opts.lora === false ? [] : ['ip-adapter-faceid-plusv2_sdxl_lora.safetensors']),
+  ]),
+  CLIPVisionLoader: choiceNode('clip_name', ['CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors']),
+  IPAdapterUnifiedLoader: {},
+  IPAdapterAdvanced: {},
+  IPAdapterModelLoader_: {},
+});
+
+test('FaceID needs the nodes, the weights and the LoRA; the node pack alone is not enough', () => {
+  const ready = faceIdFromObjectInfo(faceIdObjectInfo());
+  assert.equal(ready.available, true);
+  assert.match(ready.ipadapter || '', /faceid-plusv2_sdxl\.bin/);
+  assert.match(ready.lora || '', /faceid-plusv2_sdxl_lora/);
+
+  // The remote as probed: FaceID nodes installed, no weights, no LoRA.
+  const nodesOnly = faceIdFromObjectInfo(faceIdObjectInfo({ weights: false, lora: false }));
+  assert.equal(nodesOnly.available, false);
+  assert.equal(nodesOnly.missing.length, 2);
+  assert.equal(faceIdFromObjectInfo(faceIdObjectInfo({ lora: false })).available, false);
+  assert.equal(faceIdFromObjectInfo(faceIdObjectInfo({ weights: false })).available, false);
+  assert.equal(faceIdFromObjectInfo(faceIdObjectInfo({ nodes: false })).available, false);
+  // Never assumed without a live object_info
+  assert.equal(faceIdFromObjectInfo(null).available, false);
+});
+
+test('a FaceID weight file is never picked as the plain IP-Adapter model', () => {
+  const both = modelChoicesFromObjectInfo({
+    IPAdapterModelLoader: choiceNode('ipadapter_file', ['ip-adapter-faceid-plusv2_sdxl.bin', 'ip-adapter-plus_sdxl_vit-h.safetensors']),
+  });
+  assert.equal(both.ipadapter, 'ip-adapter-plus_sdxl_vit-h.safetensors');
+  const onlyFaceId = modelChoicesFromObjectInfo({
+    IPAdapterModelLoader: choiceNode('ipadapter_file', ['ip-adapter-faceid-plusv2_sdxl.bin']),
+  });
+  assert.equal(onlyFaceId.ipadapter, null);
+});
+
+test('probeTierBCapability exposes FaceID readiness from a live object_info', () => {
+  const ready = probeTierBCapability(null, { objectInfo: faceIdObjectInfo() });
+  assert.equal(ready.characterAdapter, true);
+  assert.equal(ready.models.ipadapter, 'ip-adapter-plus_sdxl_vit-h.safetensors');
+  assert.equal(ready.faceId?.available, true);
+  const nodesOnly = probeTierBCapability(null, { objectInfo: faceIdObjectInfo({ weights: false, lora: false }) });
+  assert.equal(nodesOnly.faceId?.available, false);
+  assert.ok(nodesOnly.notes.some((note) => /FaceID Plus V2 unavailable/.test(note)));
+});
+
+test('preferFaceId wires FaceID Plus V2 after the existing LoRA chain and not plain IP-Adapter', () => {
+  const workflow: any = ponyWorkflow();
+  workflow['3'].inputs.model = ['20', 0]; // model already patched by an earlier LoRA
+  const cap = { ...mockFullCapability(), faceId: { available: true, ipadapter: 'ip-adapter-faceid-plusv2_sdxl.bin', lora: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors', missing: [] } };
+  const result = injectTierBAdapters(workflow, {
+    characterImageFilename: 'face.png',
+    preferFaceId: true,
+    faceIdWeight: 0.9,
+    isFlux: false,
+    capability: cap,
+  });
+  assert.equal(result.characterWired, true);
+  const entries = Object.entries(workflow) as Array<[string, any]>;
+  const loader = entries.find(([, n]) => n.class_type === 'IPAdapterUnifiedLoaderFaceID')!;
+  const apply = entries.find(([, n]) => n.class_type === 'IPAdapterFaceID')!;
+  assert.deepEqual(loader[1].inputs.model, ['20', 0]);
+  assert.equal(loader[1].inputs.preset, 'FACEID PLUS V2');
+  assert.deepEqual(apply[1].inputs.ipadapter, [loader[0], 1]);
+  assert.equal(apply[1].inputs.weight, 0.9);
+  assert.deepEqual(workflow['3'].inputs.model, [apply[0], 0]);
+  const types = entries.map(([, n]) => n.class_type);
+  assert.equal(types.includes('IPAdapterAdvanced'), false);
+  assert.equal(types.includes('IPAdapterModelLoader'), false);
+  assert.ok(result.notes.some((note) => /FaceID Plus V2 wired/.test(note)));
+});
+
+test('preferFaceId falls back to plain IP-Adapter when the install has no FaceID weights', () => {
+  for (const faceId of [undefined, { available: false, ipadapter: null, lora: null, missing: ['weights'] }]) {
+    const workflow: any = ponyWorkflow();
+    const result = injectTierBAdapters(workflow, {
+      characterImageFilename: 'face.png',
+      preferFaceId: true,
+      isFlux: false,
+      capability: { ...mockFullCapability(), faceId },
+    });
+    assert.equal(result.characterWired, true);
+    const types = Object.values(workflow).map((n: any) => n.class_type);
+    assert.ok(types.includes('IPAdapterAdvanced'));
+    assert.equal(types.includes('IPAdapterFaceID'), false);
+  }
+});
+
+test('FaceID is opt-in: scene shots keep plain IP-Adapter even when FaceID is installed', () => {
+  const workflow: any = ponyWorkflow();
+  injectTierBAdapters(workflow, {
+    characterImageFilename: 'face.png',
+    isFlux: false,
+    capability: { ...mockFullCapability(), faceId: { available: true, ipadapter: 'a.bin', lora: 'b.safetensors', missing: [] } },
+  });
+  const types = Object.values(workflow).map((n: any) => n.class_type);
+  assert.ok(types.includes('IPAdapterAdvanced'));
+  assert.equal(types.includes('IPAdapterFaceID'), false);
+});
+
+test('compileComfyWorkflow forwards prefer_faceid_adapter to the injector', async () => {
+  const cap = { ...mockFullCapability(), faceId: { available: true, ipadapter: 'ip-adapter-faceid-plusv2_sdxl.bin', lora: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors', missing: [] } };
+  const compiled = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      character_ref_url: '/static/generated/char_face.png',
+      gen_type: 'portrait',
+      prefer_faceid_adapter: true,
+      faceid_weight: 0.7,
+    },
+    '1girl, silver hair, portrait, close-up face, solo',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: { tier_b: { enabled: true } } },
+    cap
+  );
+  const apply: any = Object.values(compiled).find((n: any) => n.class_type === 'IPAdapterFaceID');
+  assert.ok(apply, 'FaceID apply node present');
+  assert.equal(apply.inputs.weight, 0.7);
+});
+
+test('probeTierBCapability enables characterAdapter when only FaceID Plus V2 is installed remotely', () => {
+  const cap = probeTierBCapability(null, {
+    objectInfo: {
+      IPAdapterUnifiedLoaderFaceID: {},
+      IPAdapterFaceID: {},
+      IPAdapterModelLoader: {
+        input: { required: { ipadapter_file: [['ip-adapter-faceid-plusv2_sdxl.bin']] } }
+      },
+      LoraLoader: {
+        input: { required: { lora_name: [['ip-adapter-faceid-plusv2_sdxl_lora.safetensors']] } }
+      }
+    }
+  });
+  assert.equal(cap.faceId?.available, true);
+  assert.equal(cap.characterAdapter, true);
+  const wf: any = ponyWorkflow();
+  const wired = injectTierBAdapters(wf, {
+    characterImageFilename: 'face.png',
+    preferFaceId: true,
+    capability: cap
+  });
+  assert.equal(wired.characterWired, true);
+  assert.ok(Object.values(wf).some((n: any) => n.class_type === 'IPAdapterFaceID'));
 });

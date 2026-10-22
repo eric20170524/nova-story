@@ -988,6 +988,11 @@ export const buildPromptEnhancement = (options: {
   hasVisiblePerson?: boolean | null;
   /** Turnaround panel angle ('front') for full-body front reference plates. */
   turnaroundView?: string | null;
+  /**
+   * An approved portrait is bound as the identity reference. The reference owns the face,
+   * so generic beauty / face-lock text must not be appended and compete with it.
+   */
+  identityReferenceBound?: boolean | null;
 }): PromptEnhancement => {
   const {
     modelFamily,
@@ -1001,7 +1006,9 @@ export const buildPromptEnhancement = (options: {
     subjectType = null,
     styleStrength = null,
     hasVisiblePerson = null,
+    identityReferenceBound = null,
   } = options;
+  const identityBound = identityReferenceBound === true;
   const naturalLanguage = modelFamily === 'flux' || modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image';
   const isTurnaroundPanel = String(genType || '').toLowerCase().trim() === 'turnaround_panel';
   const isTurnaround = isTurnaroundPanel || String(genType || '').toLowerCase().trim() === 'turnaround';
@@ -1023,7 +1030,7 @@ export const buildPromptEnhancement = (options: {
   const explicitKind = String(subjectType || '').toLowerCase();
   const explicitNonPerson = /animal|nonhuman|non-human|creature|furry|quadruped|environment|landscape|location|scenery/.test(explicitKind);
   // A finished person paragraph keeps its own face, species, and composition.
-  const keepWrittenParagraph = isWrittenParagraph(existingPrompt) && !explicitNonPerson;
+  const keepWrittenParagraph = isWrittenParagraph(existingPrompt) && !explicitNonPerson && !isTurnaround;
   const personSubject =
     hasVisiblePerson === true
     || inferredSubject === 'female_human'
@@ -1111,7 +1118,10 @@ export const buildPromptEnhancement = (options: {
   // Never invent a female human subject. Beauty anchors are legal only when the
   // prompt or structured request explicitly says the subject is female.
   if (isExplicitFemale && !isEnvironment && !keepWrittenParagraph && !isLibraryPlate) {
-    if (isActionLike) {
+    if (identityBound) {
+      // The bound portrait defines the face. Keep gender only, no generic beauty stack.
+      suffixParts.push('adult woman, female');
+    } else if (isActionLike) {
       // Identity only — no heavy frontal beauty-portrait stack
       if (modelFamily === 'pony' || modelFamily === 'sd15') {
         if (!/(east asian|chinese beauty)/i.test(existingPrompt)) {
@@ -1255,7 +1265,11 @@ export const buildPromptEnhancement = (options: {
     if (lighting) suffixParts.push(lighting);
   } else if (presetKey === 'oriental_realistic') {
     if (orientalPerson) {
-      if (!/oriental realistic style/i.test(lower)) {
+      if (identityBound) {
+        if (!/oriental realistic style/i.test(lower)) {
+          suffixParts.push('oriental realistic style, photorealistic, natural porcelain skin texture, subsurface scattering, realistic human anatomy');
+        }
+      } else if (!/delicate east asian facial features/i.test(lower)) {
         const lock = (modelFamily === 'pony' || modelFamily === 'sd15')
           ? (STYLE_PRESET_BOOSTERS.oriental_realistic?.pony ?? ORIENTAL_REALISTIC_FACE_LOCK)
           : ORIENTAL_REALISTIC_FACE_LOCK;
@@ -1267,7 +1281,14 @@ export const buildPromptEnhancement = (options: {
     }
   } else if (booster) {
     // SD1.5 drafts use tag-like pony boosters; FLUX & RedCraft Krea2 use natural phrases
-    const boost = naturalLanguage ? booster.flux : booster.pony;
+    let boost = naturalLanguage ? booster.flux : booster.pony;
+    if (identityBound) {
+      boost = boost
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part && !/\b(face|facial|eyes?|eyelids?|bone structure|nose|lips?)\b/i.test(part))
+        .join(', ');
+    }
     const boostTokens = boost.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 2);
     const already = boostTokens.length > 0 && boostTokens.every((t) => t && lower.includes(t));
     if (!already && boost) {
@@ -1285,9 +1306,11 @@ export const buildPromptEnhancement = (options: {
     && !/(east asian|guofeng|xianxia)/i.test(existingPrompt)
   ) {
     suffixParts.push(
-      naturalLanguage
-        ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
-        : 'East Asian features, ancient chinese fantasy, guofeng'
+      identityBound
+        ? (naturalLanguage ? 'ancient Chinese fantasy atmosphere' : 'ancient chinese fantasy, guofeng')
+        : naturalLanguage
+          ? 'East Asian facial features, ancient Chinese fantasy atmosphere'
+          : 'East Asian features, ancient chinese fantasy, guofeng'
     ); // pony + sd15
   }
 
@@ -1438,6 +1461,9 @@ export const resolveGenerationPlan = (options: {
     styleStrength: workflowData?.style_strength ?? null,
     hasVisiblePerson: hasPerson,
     turnaroundView: workflowData?.turnaround_view ?? null,
+    identityReferenceBound:
+      String(workflowData?.gen_type || '').toLowerCase() === 'turnaround_panel'
+      && Boolean(workflowData?.character_ref_url || workflowData?.ref_image_url),
   });
 
   return { loras, enhancement };

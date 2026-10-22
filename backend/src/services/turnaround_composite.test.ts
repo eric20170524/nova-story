@@ -254,13 +254,30 @@ test('compound hair/garment descriptors and participial handheld prop stripping 
 });
 
 test('resolveTurnaroundIdentityReference respects use_ref_portrait=false and request-level session portrait', () => {
-  // Explicit opt-out disables reference even when DB has a stored avatar
+  // Explicit opt-out disables reference for non-human subjects even when DB has a stored avatar
   assert.equal(
     resolveTurnaroundIdentityReference(
       { use_ref_portrait: false, ref_image_url: '/session.png' },
       '/stored-avatar.png'
     ),
     null
+  );
+  // A human full-body plate must follow the portrait: opt-out is ignored
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { use_ref_portrait: false, turnaround_front_adapter: false },
+      '/stored-avatar.png',
+      { mandatory: true }
+    ),
+    '/stored-avatar.png'
+  );
+  assert.equal(
+    resolveTurnaroundIdentityReference(
+      { use_ref_portrait: false, ref_image_url: '/session.png' },
+      '/stored-avatar.png',
+      { mandatory: true }
+    ),
+    '/session.png'
   );
   assert.equal(
     resolveTurnaroundIdentityReference(
@@ -289,6 +306,39 @@ test('resolveTurnaroundIdentityReference respects use_ref_portrait=false and req
     resolveTurnaroundIdentityReference({}, '/stored-avatar.png'),
     '/stored-avatar.png'
   );
+});
+
+test('identity-locked VLM prompt copies the reference face and drops competing face text', () => {
+  const raw = 'oriental realistic style, photorealistic, delicate East Asian facial features, classical oriental bone structure, female, 24-26, long black hair, ice blue eyes, cold refined adult beauty, elegant sharp brows, high cheekbones, moon-white xianxia dress';
+  for (const family of ['redcraft_krea2', 'qwen_image'] as const) {
+    const locked = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[0]!, family, { identityLocked: true });
+    assert.match(locked.prompt, /exact same woman shown in the reference image \(image 1\)/i);
+    assert.match(locked.prompt, /identical facial structure/i);
+    assert.doesNotMatch(locked.prompt, /facial features|bone structure|sharp brows|cheekbones|East Asian woman/i);
+    assert.match(locked.prompt, /long black hair/);
+    assert.match(locked.prompt, /moon-white xianxia dress/);
+    assert.match(locked.negative_prompt, /different person, different face/i);
+  }
+  // The stored eye colour is named next to the copy instruction, not only left in the tag list
+  const blue = buildTurnaroundViewPrompt('female, long black hair, pale ice-blue eyes, black face veil, small scar on cheek, moon-white dress', TURNAROUND_VIEWS[0]!, 'redcraft_krea2', { identityLocked: true });
+  assert.match(blue.prompt, /identical facial structure, eye shape, eye color,/i);
+  assert.match(blue.prompt, /do not redesign or beautify or replace the face/i);
+  assert.doesNotMatch(blue.prompt, /,\s*beautify\s*,/i);
+  assert.match(blue.prompt, /Keep the exact eye color from the reference image \(pale ice-blue eyes\)/);
+  assert.match(blue.prompt, /black face veil/);
+  assert.match(blue.prompt, /small scar on cheek/);
+  const noEyes = buildTurnaroundViewPrompt('female, long black hair, moon-white dress', TURNAROUND_VIEWS[0]!, 'redcraft_krea2', { identityLocked: true });
+  assert.match(noEyes.prompt, /Keep the exact eye color from the reference image\./);
+  // The stray phrase from the real route output ("consistent face hair and clothing") is stripped again
+  const route = buildTurnaroundViewPrompt('female, long black hair, full body, consistent face hair and clothing, moon-white dress', TURNAROUND_VIEWS[0]!, 'pony');
+  assert.doesNotMatch(route.prompt, /consistent face hair and clothing/i);
+  // Unlocked prompt keeps the old behavior
+  const unlocked = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[0]!, 'redcraft_krea2');
+  assert.doesNotMatch(unlocked.prompt, /image 1/);
+  assert.doesNotMatch(unlocked.negative_prompt, /different person/i);
+  // Pony relies on text plus the adapter, so its face text is kept
+  const pony = buildTurnaroundViewPrompt(raw, TURNAROUND_VIEWS[0]!, 'pony', { identityLocked: true });
+  assert.match(pony.prompt, /sharp brows/);
 });
 
 test('TurnaroundModal quick tags survive extractAppearanceBase and deduplicate cleanly in buildTurnaroundViewPrompt', () => {

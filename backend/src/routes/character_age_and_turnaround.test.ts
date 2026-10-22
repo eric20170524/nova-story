@@ -278,10 +278,14 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
       url: `/api/characters/${created.id}/build-prompt`,
       payload: { gen_type: 'turnaround' },
     });
+    // A human full-body plate always follows the approved portrait, even when the client omits or refuses the ref.
     assert.equal(omittedRef.statusCode, 200);
     const omittedBody = JSON.parse(omittedRef.payload);
-    assert.equal(omittedBody.ref_image_url, null);
-    assert.equal(omittedBody.character_ref_url, null);
+    assert.equal(omittedBody.ref_image_url, portraitUrl);
+    assert.equal(omittedBody.character_ref_url, portraitUrl);
+    assert.equal(omittedBody.turnaround_front_adapter, true);
+    // Bound portrait owns the face: no generic face text is appended.
+    assert.doesNotMatch(omittedBody.prompt, /delicate classical oriental bone structure|soft East Asian eyelids/i);
 
     const refusedRef = await app.inject({
       method: 'POST',
@@ -289,8 +293,8 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
       payload: { gen_type: 'turnaround', use_ref_portrait: false, ref_image_url: '/static/generated/projects/1/characters/1/v1/portrait.png' },
     });
     const refusedBody = JSON.parse(refusedRef.payload);
-    assert.equal(refusedBody.ref_image_url, null);
-    assert.equal(refusedBody.turnaround_front_adapter, false);
+    assert.equal(refusedBody.ref_image_url, portraitUrl);
+    assert.equal(refusedBody.turnaround_front_adapter, true);
   } finally {
     try { fs.unlinkSync(resolveStaticAssetPath('/static/generated/projects/1/characters/1/v1/portrait.png')); } catch { /* already gone */ }
     await app.close();
@@ -416,3 +420,81 @@ test('age survives an ageless extract and a version switch, and empty shots skip
   }
 });
 
+
+test('a turnaround is saved as the body plate only when it is adopted through the character API', async () => {
+  const [
+    { default: Fastify },
+    { db, initDb },
+    { characterRoutes },
+  ] = await Promise.all([
+    import('fastify'),
+    import('../db/database'),
+    import('./characters'),
+  ]);
+  await initDb();
+  const app = Fastify();
+  await app.register(characterRoutes, { prefix: '/api/characters' });
+  await app.ready();
+  try {
+    await db.run('INSERT OR IGNORE INTO project (id, title) VALUES (1, "Test Project")');
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/characters/',
+      payload: {
+        project_id: 1,
+        name: '采纳测试',
+        role: 'supporting',
+        description: '成年女子，黑发。',
+        visual_tags: {
+          gender: 'female',
+          assets: {
+            turnaround_url: '/legacy-sheet.png',
+            turnaround_front_url: '/legacy-front.png',
+            turnaround_side_url: '/legacy-side.png',
+            turnaround_back_url: '/legacy-back.png',
+          },
+        },
+      },
+    });
+    assert.equal(createRes.statusCode, 200);
+    const id = JSON.parse(createRes.payload).id;
+    const readAssets = async () => {
+      const row = await db.get('SELECT visual_tags FROM character WHERE id = ?', id);
+      const tags = typeof row.visual_tags === 'string' ? JSON.parse(row.visual_tags) : row.visual_tags;
+      return tags.assets || {};
+    };
+
+    // An unrelated edit that repeats the stored turnaround_url must not clobber the legacy front plate.
+    const edit = await app.inject({
+      method: 'PUT',
+      url: `/api/characters/${id}`,
+      payload: { age: '25岁', turnaround_url: '/legacy-sheet.png' },
+    });
+    assert.equal(edit.statusCode, 200);
+    let assets = await readAssets();
+    assert.equal(assets.turnaround_front_url, '/legacy-front.png');
+
+    // Adopting a new plate moves both fields and removes side/back even when visual_tags.assets.turnaround_url is also sent.
+    const adopt = await app.inject({
+      method: 'PUT',
+      url: `/api/characters/${id}`,
+      payload: {
+        turnaround_url: '/adopted-front.png',
+        visual_tags: {
+          gender: 'female',
+          assets: {
+            turnaround_url: '/adopted-front.png',
+          },
+        },
+      },
+    });
+    assert.equal(adopt.statusCode, 200);
+    assets = await readAssets();
+    assert.equal(assets.turnaround_url, '/adopted-front.png');
+    assert.equal(assets.turnaround_front_url, '/adopted-front.png');
+    assert.equal(assets.turnaround_side_url, undefined);
+    assert.equal(assets.turnaround_back_url, undefined);
+  } finally {
+    await app.close();
+  }
+});

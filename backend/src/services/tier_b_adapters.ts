@@ -25,6 +25,17 @@ export interface TierBModelFiles {
   compositionKind: CompositionControlKind;
 }
 
+/**
+ * FaceID Plus V2 (SDXL) needs three things: the FaceID nodes, its ipadapter weights and its LoRA.
+ * A node pack alone is not enough — the loader fails with "IPAdapter model not found".
+ */
+export interface FaceIdCapability {
+  available: boolean;
+  ipadapter: string | null;
+  lora: string | null;
+  missing: string[];
+}
+
 export interface TierBCapability extends AdapterAvailability {
   modelFamilySupported: boolean;
   characterKind: CharacterAdapterKind;
@@ -35,6 +46,8 @@ export interface TierBCapability extends AdapterAvailability {
   hasOpenPosePreprocessor: boolean;
   hasDepthPreprocessor?: boolean;
   hasCannyPreprocessor?: boolean;
+  /** InsightFace-based face lock. Only set from a live object_info. */
+  faceId?: FaceIdCapability;
   /** Human-readable install hints when something is missing */
   missing: string[];
   notes: string[];
@@ -45,6 +58,9 @@ export interface TierBInjectOptions {
   compositionImageFilename?: string | null;
   characterWeight?: number;
   compositionStrength?: number;
+  /** Use FaceID Plus V2 for identity when the install has it; otherwise plain IP-Adapter is used. */
+  preferFaceId?: boolean;
+  faceIdWeight?: number;
   /** true when workflow is FLUX — Tier B SDXL adapters are skipped */
   isFlux?: boolean;
   capability: TierBCapability;
@@ -242,9 +258,33 @@ const choiceList = (objectInfo: Record<string, any> | null, node: string, field:
   return Array.isArray(list) ? list.map((item) => String(item)) : [];
 };
 
+const FACEID_NODES = ['IPAdapterUnifiedLoaderFaceID', 'IPAdapterFaceID'] as const;
+const FACEID_WEIGHTS_RE = /faceid[-_]?plusv2.*sdxl(?!.*lora)/i;
+const FACEID_LORA_RE = /faceid[-_]?plusv2.*sdxl.*lora/i;
+
+/** FaceID Plus V2 readiness from a live object_info. Without object_info it is never assumed. */
+export const faceIdFromObjectInfo = (objectInfo: Record<string, any> | null): FaceIdCapability => {
+  const missing: string[] = [];
+  if (!objectInfo) {
+    return { available: false, ipadapter: null, lora: null, missing: ['object_info unavailable'] };
+  }
+  for (const node of FACEID_NODES) {
+    if (!objectInfo[node]) missing.push(`custom node ${node}`);
+  }
+  const ipadapter = choiceList(objectInfo, 'IPAdapterModelLoader', 'ipadapter_file')
+    .find((file) => FACEID_WEIGHTS_RE.test(file)) || null;
+  const lora = choiceList(objectInfo, 'LoraLoader', 'lora_name')
+    .find((file) => FACEID_LORA_RE.test(file)) || null;
+  if (!ipadapter) missing.push('models/ipadapter/ip-adapter-faceid-plusv2_sdxl.bin');
+  if (!lora) missing.push('models/loras/ip-adapter-faceid-plusv2_sdxl_lora.safetensors');
+  return { available: missing.length === 0, ipadapter, lora, missing };
+};
+
 /** Model filenames advertised by a live ComfyUI, including a remote install. */
 export const modelChoicesFromObjectInfo = (objectInfo: Record<string, any> | null) => {
-  const ipadapterFiles = choiceList(objectInfo, 'IPAdapterModelLoader', 'ipadapter_file');
+  // FaceID weights share the ipadapter folder but need their own loader; never use them as the plain adapter.
+  const ipadapterFiles = choiceList(objectInfo, 'IPAdapterModelLoader', 'ipadapter_file')
+    .filter((file) => !/faceid/i.test(file));
   const clipFiles = choiceList(objectInfo, 'CLIPVisionLoader', 'clip_name');
   const controlnetFiles = choiceList(objectInfo, 'ControlNetLoader', 'control_net_name');
   const ipadapter = pickByPatterns(ipadapterFiles, [
@@ -313,9 +353,14 @@ export const probeTierBCapability = (
   const nodeNames = objectInfo ? new Set(Object.keys(objectInfo)) : null;
 
   const hasIpAdapterNodes = nodeNames
-    ? ['IPAdapterAdvanced', 'IPAdapter', 'IPAdapterUnifiedLoader', 'IPAdapterModelLoader'].some((n) =>
-      nodeNames.has(n)
-    )
+    ? [
+      'IPAdapterAdvanced',
+      'IPAdapter',
+      'IPAdapterUnifiedLoader',
+      'IPAdapterModelLoader',
+      'IPAdapterUnifiedLoaderFaceID',
+      'IPAdapterFaceID'
+    ].some((n) => nodeNames.has(n))
     : Boolean(installPath && hasIpAdapterCustomNode(installPath));
 
   // Native ComfyUI always has ControlNet — if object_info missing, assume true when install looks like ComfyUI
@@ -379,15 +424,24 @@ export const probeTierBCapability = (
     if (characterKind === 'none') missing.push('models/clip_vision for IPAdapterAdvanced');
   }
 
+  const faceId = faceIdFromObjectInfo(objectInfo);
+  if (characterKind === 'none' && faceId.available) {
+    characterKind = 'ip_adapter_unified';
+  }
   const characterAdapter = characterKind !== 'none';
   const compositionControl = Boolean(hasControlNetNodes && models.controlnet);
   const compositionKind = compositionControl ? models.compositionKind : 'none';
 
   if (characterAdapter) {
-    notes.push(`Character adapter ready (${characterKind}, model=${models.ipadapter})`);
+    notes.push(`Character adapter ready (${characterKind}, model=${models.ipadapter || faceId.ipadapter})`);
   } else {
     notes.push('Character adapter unavailable — Tier A tags/img2img only for identity');
   }
+  notes.push(
+    faceId.available
+      ? `FaceID Plus V2 ready (model=${faceId.ipadapter}, lora=${faceId.lora})`
+      : `FaceID Plus V2 unavailable — plain IP-Adapter for identity (missing: ${faceId.missing.join(', ')})`
+  );
   if (compositionControl) {
     const hasPre =
       compositionKind === 'openpose' ? hasOpenPosePreprocessor :
@@ -413,6 +467,7 @@ export const probeTierBCapability = (
     hasOpenPosePreprocessor,
     hasDepthPreprocessor,
     hasCannyPreprocessor,
+    faceId,
     missing: Array.from(new Set(missing)),
     notes
   };
@@ -476,22 +531,33 @@ export const injectTierBAdapters = (
     ? path.basename(options.compositionImageFilename)
     : null;
 
-  // ── Character: IP-Adapter ──────────────────────────────────────────
+  // ── Character: FaceID Plus V2 when asked for and installed, else IP-Adapter ──
   if (cap.characterAdapter && charFile && cap.characterKind !== 'none') {
+    const useFaceId = options.preferFaceId === true && cap.faceId?.available === true;
     try {
-      characterWired = injectIpAdapter(workflow, {
-        imageFilename: charFile,
-        kind: cap.characterKind,
-        ipadapterFile: cap.models.ipadapter!,
-        clipVisionFile: cap.models.clipVision,
-        weight: clamp(options.characterWeight ?? 0.75, 0.05, 1.5)
-      });
-      if (characterWired) {
-        notes.push(`IP-Adapter wired image=${charFile} weight=${options.characterWeight ?? 0.75}`);
+      if (useFaceId) {
+        characterWired = injectFaceIdAdapter(workflow, {
+          imageFilename: charFile,
+          weight: clamp(options.faceIdWeight ?? 0.85, 0.05, 1.5)
+        });
+        if (characterWired) {
+          notes.push(`FaceID Plus V2 wired image=${charFile} weight=${options.faceIdWeight ?? 0.85}`);
+        }
+      } else if (cap.models.ipadapter) {
+        characterWired = injectIpAdapter(workflow, {
+          imageFilename: charFile,
+          kind: cap.characterKind,
+          ipadapterFile: cap.models.ipadapter,
+          clipVisionFile: cap.models.clipVision,
+          weight: clamp(options.characterWeight ?? 0.75, 0.05, 1.5)
+        });
+        if (characterWired) {
+          notes.push(`IP-Adapter wired image=${charFile} weight=${options.characterWeight ?? 0.75}`);
+        }
       }
     } catch (e) {
-      notes.push(`IP-Adapter inject failed: ${e}`);
-      logger.warn(`IP-Adapter inject failed: ${e}`);
+      notes.push(`Character adapter inject failed: ${e}`);
+      logger.warn(`Character adapter inject failed: ${e}`);
     }
   }
 
@@ -524,6 +590,58 @@ export const injectTierBAdapters = (
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+/**
+ * FaceID Plus V2: an InsightFace embedding carries the face only, so unlike plain IP-Adapter
+ * it does not drag the reference's bust composition into a full-body frame.
+ * The unified FaceID loader patches the model with the FaceID LoRA, so it is chained after any LoRAs.
+ */
+const injectFaceIdAdapter = (
+  workflow: any,
+  opts: { imageFilename: string; weight: number }
+): boolean => {
+  const samplers = getSamplerNodes(workflow);
+  const firstSampler = samplers[0]?.[1];
+  if (!firstSampler || !Array.isArray(firstSampler.inputs?.model)) return false;
+  const modelLink: [string, number] = [
+    String(firstSampler.inputs.model[0]),
+    Number(firstSampler.inputs.model[1] ?? 0)
+  ];
+
+  const loadId = nextNodeId(workflow);
+  workflow[loadId] = {
+    inputs: { image: opts.imageFilename },
+    class_type: 'LoadImage',
+    _meta: { title: 'NovaStory Character Ref (FaceID)' }
+  };
+  const loaderId = nextNodeId(workflow);
+  workflow[loaderId] = {
+    inputs: { model: modelLink, preset: 'FACEID PLUS V2', lora_strength: 0.6, provider: 'CUDA' },
+    class_type: 'IPAdapterUnifiedLoaderFaceID',
+    _meta: { title: 'NovaStory IPAdapter FaceID Loader' }
+  };
+  const applyId = nextNodeId(workflow);
+  workflow[applyId] = {
+    inputs: {
+      model: [loaderId, 0],
+      ipadapter: [loaderId, 1],
+      image: [loadId, 0],
+      weight: opts.weight,
+      weight_faceidv2: 1.0,
+      weight_type: 'linear',
+      combine_embeds: 'concat',
+      start_at: 0.0,
+      end_at: 1.0,
+      embeds_scaling: 'V only'
+    },
+    class_type: 'IPAdapterFaceID',
+    _meta: { title: 'NovaStory IPAdapter FaceID Apply' }
+  };
+  for (const [, sampler] of samplers) {
+    if (sampler.inputs) sampler.inputs.model = [applyId, 0];
+  }
+  return true;
+};
 
 const injectIpAdapter = (
   workflow: any,

@@ -437,13 +437,17 @@ export const CharacterManager: React.FC = () => {
       );
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
-    } catch (e) {
-      // portrait: upper-body front view; turnaround: appearance base only (backend generates front/side/back then stitches)
-      const fallbackComposition = initialGenType === 'portrait'
-        ? 'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background'
-        : 'full body character design, standing, consistent identity';
-      setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
-      setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
+    } catch (e: any) {
+      if (initialGenType === 'turnaround') {
+        showToast(e?.message || t("characters.failed_gen_prompt", "Failed to generate prompt"), 'error');
+        setPrompt('');
+        setNegativePrompt('');
+      } else {
+        const fallbackComposition =
+          'high quality character portrait, upper body, waist-up, front view, facing camera, both shoulders visible, eye-level, detailed face and eyes, neutral expression, clothes visible only at the collar and shoulders, empty hands, plain studio background';
+        setPrompt(`score_9, score_8_up, ${fallbackComposition}, ${char.description || ''}`);
+        setNegativePrompt(`score_4, score_3, bad anatomy, low quality`);
+      }
     } finally {
       setIsPromptLoading(false);
     }
@@ -457,17 +461,18 @@ export const CharacterManager: React.FC = () => {
     if (!sheetModalChar) return;
     setIsPromptLoading(true);
     try {
+      const effectiveWithRef = selectedGen === 'turnaround' ? Boolean(refUrl) : withRef;
       const res = await api.buildCharacterPrompt(
         sheetModalChar.id, 
         selectedGen, 
         sheetModalChar.description,
-        withRef,
+        effectiveWithRef,
         refUrl || undefined
       );
       setPrompt(res.prompt);
       setNegativePrompt(res.negative_prompt);
-    } catch (e) {
-      showToast(t("characters.failed_gen_prompt", "Failed to generate prompt"), 'error');
+    } catch (e: any) {
+      showToast(e?.message || t("characters.failed_gen_prompt", "Failed to generate prompt"), 'error');
     } finally {
       setIsPromptLoading(false);
     }
@@ -503,8 +508,10 @@ export const CharacterManager: React.FC = () => {
         composition_ref_url: null,
       };
 
-      payload.use_ref_portrait = useRefPortrait === true;
-      if (useRefPortrait && refImageUrl) {
+      // A full-body plate always follows the portrait identity; only portraits may opt out.
+      const bindPortrait = genType === 'turnaround' ? Boolean(refImageUrl) : useRefPortrait === true;
+      payload.use_ref_portrait = bindPortrait;
+      if (bindPortrait && refImageUrl) {
         payload.ref_image_url = refImageUrl;
         payload.character_ref_url = refImageUrl;
         if (genType === 'turnaround') payload.turnaround_front_adapter = true;
@@ -634,7 +641,7 @@ export const CharacterManager: React.FC = () => {
       }
 
       if (assetType === 'turnaround' && wardrobeVariant.trim()) {
-        showToast('变体三视图已另存，常服三视图没有改动。', 'success');
+        showToast('变体正面全身图已另存，常服正面全身图没有改动。', 'success');
         setSheetModalChar(null);
         await loadCharacters();
         return;
@@ -807,6 +814,7 @@ export const CharacterManager: React.FC = () => {
           if (sheetModalChar) {
             try {
               const updated = await api.uploadCharacterAsset(sheetModalChar.id, 'avatar', file);
+              setSheetModalChar(updated);
               setRefImageUrl(updated.avatar_url);
               setUseRefPortrait(true);
               setCharacters((prev) => prev.map((c) => (c.id === sheetModalChar.id ? updated : c)));

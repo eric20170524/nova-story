@@ -161,7 +161,9 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
                     type="checkbox"
-                    checked={useRefPortrait}
+                    checked={genType === 'turnaround' ? true : useRefPortrait}
+                    disabled={genType === 'turnaround'}
+                    title={genType === 'turnaround' ? '全身正面图必须跟随定妆照身份参考' : undefined}
                     onChange={(e) => {
                       const checked = e.target.checked;
                       setUseRefPortrait(checked);
@@ -183,7 +185,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-0.5">
-                    {useRefPortrait ? (genType === 'turnaround' ? '全身正面图跟随定妆照身份参考' : t('characters.ref_portrait_active')) : t("casting.ref_portrait_inactive")}
+                    {genType === 'turnaround' || useRefPortrait ? (genType === 'turnaround' ? '全身正面图跟随定妆照身份参考' : t('characters.ref_portrait_active')) : t("casting.ref_portrait_inactive")}
                   </p>
                   <p className="text-[11px] text-slate-600 dark:text-slate-400 truncate font-medium">
                     {character.name} - {genType === 'turnaround' ? '以定妆照作为身份参考，生成单张纯净正面全身设定图' : t("casting.ref_portrait_feature")}
@@ -331,38 +333,45 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
                 </div>
 
                 <div className="flex flex-wrap gap-2 justify-center">
-                  <button
-                    type="button"
-                    onClick={() => onSaveAssetToCharacter('avatar')}
-                    className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/60 dark:hover:bg-emerald-600 text-emerald-800 dark:text-emerald-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-300 dark:border-emerald-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="覆盖当前版本定妆照"
-                  >
-                    <CheckCircle size={14} /> 保存定妆照·本版
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSaveAssetToCharacter('avatar', { newVersion: true })}
-                    className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/50 dark:hover:bg-amber-700 text-amber-800 dark:text-amber-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-amber-300 dark:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="新建版本并保存为定妆照"
-                  >
-                    <CheckCircle size={14} /> 定妆照·新版
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSaveAssetToCharacter('turnaround')}
-                    className="bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/60 dark:hover:bg-indigo-600 text-indigo-800 dark:text-indigo-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-indigo-300 dark:border-indigo-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="覆盖当前版本三视图"
-                  >
-                    <CheckCircle size={14} /> 三视图·本版
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSaveAssetToCharacter('turnaround', { newVersion: true })}
-                    className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/50 dark:hover:bg-amber-700 text-amber-800 dark:text-amber-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-amber-300 dark:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
-                    title="新建版本并保存为三视图"
-                  >
-                    <CheckCircle size={14} /> 三视图·新版
-                  </button>
+                  {genType === 'portrait' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onSaveAssetToCharacter('avatar')}
+                        className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/60 dark:hover:bg-emerald-600 text-emerald-800 dark:text-emerald-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-300 dark:border-emerald-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
+                        title="覆盖当前版本定妆照"
+                      >
+                        <CheckCircle size={14} /> 保存定妆照·本版
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onSaveAssetToCharacter('avatar', { newVersion: true })}
+                        className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/50 dark:hover:bg-amber-700 text-amber-800 dark:text-amber-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-amber-300 dark:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
+                        title="新建版本并保存为定妆照"
+                      >
+                        <CheckCircle size={14} /> 定妆照·新版
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onSaveAssetToCharacter('turnaround')}
+                        className="bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/60 dark:hover:bg-indigo-600 text-indigo-800 dark:text-indigo-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-indigo-300 dark:border-indigo-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
+                        title={t('characters.save_as_turnaround')}
+                      >
+                        <CheckCircle size={14} /> 正面全身图·本版
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onSaveAssetToCharacter('turnaround', { newVersion: true })}
+                        className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/50 dark:hover:bg-amber-700 text-amber-800 dark:text-amber-100 dark:hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-amber-300 dark:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-2xs"
+                        title="新建版本并保存为正面全身图"
+                      >
+                        <CheckCircle size={14} /> 正面全身图·新版
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
