@@ -113,59 +113,177 @@ body {
     border: 1px solid rgba(30, 41, 59, 0.8);
 }
 
-/* EasyMDE Light Mode Styling */
-.EasyMDEContainer {
+/* EasyMDE Container & Toolbar Layout */
+.custom-simplemde {
     display: flex;
     flex-direction: column;
     height: 100%;
-}
-.EasyMDEContainer .editor-toolbar {
-    background-color: #f8fafc;
-    border-color: #e2e8f0;
-    border-radius: 12px 12px 0 0;
-    opacity: 0.95;
-    padding: 6px 10px;
-}
-.EasyMDEContainer .editor-toolbar i {
-    color: #64748b;
-}
-.EasyMDEContainer .editor-toolbar button {
-    border-radius: 6px;
-    transition: all 0.15s ease;
-}
-.EasyMDEContainer .editor-toolbar button:hover,
-.EasyMDEContainer .editor-toolbar button.active {
-    background-color: #e2e8f0;
-    border-color: #cbd5e1;
-}
-.EasyMDEContainer .editor-toolbar button:hover i,
-.EasyMDEContainer .editor-toolbar button.active i {
-    color: #0f172a;
-}
-.EasyMDEContainer .CodeMirror {
-    background-color: #ffffff;
-    border-color: #e2e8f0;
-    color: #0f172a;
-    border-radius: 0 0 12px 12px;
+    min-height: 0;
     flex: 1;
-    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, "Songti SC", "SimSun", serif;
-    font-size: 1.125rem;
-    line-height: 1.85;
-    padding: 1rem 1.25rem;
-    transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+.EasyMDEContainer {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    flex: 1 !important;
+    position: relative;
+}
+
+.EasyMDEContainer .editor-toolbar {
+    display: flex !important;
+    align-items: center !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    padding: 6px 12px !important;
+    background-color: #f8fafc !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    border-radius: 0 !important;
+    opacity: 1 !important;
+    z-index: 10;
+    user-select: none;
+}
+
+.EasyMDEContainer .editor-toolbar button {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 1px solid transparent !important;
+    border-radius: 6px !important;
+    background: transparent !important;
+    color: #64748b !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+}
+
+.EasyMDEContainer .editor-toolbar button svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 2.2;
+}
+
+.EasyMDEContainer .editor-toolbar button:hover {
+    background-color: #e2e8f0 !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+}
+
+.EasyMDEContainer .editor-toolbar button.active {
+    background-color: #e0e7ff !important;
+    border-color: #c7d2fe !important;
+    color: #4338ca !important;
+}
+
+.EasyMDEContainer .editor-toolbar i.separator {
+    display: inline-block !important;
+    width: 1px !important;
+    height: 18px !important;
+    background-color: #cbd5e1 !important;
+    border: none !important;
+    margin: 0 4px !important;
+    color: transparent !important;
+    font-size: 0 !important;
+    text-indent: -9999px !important;
+    overflow: hidden !important;
+    vertical-align: middle !important;
+}
+
+/* CodeMirror Core & Scroller */
+.EasyMDEContainer .CodeMirror {
+    flex: 1 1 0% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background-color: #ffffff !important;
+    border: none !important;
+    border-radius: 0 !important;
+    color: #1e293b !important;
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, "Songti SC", "SimSun", "STSong", "Noto Serif CJK SC", serif !important;
+    font-size: 1.125rem !important;
+    line-height: 2 !important;
+    padding: 0 !important;
+}
+
+.EasyMDEContainer .CodeMirror-scroll {
+    height: 100% !important;
+    min-height: 0 !important;
+    box-sizing: border-box !important;
+    padding: 2rem 2.5rem 6rem 2.5rem !important;
+}
+
+.EasyMDEContainer .CodeMirror-lines {
+    max-width: 820px !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+}
+
+.EasyMDEContainer .CodeMirror-wrap pre.CodeMirror-line,
+.EasyMDEContainer .CodeMirror-wrap pre.CodeMirror-line-like {
+    word-wrap: break-word !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    font-family: inherit !important;
+    letter-spacing: 0.02em;
+    padding-bottom: 0.25rem;
+}
+
 .EasyMDEContainer .CodeMirror-cursor {
-    border-left: 2px solid #6366f1;
+    border-left: 2px solid #6366f1 !important;
 }
+
+/* Markdown Heading & Elements Typography inside Editor */
+.EasyMDEContainer .cm-header {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+}
+
+.EasyMDEContainer .cm-header-1 {
+    font-size: 1.6rem !important;
+    line-height: 1.5 !important;
+}
+
+.EasyMDEContainer .cm-header-2 {
+    font-size: 1.35rem !important;
+    line-height: 1.5 !important;
+}
+
+.EasyMDEContainer .cm-header-3 {
+    font-size: 1.2rem !important;
+    line-height: 1.5 !important;
+}
+
+.EasyMDEContainer .cm-quote {
+    color: #64748b !important;
+    font-style: italic !important;
+}
+
 .EasyMDEContainer .editor-preview {
     background-color: #ffffff;
     color: #0f172a;
-    padding: 2.5rem;
-    line-height: 1.85;
+    padding: 2rem 3rem;
+    line-height: 2;
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, "Songti SC", "SimSun", serif;
 }
+
+.EasyMDEContainer .editor-preview-side {
+    border: none;
+    border-left: 1px solid #e2e8f0;
+}
+
 .EasyMDEContainer .editor-statusbar {
     display: none;
 }
+
+/* Selection */
 .CodeMirror-selected {
     background-color: #e0e7ff !important;
 }
@@ -175,40 +293,64 @@ body {
 
 /* EasyMDE Dark Mode Overrides */
 .dark .EasyMDEContainer .editor-toolbar {
-    background-color: #0f172a;
-    border-color: #1e293b;
-    opacity: 0.9;
+    background-color: #0c1322 !important;
+    border-bottom-color: #1e293b !important;
 }
-.dark .EasyMDEContainer .editor-toolbar i {
-    color: #94a3b8;
+
+.dark .EasyMDEContainer .editor-toolbar button {
+    color: #94a3b8 !important;
 }
-.dark .EasyMDEContainer .editor-toolbar button:hover,
+
+.dark .EasyMDEContainer .editor-toolbar button:hover {
+    background-color: #1e293b !important;
+    border-color: #334155 !important;
+    color: #f8fafc !important;
+}
+
 .dark .EasyMDEContainer .editor-toolbar button.active {
-    background-color: #1e293b;
-    border-color: #334155;
+    background-color: #312e81 !important;
+    border-color: #4338ca !important;
+    color: #c7d2fe !important;
 }
-.dark .EasyMDEContainer .editor-toolbar button:hover i,
-.dark .EasyMDEContainer .editor-toolbar button.active i {
-    color: #f8fafc;
+
+.dark .EasyMDEContainer .editor-toolbar i.separator {
+    background-color: #1e293b !important;
 }
+
 .dark .EasyMDEContainer .CodeMirror {
-    background-color: #090d16;
-    border-color: #1e293b;
-    color: #e2e8f0;
+    background-color: #090d16 !important;
+    color: #e2e8f0 !important;
 }
+
 .dark .EasyMDEContainer .CodeMirror-cursor {
-    border-left: 2px solid #818cf8;
+    border-left: 2px solid #818cf8 !important;
 }
+
+.dark .EasyMDEContainer .cm-header {
+    color: #f8fafc !important;
+}
+
+.dark .EasyMDEContainer .cm-quote {
+    color: #94a3b8 !important;
+}
+
 .dark .EasyMDEContainer .editor-preview {
     background-color: #090d16;
     color: #e2e8f0;
 }
-.dark .editor-toolbar.fullscreen {
-    background-color: #0f172a;
+
+.dark .EasyMDEContainer .editor-preview-side {
+    border-left-color: #1e293b;
 }
+
+.dark .editor-toolbar.fullscreen {
+    background-color: #0c1322 !important;
+}
+
 .dark .CodeMirror-selected {
     background-color: #312e81 !important;
 }
+
 .dark .CodeMirror-line::selection, .dark .CodeMirror-line > span::selection, .dark .CodeMirror-line > span > span::selection {
     background-color: #312e81 !important;
 }

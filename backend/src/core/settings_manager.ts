@@ -48,7 +48,7 @@ function persistRetiredLocalLlmModel(): void {
 }
 
 const DEFAULT_SETTINGS = {
-    llm_model: 'novastory-qwen3.5:9b',
+    llm_model: 'gemini-3.8-flash',
     image_model: 'gemini-2.5-flash-image',
     comfyui: {
         mode: 'local', // 'local' | 'remote'
@@ -90,10 +90,10 @@ const DEFAULT_SETTINGS = {
     },
     // Local-first default (llama.cpp OpenAI-compatible). Cloud providers still work via settings/.env.
     llm: {
-        provider: 'ollama',
-        api_key: 'ollama',
-        base_url: 'http://127.0.0.1:11434/v1',
-        model: 'novastory-qwen3.5:9b'
+        provider: 'gemini',
+        api_key: '',
+        base_url: '',
+        model: 'gemini-3.8-flash'
     },
     tts: {
         base_url: 'http://127.0.0.1:8765',
@@ -147,6 +147,9 @@ export class SettingsManager {
             settings.llm = settings.llm || {};
             const localProviders = settings.llm.provider === 'ollama' || settings.llm.provider === 'local_llm';
             settings.llm.api_key = localProviders ? 'ollama' : llmApiKeyEnv;
+        }
+        if (settings.llm?.provider === 'gemini' && !settings.llm.api_key && process.env.GEMINI_API_KEY) {
+            settings.llm.api_key = process.env.GEMINI_API_KEY;
         }
 
         const llmBaseUrlEnv = process.env.LLM_BASE_URL;
@@ -206,8 +209,8 @@ export class SettingsManager {
     static toPublicSettings(settings: Record<string, any> = SettingsManager.loadSettings()) {
         const publicSettings = JSON.parse(JSON.stringify(settings));
         const llm = publicSettings.llm || {};
-        const rawKey = String(llm.api_key || publicSettings.gemini_api_key || '').trim();
-        const provider = String(llm.provider || 'ollama').toLowerCase();
+        const rawKey = String(llm.api_key || publicSettings.gemini_api_key || process.env.GEMINI_API_KEY || '').trim();
+        const provider = String(llm.provider || 'gemini').toLowerCase();
         const hasApiKey =
             provider === 'ollama' || provider === 'local_llm' || provider === 'codex'
                 ? true
@@ -305,6 +308,10 @@ export class SettingsManager {
                 && !(isLocalProvider && apiKey === 'ollama')
             ) {
                 envContent = upsertEnvValue(envContent, 'LLM_API_KEY', apiKey);
+                if (provider === 'gemini') {
+                    envContent = upsertEnvValue(envContent, 'GEMINI_API_KEY', apiKey);
+                    process.env.GEMINI_API_KEY = apiKey;
+                }
             }
 
             delete newSettingsCopy.llm.api_key;

@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import 'easymde/dist/easymde.min.css';
 import App from './App';
 import './index.css';
 

@@ -15,7 +15,7 @@ export class GeminiProvider implements AIProvider {
     private model: string;
     private apiKey: string;
 
-    constructor(apiKey: string, model: string = 'gemini-2.5-flash') {
+    constructor(apiKey: string, model: string = 'gemini-3.8-flash') {
         this.apiKey = apiKey;
         this.ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
         this.model = model;

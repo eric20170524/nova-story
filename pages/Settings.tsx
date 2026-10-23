@@ -34,6 +34,7 @@ const LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
 const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
 const LOCAL_LLM_PROVIDERS = new Set(['ollama', 'local_llm']);
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-argon'] as const;
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
@@ -49,7 +50,7 @@ export const SettingsPage: React.FC = () => {
   const [titleClicks, setTitleClicks] = useState(0);
 
   const [settings, setSettings] = useState<any>({ 
-    llm_model: 'gemini-3.6-flash',
+    llm_model: 'gemini-3.8-flash',
     comfyui: {
       mode: 'local',
       base_url: 'http://127.0.0.1:8188',
@@ -308,6 +309,26 @@ export const SettingsPage: React.FC = () => {
       return {
         ...prev,
         comfyui: updatedComfy
+      };
+    });
+  };
+
+  const applyGemini = () => {
+    setSettings((prev: any) => {
+      const currentModel = prev.llm?.model || prev.llm_model;
+      const model = (GEMINI_MODELS as readonly string[]).includes(currentModel)
+        ? currentModel
+        : 'gemini-3.8-flash';
+      return {
+        ...prev,
+        llm_provider: 'gemini',
+        llm_model: model,
+        llm: {
+          ...(prev.llm || {}),
+          provider: 'gemini',
+          model,
+          base_url: '',
+        },
       };
     });
   };
@@ -623,7 +644,7 @@ export const SettingsPage: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleLLMChange('provider', 'gemini')}
+                        onClick={applyGemini}
                         className={`p-3.5 rounded-xl border text-left transition-all ${
                           (settings.llm?.provider || settings.llm_provider || 'gemini') === 'gemini'
                             ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
@@ -631,7 +652,7 @@ export const SettingsPage: React.FC = () => {
                         }`}
                       >
                         <div className="text-sm font-bold mb-0.5">Google Gemini</div>
-                        <div className="text-xs opacity-75">自带 API 密钥，推荐使用 3.6 Flash / 2.5 Flash</div>
+                        <div className="text-xs opacity-75">自带 API 密钥，推荐使用 3.8 Flash / 3.5 Flash Lite</div>
                       </button>
                       
                       <button
@@ -704,14 +725,13 @@ export const SettingsPage: React.FC = () => {
                           Gemini 模型版本
                         </label>
                         <select
-                          value={settings.llm?.model || settings.llm_model || 'gemini-3.6-flash'}
+                          value={settings.llm?.model || settings.llm_model || 'gemini-3.8-flash'}
                           onChange={(e) => handleLLMChange('model', e.target.value)}
                           className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                         >
-                          <option value="gemini-3.6-flash">gemini-3.6-flash (最新版，强烈推荐)</option>
-                          <option value="gemini-2.5-flash">gemini-2.5-flash (稳定，速度极快)</option>
-                          <option value="gemini-2.5-pro">gemini-2.5-pro (推理能力极强)</option>
-                          <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                          <option value="gemini-3.8-flash">gemini-3.8-flash (最新版，强烈推荐)</option>
+                          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (轻量快速，超低延迟)</option>
+                          <option value="gemini-4-argon">gemini-4-argon (新一代深度推理模型)</option>
                         </select>
                       </div>
                     </div>

@@ -18,8 +18,13 @@ import {
   ShieldAlert,
   ChevronDown,
   Film,
+  ChevronUp,
+  Feather,
+  Clock,
+  CheckCircle2,
 } from 'lucide-react';
 import SimpleMDE from 'react-simplemde-editor';
+import EasyMDE from 'easymde';
 import { api } from '../services/api';
 import { Chapter } from '../types';
 import { useLanguage } from '../LanguageContext';
@@ -28,6 +33,18 @@ import { useUndo } from '../hooks/useUndo';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 import { StoryPlanPanel } from '../components/story/StoryPlanPanel';
 import { chapterEditorFields, isChapterEditorDirty, reconcileChapterEditorFields } from '../components/story/chapterEditorState';
+
+const MDE_ICONS = {
+  bold: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h9a4 4 0 0 1 0 8H6v-8Z"/><path d="M6 4h8a4 4 0 0 1 0 8H6V4Z"/></svg>',
+  italic: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/></svg>',
+  heading: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h12"/><path d="M6 4v16"/><path d="M18 4v16"/></svg>',
+  quote: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>',
+  ul: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
+  ol: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><circle cx="4" cy="18" r="1"/></svg>',
+  preview: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  sideBySide: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>',
+  fullscreen: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>',
+};
 
 export const StoryEditor: React.FC = () => {
   const { id: projectId } = useParams<{ id: string }>();
@@ -39,6 +56,7 @@ export const StoryEditor: React.FC = () => {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
   const [content, setContent, undo, redo, canUndo, canRedo, setContentWithoutHistory] = useUndo('');
   const [summary, setSummary] = useState('');
+  const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [title, setTitle] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [showAiMenu, setShowAiMenu] = useState(false);
@@ -387,13 +405,93 @@ export const StoryEditor: React.FC = () => {
     navigate(`/project/${projectId}/director`);
   };
 
-  const editorOptions = useMemo(() => ({
+  const wordCount = useMemo(() => {
+    return (content || '').trim().replace(/\s+/g, '').length;
+  }, [content]);
+
+  const readingTime = useMemo(() => {
+    return Math.max(1, Math.ceil(wordCount / 400));
+  }, [wordCount]);
+
+  const currentChapterIndex = useMemo(() => {
+    if (!selectedChapter) return -1;
+    return chapters.findIndex((ch) => ch.id === selectedChapter.id);
+  }, [chapters, selectedChapter]);
+
+  const editorOptions = useMemo<EasyMDE.Options>(() => ({
     spellChecker: false,
     status: false,
     placeholder: t('story.placeholder'),
-    toolbar: ["bold", "italic", "heading", "|", "quote", "unordered-list", "ordered-list", "|", "preview", "side-by-side", "fullscreen"],
+    autoDownloadFontAwesome: false,
+    lineWrapping: true,
     styleSelectedText: false,
-    maxHeight: "100%",
+    toolbar: [
+      {
+        name: 'bold',
+        action: EasyMDE.toggleBold,
+        className: 'custom-mde-btn',
+        title: t('story.editor_bold', '粗体 (Ctrl+B)'),
+        icon: MDE_ICONS.bold,
+      },
+      {
+        name: 'italic',
+        action: EasyMDE.toggleItalic,
+        className: 'custom-mde-btn',
+        title: t('story.editor_italic', '斜体 (Ctrl+I)'),
+        icon: MDE_ICONS.italic,
+      },
+      {
+        name: 'heading',
+        action: EasyMDE.toggleHeadingSmaller,
+        className: 'custom-mde-btn',
+        title: t('story.editor_heading', '标题 (Ctrl+H)'),
+        icon: MDE_ICONS.heading,
+      },
+      '|',
+      {
+        name: 'quote',
+        action: EasyMDE.toggleBlockquote,
+        className: 'custom-mde-btn',
+        title: t('story.editor_quote', '引用 (Ctrl+\')'),
+        icon: MDE_ICONS.quote,
+      },
+      {
+        name: 'unordered-list',
+        action: EasyMDE.toggleUnorderedList,
+        className: 'custom-mde-btn',
+        title: t('story.editor_ul', '无序列表 (Ctrl+L)'),
+        icon: MDE_ICONS.ul,
+      },
+      {
+        name: 'ordered-list',
+        action: EasyMDE.toggleOrderedList,
+        className: 'custom-mde-btn',
+        title: t('story.editor_ol', '有序列表 (Alt+L)'),
+        icon: MDE_ICONS.ol,
+      },
+      '|',
+      {
+        name: 'preview',
+        action: EasyMDE.togglePreview,
+        className: 'custom-mde-btn no-disable',
+        title: t('story.editor_preview', '实时预览 (Ctrl+P)'),
+        icon: MDE_ICONS.preview,
+      },
+      {
+        name: 'side-by-side',
+        action: EasyMDE.toggleSideBySide,
+        className: 'custom-mde-btn no-disable no-mobile',
+        title: t('story.editor_side_by_side', '分栏对照 (F9)'),
+        icon: MDE_ICONS.sideBySide,
+      },
+      {
+        name: 'fullscreen',
+        action: EasyMDE.toggleFullScreen,
+        className: 'custom-mde-btn no-disable no-mobile',
+        title: t('story.editor_fullscreen', '全屏沉浸 (F11)'),
+        icon: MDE_ICONS.fullscreen,
+      },
+    ],
   }), [t]);
 
   const lastChapter = chapters.length > 0 ? chapters[chapters.length - 1] : null;
@@ -406,9 +504,14 @@ export const StoryEditor: React.FC = () => {
   return (
     <div className="flex h-full w-full min-h-0 bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Chapter Sidebar */}
-      <div className="w-16 lg:w-64 bg-white/90 dark:bg-[#0c1322]/90 border-r border-slate-200/80 dark:border-slate-800/80 flex flex-col flex-shrink-0 transition-all h-full min-h-0 backdrop-blur-sm">
-        <div className="p-4 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center h-14 flex-shrink-0">
-          <h3 className="font-bold text-slate-800 dark:text-slate-200 hidden lg:block text-sm">{t('story.chapters')}</h3>
+      <div className="w-16 lg:w-72 bg-white/90 dark:bg-[#0c1322]/90 border-r border-slate-200/80 dark:border-slate-800/80 flex flex-col flex-shrink-0 transition-all h-full min-h-0 backdrop-blur-sm">
+        <div className="px-4 py-3 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center h-14 flex-shrink-0">
+          <div className="hidden lg:flex items-center gap-2">
+            <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">{t('story.chapters')}</h3>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+              {chapters.length}
+            </span>
+          </div>
           <button
             onClick={handleCreateChapter}
             className={`p-1.5 rounded-xl mx-auto lg:mx-0 transition-all shadow-xs ${
@@ -422,64 +525,84 @@ export const StoryEditor: React.FC = () => {
                 : t('story.new_chapter', '新建章节')
             }
           >
-            <Plus size={17} />
+            <Plus size={16} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-h-0">
-          {chapters.map((chapter, index) => (
-            <div
-              key={chapter.id}
-              onClick={() => setSelectedChapter(chapter)}
-              className={`group flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer text-xs sm:text-sm transition-all ${
-                selectedChapter?.id === chapter.id 
-                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold ring-1 ring-indigo-500/20 shadow-xs' 
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-              title={chapter.title}
-            >
-              <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
-                <FileText size={15} className={`flex-shrink-0 ${selectedChapter?.id === chapter.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`} />
-                <span className="truncate hidden lg:block">{chapter.title}</span>
-                {chapter.status === 'completed' ? (
-                  <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40 flex-shrink-0">
-                    {t('story.status_completed', '已定稿')}
-                  </span>
-                ) : (
-                  <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700 flex-shrink-0">
-                    {t('story.status_draft', '草稿')}
-                  </span>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar min-h-0">
+          {chapters.map((chapter, index) => {
+            const isSelected = selectedChapter?.id === chapter.id;
+            const approxWords = (chapter.content || '').trim().replace(/\s+/g, '').length;
+            return (
+              <div
+                key={chapter.id}
+                onClick={() => setSelectedChapter(chapter)}
+                className={`group flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer text-xs transition-all relative ${
+                  isSelected 
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/50 text-indigo-900 dark:text-indigo-200 font-semibold shadow-xs ring-1 ring-indigo-500/30' 
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 hover:text-slate-900 dark:hover:text-slate-200'
+                }`}
+                title={chapter.title}
+              >
+                {isSelected && (
+                  <span className="absolute left-0 top-2 bottom-2 w-1 bg-indigo-600 rounded-r-full" />
                 )}
+
+                <div className="flex items-center gap-2.5 overflow-hidden flex-1 min-w-0 pl-1">
+                  <span className={`text-[10px] font-mono font-bold flex-shrink-0 w-5 text-center ${
+                    isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'
+                  }`}>
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <div className="truncate flex-1 min-w-0 hidden lg:block">
+                    <div className="truncate font-medium">{chapter.title}</div>
+                    <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">
+                      <span>{approxWords} 字</span>
+                    </div>
+                  </div>
+                  {chapter.status === 'completed' ? (
+                    <span className="hidden lg:inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-medium rounded-md bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 flex-shrink-0">
+                      <CheckCircle2 size={10} />
+                      <span>{t('story.status_completed', '已定稿')}</span>
+                    </span>
+                  ) : (
+                    <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[9px] font-medium rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800/90 dark:text-slate-400 border border-slate-200 dark:border-slate-700/60 flex-shrink-0">
+                      {t('story.status_draft', '草稿')}
+                    </span>
+                  )}
+                </div>
+                
+                <div className="hidden lg:flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+                  <button 
+                    onClick={(e) => handleMoveChapter(e, chapter, 'up')}
+                    disabled={index === 0}
+                    className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-20 rounded hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                    title="Move Up"
+                  >
+                    <ArrowUp size={11} />
+                  </button>
+                  <button 
+                    onClick={(e) => handleMoveChapter(e, chapter, 'down')}
+                    disabled={index === chapters.length - 1}
+                    className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-20 rounded hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                    title="Move Down"
+                  >
+                    <ArrowDown size={11} />
+                  </button>
+                  <button 
+                    onClick={(e) => handleDeleteChapter(e, chapter.id)}
+                    className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                    title="Delete Chapter"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </div>
               </div>
-              
-              <div className="hidden lg:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button 
-                  onClick={(e) => handleMoveChapter(e, chapter, 'up')}
-                  disabled={index === 0}
-                  className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-30 rounded"
-                  title="Move Up"
-                >
-                  <ArrowUp size={12} />
-                </button>
-                <button 
-                  onClick={(e) => handleMoveChapter(e, chapter, 'down')}
-                  disabled={index === chapters.length - 1}
-                  className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-30 rounded"
-                  title="Move Down"
-                >
-                  <ArrowDown size={12} />
-                </button>
-                <button 
-                  onClick={(e) => handleDeleteChapter(e, chapter.id)}
-                  className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded transition-colors"
-                  title="Delete Chapter"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {chapters.length === 0 && (
-            <div className="p-4 text-center text-xs text-slate-400 dark:text-slate-500 hidden lg:block">{t('story.no_chapters')}</div>
+            <div className="p-6 text-center text-xs text-slate-400 dark:text-slate-500 hidden lg:block">
+              {t('story.no_chapters')}
+            </div>
           )}
         </div>
       </div>
@@ -729,34 +852,60 @@ export const StoryEditor: React.FC = () => {
           </div>
         </div>
 
-        {/* Outline / Summary Bar */}
+        {/* Outline / Summary Bar (Collapsible) */}
         {selectedChapter && (
-          <div className="px-4 lg:px-6 py-2.5 border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#0c1322]/70 backdrop-blur-sm flex-shrink-0">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-bold">
-                {t('story.chapter_summary', '本章剧情大纲 / 梗概 (Summary)')}
-              </label>
+          <div className="border-b border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#0c1322]/70 backdrop-blur-sm flex-shrink-0 transition-all">
+            <div className="px-4 lg:px-6 py-2 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setSummaryExpanded((v) => !v)}
+                className="flex items-center gap-2 text-left group/btn"
+              >
+                <span className="text-[11px] uppercase tracking-wider text-slate-600 dark:text-slate-300 font-bold group-hover/btn:text-indigo-600 dark:group-hover/btn:text-indigo-400 transition-colors flex items-center gap-1.5">
+                  <Feather size={12} className="text-indigo-500" />
+                  {t('story.chapter_summary', '本章剧情大纲 / 梗概')}
+                </span>
+                {!summaryExpanded && summary && (
+                  <span className="text-xs text-slate-400 dark:text-slate-500 truncate max-w-md hidden sm:inline">
+                    · {summary.slice(0, 40)}...
+                  </span>
+                )}
+                {summaryExpanded ? (
+                  <ChevronUp size={13} className="text-slate-400" />
+                ) : (
+                  <ChevronDown size={13} className="text-slate-400" />
+                )}
+              </button>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 hidden sm:inline">
+                {summaryExpanded ? '供智能体与分镜生成参考' : '点击展开编辑'}
+              </span>
             </div>
-            <textarea
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-              rows={2}
-              placeholder={t('story.summary_placeholder', '核心冲突、情节走向、结尾悬念…')}
-              className="mt-1 w-full bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none transition-all shadow-2xs"
-            />
+            {summaryExpanded && (
+              <div className="px-4 lg:px-6 pb-3 pt-0 animate-in fade-in duration-150">
+                <textarea
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                  rows={2}
+                  placeholder={t('story.summary_placeholder', '核心冲突、情节走向、结尾悬念…')}
+                  className="w-full bg-slate-50/80 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none transition-all shadow-2xs"
+                />
+              </div>
+            )}
           </div>
         )}
         
-        {/* Editor Body */}
-        <div className="flex-1 relative group/editor overflow-hidden flex flex-col min-h-0 bg-white dark:bg-[#090d16]">
+        {/* Editor Body - Paper Canvas on Tinted Desk Background */}
+        <div className="flex-1 relative group/editor overflow-hidden flex flex-col min-h-0 bg-slate-100/70 dark:bg-[#070b13] p-2 sm:p-4 lg:p-6 overflow-y-auto">
           {selectedChapter ? (
-            <SimpleMDE
-              key={selectedChapter.id}
-              value={content}
-              onChange={(val) => setContent(val)}
-              options={editorOptions}
-              className="h-full custom-simplemde"
-            />
+            <div className="flex-1 flex flex-col max-w-5xl w-full mx-auto bg-white dark:bg-[#0c1322] rounded-2xl shadow-sm border border-slate-200/90 dark:border-slate-800/80 overflow-hidden min-h-0">
+              <SimpleMDE
+                key={selectedChapter.id}
+                value={content}
+                onChange={(val) => setContent(val)}
+                options={editorOptions}
+                className="h-full custom-simplemde"
+              />
+            </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-slate-400 dark:text-slate-500 text-sm">
               {t('story.no_chapters')}
@@ -764,7 +913,11 @@ export const StoryEditor: React.FC = () => {
           )}
           
           {/* AI Floating Quick Action Toolbar */}
-          <div className="absolute bottom-6 right-8 flex items-center gap-3 z-10">
+          <div className="absolute bottom-6 right-36 flex items-center gap-2 z-20">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/90 dark:border-slate-800 rounded-full text-xs font-medium text-slate-600 dark:text-slate-300 shadow-lg shadow-slate-900/5">
+              <Clock size={13} className="text-indigo-500" />
+              <span>{wordCount} 字</span>
+            </div>
             <button
               onClick={handleAIDraft}
               disabled={aiLoading}

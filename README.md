@@ -14,7 +14,7 @@ npm install
 # 从 backend/.env.example 复制：
 #   LLM_PROVIDER=gemini
 #   LLM_API_KEY=...
-#   LLM_MODEL=gemini-2.5-flash
+#   LLM_MODEL=gemini-3.8-flash
 #   # 默认仅监听回环；不要轻易改成 0.0.0.0
 #   # HOST=127.0.0.1
 #   # PORT=3000

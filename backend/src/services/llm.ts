@@ -82,7 +82,7 @@ export class LLMService {
 
         return new GeminiProvider(
             llmConfig.api_key || appSettings.GEMINI_API_KEY,
-            llmConfig.model || 'gemini-2.5-flash'
+            llmConfig.model || 'gemini-3.8-flash'
         );
     }
 

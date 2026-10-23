@@ -41,8 +41,8 @@ export class MediaService {
         || appSettings.GEMINI_API_KEY
         || (llmSettings.provider === 'gemini' ? llmSettings.api_key : ''),
       llmSettings.provider === 'gemini'
-        ? (llmSettings.model || 'gemini-2.5-flash')
-        : 'gemini-2.5-flash'
+        ? (llmSettings.model || 'gemini-3.8-flash')
+        : 'gemini-3.8-flash'
     );
   }
 }
