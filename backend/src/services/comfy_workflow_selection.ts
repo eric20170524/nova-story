@@ -36,7 +36,12 @@ export const inferComfyWorkflowFamily = (row: ComfyWorkflowRow): ImageModelFamil
     throw new Error(`ComfyUI workflow ${row.id} (${row.name}) contains invalid JSON`);
   }
   const nodes = Object.values(graph);
-  if (nodes.some((node) => node?.class_type === 'UnetLoaderGGUF')) return 'flux';
+  if (nodes.some((node) =>
+    node?.class_type === 'UnetLoaderGGUF'
+    || node?.class_type === 'CLIPTextEncodeFlux'
+    || (node?.class_type === 'UNETLoader' && /flux/i.test(String(node.inputs?.unet_name || '')))
+    || (node?.class_type === 'DualCLIPLoader' && String(node.inputs?.type || '') === 'flux')
+  )) return 'flux';
   if (nodes.some((node) =>
     node?.class_type === 'TextEncodeQwenImage21'
     || (node?.class_type === 'UNETLoader' && /qwen[_-]?image/i.test(String(node.inputs?.unet_name || '')))

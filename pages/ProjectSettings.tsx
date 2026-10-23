@@ -566,9 +566,9 @@ export const ProjectSettings: React.FC = () => {
                       setDefaultWorkflowId(null);
                     }}
                   >
-                    <option value="pony">{t('project_settings.model_pony')}</option>
                     <option value="qwen_image">{t('project_settings.model_qwen_image')}</option>
                     <option value="redcraft_krea2">{t('project_settings.model_redcraft')}</option>
+                    <option value="pony">{t('project_settings.model_pony')}</option>
                     <option value="sd15">{t('project_settings.model_sd15')}</option>
                   </select>
                 </Field>
@@ -594,7 +594,7 @@ export const ProjectSettings: React.FC = () => {
                     {defaultWorkflowId != null && !workflows.some((wf) => wf.id === defaultWorkflowId) && (
                       <option value={defaultWorkflowId}>{t('project_settings.workflow_invalid', '所选工作流已失效或与项目模型不匹配')}</option>
                     )}
-                    {(['pony', 'qwen_image', 'redcraft_krea2', 'sd15'] as const).map((family) => {
+                    {(['qwen_image', 'redcraft_krea2', 'pony', 'sd15'] as const).map((family) => {
                       const familyWorkflows = workflows.filter((wf) => wf.model_family === family);
                       if (!familyWorkflows.length) return null;
                       const familyLabel = family === 'redcraft_krea2'

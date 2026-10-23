@@ -1051,7 +1051,7 @@ export const translations = {
       video_section: "Video workflow presets",
       video_section_desc: "Built-in video graphs. A project default applies to ordinary shots. A last frame still selects FL2VA, and a guide frame still selects Multi-Frame.",
       built_in: "Built in",
-      family_flux: "FLUX (retired)",
+      family_flux: "FLUX.1 [dev]",
       family_other: "Other",
       preset_custom: "Custom image workflow. Its checkpoint family is inferred from the graph.",
       presets: {
@@ -1063,6 +1063,8 @@ export const translations = {
         sd15_draft_12gb: "SD 1.5 draft. Faster and lighter, with less detail than Pony or Krea 2.",
         qwen_image_2_1: "Qwen-Image 2.1 stills. Native graph: UNET qwen_image_2.1_int8_convrot, Qwen3-VL 8B CLIP type qwen_image, and VAE qwen_image_2.1_vae_bf16. Euler, Simple, CFG 1, 25 steps. A Pony or SDXL checkpoint cannot be swapped into this graph. The ComfyUI server must already have these three files. Video workflows stay unchanged.",
         redcraft_krea2_12gb: "赤佬 3.0 / Krea 2 stills only. Euler, Simple, CFG 1, about 10 steps. It does not generate video and needs the Krea 2 UNET, Qwen CLIP, and Qwen image VAE.",
+        flux_dev: "FLUX.1 [dev] full-precision text-to-image workflow. DualCLIP (T5-XXL + CLIP-L), AE VAE, Euler 20 steps, top-tier prompt adherence and text rendering.",
+        illustrious_xl: "Illustrious-XL anime & picture-book checkpoint. High-quality anime illustration and picture book styles, Euler Ancestral 25 steps.",
       },
       video_presets: {
         grok_imagine_browser: "Makes a 5-second clip from the current storyboard frame in a signed-in Chrome session. The result is copied back into NovaStory.",
@@ -2154,7 +2156,7 @@ export const translations = {
       video_section: "生视频工作流预设",
       video_section_desc: "内置视频图。项目默认只作用于普通镜头；已有尾帧仍用 FL2VA，已有引导帧仍用 Multi-Frame。",
       built_in: "内置",
-      family_flux: "FLUX（已退役）",
+      family_flux: "FLUX.1 [dev]",
       family_other: "其他",
       preset_custom: "自定义生图工作流。底模家族由图里的加载器推断。",
       presets: {
@@ -2166,6 +2168,8 @@ export const translations = {
         sd15_draft_12gb: "SD 1.5 草稿。更快、更轻，细节少于 Pony 和赤佬。",
         qwen_image_2_1: "Qwen-Image 2.1 静帧。原生图使用 UNET qwen_image_2.1_int8_convrot、类型为 qwen_image 的 Qwen3-VL 8B，以及 VAE qwen_image_2.1_vae_bf16。Euler、Simple、CFG 1、25 步。Pony 或 SDXL 检查点不能换进这张图。远端 ComfyUI 上必须已经有这三份文件。视频工作流不变。",
         redcraft_krea2_12gb: "赤佬 3.0 / Krea 2，只出静帧。Euler、Simple、CFG 1、约 10 步。不出视频。需要 Krea 2 UNET、Qwen CLIP 和 Qwen 图像 VAE。",
+        flux_dev: "FLUX.1 [dev] 全精度文本驱动生图。DualCLIP (T5-XXL + CLIP-L)，AE VAE，Euler 20步，出图细节与文字渲染顶级。",
+        illustrious_xl: "Illustrious-XL 动漫绘本专用基模。SDXL 高质量二次元与插画生成，Euler Ancestral 25步，适合日漫与儿童绘本风格。",
       },
       video_presets: {
         grok_imagine_browser: "用当前分镜图在已登录的 Chrome 里生成约 5 秒视频，再把成片写回 NovaStory。",

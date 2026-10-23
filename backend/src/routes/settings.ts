@@ -62,8 +62,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       objectInfo = null;
     }
     const query = (request.query || {}) as Record<string, string>;
-    let workflowFile = comfy.selected_workflow_file || comfy.default_workflow || 'pony_xl_12gb.json';
-    let modelName = 'pony';
+    const isRemote = comfy.mode === 'remote';
+    let workflowFile = comfy.selected_workflow_file || (isRemote ? 'qwen_image_2_1.json' : (comfy.default_workflow || 'pony_xl_12gb.json'));
+    let modelName = isRemote ? 'qwen-image-2.1' : 'pony';
     if (query.model === 'redcraft_krea2') {
       modelName = 'redcraft_krea2';
       workflowFile = 'redcraft_krea2_12gb.json';
@@ -78,6 +79,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       workflowFile = 'anything_v5.json';
     } else if (String(workflowFile).includes('krea') || String(workflowFile).includes('redcraft')) {
       modelName = 'redcraft_krea2';
+    } else if (String(workflowFile).includes('qwen')) {
+      modelName = 'qwen-image-2.1';
+    } else if (String(workflowFile).includes('pony')) {
+      modelName = 'pony';
     }
     const formal = assessFormalInstall({
       modelName,
