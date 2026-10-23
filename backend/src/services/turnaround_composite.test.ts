@@ -330,6 +330,44 @@ test('redcraft_krea2 face_detail_stage2 keeps Krea2 Stage 1 and adds a Qwen-Imag
   );
   assert.equal(Object.values(fallback).some((n: any) => isFaceDetailStage2Node(n)), false);
   assert.deepEqual(fallback['9'].inputs.images, ['8', 0]);
+
+  // Empty remote UNet catalog ([]) or missing Stage 2 custom nodes must also skip Stage 2.
+  const emptyCatalogFallback: any = await compileComfyWorkflow(
+    {
+      ...kreaTemplate,
+      ...buildTurnaroundPanelWorkflowData({ model_type: 'redcraft_krea2' }, TURNAROUND_VIEWS[0]!, front.prompt, front.negative_prompt),
+      character_ref_url: '/static/generated/portrait.png',
+      ref_image_url: '/static/generated/portrait.png',
+      face_detail_stage2: true,
+    },
+    front.prompt,
+    'standard',
+    undefined,
+    { comfyui: { remote_unet_names: [] } },
+  );
+  assert.equal(Object.values(emptyCatalogFallback).some((n: any) => isFaceDetailStage2Node(n)), false);
+
+  const missingNodeFallback: any = await compileComfyWorkflow(
+    {
+      ...kreaTemplate,
+      ...buildTurnaroundPanelWorkflowData({ model_type: 'redcraft_krea2' }, TURNAROUND_VIEWS[0]!, front.prompt, front.negative_prompt),
+      character_ref_url: '/static/generated/portrait.png',
+      ref_image_url: '/static/generated/portrait.png',
+      face_detail_stage2: true,
+    },
+    front.prompt,
+    'standard',
+    undefined,
+    {
+      comfyui: {
+        remote_unet_names: ['krea2_raw_bf16.safetensors', 'qwen_image_2.1_bf16.safetensors'],
+        remote_clip_names: ['qwen3vl_4b_bf16.safetensors', 'qwen3vl_8b_bf16.safetensors'],
+        remote_vae_names: ['qwen_image_vae.safetensors', 'qwen_image_2.1_vae_bf16.safetensors'],
+        remote_node_names: ['KSampler', 'SaveImage', 'UNETLoader'],
+      },
+    },
+  );
+  assert.equal(Object.values(missingNodeFallback).some((n: any) => isFaceDetailStage2Node(n)), false);
 });
 
 test('compound hair/garment descriptors and participial handheld prop stripping work cleanly on front view', () => {

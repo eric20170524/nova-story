@@ -46,6 +46,8 @@ export interface TierBCapability extends AdapterAvailability {
   hasOpenPosePreprocessor: boolean;
   hasDepthPreprocessor?: boolean;
   hasCannyPreprocessor?: boolean;
+  /** Whether Stage 2 local face crop/restore custom nodes (CreateShapeMask, GH_MaskCropV2, GH_CropRestore) exist. */
+  hasFaceDetailStage2Nodes?: boolean;
   /** InsightFace-based face lock. Only set from a live object_info. */
   faceId?: FaceIdCapability;
   /** Human-readable install hints when something is missing */
@@ -195,7 +197,8 @@ export const discoverTierBModels = (
       /CLIP-ViT-H-14/i,
       /ViT-H-14/i,
       /vit.?h/i,
-      /laion2B/i
+      /laion2B/i,
+      /clip_vision_g/i
     ]);
 
   // Prefer openpose → depth → canny for composition lock
@@ -266,6 +269,18 @@ const FACEID_NODES = ['IPAdapterUnifiedLoaderFaceID', 'IPAdapterFaceID'] as cons
 const FACEID_WEIGHTS_RE = /faceid[-_]?plusv2.*sdxl(?!.*lora)/i;
 const FACEID_LORA_RE = /faceid[-_]?plusv2.*sdxl.*lora/i;
 
+export const FACE_DETAIL_STAGE2_COMMON_NODES = [
+  'CreateShapeMask',
+  'GH_MaskCropV2',
+  'GH_CropRestore',
+] as const;
+
+export const KREA2_STAGE2_QWEN_NODES = [
+  ...FACE_DETAIL_STAGE2_COMMON_NODES,
+  'TextEncodeQwenImage21GH',
+  'RestoreQwenImage21GH',
+] as const;
+
 /** FaceID Plus V2 readiness from a live object_info. Without object_info it is never assumed. */
 export const faceIdFromObjectInfo = (objectInfo: Record<string, any> | null): FaceIdCapability => {
   const missing: string[] = [];
@@ -281,6 +296,11 @@ export const faceIdFromObjectInfo = (objectInfo: Record<string, any> | null): Fa
     .find((file) => FACEID_LORA_RE.test(file)) || null;
   if (!ipadapter) missing.push('models/ipadapter/ip-adapter-faceid-plusv2_sdxl.bin');
   if (!lora) missing.push('models/loras/ip-adapter-faceid-plusv2_sdxl_lora.safetensors');
+  if (objectInfo.CLIPVisionLoader) {
+    const clipFiles = choiceList(objectInfo, 'CLIPVisionLoader', 'clip_name');
+    const clipVision = pickByPatterns(clipFiles, [/CLIP-ViT-H-14/i, /ViT-H-14/i, /vit.?h/i, /clip_vision_g/i]);
+    if (!clipVision) missing.push('models/clip_vision/CLIP-ViT-H-14*.safetensors');
+  }
   return { available: missing.length === 0, ipadapter, lora, missing };
 };
 
@@ -298,7 +318,7 @@ export const modelChoicesFromObjectInfo = (objectInfo: Record<string, any> | nul
     /plus.*sdxl/i,
     /sdxl/i,
   ]);
-  const clipVision = pickByPatterns(clipFiles, [/CLIP-ViT-H-14/i, /ViT-H-14/i, /vit.?h/i]);
+  const clipVision = pickByPatterns(clipFiles, [/CLIP-ViT-H-14/i, /ViT-H-14/i, /vit.?h/i, /clip_vision_g/i]);
   const openpose = controlnetFiles.find((file) => /openpose|pose/i.test(file) && /sdxl|xl/i.test(file));
   const depth = controlnetFiles.find((file) => /depth/i.test(file) && /sdxl|xl/i.test(file));
   const canny = controlnetFiles.find((file) => /canny|lineart/i.test(file) && /sdxl|xl/i.test(file));
@@ -388,6 +408,10 @@ export const probeTierBCapability = (
     ? ['CannyEdgePreprocessor', 'Canny'].some((n) => nodeNames.has(n))
     : Boolean(installPath && hasControlNetAux(installPath));
 
+  const hasFaceDetailStage2Nodes = nodeNames
+    ? FACE_DETAIL_STAGE2_COMMON_NODES.every((n) => nodeNames.has(n))
+    : undefined;
+
   if (!hasIpAdapterNodes) {
     missing.push('custom_nodes/ComfyUI_IPAdapter_plus');
   }
@@ -471,6 +495,7 @@ export const probeTierBCapability = (
     hasOpenPosePreprocessor,
     hasDepthPreprocessor,
     hasCannyPreprocessor,
+    hasFaceDetailStage2Nodes,
     faceId,
     missing: Array.from(new Set(missing)),
     notes
@@ -602,19 +627,23 @@ export const injectTierBAdapters = (
 
   // ── Stage 2: Face-Detail Local Inpaint Pipeline (Scheme 3 + Scheme 1) ──
   if (characterWired && options.enableFaceDetailStage2 === true) {
-    try {
-      faceDetailWired = injectPonyFaceDetailStage2(workflow, {
-        width: options.canvasWidth || 768,
-        height: options.canvasHeight || 1344,
-        basePositiveLink,
-        baseNegativeLink,
-      });
-      if (faceDetailWired) {
-        notes.push('Pony Stage 2 Face-Detail local crop-inpaint-restore wired');
+    if (cap.hasFaceDetailStage2Nodes === false) {
+      notes.push('Pony Stage 2 Face-Detail skipped: missing custom nodes (CreateShapeMask / GH_MaskCropV2 / GH_CropRestore)');
+    } else {
+      try {
+        faceDetailWired = injectPonyFaceDetailStage2(workflow, {
+          width: options.canvasWidth || 768,
+          height: options.canvasHeight || 1344,
+          basePositiveLink,
+          baseNegativeLink,
+        });
+        if (faceDetailWired) {
+          notes.push('Pony Stage 2 Face-Detail local crop-inpaint-restore wired');
+        }
+      } catch (e) {
+        notes.push(`Pony Stage 2 Face-Detail inject failed: ${e}`);
+        logger.warn(`Pony Stage 2 Face-Detail inject failed: ${e}`);
       }
-    } catch (e) {
-      notes.push(`Pony Stage 2 Face-Detail inject failed: ${e}`);
-      logger.warn(`Pony Stage 2 Face-Detail inject failed: ${e}`);
     }
   }
 
@@ -959,6 +988,50 @@ export const pickCatalogModel = (
 };
 
 /**
+ * Discover local UNet / CLIP / VAE model filenames under a local ComfyUI install_path when no remote catalog is supplied.
+ */
+export const discoverLocalCatalogModels = (
+  installPath: string | null | undefined
+): { unetNames?: string[]; clipNames?: string[]; vaeNames?: string[] } => {
+  if (!installPath) return {};
+  const modelsRoot = path.join(installPath, 'models');
+  if (!fs.existsSync(modelsRoot)) return {};
+  const unetDirs = [path.join(modelsRoot, 'unet'), path.join(modelsRoot, 'diffusion_models')];
+  const clipDirs = [path.join(modelsRoot, 'clip'), path.join(modelsRoot, 'text_encoders')];
+  const vaeDirs = [path.join(modelsRoot, 'vae')];
+  const hasUnetDir = unetDirs.some((d) => fs.existsSync(d));
+  const hasClipDir = clipDirs.some((d) => fs.existsSync(d));
+  const hasVaeDir = vaeDirs.some((d) => fs.existsSync(d));
+  return {
+    ...(hasUnetDir
+      ? { unetNames: Array.from(new Set(unetDirs.flatMap((d) => listModelFilesRecursive(d)))) }
+      : {}),
+    ...(hasClipDir
+      ? { clipNames: Array.from(new Set(clipDirs.flatMap((d) => listModelFilesRecursive(d)))) }
+      : {}),
+    ...(hasVaeDir
+      ? { vaeNames: Array.from(new Set(vaeDirs.flatMap((d) => listModelFilesRecursive(d)))) }
+      : {}),
+  };
+};
+
+const PONY_STAGE2_FULLBODY_CLAUSE_RE =
+  /\b(full[- ]body|head to toe|full-length wide shot|entire figure from head to feet inside frame|long skirt hem and feet visible on studio floor|hands and feet visible|visible feet and shoes|wide shot|neutral standing a-pose|neutral a-pose|standing a-pose|arms slightly away from torso|shoulders and hips square to camera)\b/i;
+
+/**
+ * Strip full-body framing clauses from Stage 1's prompt and add close-up facial focus for the 768x768 head crop inpaint.
+ */
+export const buildPonyStage2FacePrompt = (stage1Text: string): string => {
+  const clauses = String(stage1Text || '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter((c) => Boolean(c) && !PONY_STAGE2_FULLBODY_CLAUSE_RE.test(c));
+  const base = clauses.join(', ');
+  const faceSuffix = 'portrait, close-up face, detailed facial features, sharp eyes';
+  return base ? `${base}, ${faceSuffix}` : faceSuffix;
+};
+
+/**
  * Pony/SDXL Stage 2 Face-Detail Local Inpaint Pipeline (Scheme 3 + Scheme 1):
  * Crops the head/face ROI from Stage 1's full-body decode to 768x768, re-samples with
  * the FaceID/IP-Adapter patched SDXL model via VAEEncodeForInpaint, and restores onto Stage 1.
@@ -972,6 +1045,7 @@ const injectPonyFaceDetailStage2 = (
     baseNegativeLink?: [string, number] | null;
   }
 ): boolean => {
+  if (Object.values(workflow).some((n: any) => isFaceDetailStage2Node(n))) return false;
   const samplers = getSamplerNodes(workflow).filter(
     ([, node]) => !isFaceDetailStage2Node(node)
   );
@@ -1001,7 +1075,7 @@ const injectPonyFaceDetailStage2 = (
     String(firstSampler.inputs.model[0]),
     Number(firstSampler.inputs.model[1] ?? 0),
   ];
-  const posLink: [string, number] = opts.basePositiveLink || [
+  const basePosLink: [string, number] = opts.basePositiveLink || [
     String(firstSampler.inputs.positive[0]),
     Number(firstSampler.inputs.positive[1] ?? 0),
   ];
@@ -1009,6 +1083,25 @@ const injectPonyFaceDetailStage2 = (
     String(firstSampler.inputs.negative[0]),
     Number(firstSampler.inputs.negative[1] ?? 0),
   ];
+
+  let posLink: [string, number] = basePosLink;
+  const basePosNode = workflow[basePosLink[0]];
+  if (
+    basePosNode?.class_type === 'CLIPTextEncode'
+    && typeof basePosNode?.inputs?.text === 'string'
+    && Array.isArray(basePosNode?.inputs?.clip)
+  ) {
+    const stage2PosId = nextNodeId(workflow);
+    workflow[stage2PosId] = {
+      inputs: {
+        text: buildPonyStage2FacePrompt(basePosNode.inputs.text),
+        clip: basePosNode.inputs.clip,
+      },
+      class_type: 'CLIPTextEncode',
+      _meta: { title: 'NovaStory Stage 2 Face Positive (Pony)', stage: FACE_DETAIL_STAGE2_META },
+    };
+    posLink = [stage2PosId, 0];
+  }
 
   const w = Math.max(256, Math.round(Number(opts.width) || 768));
   const h = Math.max(256, Math.round(Number(opts.height) || 1344));

@@ -616,9 +616,15 @@ export async function generateTurnaroundComposite(
     );
   }
 
-  const runPanel = async (preferFaceId: boolean) => {
+  const stage2Planned = Boolean(panelWorkflow.face_detail_stage2);
+
+  const runPanel = async (preferFaceId: boolean, enableStage2 = stage2Planned) => {
     const compiled = await compileComfyWorkflow(
-      { ...panelWorkflow, prefer_faceid_adapter: preferFaceId },
+      {
+        ...panelWorkflow,
+        prefer_faceid_adapter: preferFaceId,
+        face_detail_stage2: enableStage2,
+      },
       built.prompt,
       'standard',
       {
@@ -669,11 +675,25 @@ export async function generateTurnaroundComposite(
     );
   };
 
-  let result = await runPanel(wantFaceId);
-  if (wantFaceId && result?.status !== 'completed' && /faceid|insightface|ipadapter|ip-adapter/i.test(String(result?.message || ''))) {
+  let activePreferFaceId = wantFaceId;
+  let result = await runPanel(activePreferFaceId, stage2Planned);
+  if (
+    activePreferFaceId
+    && result?.status !== 'completed'
+    && /faceid|insightface|ipadapter|ip-adapter/i.test(String(result?.message || ''))
+  ) {
     // object_info cannot prove the InsightFace runtime works. Fall back instead of failing the plate.
     logger.warn(`[Task ${input.taskId}] FaceID run failed (${result?.message}); retrying with plain IP-Adapter`);
-    result = await runPanel(false);
+    activePreferFaceId = false;
+    result = await runPanel(false, stage2Planned);
+  }
+  if (
+    stage2Planned
+    && result?.status !== 'completed'
+    && /CreateShapeMask|GH_MaskCropV2|GH_CropRestore|TextEncodeQwenImage21GH|RestoreQwenImage21GH|VAEEncodeForInpaint|qwen_image_2\.1|qwen3vl_8b|does not exist|invalid_prompt/i.test(String(result?.message || ''))
+  ) {
+    logger.warn(`[Task ${input.taskId}] Stage 2 face refinement failed (${result?.message}); retrying with Stage 1 only`);
+    result = await runPanel(activePreferFaceId, false);
   }
 
   if (result?.status !== 'completed' || !result.images?.[0]?.data) {

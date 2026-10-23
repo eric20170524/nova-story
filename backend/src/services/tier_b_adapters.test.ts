@@ -418,4 +418,38 @@ test('pony face_detail_stage2 keeps its own denoise through compile and sizes th
   const restore = nodes.find(([, n]) => n?.class_type === 'GH_CropRestore');
   const save = nodes.find(([, n]) => n?.class_type === 'SaveImage')?.[1];
   assert.deepEqual(save.inputs.images, [restore![0], 0]);
+
+  // Stage 2 conditioning strips full-body framing tags and adds close-up face focus.
+  const stage2PosNode = compiled[stage2Sampler.inputs.positive[0]];
+  assert.equal(stage2PosNode.class_type, 'CLIPTextEncode');
+  assert.equal(/\bfull[- ]body\b/i.test(stage2PosNode.inputs.text), false);
+  assert.match(stage2PosNode.inputs.text, /close-up face/);
+
+  // Missing Stage 2 custom nodes on ComfyUI: keep Stage 1 FaceID lock without injecting Stage 2.
+  const noStage2Nodes: any = await compileComfyWorkflow(
+    {
+      ...ponyWorkflow(),
+      character_ref_url: '/static/generated/char_face.png',
+      gen_type: 'turnaround',
+      prefer_faceid_adapter: true,
+      face_detail_stage2: true,
+    },
+    '1girl, silver hair, full body, standing, solo',
+    'standard',
+    {},
+    { advanced: { nsfw_enabled: false }, comfyui: { tier_b: { enabled: true }, remote_node_names: ['KSampler', 'SaveImage'] } },
+    cap
+  );
+  assert.equal(Object.values(noStage2Nodes).some((n: any) => isFaceDetailStage2Node(n)), false);
+
+  // faceIdFromObjectInfo requires CLIP-ViT-H-14 when CLIPVisionLoader is present in object_info.
+  const missingClip = faceIdFromObjectInfo({
+    IPAdapterUnifiedLoaderFaceID: {},
+    IPAdapterFaceID: {},
+    IPAdapterModelLoader: { input: { required: { ipadapter_file: [['ip-adapter-faceid-plusv2_sdxl.bin']] } } },
+    LoraLoader: { input: { required: { lora_name: [['ip-adapter-faceid-plusv2_sdxl_lora.safetensors']] } } },
+    CLIPVisionLoader: { input: { required: { clip_name: [[]] } } },
+  });
+  assert.equal(missingClip.available, false);
+  assert.ok(missingClip.missing.some((m) => m.includes('CLIP-ViT-H-14')));
 });

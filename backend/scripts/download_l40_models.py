@@ -94,18 +94,19 @@ MODELS = [
             "desc": f"InsightFace buffalo_l ({onnx_name})",
             "hf_repo": "public-data/insightface",
             "hf_file": f"models/buffalo_l/{onnx_name}",
+            "min_size_mb": 1,
             "targets": ["all", "tier_b"]
         }
         for onnx_name in ["1k3d68.onnx", "2d106det.onnx", "det_10g.onnx", "genderage.onnx", "w600k_r50.onnx"]
     ]
 ]
 
-def download_with_resume(url: str, output_path: str, desc: str):
+def download_with_resume(url: str, output_path: str, desc: str, min_size_mb: float = 10.0):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     temp_path = output_path + ".part"
     existing_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
 
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 10 * 1024 * 1024:
+    if os.path.exists(output_path) and os.path.getsize(output_path) > int(min_size_mb * 1024 * 1024):
         print(f"✅ 已存在完整文件: {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f} MB)，跳过。")
         return True
 
@@ -169,7 +170,14 @@ def main():
     for item in selected:
         url = f"{hf_base}/{item['hf_repo']}/resolve/main/{item['hf_file']}"
         dest_path = os.path.join(args.dest, item["subpath"])
-        download_with_resume(url, dest_path, item["desc"])
+        ok = download_with_resume(url, dest_path, item["desc"], float(item.get("min_size_mb", 10.0)))
+        if ok and item["subpath"] == "models/clip_vision/clip_vision_g.safetensors":
+            vit_h_alias = os.path.join(os.path.dirname(dest_path), "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors")
+            if not os.path.exists(vit_h_alias):
+                try:
+                    os.symlink(os.path.basename(dest_path), vit_h_alias)
+                except OSError:
+                    pass
 
     print("\n" + "=" * 60)
     print("🎉 所有目标模型下载流程处理完毕！")

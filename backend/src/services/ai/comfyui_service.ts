@@ -88,12 +88,13 @@ export interface RemoteModelCatalog {
     remote_unet_names?: string[];
     remote_clip_names?: string[];
     remote_vae_names?: string[];
+    remote_node_names?: string[];
 }
 
 /**
  * Portrait and turnaround compile through different callers. Both must see the
- * live LoraLoader / UNETLoader / CLIPLoader / VAELoader lists so a missing style LoRA
- * or precision variant is reconciled before submission.
+ * live LoraLoader / UNETLoader / CLIPLoader / VAELoader lists and custom node names
+ * so a missing style LoRA, precision variant, or Stage 2 custom node is reconciled before submission.
  */
 export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
     settings: T,
@@ -104,6 +105,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
     let remoteUnetNames: string[] | undefined;
     let remoteClipNames: string[] | undefined;
     let remoteVaeNames: string[] | undefined;
+    let remoteNodeNames: string[] | undefined;
     try {
         const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
         if (infoRes.ok) {
@@ -112,6 +114,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
             remoteUnetNames = unetNamesFromObjectInfo(info);
             remoteClipNames = clipNamesFromObjectInfo(info);
             remoteVaeNames = vaeNamesFromObjectInfo(info);
+            remoteNodeNames = nodeNamesFromObjectInfo(info);
         }
     } catch (error) {
         logger.warn(`Remote LoRA catalog unavailable: ${error}`);
@@ -124,6 +127,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
             ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
             ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
             ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
+            ...(remoteNodeNames && remoteNodeNames.length > 0 ? { remote_node_names: remoteNodeNames } : {}),
         } as NonNullable<T['comfyui']> & RemoteModelCatalog,
     };
 }
@@ -152,6 +156,11 @@ export function clipNamesFromObjectInfo(objectInfo: unknown): string[] {
 
 export function vaeNamesFromObjectInfo(objectInfo: unknown): string[] {
     return loaderChoicesFromObjectInfo(objectInfo, 'VAELoader', 'vae_name');
+}
+
+export function nodeNamesFromObjectInfo(objectInfo: unknown): string[] {
+    if (!objectInfo || typeof objectInfo !== 'object' || Array.isArray(objectInfo)) return [];
+    return Object.keys(objectInfo as Record<string, unknown>).filter(Boolean);
 }
 
 /**

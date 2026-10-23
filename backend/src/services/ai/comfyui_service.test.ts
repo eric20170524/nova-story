@@ -62,6 +62,7 @@ test('remote LoRA catalog is attached for every image compile caller', async () 
   assert.deepEqual(remote.comfyui.remote_unet_names, ['qwen_image_2.1_bf16.safetensors']);
   assert.deepEqual(remote.comfyui.remote_clip_names, ['qwen3vl_8b_bf16.safetensors']);
   assert.deepEqual(remote.comfyui.remote_vae_names, ['qwen_image_2.1_vae_bf16.safetensors']);
+  assert.deepEqual(remote.comfyui.remote_node_names, ['LoraLoader', 'UNETLoader', 'CLIPLoader', 'VAELoader']);
 });
 
 test('a dropped websocket keeps polling while the prompt is still active', () => {

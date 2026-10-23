@@ -39,9 +39,12 @@ import {
     type AdapterAvailability
 } from './reference_generation_policy';
 import {
+    discoverLocalCatalogModels,
+    FACE_DETAIL_STAGE2_COMMON_NODES,
     injectKrea2QwenFaceDetailStage2,
     injectTierBAdapters,
     isFaceDetailStage2Node,
+    KREA2_STAGE2_QWEN_NODES,
     pickCatalogModel,
     probeTierBCapability,
     resolveTierBFromSettings,
@@ -663,7 +666,7 @@ export const compileComfyWorkflow = async (
     }
 
     const samplerNodes = Object.values(workflow).filter(
-        (node: any) => node?.class_type?.includes('KSampler')
+        (node: any) => node?.class_type?.includes('KSampler') && !isFaceDetailStage2Node(node)
     ) as any[];
     // Keep the selected workflow's sampling recipe unless the request overrides it.
     const defaultSteps = Number(
@@ -778,6 +781,20 @@ export const compileComfyWorkflow = async (
     // Resolve Tier B capability (caller may pass live probe; else filesystem-only)
     const comfyCfg = runtimeSettings?.comfyui || {};
     const tierBCfg = comfyCfg.tier_b || {};
+    const localCatalog = discoverLocalCatalogModels(comfyCfg.install_path);
+    const effectiveUnetCatalog = Array.isArray(comfyCfg.remote_unet_names)
+        ? comfyCfg.remote_unet_names
+        : localCatalog.unetNames;
+    const effectiveClipCatalog = Array.isArray(comfyCfg.remote_clip_names)
+        ? comfyCfg.remote_clip_names
+        : localCatalog.clipNames;
+    const effectiveVaeCatalog = Array.isArray(comfyCfg.remote_vae_names)
+        ? comfyCfg.remote_vae_names
+        : localCatalog.vaeNames;
+    const remoteNodeNames = Array.isArray(comfyCfg.remote_node_names) && comfyCfg.remote_node_names.length > 0
+        ? new Set(comfyCfg.remote_node_names.map((n: unknown) => String(n)))
+        : null;
+
     let capability: AdapterAvailability | TierBCapability =
         adapterCapability
         || probeTierBCapability(comfyCfg.install_path, {
@@ -808,7 +825,7 @@ export const compileComfyWorkflow = async (
         const fullCap = capability as TierBCapability;
         // Ensure we have model paths for inject (probe result)
         const injectCap: TierBCapability = fullCap.models
-            ? fullCap
+            ? { ...fullCap }
             : probeTierBCapability(comfyCfg.install_path, {
                 enabled: true,
                 configured: {
@@ -828,6 +845,9 @@ export const compileComfyWorkflow = async (
                     ? 'ip_adapter'
                     : 'none';
         injectCap.compositionKind = refPlan.compositionControlType;
+        if (remoteNodeNames && injectCap.hasFaceDetailStage2Nodes === undefined) {
+            injectCap.hasFaceDetailStage2Nodes = FACE_DETAIL_STAGE2_COMMON_NODES.every((n) => remoteNodeNames.has(n));
+        }
 
         const charWeight = Number(
             workflowData?.character_adapter_weight
@@ -878,12 +898,12 @@ export const compileComfyWorkflow = async (
         && Boolean(characterRefUrl);
     if (isQwenImage || (isRedCraftKrea2 && workflowData?.use_qwen_vl_ref === true && characterRefUrl)) {
         // RedCraft Krea2 keeps its native backbone here; only the Stage 2 face refinement uses Qwen-Image 2.1.
-        // Pure Qwen-Image graphs reconcile precision variants against the live remote catalog.
+        // Pure Qwen-Image graphs reconcile precision variants against the live remote/local catalog.
         if (isQwenImage) {
             const unetId = findNodeId(workflow, (node) => node?.class_type === 'UNETLoader');
             const currentUnet = String((unetId && workflow[unetId]?.inputs?.unet_name) || '');
             const resolvedUnet = pickCatalogModel(
-                comfyCfg.remote_unet_names,
+                effectiveUnetCatalog,
                 ['qwen_image_2.1_bf16.safetensors', 'qwen_image_2.1_int8_convrot.safetensors'],
                 /qwen[_-]?image[_-]?2[._-]?1/i,
                 currentUnet,
@@ -898,7 +918,7 @@ export const compileComfyWorkflow = async (
                 if (clipId && workflow[clipId]?.inputs) {
                     const currentClip = String(workflow[clipId].inputs.clip_name || '');
                     workflow[clipId].inputs.clip_name = pickCatalogModel(
-                        comfyCfg.remote_clip_names,
+                        effectiveClipCatalog,
                         ['qwen3vl_8b_bf16.safetensors', 'qwen3vl_8b_int8_convrot.safetensors', 'qwen3vl_4b_bf16.safetensors'],
                         /qwen3vl/i,
                         currentClip || 'qwen3vl_8b_bf16.safetensors',
@@ -910,7 +930,7 @@ export const compileComfyWorkflow = async (
                 if (vaeLoaderId && workflow[vaeLoaderId]?.inputs) {
                     const currentVae = String(workflow[vaeLoaderId].inputs.vae_name || '');
                     workflow[vaeLoaderId].inputs.vae_name = pickCatalogModel(
-                        comfyCfg.remote_vae_names,
+                        effectiveVaeCatalog,
                         ['qwen_image_2.1_vae_bf16.safetensors', 'qwen_image_vae.safetensors'],
                         /qwen[_-]?image.*vae/i,
                         currentVae || 'qwen_image_2.1_vae_bf16.safetensors',
@@ -1023,35 +1043,42 @@ export const compileComfyWorkflow = async (
     // RedCraft Krea2 scheme 1B: Qwen-Image 2.1 re-draws the head crop with the portrait as reference.
     if (krea2FaceDetailStage2 && characterRefUrl) {
         const unetName = pickCatalogModel(
-            comfyCfg.remote_unet_names,
+            effectiveUnetCatalog,
             ['qwen_image_2.1_bf16.safetensors', 'qwen_image_2.1_int8_convrot.safetensors'],
             /qwen[_-]?image[_-]?2[._-]?1/i,
             'qwen_image_2.1_bf16.safetensors',
             false
         );
         const clipName = pickCatalogModel(
-            comfyCfg.remote_clip_names,
+            effectiveClipCatalog,
             ['qwen3vl_8b_bf16.safetensors', 'qwen3vl_8b_int8_convrot.safetensors'],
             /qwen3vl[_-]?8b/i,
             'qwen3vl_8b_bf16.safetensors',
             false
         );
         const vaeName = pickCatalogModel(
-            comfyCfg.remote_vae_names,
+            effectiveVaeCatalog,
             ['qwen_image_2.1_vae_bf16.safetensors', 'qwen_image_vae.safetensors'],
             /qwen[_-]?image.*vae/i,
             'qwen_image_2.1_vae_bf16.safetensors',
             false
         );
         const missingFromCatalog = [
-            [comfyCfg.remote_unet_names, unetName],
-            [comfyCfg.remote_clip_names, clipName],
-            [comfyCfg.remote_vae_names, vaeName],
+            [effectiveUnetCatalog, unetName],
+            [effectiveClipCatalog, clipName],
+            [effectiveVaeCatalog, vaeName],
         ].filter(([catalog, name]) =>
-            Array.isArray(catalog) && catalog.length > 0 && !(catalog as unknown[]).includes(name as string)
+            Array.isArray(catalog) && !(catalog as unknown[]).includes(name as string)
         ).map(([, name]) => String(name));
-        if (missingFromCatalog.length > 0) {
-            logger.warn(`[face-detail-stage2] Qwen-Image 2.1 models missing on ComfyUI (${missingFromCatalog.join(', ')}); keeping Stage 1 Krea2 render`);
+        const missingStage2Nodes = remoteNodeNames
+            ? KREA2_STAGE2_QWEN_NODES.filter((n) => !remoteNodeNames.has(n))
+            : [];
+        if (missingFromCatalog.length > 0 || missingStage2Nodes.length > 0) {
+            const reasons = [
+                ...(missingFromCatalog.length > 0 ? [`models: ${missingFromCatalog.join(', ')}`] : []),
+                ...(missingStage2Nodes.length > 0 ? [`nodes: ${missingStage2Nodes.join(', ')}`] : []),
+            ].join('; ');
+            logger.warn(`[face-detail-stage2] Qwen-Image 2.1 Stage 2 dependencies missing on ComfyUI (${reasons}); keeping Stage 1 Krea2 render`);
         } else {
             const stage2Sampler = samplerNodes[0];
             const wired = injectKrea2QwenFaceDetailStage2(workflow, {

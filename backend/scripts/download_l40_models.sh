@@ -131,6 +131,7 @@ if [ "$TARGET" = "all" ] || [ "$TARGET" = "tier_b" ]; then
         "$HF_BASE/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors" \
         "$COMFY_ROOT/models/clip_vision/clip_vision_g.safetensors" \
         "CLIP Vision 大模型 (ViT-bigG / G Encoder)"
+    ln -sf clip_vision_g.safetensors "$COMFY_ROOT/models/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" 2>/dev/null || true
 
     download_file \
         "$HF_BASE/thibaud/controlnet-openpose-sdxl-1.0/resolve/main/OpenPoseXL2.safetensors" \
