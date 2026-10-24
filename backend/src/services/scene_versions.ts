@@ -354,7 +354,7 @@ export async function createSceneVersion(
     clearAsset ? null : source.english_visual_prompt ?? null
   );
   await copyContinuityMetadata(sceneId, nextVersion, source);
-  await db.run(`INSERT INTO continuity_shot_dependency(scene_id,scene_version,script_id,script_scene_id,snapshot_id,ledger_revision,moment_id,phase,reads_json,dependency_hash,source_hash,status,reason_json)
+  await db.run(`INSERT OR REPLACE INTO continuity_shot_dependency(scene_id,scene_version,script_id,script_scene_id,snapshot_id,ledger_revision,moment_id,phase,reads_json,dependency_hash,source_hash,status,reason_json)
     SELECT scene_id,?,script_id,script_scene_id,snapshot_id,ledger_revision,moment_id,phase,reads_json,dependency_hash,source_hash,status,reason_json FROM continuity_shot_dependency WHERE scene_id=? AND scene_version=?`, nextVersion, sceneId, fromVerNum);
 
   let resultScene = scene;

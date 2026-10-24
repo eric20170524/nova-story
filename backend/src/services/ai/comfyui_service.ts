@@ -89,6 +89,7 @@ export interface RemoteModelCatalog {
     remote_clip_names?: string[];
     remote_vae_names?: string[];
     remote_node_names?: string[];
+    remote_checkpoint_names?: string[];
 }
 
 /**
@@ -106,6 +107,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
     let remoteClipNames: string[] | undefined;
     let remoteVaeNames: string[] | undefined;
     let remoteNodeNames: string[] | undefined;
+    let remoteCheckpointNames: string[] | undefined;
     try {
         const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
         if (infoRes.ok) {
@@ -115,6 +117,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
             remoteClipNames = clipNamesFromObjectInfo(info);
             remoteVaeNames = vaeNamesFromObjectInfo(info);
             remoteNodeNames = nodeNamesFromObjectInfo(info);
+            remoteCheckpointNames = checkpointNamesFromObjectInfo(info);
         }
     } catch (error) {
         logger.warn(`Remote LoRA catalog unavailable: ${error}`);
@@ -124,6 +127,7 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
         comfyui: {
             ...(settings.comfyui || {}),
             remote_lora_names: remoteLoraNames,
+            ...(remoteCheckpointNames && remoteCheckpointNames.length > 0 ? { remote_checkpoint_names: remoteCheckpointNames } : {}),
             ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
             ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
             ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
@@ -141,6 +145,10 @@ const loaderChoicesFromObjectInfo = (
         ?.[loaderNode]?.input?.required?.[inputField]?.[0];
     return Array.isArray(raw) ? raw.map((name) => String(name)).filter(Boolean) : [];
 };
+
+export function checkpointNamesFromObjectInfo(objectInfo: unknown): string[] {
+    return loaderChoicesFromObjectInfo(objectInfo, 'CheckpointLoaderSimple', 'ckpt_name');
+}
 
 export function loraNamesFromObjectInfo(objectInfo: unknown): string[] {
     return loaderChoicesFromObjectInfo(objectInfo, 'LoraLoader', 'lora_name');

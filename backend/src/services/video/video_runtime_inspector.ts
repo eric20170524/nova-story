@@ -16,7 +16,14 @@ const isFeatureEnabled = () =>
   || process.env.ENABLE_VIDEO_GENERATION === 'true';
 
 export class VideoRuntimeInspector {
+  private static inspectionCache = new Map<string, { result: VideoRuntimeInspection; expiresAt: number }>();
+
   static async inspect(workflowId: VideoWorkflowId = DEFAULT_VIDEO_WORKFLOW_ID): Promise<VideoRuntimeInspection> {
+    const canCache = process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test' && !process.execArgv.includes('--test');
+    if (canCache && isFeatureEnabled()) {
+      const cached = VideoRuntimeInspector.inspectionCache.get(workflowId);
+      if (cached && cached.expiresAt > Date.now()) return cached.result;
+    }
     if (workflowId === 'grok_imagine_browser') {
       const [ffmpegOk, ffprobeOk] = await Promise.all([
         VideoPostprocessService.isFfmpegAvailable(),
@@ -101,7 +108,7 @@ export class VideoRuntimeInspector {
       }
     }
 
-    return {
+    const inspection: VideoRuntimeInspection = {
       workflow_id: workflowId,
       workflow_family: bundle?.manifest.workflow_family || 'unknown',
       workflow_stability: bundle?.manifest.stability || 'unknown',
@@ -124,5 +131,9 @@ export class VideoRuntimeInspector {
       supported_profiles: ['narrative_clip', 'character_loop'],
       missing_components: [...new Set(missingComponents)]
     };
+    if (canCache && inspection.video_generation_enabled) {
+      VideoRuntimeInspector.inspectionCache.set(workflowId, { result: inspection, expiresAt: Date.now() + 1_800_000 });
+    }
+    return inspection;
   }
 }

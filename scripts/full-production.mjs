@@ -30,6 +30,8 @@ const rebuildScripts = args.includes('--rebuild-scripts') || reproduceFromB3;
 const rebuildAssets = args.includes('--rebuild-assets') || reproduceFromB3;
 const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts || reproduceFromB3;
 const acceptLegacyStoryboards = args.includes('--accept-legacy-storyboards');
+const keepPortraits = args.includes('--keep-portraits') || args.includes('--preserve-portraits');
+const keepPortraits = args.includes('--keep-portraits') || args.includes('--preserve-portraits');
 const assetScopeArg = option('asset-scope', null);
 const selectedChapterId = option('chapter-id', null);
 const narratorVoice = option('narrator-voice', null);
@@ -543,6 +545,9 @@ async function recordLegacyTaskOrderReview() {
 async function scripts(selected = null) {
   for (const chapter of selected || await chapters()) {
     let script = (await request(`/chapters/${chapter.id}/script`, 'POST', {})).script;
+    if (rebuildScripts && script.freshness?.sourceChanged) {
+      script = (await request(`/scripts/${script.id}/refresh-source`, 'POST', { expected_revision: script.revision, request_key: key(`refresh-source-${script.id}-r${script.revision}`) })).script;
+    }
     const missingOutline = !script.document.scenes.length && !(script.document.outline?.beats?.length);
     if (rebuildScripts || missingOutline) {
       const name = `script-${script.id}:outline-compact${scriptRebuildToken}`;
@@ -609,6 +614,10 @@ async function assets(selected = null) {
           fileExists = fs.existsSync(localMedia(frontUrl));
         }
       } catch {}
+      if (type === 'portrait' && keepPortraits && fileExists) {
+        console.log(`REUSE character ${character.id} (${character.name}) portrait (preserved by operator instruction)`);
+        continue;
+      }
       if (fileExists && (!rebuildAssets || (retryFailed && state.rebuiltAssets?.[rebuildSlot] === character[slot]))) continue;
       const visualDescription = character.visual_tags?.visual_bible?.portrait_description || character.description;
       const referenceUrl = type === 'portrait' ? null : character.avatar_url;
@@ -722,14 +731,21 @@ async function formalProductionGuard(shot) {
   const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
   const scriptId = spec.source?.script_id;
   if (!scriptId) throw new Error(`Shot ${shot.id}: 正式分镜需要剧本场次来源，不能改出草稿图`);
-  const frame = await request(`/scripts/${scriptId}/production/frames/${shot.id}`);
+  let frame = await request(`/scripts/${scriptId}/production/frames/${shot.id}`);
+  if (frame.issue) {
+    try {
+      await request(`/scripts/${scriptId}/continuity/bind-chapter-shots`, 'POST', {});
+      frame = await request(`/scripts/${scriptId}/production/frames/${shot.id}`);
+    } catch {}
+  }
   if (frame.issue) throw new Error(`Shot ${shot.id}: 正式分镜连续性未确认（${frame.issue}），不会改出草稿图`);
   if (frame.reference_hash && frame.scene_version) {
     return { expected_version: frame.scene_version, reference_hash: frame.reference_hash, redraw: false };
   }
   const chosen = [];
   const seen = new Set();
-  for (const ref of frame.available_references || []) {
+  const sortedReferences = [...(frame.available_references || [])].sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0));
+  for (const ref of sortedReferences) {
     if (!ref?.entity_id || seen.has(ref.entity_id)) continue;
     seen.add(ref.entity_id);
     chosen.push({ entity_id: ref.entity_id, kind: ref.kind, id: ref.id, version: ref.version });

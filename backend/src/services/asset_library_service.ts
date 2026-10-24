@@ -118,7 +118,7 @@ export class AssetLibraryService {
     const promptFor = (canonicalAssets: typeof canonical) => `提取本章中实际出现、可重复使用的场景环境(location)和道具(prop)，不提取人物，不虚构。name 用稳定中文名称。` +
       `description 描述空间布局、材质、色彩及连续性；visual_prompt 用英文描述固定外观。` +
       `visual_prompt 只写空间、材质、光线，或这一件物体的外形。不要写人物、身体、欲望、亲密和镜中人。` +
-      `已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind 和 name，不要改名，也不要为人物建档。kind 只能是 location 或 prop。` +
+      `本章中出现的所有场景环境和道具均须完整列在 assets 列表中（包括已有资产中已有的，复用其已有 kind 和 name，不可遗漏）。已有资产是名称和外观的准绳。同一物件或地点再次出现必须复用已有 kind 和 name，不要改名，也不要为人物建档。kind 只能是 location 或 prop。` +
       `不同实体不能仅因材质、颜色或名称相近就合并；按原文分别管理各自的用途与位置。\n` +
       (instructions?.trim() ? `本次提取补充要求：${instructions.trim()}\n` : '') +
       `已有资产：${JSON.stringify(canonicalAssets)}\n返回 JSON {assets:[{kind,name,description,visual_prompt}]}。\n本章正文：\n` + chapter.content;

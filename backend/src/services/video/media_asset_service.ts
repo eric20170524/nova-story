@@ -354,14 +354,15 @@ export class MediaAssetService {
     const { SettingsManager } = await import('../../core/settings_manager');
     const settings = SettingsManager.loadSettings();
     const comfySettings = (settings.comfyui || {}) as Record<string, any>;
-    const baseUrl = String(comfySettings.base_url || 'http://127.0.0.1:8188').replace(/\/$/, '');
+    const isRemote = comfySettings.mode === 'remote';
+    const baseUrl = String(isRemote ? (comfySettings.remote_base_url || comfySettings.base_url || '') : (comfySettings.local_base_url || comfySettings.base_url || 'http://127.0.0.1:8188')).replace(/\/$/, '');
     const transportMode = normalizeReferenceTransportMode(
       process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT || comfySettings.reference_transport
     );
 
     let filesystemAvailable = false;
     let filesystemError: Error | null = null;
-    if (comfySettings.install_path) {
+    if (!isRemote && comfySettings.install_path) {
       const comfyInput = path.join(String(comfySettings.install_path), 'input');
       if (fs.existsSync(comfyInput)) {
         try {

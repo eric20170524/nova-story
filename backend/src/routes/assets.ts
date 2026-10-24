@@ -46,7 +46,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
         if (previous) {
           if (previous.request_hash !== hashCanonical(req)) return reply.status(409).send({ detail: 'Image request key was already used with different parameters' });
           const task = await AssetTaskStore.get(previous.task_id);
-          if (!task || task.status === 'failed' || task.status === 'cancelled') {
+          if (!task || task.status === 'failed' || task.status === 'cancelled' || task.status === 'interrupted') {
             await db.run('DELETE FROM image_generation_request WHERE request_key = ?', req.request_key);
           } else {
             return { task_id: previous.task_id, status: task.status || 'processing', replayed: true };

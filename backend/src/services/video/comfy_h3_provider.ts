@@ -102,15 +102,30 @@ export class ComfyH3Provider {
     return this.comfyService.authenticatedFetch(url, init, timeoutMs);
   }
 
+  private static objectInfoCache = new Map<string, { data: Record<string, any>; expiresAt: number }>();
+
   async checkStatus(): Promise<boolean> {
     return this.comfyService.checkStatus();
   }
 
   async getObjectInfo(timeoutMs = 30000): Promise<Record<string, any> | null> {
+    const canCache = this.comfyService.isRemote && process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test';
+    if (canCache) {
+      const cached = ComfyH3Provider.objectInfoCache.get(this.baseUrl);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.data;
+      }
+    }
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const res = await this.comfyService.authenticatedFetch('/object_info', {}, timeoutMs);
-        if (res.ok) return (await res.json()) as Record<string, any>;
+        if (res.ok) {
+          const data = (await res.json()) as Record<string, any>;
+          if (canCache) {
+            ComfyH3Provider.objectInfoCache.set(this.baseUrl, { data, expiresAt: Date.now() + 60_000 });
+          }
+          return data;
+        }
       } catch {
         if (attempt === 1) await new Promise(r => setTimeout(r, 1000));
       }
@@ -382,7 +397,13 @@ export class ComfyH3Provider {
           setTimeout(async () => {
             if (!isDone) {
               await fetchHistoryFallback();
-              const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 1500);
+              const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 3000);
+              if (!stopped) {
+                logger.warn(
+                  `ComfyUI H3 websocket closed while prompt ${promptId} is still active; waiting on history poll`
+                );
+                return;
+              }
               cleanup({
                 status: collectedVideos.length > 0 ? 'completed' : 'error',
                 error: collectedVideos.length === 0 ? 'ComfyUI connection closed before video output was available' : undefined,

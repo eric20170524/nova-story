@@ -165,7 +165,7 @@ export async function beginFormalImage(sceneId: number, taskId: string, input: {
     'generating', taskId, sceneId, version
   );
   const referenceHash = continuityHash(pin);
-  const combination = input.model === 'redcraft_krea2' ? 'krea2_native_reference' : input.model === 'sd15' ? 'sdxl_unverified' : 'sdxl_ip_adapter';
+  const combination = input.model === 'redcraft_krea2' ? 'krea2_native_reference' : input.model === 'qwen_image' ? 'qwen_image_native_reference' : input.model === 'sd15' ? 'sdxl_unverified' : 'sdxl_ip_adapter';
   const live = formalRenderAllowed(combination);
   await rememberCandidate(sceneId, version, {
     production_stage: 'production',

@@ -58,7 +58,7 @@ export class LoopCloser {
         '-y',
         '-i', videoPath,
         '-vf', 'select=eq(n\\,0)+eq(n\\,1)+eq(n\\,118)+eq(n\\,119)',
-        '-vsync', '0',
+        '-fps_mode', 'passthrough',
         '-frames:v', '4',
         framePattern
       ]);

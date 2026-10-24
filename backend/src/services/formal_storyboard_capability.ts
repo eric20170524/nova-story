@@ -14,6 +14,7 @@ import { shouldAllowCharacterAdapter } from './reference_generation_policy';
 
 export const FORMAL_SDXL_3060_WORKFLOW = 'pony_xl_12gb.json';
 export const FORMAL_KREA2_12GB_WORKFLOW = 'redcraft_krea2_12gb.json';
+export const FORMAL_QWEN_IMAGE_WORKFLOW = 'qwen_image_2_1.json';
 export const FORMAL_REJECTED_3060_WORKFLOW = 'pony_xl_tier_b_dual_ref_l40.json';
 
 export const FORMAL_CAPABILITY_IDS = [
@@ -22,11 +23,12 @@ export const FORMAL_CAPABILITY_IDS = [
   'sdxl_depth',
   'sdxl_canny',
   'krea2_native_reference',
+  'qwen_image_native_reference',
 ] as const;
 
 export type FormalCapabilityId = (typeof FORMAL_CAPABILITY_IDS)[number];
 
-export type FormalModelClass = 'sdxl' | 'krea2' | 'sd15' | 'flux' | 'unknown';
+export type FormalModelClass = 'sdxl' | 'krea2' | 'qwen_image' | 'sd15' | 'flux' | 'unknown';
 
 export type FormalBlockReason =
   | 'not_installed'
@@ -120,17 +122,19 @@ const capabilityNodes = (id: FormalCapabilityId): string[] => {
   if (id === 'sdxl_openpose') return [...CONTROL_NODES, ...OPENPOSE_PREPROCESSORS];
   if (id === 'sdxl_depth') return [...CONTROL_NODES, ...DEPTH_PREPROCESSORS];
   if (id === 'sdxl_canny') return [...CONTROL_NODES, ...CANNY_PREPROCESSORS];
+  if (id === 'qwen_image_native_reference') return ['LoadImage', 'TextEncodeQwenImage21'];
   return [];
 };
 
 const familyOf = (id: FormalCapabilityId): FormalModelClass =>
-  id === 'krea2_native_reference' ? 'krea2' : 'sdxl';
+  id === 'krea2_native_reference' ? 'krea2' : id === 'qwen_image_native_reference' ? 'qwen_image' : 'sdxl';
 
 export const classifyFormalModel = (raw: unknown): { model_class: FormalModelClass; label: string } => {
   const value = String(raw ?? '').toLowerCase();
   if (/krea|redcraft|convrot|赤佬/.test(value)) {
     return { model_class: 'krea2', label: /int8|convrot/.test(value) ? 'Krea2 INT8 ConvRot' : 'Krea2' };
   }
+  if (/qwen[_-]?image/.test(value)) return { model_class: 'qwen_image', label: 'Qwen-Image 2.1' };
   if (value.includes('flux')) return { model_class: 'flux', label: 'FLUX' };
   if (/sd\s*1\.?5|sd15|anything-?v5/.test(value)) return { model_class: 'sd15', label: 'SD1.5' };
   if (/juggernaut|autismmix|pony|sdxl/.test(value)) return { model_class: 'sdxl', label: 'SDXL' };
@@ -138,10 +142,11 @@ export const classifyFormalModel = (raw: unknown): { model_class: FormalModelCla
   return { model_class: 'unknown', label: String(raw) };
 };
 
-export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'rejected' } => {
+export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'qwen_image_2_1' | 'rejected' } => {
   const name = path.basename(workflowFile);
   if (name === FORMAL_SDXL_3060_WORKFLOW) return { accepted: true, role: 'sdxl_3060' };
   if (name === FORMAL_KREA2_12GB_WORKFLOW) return { accepted: true, role: 'krea2_12gb' };
+  if (name === FORMAL_QWEN_IMAGE_WORKFLOW) return { accepted: true, role: 'qwen_image_2_1' };
   return { accepted: false, role: 'rejected' };
 };
 
@@ -197,6 +202,7 @@ export const scanFormalWeights = (installPath: string | null | undefined, hashFi
     sdxl_depth: [],
     sdxl_canny: [],
     krea2_native_reference: [],
+    qwen_image_native_reference: [],
   });
   if (!installPath) return empty();
   const result = empty();
@@ -223,6 +229,8 @@ export const scanFormalWeights = (installPath: string | null | undefined, hashFi
   result.sdxl_canny = canny.map((file) => weightRecord('canny', installPath, file, hashFiles));
   const krea = matchingFiles(diffusion, /krea|redcraft|convrot/i)[0] || null;
   if (krea) result.krea2_native_reference = [weightRecord('diffusion', installPath, krea, hashFiles)];
+  const qwen = matchingFiles(diffusion, /qwen[_-]?image/i)[0] || null;
+  if (qwen) result.qwen_image_native_reference = [weightRecord('diffusion', installPath, qwen, hashFiles)];
   return result;
 };
 
@@ -259,8 +267,19 @@ export const inspectFormalWiring = (
     sdxl_depth: false,
     sdxl_canny: false,
     krea2_native_reference: false,
+    qwen_image_native_reference: false,
   };
   if (!workflow) return result;
+  const qwenEncode = Object.entries(workflow).find(([, node]) => node?.class_type === 'TextEncodeQwenImage21');
+  if (qwenEncode) {
+    const inputs = qwenEncode[1].inputs || {};
+    result.qwen_image_native_reference = Boolean(
+      reaches(workflow, asLink(inputs.image_1), ['LoadImage'])
+      && reaches(workflow, asLink(inputs.clip), ['CLIPLoader'])
+      && reaches(workflow, asLink(inputs.vae), ['VAELoader'])
+      && samplerUses(workflow, qwenEncode[0], 'positive')
+    );
+  }
   const advanced = Object.entries(workflow).find(([, node]) => node?.class_type === 'IPAdapterAdvanced');
   if (advanced) {
     const inputs = advanced[1].inputs || {};
@@ -363,17 +382,22 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
     const templateOk = template.accepted && (
       (familyOf(id) === 'sdxl' && template.role === 'sdxl_3060')
       || (familyOf(id) === 'krea2' && template.role === 'krea2_12gb')
+      || (familyOf(id) === 'qwen_image' && template.role === 'qwen_image_2_1')
     );
-    const referenceInstalled = id !== 'krea2_native_reference' && weights[id].length > 0;
+    const remoteQwenReady = id === 'qwen_image_native_reference'
+      && input.runtime === 'online'
+      && Array.isArray(input.objectInfo?.UNETLoader?.input?.required?.unet_name?.[0])
+      && input.objectInfo.UNETLoader.input.required.unet_name[0].some((name: unknown) => /qwen[_-]?image/i.test(String(name)));
+    const referenceInstalled = id !== 'krea2_native_reference' && (weights[id].length > 0 || remoteQwenReady);
     const shotAllowed = installProbe
       ? false
-      : id === 'sdxl_ip_adapter'
+      : id === 'sdxl_ip_adapter' || id === 'qwen_image_native_reference'
         ? identity.allow
         : id === 'sdxl_openpose'
           ? people.length > 0
           : false;
-    const needsReference = shotAllowed && (id === 'sdxl_ip_adapter' || id === 'sdxl_openpose');
-    const hasReference = id === 'sdxl_ip_adapter'
+    const needsReference = shotAllowed && (id === 'sdxl_ip_adapter' || id === 'qwen_image_native_reference' || id === 'sdxl_openpose');
+    const hasReference = id === 'sdxl_ip_adapter' || id === 'qwen_image_native_reference'
       ? Boolean(input.shot.character_ref_url)
       : input.shot.pose_source != null;
     const nodesLoaded = id === 'krea2_native_reference' ? false : input.runtime === 'online' && nodes.loaded;
