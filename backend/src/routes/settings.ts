@@ -84,6 +84,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     } else if (String(workflowFile).includes('pony')) {
       modelName = 'pony';
     }
+    const openCombinations = (isRemote || modelName === 'qwen-image-2.1')
+      ? [...FORMAL_OPEN_COMBINATIONS, 'qwen_image_native_reference']
+      : FORMAL_OPEN_COMBINATIONS;
     const formal = assessFormalInstall({
       modelName,
       workflowFile,
@@ -91,7 +94,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       runtime: objectInfo ? 'online' : 'offline',
       objectInfo,
       hashFiles: false,
-      liveVerifiedIds: FORMAL_OPEN_COMBINATIONS,
+      liveVerifiedIds: openCombinations,
     });
     return {
       ready: capability.characterAdapter || capability.compositionControl,
@@ -109,7 +112,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         model_label: formal.model_label,
         template: formal.template,
         workflow_file: formal.workflow_file,
-        open_combinations: FORMAL_OPEN_COMBINATIONS,
+        open_combinations: openCombinations,
         live_verified: formal.capabilities.some((row) => row.live_verified),
         capabilities: formal.capabilities.map((row) => ({
           id: row.id,

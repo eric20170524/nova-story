@@ -389,3 +389,44 @@ test('maps the logical portrait canvas to the image provider size', async () => 
         });
     }
 });
+
+test('Scheme C: generateText supports enableThinking=true while generateStructured forces enable_thinking=false', async () => {
+    let textRequestBody: any;
+    await withTextServer((response, body) => {
+        textRequestBody = body;
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '<think>先分析戏剧冲突与空间轴线</think>\n第一镜：全景建立港口环境。', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        const text = await provider.generateText('请输出导演分镜构思', '你是分镜导演', {
+            enableThinking: true,
+            temperature: 0.4,
+            maxTokens: 4096,
+        });
+        assert.match(text, /第一镜：全景建立港口环境/);
+        assert.equal(textRequestBody.chat_template_kwargs.enable_thinking, true);
+        assert.equal(textRequestBody.reasoning_effort, undefined);
+        assert.equal(textRequestBody.temperature, 0.4);
+        assert.equal(textRequestBody.max_tokens, 4096);
+    }, 'Qwen3.8-27B');
+
+    let structuredRequestBody: any;
+    await withTextServer((response, body) => {
+        structuredRequestBody = body;
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '{"shots":[{"id":1}]}', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        const res = await provider.generateStructured(
+            '将分镜构思转换为 JSON',
+            z.object({ shots: z.array(z.object({ id: z.number() })) }),
+            '你是 JSON 格式化器',
+            { enableThinking: false, temperature: 0.1 }
+        );
+        assert.deepEqual(res, { shots: [{ id: 1 }] });
+        assert.equal(structuredRequestBody.chat_template_kwargs.enable_thinking, false);
+        assert.equal(structuredRequestBody.reasoning_effort, 'none');
+        assert.equal(structuredRequestBody.response_format.type, 'json_object');
+    }, 'Qwen3.8-27B');
+});
+

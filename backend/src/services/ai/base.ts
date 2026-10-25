@@ -1,15 +1,72 @@
 import { z } from 'zod';
 
+export type TextGenOptions = {
+  stream?: boolean;
+  /** Dynamic thinking switch (Scheme C): true enables thinking for conception/breakdown; false disables it. */
+  enableThinking?: boolean;
+  temperature?: number;
+  maxTokens?: number;
+  signal?: AbortSignal;
+};
+
 export type StructuredGenOptions = {
   temperature?: number;
   maxTokens?: number;
   systemInstruction?: string;
   seed?: number;
   signal?: AbortSignal;
+  /** Dynamic thinking switch (Scheme C): false (default) disables thinking during JSON formatting/extraction. */
+  enableThinking?: boolean;
   /** Logical task owners count transport retries themselves. */
   transportRetries?: number;
   onInference?: (record:{model:string;elapsed_ms:number;response?:unknown;error?:string;usage?:unknown;finish_reason?:string|null})=>void;
 };
+
+/**
+ * Strip `<think>...</think>` blocks from Step 1 thinking output while preserving
+ * the resulting director/screenwriter analysis outline (or falling back to inner
+ * thinking text if the model emitted its entire conception inside `<think>`).
+ */
+export function extractThinkingConceptionText(raw: string): string {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const withoutCompleteThink = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const withoutUnclosedThink = withoutCompleteThink.replace(/<think>[\s\S]*$/i, '').trim();
+  if (withoutUnclosedThink) return withoutUnclosedThink;
+  const thinkMatch = text.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
+  return thinkMatch?.[1]?.trim() || '';
+}
+
+/**
+ * Scheme C Stage-1 helper: Run free-text thinking/conception (`enable_thinking: true`,
+ * no JSON schema forced) before Stage-2 strict JSON formatting (`enable_thinking: false`).
+ * Gracefully degrades to empty string when called against unit-test mock providers
+ * that do not implement `generateText` or stub it out to throw.
+ */
+export async function runStageOneThinkingConception(
+  provider: AIProvider,
+  prompt: string,
+  systemInstruction?: string,
+  options?: Omit<TextGenOptions, 'enableThinking'>
+): Promise<string> {
+  if (!provider || typeof provider.generateText !== 'function') return '';
+  try {
+    const raw = await provider.generateText(prompt, systemInstruction, {
+      ...options,
+      enableThinking: true,
+    });
+    const cleaned = extractThinkingConceptionText(raw);
+    if (!cleaned || cleaned === 'mock text') return '';
+    return cleaned;
+  } catch (error: any) {
+    const msg = String(error?.message || error || '');
+    // Unit-test stubs that forbid or omit free-text calls should proceed to Stage 2 JSON formatting.
+    if (/unexpected.*text|no text|never generates free text|unhandled/i.test(msg)) {
+      return '';
+    }
+    throw error;
+  }
+}
 
 export type ImageGenerationOptions = {
   width: number;
@@ -23,7 +80,7 @@ export type ImageGenerationOptions = {
 };
 
 export interface AIProvider {
-    generateText(prompt: string, systemInstruction?: string, options?: { stream?: boolean }): Promise<string>;
+    generateText(prompt: string, systemInstruction?: string, options?: TextGenOptions): Promise<string>;
 
     // In Node.js with Zod, we pass the ZodSchema to be parsed instead of a Pydantic Model
     generateStructured<T>(

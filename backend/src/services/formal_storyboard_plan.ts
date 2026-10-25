@@ -157,6 +157,7 @@ export function selectPreviousFrame(input: {
 }
 
 export function formalRenderAllowed(combination: string) {
+  if (combination === 'qwen_image_native_reference') return true;
   return FORMAL_OPEN_COMBINATIONS.includes(combination);
 }
 

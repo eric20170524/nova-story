@@ -66,6 +66,11 @@ backend/system_settings.json
 docs/短剧/qiongming.txt
 /local/
 # Local runtime (regenerate / machine-specific)
+backend/database.sqlite
+backend/database.sqlite-shm
+backend/database.sqlite-wal
+*.sqlite
+*.sqlite3
 backend/sql_app.db
 backend/sql_app.db-shm
 backend/sql_app.db-wal

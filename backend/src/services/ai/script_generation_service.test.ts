@@ -1181,6 +1181,74 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     assert.deepEqual(doc.scenes[0].eventIds, ['ev_a', 'ev_b']);
     assert.deepEqual(doc.scenes[1].eventIds, ['ev_c']);
   });
+
+  await t.test('Scheme C: Script outline and scene generation run Step 1 (enableThinking: true) before Step 2 (enableThinking: false)', async () => {
+    const fix = await createFixture('林轩走入青云大殿，众长老目光齐聚。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const textCalls: Array<{ prompt: string; system?: string; options?: any }> = [];
+    const structuredCalls: Array<{ prompt: string; system?: string; options?: any }> = [];
+
+    const baseProvider = createMockProvider({
+      onOutline: (prompt) => ({
+        logline: '林轩入殿受审',
+        mustKeepEvents: [{ id: 'ev_1', text: '林轩走入青云大殿', sourceParagraphIds: ['p_1'] }],
+        beats: [{ id: 'b_1', purpose: '入殿压迫感建立', eventIds: ['ev_1'] }],
+        endingHook: '长老发难',
+      }),
+      onScene: (prompt) => ({
+        location: { name: '青云大殿', description: '' },
+        interiorExterior: 'interior',
+        timeOfDay: 'day',
+        characterNames: [fix.char1.name],
+        coveredEventIds: ['ev_1'],
+        blocks: [{ id: 'blk_1', type: 'action', text: '林轩走入青云大殿，众长老目光齐聚。' }],
+      }),
+    });
+
+    const schemeCProvider = {
+      ...baseProvider,
+      async generateText(prompt: string, system?: string, options?: any) {
+        textCalls.push({ prompt, system, options });
+        if (prompt.includes('场次拆解与戏剧节拍构思')) {
+          return '<think>先梳理主线冲突与必保事件</think>\n【导演场次拆解大纲】本集聚焦林轩入殿后的压迫感建立，保留p_1核心动作。';
+        }
+        return '<think>构思本场视觉动线</think>\n【单场导演调度构思】大殿内景日戏，先给林轩迈入大殿的动作细节。';
+      },
+      async generateStructured<T>(prompt: string, schema: any, system?: string, options?: any): Promise<T> {
+        structuredCalls.push({ prompt, schema, system, options } as any);
+        return baseProvider.generateStructured<T>(prompt, schema, system, options);
+      },
+    };
+
+    const fullCand = await ScriptGenerationService.generateFullScriptCandidate({
+      scriptId: script.id,
+      expectedRevision: 1,
+      requestKey: 'req_scheme_c_script',
+      provider: schemeCProvider as any,
+    });
+
+    assert.ok(textCalls.length >= 2, 'Should invoke Step 1 thinking for outline and scene');
+    for (const tc of textCalls) {
+      assert.equal(tc.options?.enableThinking, true);
+    }
+
+    const outlineStructured = structuredCalls.find((c: any) => c.schema === GeneratedOutlineResponseSchema);
+    assert.ok(outlineStructured, 'Should invoke Step 2 structured outline extraction');
+    assert.equal(outlineStructured.options?.enableThinking, false);
+    assert.match(outlineStructured.prompt, /--- 第一步：剧本场次拆解与戏剧节拍构思大纲（请严格提取并转换为 JSON） ---/);
+    assert.match(outlineStructured.prompt, /【导演场次拆解大纲】本集聚焦林轩入殿后的压迫感建立/);
+    assert.doesNotMatch(outlineStructured.prompt, /<think>/);
+
+    const sceneStructured = structuredCalls.find((c: any) => c.schema === GeneratedSceneResponseSchema);
+    assert.ok(sceneStructured, 'Should invoke Step 2 structured scene formatting');
+    assert.equal(sceneStructured.options?.enableThinking, false);
+    assert.match(sceneStructured.prompt, /--- 第一步：分场戏剧调度与表演构思大纲（请严格提取并转换为 JSON） ---/);
+    assert.match(sceneStructured.prompt, /【单场导演调度构思】大殿内景日戏/);
+    assert.doesNotMatch(sceneStructured.prompt, /<think>/);
+
+    const parsedDoc: ScriptDocument = JSON.parse(fullCand.after_json);
+    assert.equal(parsedDoc.scenes.length, 1);
+  });
 });
 
 test('dialogue does not count as coverage for a visible beat', () => {

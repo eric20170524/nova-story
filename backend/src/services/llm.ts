@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { logger } from '../core/logging';
 import { settings as appSettings } from '../core/config';
 import { SettingsManager } from '../core/settings_manager';
-import type { AIProvider } from './ai/base';
+import { runStageOneThinkingConception, type AIProvider } from './ai/base';
 import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
 import { CodexProvider } from './ai/codex_provider';
@@ -125,6 +125,7 @@ export class LLMService {
             temperature?: number;
             maxTokens?: number;
             systemInstruction?: string;
+            enableThinking?: boolean;
         }
     ): Promise<T | null> {
         const maxRetries = options?.maxRetries ?? 4;
@@ -139,6 +140,7 @@ export class LLMService {
                         temperature: options?.temperature,
                         maxTokens: options?.maxTokens,
                         systemInstruction: options?.systemInstruction,
+                        enableThinking: options?.enableThinking ?? false,
                     }
                 );
             } catch (error) {
@@ -165,6 +167,7 @@ export class LLMService {
             temperature?: number;
             maxTokens?: number;
             systemInstruction?: string;
+            enableThinking?: boolean;
         }
     ): Promise<T | null> {
         // Default 2 attempts (first + one retry). Route uses maxRetries: 2 as well.
@@ -177,6 +180,7 @@ export class LLMService {
                     temperature: options?.temperature,
                     maxTokens: options?.maxTokens,
                     systemInstruction: options?.systemInstruction,
+                    enableThinking: options?.enableThinking ?? false,
                 });
             } catch (error) {
                 logger.warn(`LLM parsing failed on attempt ${i + 1}: ${error}`);
@@ -293,7 +297,25 @@ export class LLMService {
             prompt = Prompts.generateTimeline(content, characterProfiles, nsfwEnabled);
         }
 
-        const result = await LLMService.generateStructuredWithRetry(prompt, TimelineResponseSchema, token);
+        // Scheme C Step 1: 导演分镜构思 (enable_thinking: true, 不强制 JSON 格式)
+        let directorOutline = "";
+        try {
+            const provider = LLMService.getProvider(token);
+            directorOutline = await runStageOneThinkingConception(
+                provider,
+                `${prompt}\n\n【第一步任务：导演分镜构思与机位调度大纲】请先不输出 JSON，以自由文字形式分析本段剧情的戏剧冲突节拍（Beat）、3D 空间轴线、景别过渡规律（全景建立环境 -> 中近景动作/正反打 -> 特写给关键道具与情绪），列出每个镜头的导演调度构思大纲。`,
+                '你是一位资深影视导演与分镜师，擅长将文字剧情转化为具有空间连贯性与节奏感的导演分镜构思大纲。',
+                { stream: true, temperature: 0.6, maxTokens: 4096 }
+            );
+        } catch (err) {
+            logger.warn(`Timeline Stage-1 thinking conception skipped: ${err}`);
+        }
+
+        // Scheme C Step 2: 分镜表 JSON 格式化 (enable_thinking: false, 严格 JSON 结构转换)
+        const formattedPrompt = directorOutline
+            ? `${prompt}\n\n--- 第一步：导演分镜构思与机位调度大纲（请严格提取并转换为 JSON） ---\n${directorOutline}`
+            : prompt;
+        const result = await LLMService.generateStructuredWithRetry(formattedPrompt, TimelineResponseSchema, token, { enableThinking: false });
 
         if (result && result.shots) {
             if (targetMode === "nine_shot_coverage") {
@@ -341,7 +363,24 @@ export class LLMService {
                 ? options.nsfwEnabled
                 : Boolean(SettingsManager.loadSettings()?.advanced?.nsfw_enabled);
         const prompt = Prompts.generateSceneCoveragePrompt(rawPrompt, dialogue, characterProfiles, nsfwEnabled);
-        const result = await LLMService.generateStructuredWithRetry(prompt, TimelineResponseSchema, token);
+        // Scheme C Step 1: 9镜覆盖空间机位构思 (enable_thinking: true, 不强制 JSON 格式)
+        let coverageConception = "";
+        try {
+            const provider = LLMService.getProvider(token);
+            coverageConception = await runStageOneThinkingConception(
+                provider,
+                `${prompt}\n\n【第一步任务：9镜空间轴线与机位调度构思】请先不输出 JSON，以自由文字形式确立本场同一时刻的 3D 空间轴线，构思 9 个机位槽位（大远景、远景、中远景、中景、中近景、特写、大特写、仰拍、俯拍）在同一动作瞬间的构图与光影连贯性。`,
+                '你是一位专业电影摄影指导（DP），擅长在同一戏剧瞬间内设计空间轴线一致的多机位分镜覆盖。',
+                { stream: true, temperature: 0.6, maxTokens: 4096 }
+            );
+        } catch (err) {
+            logger.warn(`SceneCoverage Stage-1 thinking conception skipped: ${err}`);
+        }
+        // Scheme C Step 2: 9镜覆盖 JSON 格式化 (enable_thinking: false, 严格 JSON 结构转换)
+        const formattedPrompt = coverageConception
+            ? `${prompt}\n\n--- 第一步：9镜空间机位构思大纲（请严格提取并转换为 JSON） ---\n${coverageConception}`
+            : prompt;
+        const result = await LLMService.generateStructuredWithRetry(formattedPrompt, TimelineResponseSchema, token, { enableThinking: false });
 
         if (result && result.shots && LLMService.validateNineShotCoverage(result.shots)) {
             return result.shots.map((s, i) => {

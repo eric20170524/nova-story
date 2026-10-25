@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import type { AIProvider, ImageGenerationOptions,StructuredGenOptions } from './base';
+import type { AIProvider, ImageGenerationOptions, StructuredGenOptions, TextGenOptions } from './base';
 import { logger } from '../../core/logging';
 import { inheritCharacterTraitConfidence } from '../../schemas/llm';
 
@@ -48,10 +48,24 @@ export class OpenAIProvider implements AIProvider {
         return this.isRemoteGemma() || this.isRemoteQwen();
     }
 
-    private applyThinkingOff(request: any): void {
-        if (!this.isOllama && !this.isRemoteGemma()) return;
-        request.reasoning_effort = 'none';
-        if (this.isRemoteGemma()) {
+    private applyThinkingConfig(request: any, enableThinking?: boolean): void {
+        if (enableThinking === true) {
+            request.chat_template_kwargs = {
+                ...(request.chat_template_kwargs || {}),
+                enable_thinking: true,
+            };
+            delete request.reasoning_effort;
+            return;
+        }
+        if (this.isOllama || this.isRemoteLab()) {
+            request.reasoning_effort = 'none';
+            if (this.isRemoteLab() || enableThinking === false) {
+                request.chat_template_kwargs = {
+                    ...(request.chat_template_kwargs || {}),
+                    enable_thinking: false,
+                };
+            }
+        } else if (enableThinking === false) {
             request.chat_template_kwargs = {
                 ...(request.chat_template_kwargs || {}),
                 enable_thinking: false,
@@ -59,7 +73,7 @@ export class OpenAIProvider implements AIProvider {
         }
     }
 
-    async generateText(prompt: string, systemInstruction?: string, options?: { stream?: boolean }): Promise<string> {
+    async generateText(prompt: string, systemInstruction?: string, options?: TextGenOptions): Promise<string> {
         try {
             const messages: any[] = [];
             if (systemInstruction) {
@@ -67,26 +81,36 @@ export class OpenAIProvider implements AIProvider {
             }
             messages.push({ role: 'user', content: prompt });
 
-            const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+            const request: any = {
                 model: this.model,
                 messages,
-                temperature: 0.85,
+                temperature: typeof options?.temperature === 'number' ? options.temperature : 0.85,
                 top_p: 0.92
             };
 
-            this.applyThinkingOff(request);
+            if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
+                request.max_tokens = this.isRemoteLab() ? Math.max(options.maxTokens, 2048) : options.maxTokens;
+            }
+
+            this.applyThinkingConfig(request, options?.enableThinking);
+            const requestOptions = options?.signal ? { signal: options.signal } : undefined;
 
             logger.info(`[OpenAI Prompt Input]: ${truncateLog(prompt)}`);
             if (options?.stream || this.isRemoteLab()) {
                 // Receive long rewrites incrementally so the upstream proxy does not
                 // have to wait for the entire chapter before receiving a response.
-                const stream = await this.openai.chat.completions.create({ ...request, stream: true });
+                const stream = (await this.openai.chat.completions.create({ ...request, stream: true }, requestOptions)) as unknown as AsyncIterable<any>;
                 let content = '';
+                let reasoningContent = '';
                 let finishReason: string | null = null;
                 for await (const chunk of stream) {
-                    const choice = chunk.choices.find((item) => item.index === 0);
+                    const choice = chunk.choices.find((item: any) => item.index === 0);
                     content += choice?.delta?.content || '';
+                    reasoningContent += (choice?.delta as any)?.reasoning_content || (choice?.delta as any)?.reasoning || '';
                     if (choice?.finish_reason) finishReason = choice.finish_reason;
+                }
+                if (!content.trim() && options?.enableThinking && reasoningContent.trim()) {
+                    content = reasoningContent;
                 }
                 // A closed connection or token limit must never turn a partial
                 // rewrite into a successful replacement of the original chapter.
@@ -96,13 +120,16 @@ export class OpenAIProvider implements AIProvider {
                 logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
                 return content;
             }
-            const response = await this.openai.chat.completions.create(request);
+            const response = await this.openai.chat.completions.create(request, requestOptions);
 
             if (response.choices[0]?.finish_reason !== 'stop') {
                 throw new Error(`Text generation incomplete: finish_reason=${response.choices[0]?.finish_reason || 'missing'}`);
             }
 
-            const content = response.choices[0]?.message?.content || '';
+            let content = response.choices[0]?.message?.content || '';
+            if (!content.trim() && options?.enableThinking) {
+                content = (response.choices[0]?.message as any)?.reasoning_content || (response.choices[0]?.message as any)?.reasoning || '';
+            }
             logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
 
             return content;
@@ -150,10 +177,10 @@ export class OpenAIProvider implements AIProvider {
             };
 
             if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
-                request.max_tokens = options.maxTokens;
+                request.max_tokens = this.isRemoteLab() ? Math.max(options.maxTokens, 2048) : options.maxTokens;
             }
 
-            this.applyThinkingOff(request);
+            this.applyThinkingConfig(request, options?.enableThinking ?? false);
             if(typeof options?.seed==='number')request.seed=options.seed;
 
             logger.info(`[OpenAI Structured Prompt Input]: ${truncateLog(prompt)}`);

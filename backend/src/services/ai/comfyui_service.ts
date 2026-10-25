@@ -97,19 +97,31 @@ export interface RemoteModelCatalog {
  * live LoraLoader / UNETLoader / CLIPLoader / VAELoader lists and custom node names
  * so a missing style LoRA, precision variant, or Stage 2 custom node is reconciled before submission.
  */
+let cachedRemoteCatalog: RemoteModelCatalog | null = null;
+let lastCatalogFetch = 0;
+
 export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
     settings: T,
     service: RemoteLoraCatalogSource,
 ): Promise<T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog }> {
     if (!service.isRemote) return settings as T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog };
-    let remoteLoraNames: string[] = [];
-    let remoteUnetNames: string[] | undefined;
-    let remoteClipNames: string[] | undefined;
-    let remoteVaeNames: string[] | undefined;
-    let remoteNodeNames: string[] | undefined;
-    let remoteCheckpointNames: string[] | undefined;
+    if (cachedRemoteCatalog && Date.now() - lastCatalogFetch < 120_000) {
+        return {
+            ...settings,
+            comfyui: {
+                ...(settings.comfyui || {}),
+                ...cachedRemoteCatalog,
+            } as NonNullable<T['comfyui']> & RemoteModelCatalog,
+        };
+    }
+    let remoteLoraNames: string[] = cachedRemoteCatalog?.remote_lora_names || (settings.comfyui as any)?.remote_lora_names || [];
+    let remoteUnetNames: string[] | undefined = cachedRemoteCatalog?.remote_unet_names || (settings.comfyui as any)?.remote_unet_names;
+    let remoteClipNames: string[] | undefined = cachedRemoteCatalog?.remote_clip_names || (settings.comfyui as any)?.remote_clip_names;
+    let remoteVaeNames: string[] | undefined = cachedRemoteCatalog?.remote_vae_names || (settings.comfyui as any)?.remote_vae_names;
+    let remoteNodeNames: string[] | undefined = cachedRemoteCatalog?.remote_node_names || (settings.comfyui as any)?.remote_node_names;
+    let remoteCheckpointNames: string[] | undefined = cachedRemoteCatalog?.remote_checkpoint_names || (settings.comfyui as any)?.remote_checkpoint_names;
     try {
-        const infoRes = await service.authenticatedFetch('/object_info', {}, 8000);
+        const infoRes = await service.authenticatedFetch('/object_info', {}, 45_000);
         if (infoRes.ok) {
             const info = await infoRes.json();
             remoteLoraNames = loraNamesFromObjectInfo(info);
@@ -118,6 +130,15 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
             remoteVaeNames = vaeNamesFromObjectInfo(info);
             remoteNodeNames = nodeNamesFromObjectInfo(info);
             remoteCheckpointNames = checkpointNamesFromObjectInfo(info);
+            cachedRemoteCatalog = {
+                remote_lora_names: remoteLoraNames,
+                ...(remoteCheckpointNames && remoteCheckpointNames.length > 0 ? { remote_checkpoint_names: remoteCheckpointNames } : {}),
+                ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
+                ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
+                ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
+                ...(remoteNodeNames && remoteNodeNames.length > 0 ? { remote_node_names: remoteNodeNames } : {}),
+            };
+            lastCatalogFetch = Date.now();
         }
     } catch (error) {
         logger.warn(`Remote LoRA catalog unavailable: ${error}`);
@@ -933,25 +954,38 @@ export class ComfyUIService {
      * Returns the remote filename assigned by ComfyUI.
      */
     async uploadImage(buffer: Buffer, filename: string): Promise<string> {
-        const formData = new FormData();
-        const blob = new Blob([buffer]);
-        formData.append('image', blob, filename);
-        formData.append('overwrite', 'true');
-        formData.append('type', 'input');
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= 6; attempt++) {
+            try {
+                const formData = new FormData();
+                const blob = new Blob([buffer]);
+                formData.append('image', blob, filename);
+                formData.append('overwrite', 'true');
+                formData.append('type', 'input');
 
-        const res = await this.authenticatedFetch('/upload/image', {
-            method: 'POST',
-            body: formData
-        }, 60_000);
+                const res = await this.authenticatedFetch('/upload/image', {
+                    method: 'POST',
+                    body: formData
+                }, 60_000);
 
-        if (!res.ok) {
-            const text = await res.text().catch(() => '');
-            throw new Error(`Failed to upload reference image to ComfyUI (${res.status}): ${text}`);
+                if (res.ok) {
+                    const data = await res.json() as { name: string; subfolder?: string; type?: string };
+                    logger.info(`Uploaded reference image ${filename} to ComfyUI as ${data.name}`);
+                    return data.name || filename;
+                }
+
+                const text = await res.text().catch(() => '');
+                lastError = new Error(`Failed to upload reference image to ComfyUI (${res.status}): ${text}`);
+                logger.warn(`Upload reference image attempt ${attempt}/6 failed (HTTP ${res.status}), retrying...`);
+            } catch (err: any) {
+                lastError = err;
+                logger.warn(`Upload reference image attempt ${attempt}/6 threw error: ${err.message}, retrying...`);
+            }
+            if (attempt < 6) {
+                await new Promise(r => setTimeout(r, attempt * 1500));
+            }
         }
-
-        const data = await res.json() as { name: string; subfolder?: string; type?: string };
-        logger.info(`Uploaded reference image ${filename} to ComfyUI as ${data.name}`);
-        return data.name || filename;
+        throw lastError;
     }
 
     /**

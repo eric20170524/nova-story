@@ -4,7 +4,7 @@ import { db } from '../../db/database';
 import { logger } from '../../core/logging';
 import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
-import type { AIProvider } from './base';
+import { runStageOneThinkingConception, type AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
 import { bindEntities, boundVisibleEntities, entityRoster, eventContentCovered, eventRelationConflict, groundedEventText, materializeScriptReferences, needsBindingReview, resolveScriptBindings, validateBinding, textHash } from '../entity_binding';
 import type { EntityRef } from '../../schemas/entity_binding';
@@ -456,10 +456,22 @@ export class ScriptGenerationService {
     let outlineResult: GeneratedOutlineResponse | null = null;
 
     try {
+      // Scheme C Step 1: 剧本场次拆解 & 戏剧节拍构思 (enable_thinking: true, 不强制 JSON 格式)
+      const outlineConception = await runStageOneThinkingConception(
+        provider,
+        `${prompt}\n\n【第一步任务：剧本场次拆解与戏剧节拍构思】请先不输出 JSON，以自由文字形式深度分析本章的核心戏剧冲突、情绪转折、必须保留的可见动作/服装/姿态事件（标明对应段落编号 p_x）、场次节拍（Beat）切分逻辑以及结尾钩子，形成清晰的场次拆解文字大纲。`,
+        '你是一位专业短剧总编剧与戏剧构作师，擅长按戏剧节拍（Beat）与潜台词转折拆解剧本场次。',
+        { stream: true, temperature: 0.6, maxTokens: 4096 }
+      );
+      // Scheme C Step 2: 提纲 JSON 格式化提取 (enable_thinking: false, 严格 JSON 结构转换)
+      const formattingPrompt = outlineConception
+        ? `${prompt}\n\n--- 第一步：剧本场次拆解与戏剧节拍构思大纲（请严格提取并转换为 JSON） ---\n${outlineConception}`
+        : prompt;
       outlineResult = await provider.generateStructured(
-        prompt,
+        formattingPrompt,
         GeneratedOutlineResponseSchema,
-        '你是一位专业短剧编剧，请严格输出合法的 JSON 格式改编提纲。'
+        '你是一位专业短剧编剧，请严格输出合法的 JSON 格式改编提纲。',
+        { enableThinking: false }
       );
     } catch (err: any) {
       logger.error(`Failed to generate script outline: ${err}`);
@@ -802,14 +814,29 @@ export class ScriptGenerationService {
         : '');
 
       let attemptPrompt = scenePrompt;
+      let sceneConception = '';
       let stableScene: ScriptScene | null = null;
       for (let attempt = 0; attempt < 2 && !stableScene; attempt++) {
         let rawScene: GeneratedSceneResponse | null = null;
         try {
+          if (attempt === 0) {
+            // Scheme C Step 1: 剧本分场拆解 & 戏剧调度构思 (enable_thinking: true, 自由文本)
+            sceneConception = await runStageOneThinkingConception(
+              provider,
+              `${scenePrompt}\n\n【第一步任务：分场戏剧调度与表演节拍构思】请先不输出 JSON，以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排，确保原样保留必保事件与可见画面细节。`,
+              '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。',
+              { stream: true, temperature: 0.6, maxTokens: 4096 }
+            );
+          }
+          // Scheme C Step 2: 分场剧本 JSON 格式化 & 资产提取 (enable_thinking: false, 严格 JSON)
+          const formattedScenePrompt = sceneConception
+            ? `${attemptPrompt}\n\n--- 第一步：分场戏剧调度与表演构思大纲（请严格提取并转换为 JSON） ---\n${sceneConception}`
+            : attemptPrompt;
           rawScene = await provider.generateStructured(
-            attemptPrompt,
+            formattedScenePrompt,
             GeneratedSceneResponseSchema,
-            '你是一位专业短剧分场编剧，请严格输出合法的 JSON 格式分场戏剧剧本。'
+            '你是一位专业短剧分场编剧，请严格输出合法的 JSON 格式分场戏剧剧本。',
+            { enableThinking: false }
           );
         } catch (err: any) {
           logger.error(`Failed to generate scene ${sIdx + 1}: ${err}`);
@@ -1070,10 +1097,22 @@ export class ScriptGenerationService {
     let rawScene: GeneratedSceneResponse | null = null;
 
     try {
+      // Scheme C Step 1: 分场改写戏剧调度构思 (enable_thinking: true, 自由文本)
+      const rewriteConception = await runStageOneThinkingConception(
+        provider,
+        `${prompt}\n\n【第一步任务：分场改写与戏剧张力构思】请先不输出 JSON，以自由文字形式分析本场戏的核心冲突升级点、外部动作设计与对白潜台词打磨方案，确保必保事件与关键道具完整保留。`,
+        '你是一位专业短剧导演与精修编剧，擅长通过动作细节和潜台词强化单场戏剧张力。',
+        { stream: true, temperature: 0.6, maxTokens: 4096 }
+      );
+      // Scheme C Step 2: 分场改写 JSON 格式化转换 (enable_thinking: false, 严格 JSON)
+      const formattedRewritePrompt = rewriteConception
+        ? `${prompt}\n\n--- 第一步：分场改写构思大纲（请严格提取并转换为 JSON） ---\n${rewriteConception}`
+        : prompt;
       rawScene = await provider.generateStructured(
-        prompt,
+        formattedRewritePrompt,
         GeneratedSceneResponseSchema,
-        '你是一位专业短剧精修编剧，请严格输出合法的 JSON 格式分场剧本。'
+        '你是一位专业短剧精修编剧，请严格输出合法的 JSON 格式分场剧本。',
+        { enableThinking: false }
       );
     } catch (err: any) {
       logger.error(`Failed to rewrite scene ${params.targetSceneId}: ${err}`);

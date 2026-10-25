@@ -277,6 +277,7 @@ export function transferTranslationProblem(source: string, english: string, glos
 export function englishReferenceProblem(english: string, glossary: Record<string, string>): string | null {
   let remaining = english;
   for (const name of Object.values(glossary).sort((a, b) => b.length - a.length)) remaining = remaining.replace(new RegExp(`\\b${quote(name)}\\b`, 'gi'), 'BOUND_ENTITY');
+  remaining = remaining.replace(/\bHe[\s-]+(?:Huan|Qi|Tu|Luo|Shou|Bao|Feng|Zun|Xian)\b/gi, 'PINYIN_PHRASE');
   return /\b(?:he|him|his|she|her|hers|they|them|their|theirs)\b/iu.test(remaining) ? '英文人物代词未显式绑定，请保留整句重译为确定姓名' : null;
 }
 

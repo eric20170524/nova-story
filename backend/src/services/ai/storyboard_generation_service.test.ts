@@ -907,3 +907,46 @@ test('分镜角色反转在模型自审通过时也被拒绝，地点上下文�
   const old = structuredClone(payload); old.fact_contract.version = 2; old.fact_contract.policy_version = 'storyboard-facts-2';
   assert.throws(() => StoryboardGenerationService.validatePayload(old, f.script), /旧版|契约|版本/);
 });
+
+test('Scheme C: 分镜 plan 阶段先执行 enableThinking=true 导演构思，再以 enableThinking=false 格式化 JSON', async () => {
+  const doc = document();
+  const f = await confirmed(doc);
+  const m = providerFixture();
+  const textCalls: Array<{ prompt: string; system?: string; options?: any }> = [];
+  const planStructuredCalls: Array<{ request: any; options?: any }> = [];
+
+  const provider: AIProvider = {
+    ...m.provider,
+    async generateText(prompt, system, options) {
+      textCalls.push({ prompt, system, options });
+      return '<think>确定180度空间轴线，先用远景建立港口，再用近景给红灯细节</think>\n第一镜远景建立港口环境，第二镜近景捕捉红灯亮起。';
+    },
+    async generateStructured(prompt, schema, system, options) {
+      const input = JSON.parse(prompt);
+      if (input.task === 'plan') {
+        planStructuredCalls.push({ request: input, options });
+      }
+      return m.provider.generateStructured(prompt, schema, system, options);
+    },
+  };
+
+  const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
+    ...f.params,
+    requestKey: 'scheme-c-storyboard-plan',
+    provider,
+  });
+
+  assert.equal(textCalls.length, 1);
+  assert.equal(textCalls[0]!.options?.enableThinking, true);
+
+  assert.equal(planStructuredCalls.length, 1);
+  assert.equal(planStructuredCalls[0]!.options?.enableThinking, false);
+  assert.equal(
+    planStructuredCalls[0]!.request.director_conception,
+    '第一镜远景建立港口环境，第二镜近景捕捉红灯亮起。'
+  );
+
+  const payload = JSON.parse(candidate.after_json);
+  StoryboardGenerationService.validatePayload(payload, f.script);
+});
+

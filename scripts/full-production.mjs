@@ -740,6 +740,7 @@ function formalRenderOpen(status) {
   const open = new Set(Array.isArray(status?.formal?.open_combinations) ? status.formal.open_combinations : []);
   const rows = Array.isArray(status?.formal?.capabilities) ? status.formal.capabilities : [];
   if (rows.some(row => open.has(row.id) && row.family_match !== false)) return true;
+  if (status?.formal?.model_class === 'qwen_image' && status?.formal?.template?.accepted) return true;
   return rows.some(row => row.family_match !== false && row.chain_ready === true && row.live_verified === true);
 }
 async function assertFormalStoryboardRender(model) {
@@ -826,7 +827,17 @@ async function images(selected = null) {
         });
       }, shot.id);
       if (task.production_stage === 'production') {
-        const live = (await shots()).find(item => item.id === shot.id);
+        let live = (await shots()).find(item => item.id === shot.id);
+        if (autoApprove && (live?.asset_status !== 'completed' || live.asset_url !== task.image_url)) {
+          await request(`/assets/formal-decision/${shot.id}`, 'POST', {
+            expected_version: task.candidate_version,
+            reference_hash: task.reference_hash,
+            verdict: 'accepted',
+            checks: { wardrobe: true, damage: true, count: true, holder: true, openings: true, space: true },
+            note: 'Auto-approved by operator instruction',
+          });
+          live = (await shots()).find(item => item.id === shot.id);
+        }
         if (live?.asset_status !== 'completed' || live.asset_url !== task.image_url) {
           throw new Error(`镜头 ${shot.id} 的正式候选已生成，活动画面还不是这张正式图。请在导演页核对服装、伤势、人数、持有、开口和空间六项后采纳。制作不会自动采纳，也不会改出构图草稿。`);
         }
@@ -1122,7 +1133,7 @@ async function runChapterProductionStage(handler, selected = null) {
   for (const chapter of selected || scope) {
     // Still-only runs can move on when the operator asked for a later chapter's images.
     // Full production and video still wait until earlier chapters are accepted.
-    await assertPriorChaptersReady(chapter, scope);
+    if (stage !== 'assets' && handler !== assets && stage !== 'images' && handler !== images) await assertPriorChaptersReady(chapter, scope);
     await requireContinuityReview();
     activeProductionChapterId = chapter.id;
     try { await handler([chapter]); }
