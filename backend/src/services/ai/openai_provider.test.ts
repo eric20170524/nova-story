@@ -250,6 +250,30 @@ test('remote gemma text calls stream even when the caller does not ask', async (
     }, 'gemma-4-31b');
 });
 
+test('remote qwen text and structured calls stream to prevent proxy 524 timeouts', async () => {
+    let capturedBody: any;
+    await withTextServer((response, body) => {
+        capturedBody = body;
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '{"qwen_ok":');
+        sendChunk(response, 'true}', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        assert.deepEqual(await provider.generateStructured('check', z.object({ qwen_ok: z.boolean() })), { qwen_ok: true });
+        assert.equal(capturedBody.stream, true);
+        assert.equal(capturedBody.response_format.type, 'json_object');
+    }, 'Qwen3.8-27B');
+
+    await withTextServer((response, body) => {
+        assert.equal(body.stream, true);
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '千问回答', 'stop');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        assert.equal(await provider.generateText('rewrite'), '千问回答');
+    }, 'qwen3.8-27b');
+});
+
 test('524 reports actionable upstream timeout instead of opaque status', async () => {
     await withTextServer(response => {
         response.statusCode = 524;

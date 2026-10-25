@@ -93,6 +93,21 @@ test('saving a non-Ollama provider removes a placeholder LLM_API_KEY', () => {
         assert.match(keptEnv, /^LLM_API_KEY=real-gemma-key$/m);
         assert.equal(kept.llm.api_key, '');
         assert.equal(kept.llm.has_api_key, true);
+
+        const qwenSaved = SettingsManager.saveSettings({
+            llm: {
+                provider: 'openai',
+                model: 'Qwen3.8-27B',
+                base_url: 'https://comfy.chuangyi.chat/qwen38/v1',
+                api_key: 'custom-qwen-key',
+            },
+        });
+        const qwenEnv = fs.readFileSync(path.join(dir, '.env'), 'utf8');
+        assert.match(qwenEnv, /^LLM_MODEL=Qwen3.8-27B$/m);
+        assert.match(qwenEnv, /^LLM_BASE_URL=https:\/\/comfy.chuangyi.chat\/qwen38\/v1$/m);
+        assert.match(qwenEnv, /^LLM_API_KEY=custom-qwen-key$/m);
+        assert.equal(qwenSaved.llm.model, 'Qwen3.8-27B');
+        assert.equal(qwenSaved.llm.has_api_key, true);
     } finally {
         restoreEnv(saved);
         fs.rmSync(dir, { recursive: true, force: true });

@@ -29,7 +29,7 @@ export class OpenAIProvider implements AIProvider {
             timeout: options.timeoutMs ?? (options.isOllama ? 600_000 : 60_000),
             maxRetries: options.isOllama ? 0 : 2,
         });
-        this.model = model;
+        this.model = /qwen3\.?8/i.test(model) ? 'qwen3.8-27b' : model;
         this.baseUrl = baseUrl || '';
         this.imageModel = 'dall-e-3';
         this.isOllama = options.isOllama === true;
@@ -38,6 +38,14 @@ export class OpenAIProvider implements AIProvider {
     /** Public Gemma is served through EdgeOne, which answers 524 if a completion stays silent. */
     private isRemoteGemma(): boolean {
         return !this.isOllama && (/gemma/i.test(this.model) || /\/gemma4\b/i.test(this.baseUrl));
+    }
+
+    private isRemoteQwen(): boolean {
+        return !this.isOllama && (/qwen3\.?8/i.test(this.model) || /\/qwen38\b/i.test(this.baseUrl));
+    }
+
+    private isRemoteLab(): boolean {
+        return this.isRemoteGemma() || this.isRemoteQwen();
     }
 
     private applyThinkingOff(request: any): void {
@@ -69,7 +77,7 @@ export class OpenAIProvider implements AIProvider {
             this.applyThinkingOff(request);
 
             logger.info(`[OpenAI Prompt Input]: ${truncateLog(prompt)}`);
-            if (options?.stream || this.isRemoteGemma()) {
+            if (options?.stream || this.isRemoteLab()) {
                 // Receive long rewrites incrementally so the upstream proxy does not
                 // have to wait for the entire chapter before receiving a response.
                 const stream = await this.openai.chat.completions.create({ ...request, stream: true });
@@ -154,7 +162,7 @@ export class OpenAIProvider implements AIProvider {
             let content='';
             let finishReason:string|null=null;
             try {
-                if(this.isRemoteGemma()){
+                if(this.isRemoteLab()){
                     // EdgeOne's HTTP response timeout treats a silent non-streaming body as failure.
                     const stream = (await this.openai.chat.completions.create({ ...request, stream: true }, requestOptions)) as unknown as AsyncIterable<any>;
                     for await(const chunk of stream){

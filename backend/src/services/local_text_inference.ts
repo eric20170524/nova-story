@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { SettingsManager } from '../core/settings_manager';
 import { GpuLeaseService, type GpuLease } from './gpu_lease_service';
-import { isRemoteGemmaLlm } from './llm_presets';
+import { isRemoteGemmaLlm, isRemotePresetLlm } from './llm_presets';
 import { isNodeTest } from './inference_cache';
 
 const ownedTextLease = new AsyncLocalStorage<GpuLease>();
@@ -16,7 +16,7 @@ export async function withLocalTextInference<T>(work: () => Promise<T>, options:
   if (options.configuredProvider && String(llm.provider || '').toLowerCase() === 'custom' && llm.base_url) {
     try { if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(llm.base_url).hostname)) return work(); } catch { return work(); }
   }
-  if (!ensureOverride && (isNodeTest() || isRemoteGemmaLlm(llm))) return work();
+  if (!ensureOverride && (isNodeTest() || isRemotePresetLlm(llm) || isRemoteGemmaLlm(llm) || String(llm.provider || '').toLowerCase() === 'gemini')) return work();
   if (ownedTextLease.getStore()) return work();
   const owner = `text_${randomUUID()}`;
   const lease = await GpuLeaseService.acquireLease(owner, 'text', 30 * 60 * 1000);

@@ -5,6 +5,11 @@ import { resolveLlmApiKey } from './llm';
 import {
     GEMMA4_REMOTE_BASE_URL,
     GEMMA4_REMOTE_MODEL,
+    QWEN38_REMOTE_BASE_URL,
+    QWEN38_REMOTE_MODEL,
+    isRemoteGemmaLlm,
+    isRemoteQwenLlm,
+    isRemotePresetLlm,
     applyKnownRemoteLlm,
     mergeVerifyLlmConfig,
 } from './llm_presets';
@@ -165,4 +170,55 @@ test('applyLlmModeOverride switches cleanly between parallel local LLM and remot
     assert.equal(leftoverHost.llm.provider, 'openai');
     assert.equal(leftoverHost.llm.model, GEMMA4_REMOTE_MODEL);
     assert.equal(leftoverHost.llm.base_url, GEMMA4_REMOTE_BASE_URL);
+
+    const qwenSelected = applyLlmModeOverride(structuredClone(localSelected), 'qwen');
+    assert.equal(qwenSelected.llm.provider, 'openai');
+    assert.equal(qwenSelected.llm.model, QWEN38_REMOTE_MODEL);
+    assert.equal(qwenSelected.llm.base_url, QWEN38_REMOTE_BASE_URL);
+});
+
+test('Qwen3.8-27B replaces a leftover Ollama endpoint', () => {
+    const settings = applyKnownRemoteLlm({
+        llm_model: 'novastory-qwen3.5:9b',
+        llm: {
+            provider: 'ollama',
+            api_key: 'ollama',
+            base_url: 'http://127.0.0.1:11434/v1',
+            model: QWEN38_REMOTE_MODEL,
+        },
+    });
+
+    assert.equal(settings.llm.provider, 'openai');
+    assert.equal(settings.llm.base_url, QWEN38_REMOTE_BASE_URL);
+    assert.equal(settings.llm.model, QWEN38_REMOTE_MODEL);
+    assert.equal(settings.llm_model, QWEN38_REMOTE_MODEL);
+});
+
+test('Qwen3.8-27B keeps an explicit non-Ollama base URL and custom key', () => {
+    const settings = applyKnownRemoteLlm({
+        llm: {
+            provider: 'openai',
+            api_key: 'kept-qwen-key',
+            base_url: 'http://127.0.0.1:8999/v1',
+            model: 'qwen3.8-27b',
+        },
+    });
+
+    assert.equal(settings.llm.base_url, 'http://127.0.0.1:8999/v1');
+    assert.equal(settings.llm.api_key, 'kept-qwen-key');
+});
+
+test('isRemotePresetLlm identifies both Gemma and Qwen presets', () => {
+    assert.equal(isRemoteGemmaLlm({ model: 'gemma-4-31b' }), true);
+    assert.equal(isRemoteGemmaLlm({ base_url: 'https://comfy.chuangyi.chat/gemma4/v1' }), true);
+    assert.equal(isRemoteGemmaLlm({ model: 'Qwen3.8-27B' }), false);
+
+    assert.equal(isRemoteQwenLlm({ model: 'Qwen3.8-27B' }), true);
+    assert.equal(isRemoteQwenLlm({ model: 'qwen3.8-27b' }), true);
+    assert.equal(isRemoteQwenLlm({ base_url: 'https://comfy.chuangyi.chat/qwen38/v1' }), true);
+    assert.equal(isRemoteQwenLlm({ model: 'gemma-4-31b' }), false);
+
+    assert.equal(isRemotePresetLlm({ model: 'gemma-4-31b' }), true);
+    assert.equal(isRemotePresetLlm({ model: 'Qwen3.8-27B' }), true);
+    assert.equal(isRemotePresetLlm({ model: 'novastory-qwen3.5:9b' }), false);
 });

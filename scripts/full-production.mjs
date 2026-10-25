@@ -31,22 +31,23 @@ const rebuildAssets = args.includes('--rebuild-assets') || reproduceFromB3;
 const rebuildStoryboards = args.includes('--rebuild-storyboards') || rebuildScripts || reproduceFromB3;
 const acceptLegacyStoryboards = args.includes('--accept-legacy-storyboards');
 const keepPortraits = args.includes('--keep-portraits') || args.includes('--preserve-portraits');
-const keepPortraits = args.includes('--keep-portraits') || args.includes('--preserve-portraits');
 const assetScopeArg = option('asset-scope', null);
 const selectedChapterId = option('chapter-id', null);
 const narratorVoice = option('narrator-voice', null);
 const llmModeFromArgs = args.includes('--llm-mode');
 const rawLlmMode = String(option('llm-mode', process.env.NOVASTORY_LLM_MODE || process.env.LLM_MODE || 'local')).trim().toLowerCase();
-const llmMode = rawLlmMode === 'gemma4' ? 'remote' : rawLlmMode;
+const llmMode = rawLlmMode === 'gemma4' ? 'remote' : (['gemini', 'gemini-3.8-flash'].includes(rawLlmMode) ? 'gemini' : rawLlmMode);
 const llmModeExplicit = llmModeFromArgs || Boolean(process.env.NOVASTORY_LLM_MODE || process.env.LLM_MODE);
 const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
+const QWEN38_REMOTE_MODEL = 'Qwen3.8-27B';
+const QWEN38_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/qwen38/v1';
 const LOCAL_LLM_MODEL = 'novastory-qwen3.5:9b';
 const LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
 const archiveAgain = args.includes('--archive-again');
 const autoApprove = args.includes('--auto-approve') || process.env.NOVASTORY_AUTO_APPROVE === '1';
 const stages = ['preflight', 'text', 'review-continuity', 'review-task-order', 'scripts', 'assets', 'storyboards', 'images', 'review-images', 'review-chapter', 'audio', 'video-preflight', 'videos', 'assemble', 'verify'];
-if (!projectArg || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 200 || ![...stages, 'all'].includes(stage) || !['local', 'remote'].includes(llmMode)) throw new Error('Invalid --project, --chapter-limit, --stage or --llm-mode');
+if (!projectArg || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(chapterLimit) || chapterLimit < 1 || chapterLimit > 200 || ![...stages, 'all'].includes(stage) || !['local', 'remote', 'gemini'].includes(llmMode)) throw new Error('Invalid --project, --chapter-limit, --stage or --llm-mode');
 fs.mkdirSync(directory, { recursive: true });
 const lockFile = path.join(directory, '.production.lock');
 if (fs.existsSync(lockFile)) {
@@ -289,12 +290,18 @@ function providerBlockers(settings) {
   const llmProvider = String(settings?.llm?.provider || '').toLowerCase();
   const llmModel = String(settings?.llm?.model || settings?.llm_model || '');
   const llmBaseUrl = String(settings?.llm?.base_url || '');
-  const isRemotePreset = llmProvider === 'openai' && llmModel === GEMMA4_REMOTE_MODEL && llmBaseUrl === GEMMA4_REMOTE_BASE_URL;
+  const isGemmaRemote = llmProvider === 'openai' && (llmModel.toLowerCase() === GEMMA4_REMOTE_MODEL.toLowerCase() || llmModel.includes('gemma-4-31b')) && (llmBaseUrl === GEMMA4_REMOTE_BASE_URL || llmBaseUrl.includes('/gemma4'));
+  const isQwenRemote = llmProvider === 'openai' && (llmModel.toLowerCase() === QWEN38_REMOTE_MODEL.toLowerCase() || llmModel.toLowerCase() === 'qwen3.8-27b') && (llmBaseUrl === QWEN38_REMOTE_BASE_URL || llmBaseUrl.includes('/qwen38'));
+  const isRemotePreset = isGemmaRemote || isQwenRemote;
   if (process.env.NOVASTORY_BUILTIN_AI === 'codex' || llmProvider === 'codex') {
     blockers.push('禁止通过 NOVASTORY_BUILTIN_AI=codex 或 provider=codex 调用内置模型能力；文本推理必须使用本地 LLM 或通过 --llm-mode remote 选用远端预设。');
+  } else if (llmMode === 'gemini') {
+    if (llmProvider !== 'gemini') {
+      blockers.push(`当前通过 --llm-mode gemini 选用了 Gemini，但服务端配置不是 Gemini（provider=${llmProvider || 'unset'}）；请配置 gemini 或改用 --llm-mode local。`);
+    }
   } else if (llmMode === 'remote') {
     if (llmProvider !== 'openai' || !isRemotePreset) {
-      blockers.push(`当前通过 --llm-mode remote 选用了远端预设工作方式，但服务端配置不是远端预设（provider=${llmProvider || 'unset'}, model=${llmModel || 'unset'}）；请配置 gemma-4-31b 远端预设或改用 --llm-mode local。`);
+      blockers.push(`当前通过 --llm-mode remote 选用了远端预设工作方式，但服务端配置不是远端预设（provider=${llmProvider || 'unset'}, model=${llmModel || 'unset'}）；请配置 gemma-4-31b / Qwen3.8-27B 远端预设或改用 --llm-mode local。`);
     }
   } else {
     if (llmProvider && !['ollama', 'local_llm'].includes(llmProvider)) {
@@ -346,13 +353,27 @@ async function assertProductionProviders() {
 }
 function desiredLlm(settings) {
   const current = settings?.llm || {};
+  if (llmMode === 'gemini') {
+    return {
+      provider: 'gemini',
+      model: 'gemini-3.8-flash',
+      api_key: process.env.GEMINI_API_KEY || current.api_key || '',
+      base_url: '',
+    };
+  }
   if (llmMode === 'remote') {
+    const isRemoteQwen = rawLlmMode === 'qwen' ||
+      String(current.model || '').toLowerCase() === QWEN38_REMOTE_MODEL.toLowerCase() ||
+      String(current.base_url || '').includes('/qwen38');
+    if (isRemoteQwen) {
+      return { provider: 'openai', model: QWEN38_REMOTE_MODEL, base_url: QWEN38_REMOTE_BASE_URL };
+    }
     return { provider: 'openai', model: GEMMA4_REMOTE_MODEL, base_url: GEMMA4_REMOTE_BASE_URL };
   }
   const provider = String(current.provider || '').toLowerCase();
   const base = String(current.base_url || '');
   const model = String(current.model || settings?.llm_model || '');
-  const alreadyLocal = ['ollama', 'local_llm'].includes(provider) && model !== GEMMA4_REMOTE_MODEL && !base.includes('/gemma4');
+  const alreadyLocal = ['ollama', 'local_llm'].includes(provider) && model !== GEMMA4_REMOTE_MODEL && !model.toLowerCase().includes('qwen3.8-27b') && !base.includes('/gemma4') && !base.includes('/qwen38');
   return {
     provider: 'ollama',
     model: alreadyLocal && model ? model : LOCAL_LLM_MODEL,

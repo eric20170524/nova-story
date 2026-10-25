@@ -946,18 +946,16 @@ export class WritingService {
       };
     };
 
-    const [impactRaw, analysis] = await Promise.all([
-      analyzeImpact(),
-      WritingService.analyzeChapterCharacters(projectId, chapterId).catch(
-        (err) => {
-          logger.warn(
-            { err, projectId, chapterId },
-            'analyzeChapterCharacters failed during chapter impact; continuing with impact delta only'
-          );
-          return { characters: [] } as ChapterCharacterAnalysis;
-        }
-      ),
-    ]);
+    const impactRaw = await analyzeImpact();
+    const analysis = await WritingService.analyzeChapterCharacters(projectId, chapterId).catch(
+      (err) => {
+        logger.warn(
+          { err, projectId, chapterId },
+          'analyzeChapterCharacters failed during chapter impact; continuing with impact delta only'
+        );
+        return { characters: [] } as ChapterCharacterAnalysis;
+      }
+    );
 
     const data = mergeImpactWithCharacterAnalysis(impactRaw, analysis);
     data.applied = false;

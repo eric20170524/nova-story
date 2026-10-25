@@ -7,7 +7,7 @@ import { GeminiProvider } from './ai/gemini_provider';
 import { OpenAIProvider } from './ai/openai_provider';
 import { CodexProvider } from './ai/codex_provider';
 import { Prompts } from './prompts';
-import { isRemoteGemmaLlm } from './llm_presets';
+import { isRemoteGemmaLlm, isRemotePresetLlm, isRemoteQwenLlm } from './llm_presets';
 
 import {
     TimelineResponseSchema,
@@ -34,8 +34,14 @@ export function resolveLlmApiKey(llmConfig: LLMProviderConfig, providerType: str
     const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
     const configuredKey = String(llmConfig.api_key || '').trim();
     if (isLocalLlm) return 'ollama';
-    if (isRemoteGemmaLlm(llmConfig)) {
-        return configuredKey && configuredKey !== 'ollama' ? configuredKey : '';
+    if (isRemotePresetLlm(llmConfig)) {
+        if (configuredKey && configuredKey !== 'ollama') return configuredKey;
+        if (isRemoteQwenLlm(llmConfig)) {
+            return process.env.QWEN_REMOTE_API_KEY || process.env.LLM_API_KEY || 'qwn_hCOfqyB5a5YQr8ka_a5Jd977-Fx1C_UC_GMM2LCxLDqRxs0a';
+        }
+        if (isRemoteGemmaLlm(llmConfig)) {
+            return process.env.GEMMA_REMOTE_API_KEY || process.env.LLM_API_KEY || '060338a5907f38dfc75b107d7ca0795e8546153655ea75ae';
+        }
     }
     return configuredKey || appSettings.OPENAI_API_KEY;
 }
@@ -48,7 +54,7 @@ export class LLMService {
         const baseUrl = llmConfig.base_url;
 
         if (providerType === 'codex') {
-            if (isRemoteGemmaLlm({ model: llmConfig.model, base_url: baseUrl })) {
+            if (isRemotePresetLlm({ model: llmConfig.model, base_url: baseUrl })) {
                 return LLMService.getProvider(token, { ...llmConfig, provider: 'custom' });
             }
             return LLMService.getLocalProvider();
@@ -58,7 +64,7 @@ export class LLMService {
             const isLocalLlm = LOCAL_LLM_PROVIDERS.has(providerType);
             const effectiveBaseUrl = baseUrl || (isLocalLlm ? DEFAULT_LOCAL_LLM_BASE_URL : undefined);
             const effectiveModel = llmConfig.model || (isLocalLlm ? DEFAULT_LOCAL_LLM_MODEL : 'gpt-4o');
-            const remoteGemma = isRemoteGemmaLlm({
+            const isRemotePreset = isRemotePresetLlm({
                 model: effectiveModel,
                 base_url: effectiveBaseUrl,
             });
@@ -68,7 +74,7 @@ export class LLMService {
             );
             return new OpenAIProvider(effectiveApiKey, effectiveModel, effectiveBaseUrl, {
                 isOllama: isLocalLlm,
-                timeoutMs: remoteGemma ? 300_000 : undefined,
+                timeoutMs: isRemotePreset ? 300_000 : undefined,
             });
         }
 
@@ -92,13 +98,16 @@ export class LLMService {
         const configured = SettingsManager.loadSettings().llm || {};
         const configuredModel = String(configured.model || '');
         const configuredBase = String(configured.base_url || '');
-        if (isRemoteGemmaLlm({ model: configuredModel, base_url: configuredBase })) {
+        if (isRemotePresetLlm({ model: configuredModel, base_url: configuredBase })) {
             return LLMService.getProvider(undefined, {
                 ...configured,
                 provider: configured.provider === 'codex' ? 'custom' : (configured.provider || 'custom'),
             });
         }
         const configuredProvider = String(configured.provider || '').toLowerCase();
+        if (configuredProvider === 'gemini') {
+            return LLMService.getProvider(undefined, configured);
+        }
         const isConfiguredLocal = LOCAL_LLM_PROVIDERS.has(configuredProvider);
         return new OpenAIProvider(
             'ollama',
@@ -118,7 +127,7 @@ export class LLMService {
             systemInstruction?: string;
         }
     ): Promise<T | null> {
-        const maxRetries = options?.maxRetries ?? 2;
+        const maxRetries = options?.maxRetries ?? 4;
         const provider = LLMService.getLocalProvider();
         for (let i = 0; i < maxRetries; i++) {
             try {
@@ -138,6 +147,10 @@ export class LLMService {
                     logger.error('Max retries reached for local structured output.');
                     return null;
                 }
+                const isRateOrNet = String(error).includes('429') || String(error).includes('quota') || String(error).includes('503') || String(error).includes('fetch');
+                if (isRateOrNet) {
+                    await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+                }
             }
         }
         return null;
@@ -155,7 +168,7 @@ export class LLMService {
         }
     ): Promise<T | null> {
         // Default 2 attempts (first + one retry). Route uses maxRetries: 2 as well.
-        const maxRetries = options?.maxRetries ?? 2;
+        const maxRetries = options?.maxRetries ?? 4;
         const provider = LLMService.getProvider(token);
 
         for (let i = 0; i < maxRetries; i++) {
@@ -170,6 +183,10 @@ export class LLMService {
                 if (i === maxRetries - 1) {
                     logger.error('Max retries reached for LLM structured output.');
                     return null;
+                }
+                const isRateOrNet = String(error).includes('429') || String(error).includes('quota') || String(error).includes('503') || String(error).includes('fetch');
+                if (isRateOrNet) {
+                    await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
                 }
             }
         }

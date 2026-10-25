@@ -33,8 +33,22 @@ const LOCAL_LLM_MODEL = 'novastory-qwen3.5:9b';
 const LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1';
 const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
+const QWEN38_REMOTE_MODEL = 'Qwen3.8-27B';
+const QWEN38_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/qwen38/v1';
 const LOCAL_LLM_PROVIDERS = new Set(['ollama', 'local_llm']);
 const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-argon'] as const;
+
+function isRemoteGemmaModel(model?: string, baseUrl?: string): boolean {
+  const m = String(model || '').toLowerCase();
+  const b = String(baseUrl || '').toLowerCase();
+  return m === 'gemma-4-31b' || m.includes('gemma-4-31b') || b.includes('/gemma4');
+}
+
+function isRemoteQwenModel(model?: string, baseUrl?: string): boolean {
+  const m = String(model || '').toLowerCase();
+  const b = String(baseUrl || '').toLowerCase();
+  return m === 'qwen3.8-27b' || m.includes('qwen3.8-27b') || b.includes('/qwen38');
+}
 
 export const SettingsPage: React.FC = () => {
   const { t } = useLanguage();
@@ -82,6 +96,13 @@ export const SettingsPage: React.FC = () => {
   const [ttsStatus, setTtsStatus] = useState<TtsStatusResult | null>(null);
   const [loadingTts, setLoadingTts] = useState<boolean>(false);
   const secretClicksRef = useRef({ count: 0, lastAt: 0 });
+
+  const currentLlmModel = settings.llm?.model || settings.llm_model || '';
+  const currentLlmBaseUrl = settings.llm?.base_url || settings.openai_base_url || '';
+  const currentLlmProvider = settings.llm?.provider || settings.llm_provider || 'gemini';
+
+  const isCurrentGemmaRemote = currentLlmProvider === 'openai' && isRemoteGemmaModel(currentLlmModel, currentLlmBaseUrl);
+  const isCurrentQwenRemote = currentLlmProvider === 'openai' && isRemoteQwenModel(currentLlmModel, currentLlmBaseUrl);
 
   /** Hidden area: 5 consecutive clicks (within 1.5s gaps) toggles advanced styles */
   const handleSecretAreaClick = () => {
@@ -368,6 +389,24 @@ export const SettingsPage: React.FC = () => {
     }));
   };
 
+  const applyQwenRemote = () => {
+    setSettings((prev: any) => ({
+      ...prev,
+      llm_provider: 'openai',
+      llm_model: QWEN38_REMOTE_MODEL,
+      openai_base_url: QWEN38_REMOTE_BASE_URL,
+      llm: {
+        ...(prev.llm || {}),
+        provider: 'openai',
+        model: QWEN38_REMOTE_MODEL,
+        base_url: QWEN38_REMOTE_BASE_URL,
+        api_key: prev.llm?.api_key === 'ollama' ? '' : (prev.llm?.api_key || ''),
+        has_api_key: ['ollama', 'local_llm'].includes(prev.llm?.provider || prev.llm_provider)
+          ? false : Boolean(prev.llm?.has_api_key),
+      },
+    }));
+  };
+
   const applyCodexBuiltIn = () => {
     setSettings((prev: any) => ({
       ...prev,
@@ -592,19 +631,23 @@ export const SettingsPage: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
-                      (settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
+                      isCurrentGemmaRemote
                         ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
-                        : LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '')
+                        : isCurrentQwenRemote
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800/50 text-indigo-800 dark:text-indigo-300'
+                        : LOCAL_LLM_PROVIDERS.has(currentLlmProvider)
                         ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'
-                        : (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
+                        : currentLlmProvider === 'openai'
                         ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
                         : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-300'
                     }`}>
-                      {(settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
-                        ? 'GEMMA 4 31B'
-                        : LOCAL_LLM_PROVIDERS.has(settings.llm?.provider || settings.llm_provider || '')
+                      {isCurrentGemmaRemote
+                        ? 'gemma-4-31B'
+                        : isCurrentQwenRemote
+                        ? 'Qwen3.8-27B'
+                        : LOCAL_LLM_PROVIDERS.has(currentLlmProvider)
                         ? 'llama.cpp'
-                        : (settings.llm?.provider || settings.llm_provider || 'gemini').toUpperCase()}
+                        : currentLlmProvider.toUpperCase()}
                     </span>
                     <button
                       type="button"
@@ -629,7 +672,7 @@ export const SettingsPage: React.FC = () => {
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                       模型提供方 (Provider)
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                       <button
                         type="button"
                         onClick={applyCodexBuiltIn}
@@ -659,8 +702,9 @@ export const SettingsPage: React.FC = () => {
                         type="button"
                         onClick={() => handleLLMChange('provider', 'openai')}
                         className={`p-3.5 rounded-xl border text-left transition-all ${
-                          (settings.llm?.provider || settings.llm_provider || 'gemini') === 'openai'
-                          && (settings.llm?.model || settings.llm_model) !== GEMMA4_REMOTE_MODEL
+                          currentLlmProvider === 'openai'
+                          && !isCurrentGemmaRemote
+                          && !isCurrentQwenRemote
                             ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
                             : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
                         }`}
@@ -671,14 +715,27 @@ export const SettingsPage: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={applyGemmaRemote}
+                        onClick={applyQwenRemote}
                         className={`p-3.5 rounded-xl border text-left transition-all ${
-                          (settings.llm?.model || settings.llm_model) === GEMMA4_REMOTE_MODEL
+                          isCurrentQwenRemote
                             ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
                             : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
                         }`}
                       >
-                        <div className="text-sm font-bold mb-0.5">远端 Gemma 4 31B</div>
+                        <div className="text-sm font-bold mb-0.5">远端 Qwen3.8-27B</div>
+                        <div className="text-xs opacity-75">算力机 GPU 远端服务，OpenAI 兼容接口，模型名 Qwen3.8-27B</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={applyGemmaRemote}
+                        className={`p-3.5 rounded-xl border text-left transition-all ${
+                          isCurrentGemmaRemote
+                            ? 'bg-indigo-50/70 dark:bg-indigo-600/10 border-indigo-500 text-indigo-950 dark:text-indigo-300 ring-1 ring-indigo-500/30 shadow-sm'
+                            : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="text-sm font-bold mb-0.5">远端 gemma-4-31B</div>
                         <div className="text-xs opacity-75">算力机 GPU 3，OpenAI 兼容接口，模型名 gemma-4-31b</div>
                       </button>
 
@@ -751,6 +808,8 @@ export const SettingsPage: React.FC = () => {
                           placeholder={
                             settings.llm?.has_api_key
                               ? '已配置密钥（留空则不修改）'
+                              : (isCurrentGemmaRemote || isCurrentQwenRemote)
+                              ? '远端服务密钥（若服务端免密或已配环境变量可留空）'
                               : 'sk-...'
                           }
                           autoComplete="off"
@@ -759,6 +818,11 @@ export const SettingsPage: React.FC = () => {
                         {settings.llm?.has_api_key && !settings.llm?.api_key && (
                           <p className="text-[11px] text-emerald-600 dark:text-emerald-500/80 mt-1">服务器已保存 API Key，不会在接口中回传明文。</p>
                         )}
+                        {(isCurrentGemmaRemote || isCurrentQwenRemote) && !settings.llm?.has_api_key && (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                            远端算力机 OpenAI 兼容接口。若服务端已配置环境变量或无需鉴权，可直接留空进行连接测试与保存。
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -766,9 +830,15 @@ export const SettingsPage: React.FC = () => {
                         </label>
                         <input
                           type="text"
-                          value={settings.llm?.base_url || settings.openai_base_url || 'https://api.openai.com/v1'}
+                          value={settings.llm?.base_url || settings.openai_base_url || (isCurrentQwenRemote ? QWEN38_REMOTE_BASE_URL : isCurrentGemmaRemote ? GEMMA4_REMOTE_BASE_URL : 'https://api.openai.com/v1')}
                           onChange={(e) => handleLLMChange('base_url', e.target.value)}
-                          placeholder="https://api.openai.com/v1"
+                          placeholder={
+                            isCurrentQwenRemote
+                              ? QWEN38_REMOTE_BASE_URL
+                              : isCurrentGemmaRemote
+                              ? GEMMA4_REMOTE_BASE_URL
+                              : 'https://api.openai.com/v1'
+                          }
                           className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -778,9 +848,15 @@ export const SettingsPage: React.FC = () => {
                         </label>
                         <input
                           type="text"
-                          value={settings.llm?.model || settings.llm_model || 'gpt-4o-mini'}
+                          value={settings.llm?.model || settings.llm_model || (isCurrentQwenRemote ? QWEN38_REMOTE_MODEL : isCurrentGemmaRemote ? GEMMA4_REMOTE_MODEL : 'gpt-4o-mini')}
                           onChange={(e) => handleLLMChange('model', e.target.value)}
-                          placeholder="gpt-4o-mini 或 deepseek-chat"
+                          placeholder={
+                            isCurrentQwenRemote
+                              ? QWEN38_REMOTE_MODEL
+                              : isCurrentGemmaRemote
+                              ? GEMMA4_REMOTE_MODEL
+                              : 'gpt-4o-mini 或 deepseek-chat'
+                          }
                           className="w-full bg-slate-50/80 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 focus:outline-none transition-all"
                         />
                       </div>

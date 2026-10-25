@@ -293,8 +293,8 @@ export function evidencedContinuityStates<T extends { entity: string; attribute:
   return { accepted, rejected };
 }
 
-const CLAUSE_EDGE = /[，,；;。！？!?、：:—–—~～…"\n\s]+$/u;
-const CLAUSE_JOIN = /^(?:[—–—~～…"\n\s]+|然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
+const CLAUSE_EDGE = /[，,；;。！？!?、：:—–—~～…”’」』"'\n\s]+$/u;
+const CLAUSE_JOIN = /^(?:[—–—~～…”’」』“‘「『"'\n\s]+|然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u;
 
 /** A cut is valid at punctuation or a succession word. A cut inside a clause is not. */
 export function clauseBoundaryBetween(head: string, tail: string): boolean {
@@ -317,6 +317,10 @@ export function groupAdjacentClauseFragments<T extends { text: string; beat: num
 /** A model split counts only when the pieces are verbatim source quotes in order. */
 export function verbatimActionSplit(source: string, spans: string[]): string[] | null {
   if (spans.length < 2 || spans.some(span => !span)) return null;
+  for (let i = 0; i < spans.length - 1; i++) {
+    const trimmed = spans[i]!.replace(/[，,；;。！？\n\s]+$/u, '').trim();
+    if (/(?:[把将从向朝被在往且]|对于|关于|和|与|跟|同)$/u.test(trimmed)) return null;
+  }
   if (spans.join('') === source) return spans;
   const joined = spans.join('');
   if (source.startsWith(joined) && source.slice(joined.length).match(/^[，,；;。！？\n\s]+$/u)) {
@@ -777,7 +781,7 @@ export async function runFactWorkflow(input: {
           let kind = classified.items.find(i => i.id === source.id)!.kind;
           if (kind === 'visual') {
             const atomic = await provider.generateStructured(JSON.stringify({ task: 'atomicity', source: source.text, repair }), z.object({ result: z.enum(['one_frame', 'sequence', 'uncertain']) }),
-              'Can ALL visible details in this clause coexist in ONE still image? one_frame = compatible appearance, environment, lighting, clothing, objects, posture, emotional reaction, or a single action at one moment (e.g. ambient states like "天光发粉", postures like "坐在玉阶上", reactions/states like "却终究克制不住", "神色凝重"). sequence = two or more distinct successive physical actions by characters requiring separate keyframes (e.g. "先坐下然后站起", "打开门并走到屋外"). uncertain = cannot decide. A single clause with only one action or emotional reaction is always one_frame, never sequence. Only distinct successive actions by characters can be sequence. Classify only, do not rewrite. 只返回 JSON，顶层键名必须是 result。', { temperature: 0.1, maxTokens: 48 });
+              'Can ALL visible details in this clause coexist in ONE still image? one_frame = compatible appearance, environment, lighting, clothing, objects, posture, emotional reaction, or a single action at one moment (e.g. ambient states like "天光发粉", postures like "坐在玉阶上", reactions/states like "却终究克制不住", "神色凝重", transitive/prepositional actions like "将某人圈入怀中", "从身后抱住某人"). sequence = two or more distinct successive physical actions by characters requiring separate keyframes (e.g. "先坐下然后站起", "打开门并走到屋外"). uncertain = cannot decide. A single clause with only one action or emotional reaction is always one_frame, never sequence. Only distinct successive actions by characters can be sequence. Classify only, do not rewrite. 只返回 JSON，顶层键名必须是 result。', { temperature: 0.1, maxTokens: 48 });
             if (atomic.result === 'uncertain' || source.text.length > 240) {
               classified.items.find(i => i.id === source.id)!.kind = 'uncertain';
               place(source, lastVisualBeat >= 0 ? lastVisualBeat : 0, 'uncertain');
@@ -785,7 +789,7 @@ export async function runFactWorkflow(input: {
             }
             if (atomic.result === 'sequence') {
               const split = await provider.generateStructured(JSON.stringify({ task: 'split_actions', source: source.text, repair }), z.object({ spans: z.array(z.object({ text: z.string().min(1) })).min(1) }),
-                'The sentence was already judged to be successive actions. Return at least two spans. Every span must be a verbatim contiguous quote, and joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. Do not return the whole sentence as one span. A one-span reply does not change the sequence judgment.', { temperature: 0.1, maxTokens: 256 });
+                'The sentence was already judged to be successive actions. Return at least two spans. Every span must be a complete predicate or action clause, never cut across prepositions (do not end a span with 把, 将, 从, 向, 朝, 被, 在, 往). Every span must be a verbatim contiguous quote, and joining the spans in order must reproduce the source with no added, dropped, or rewritten characters. Do not return the whole sentence as one span. A one-span reply does not change the sequence judgment.', { temperature: 0.1, maxTokens: 256 });
               const quotes = verbatimActionSplit(source.text, split.spans.map(span => span.text));
               if (!quotes) throw new FactWorkflowError(`连续动作未能拆成可核对的原文片段: ${source.text}`);
               let beat = lastVisualBeat < 0 ? 0 : lastVisualBeat + 1;
@@ -859,7 +863,7 @@ export async function runFactWorkflow(input: {
   for (const fact of facts.filter(item => item.kind === 'mixed' || item.kind === 'uncertain')) {
     const replaced = await request(`repair:${fact.id}`, async repair => {
       const schema = z.object({ spans: z.array(z.object({ text: z.string().min(1), kind: z.enum(['visual', 'audio', 'internal', 'figurative']) })).min(1) });
-      const canSplit = /[，,；;。！？!?、：:—–—~～…]/u.test(fact.text.slice(0, -1)) || /(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u.test(fact.text);
+      const canSplit = /[，,；;。！？!?、：:—–—~～…”’」』"']/u.test(fact.text.slice(0, -1)) || /(?:然后|随后|接着|之后|继而|并(?![列排拢肩非且得]))/u.test(fact.text);
       const instruction = canSplit
         ? 'Repair one stored fact so a person does not have to edit it. If it mixes a visible action with speech, a thought, a sound, or a metaphor, return source-exact spans cut only after punctuation (such as ，、：——) or before 然后、随后、接着、之后、继而 or 并. A speech act such as 说、问、答、应 is audio. A visible reaction in the same sentence stays visual. A cut inside a clause is invalid. Otherwise return one span whose text equals the source. Joining the spans in order must reproduce the source verbatim with no added, dropped, or rewritten characters or punctuation. kind is only visual, audio, internal, or figurative. Return spans with text and kind only.'
         : 'This fact is a single clause with no internal punctuation or conjunctions; it cannot be split. Return exactly ONE span whose text equals the source verbatim, and classify kind as visual, audio, internal, or figurative. Do NOT add, drop, or alter any characters or punctuation.';
@@ -961,7 +965,18 @@ export async function runFactWorkflow(input: {
           throw error;
         }
         const owners = boundVisibleEntities(source.binding).map(e => e.name);
-        const evidence = evidencedContinuityStates(source.text, statesCleaned, context, owners);
+        let evidence = evidencedContinuityStates(source.text, statesCleaned, context, owners);
+        if (evidence.rejected.length) {
+          const note = continuityEvidenceRepair(source.text, evidence.rejected, context);
+          try {
+            const retried = cleanStates((await ask(note)).states);
+            const retriedEvidence = evidencedContinuityStates(source.text, retried, context, owners);
+            if (!retriedEvidence.rejected.length) {
+              statesCleaned = retried;
+              evidence = retriedEvidence;
+            }
+          } catch {}
+        }
         if (evidence.rejected.length) {
           source.states = statesCleaned; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`);
         }
@@ -1113,7 +1128,7 @@ export async function runFactWorkflow(input: {
           const idSchema = batchIds.length ? z.enum(batchIds as [string, ...string[]]) : z.string();
           const translationSchema = z.object({ translations: z.array(z.object({ id: idSchema, english: z.string().min(1) })) });
           const result = await provider.generateStructured(JSON.stringify({ task: 'translate', facts: batch, required_terms: batch.map(f => ({ id: f.id, terms: bodyOwnerTerms(f.text, input.glossary) })).filter(f => f.terms.length), bindings: selected.filter(f => batch.some(row => row.id === f.id)).map(f => ({ id: f.id, mentions: f.binding?.mentions.map(m => ({ text: m.text, entity: m.entity, visibility: m.visibility })) })), glossary: input.glossary, places: doc.locations.map(location => location.name), repair: repairNote }), translationSchema,
-            '只翻译 facts 数组的条目，返回条目数量和 ID 必须与 facts 完全相同。bindings 和 glossary 只是对应关系，禁止把它们作为新增事实翻译。places 是剧本地点。朝加地点再加“的方向”表示走向该地，句首的朝是朝向，不是姓，地名必须整词保留。required_terms 是已确定的身体所有者短语，必须原样写进对应条目的 english，不能改成 his/her。把每条编号事实直译为短英文句，保持原意全部内容，不写镜头、风格或技术标签。保留身份、数量、施受关系、颜色、左右、否定和所有连接词后的事实。禁止补人物、环境、道具、情绪。专名只使用项目glossary给出的译名，无译名时音译，所有人物引用都写确定姓名，不使用 he/she/him/her/his/they/them/their，包括身体部位所有者。未绑定的人物不能新增。english 只能写英文，禁止出现汉字。返回每条相同id及english。', { temperature: 0.1, maxTokens: 512 });
+            '只翻译 facts 数组的条目，返回条目数量和 ID 必须与 facts 完全相同。bindings 和 glossary 只是对应关系，禁止把它们作为新增事实翻译。places 是剧本地点。朝加地点再加“的方向”表示走向该地，句首的朝是朝向，不是姓，地名必须整词保留。required_terms 是已确定的身体所有者短语，必须原样写进对应条目的 english，不能改成 his/her。把每条编号事实直译为短英文句，保持原意全部内容，不写镜头、风格或技术标签。保留身份、数量、施受关系、颜色、左右、否定和所有连接词后的事实。禁止补人物、环境、道具、情绪。专名只使用项目glossary给出的译名，无译名时音译，所有人物引用都写确定姓名，绝对禁止使用任何第三人称或物主代词（禁止使用 he/she/him/her/his/they/them/their/theirs，禁止写 their immortal powers，写 the immortal powers 或省略代词；禁止写 her/his chest，写 the chest 或确定人名所有格）。未绑定的人物不能新增。english 只能写英文，禁止出现汉字。返回每条相同id及english。', { temperature: 0.1, maxTokens: 512 });
           if (result.translations.length === batch.length && batch.some(f => !result.translations.some(t => t.id === f.id))) {
             result.translations = result.translations.map((t, i) => ({ ...t, id: batch[i]?.id || t.id }));
           }
@@ -1136,7 +1151,14 @@ export async function runFactWorkflow(input: {
             if (containsCjk(row.english)) problems.push(`${fact.id} 仍含中文「${row.english}」`);
             const missingTerms = bodyOwnerTerms(fact.text, input.glossary).filter(term => !row.english.toLowerCase().includes(term.toLowerCase()));
             if (missingTerms.length) throw new FactWorkflowError(`译文待核对: ${fact.id} 身体部位归属须原样写出 ${missingTerms.join(', ')}`, 502);
-            const referenceProblem = englishReferenceProblem(row.english, input.glossary);
+            let referenceProblem = englishReferenceProblem(row.english, input.glossary);
+            if (referenceProblem) {
+              const sanitized = row.english.replace(/\btheir\b/gi, 'the').replace(/\b(?:her|his)\b(?=\s+[a-z])/gi, 'the');
+              if (!englishReferenceProblem(sanitized, input.glossary)) {
+                row.english = sanitized;
+                referenceProblem = null;
+              }
+            }
             if (referenceProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${referenceProblem}。上次译文「${row.english}」。须改用 facts 中人物的完整译名及其所有格，不能保留 his/her。`, 502);
             const relationProblem = transferTranslationProblem(fact.text, row.english, input.glossary);
             if (relationProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${relationProblem}`, 502);
