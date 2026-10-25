@@ -36,7 +36,7 @@ const selectedChapterId = option('chapter-id', null);
 const narratorVoice = option('narrator-voice', null);
 const llmModeFromArgs = args.includes('--llm-mode');
 const rawLlmMode = String(option('llm-mode', process.env.NOVASTORY_LLM_MODE || process.env.LLM_MODE || 'local')).trim().toLowerCase();
-const llmMode = rawLlmMode === 'gemma4' ? 'remote' : (['gemini', 'gemini-3.8-flash'].includes(rawLlmMode) ? 'gemini' : rawLlmMode);
+const llmMode = (rawLlmMode === 'gemma4' || rawLlmMode === 'qwen' || rawLlmMode === 'qwen38' || rawLlmMode === 'qwen3.8') ? 'remote' : (['gemini', 'gemini-3.8-flash'].includes(rawLlmMode) ? 'gemini' : rawLlmMode);
 const llmModeExplicit = llmModeFromArgs || Boolean(process.env.NOVASTORY_LLM_MODE || process.env.LLM_MODE);
 const GEMMA4_REMOTE_MODEL = 'gemma-4-31b';
 const GEMMA4_REMOTE_BASE_URL = 'https://comfy.chuangyi.chat/gemma4/v1';
