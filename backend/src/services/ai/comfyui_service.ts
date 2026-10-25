@@ -35,7 +35,7 @@ export function comfyDownloadShouldRetry(status: number | null, message: string,
 
 /** EdgeOne/Cloudflare handshake and origin timeouts. A real ComfyUI 4xx is not retried. */
 export function comfyPromptGiveUp(status: number, attempt: number, limit = 3): boolean {
-    const gateway = status === 522 || status === 524 || status === 525;
+    const gateway = status === 502 || status === 504 || status === 522 || status === 524 || status === 525 || status === 554;
     return !gateway || attempt >= limit;
 }
 
@@ -460,7 +460,7 @@ export class ComfyUIService {
 
     async checkStatus(): Promise<boolean> {
         try {
-            const response = await this.authenticatedFetch('/system_stats', {}, 3000);
+            const response = await this.authenticatedFetch('/system_stats', {}, this.isRemote ? 15000 : 3000);
             return response.ok;
         } catch {
             return false;
@@ -469,7 +469,7 @@ export class ComfyUIService {
 
     async fetchSystemStats(): Promise<any> {
         try {
-            const res = await this.authenticatedFetch('/system_stats', {}, 8000);
+            const res = await this.authenticatedFetch('/system_stats', {}, this.isRemote ? 20000 : 8000);
             if (!res.ok) {
                 throw new Error(`ComfyUI /system_stats failed with status ${res.status}`);
             }

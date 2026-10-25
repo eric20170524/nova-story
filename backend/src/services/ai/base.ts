@@ -50,22 +50,39 @@ export async function runStageOneThinkingConception(
   options?: Omit<TextGenOptions, 'enableThinking'>
 ): Promise<string> {
   if (!provider || typeof provider.generateText !== 'function') return '';
-  try {
-    const raw = await provider.generateText(prompt, systemInstruction, {
-      ...options,
-      enableThinking: true,
-    });
-    const cleaned = extractThinkingConceptionText(raw);
-    if (!cleaned || cleaned === 'mock text') return '';
-    return cleaned;
-  } catch (error: any) {
-    const msg = String(error?.message || error || '');
-    // Unit-test stubs that forbid or omit free-text calls should proceed to Stage 2 JSON formatting.
-    if (/unexpected.*text|no text|never generates free text|unhandled/i.test(msg)) {
-      return '';
+  let currentMaxTokens = options?.maxTokens;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const raw = await provider.generateText(prompt, systemInstruction, {
+        ...options,
+        maxTokens: currentMaxTokens,
+        enableThinking: true,
+      });
+      const cleaned = extractThinkingConceptionText(raw);
+      if (!cleaned || cleaned === 'mock text') return '';
+      return cleaned;
+    } catch (error: any) {
+      const msg = String(error?.message || error || '');
+      // Unit-test stubs that forbid or omit free-text calls should proceed to Stage 2 JSON formatting.
+      if (/unexpected.*text|no text|never generates free text|unhandled/i.test(msg)) {
+        return '';
+      }
+      if (/maximum context length/i.test(msg) && currentMaxTokens !== undefined && attempt < 2) {
+        currentMaxTokens = undefined;
+        continue;
+      }
+      const isTransient =
+        error?.status === 429 ||
+        (typeof error?.status === 'number' && error.status >= 500) ||
+        /52[24]|timeout|terminated|ECONNRESET|ETIMEDOUT|socket/i.test(msg);
+      if (isTransient && attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
+  return '';
 }
 
 export type ImageGenerationOptions = {

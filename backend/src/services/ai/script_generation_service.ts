@@ -459,9 +459,9 @@ export class ScriptGenerationService {
       // Scheme C Step 1: 剧本场次拆解 & 戏剧节拍构思 (enable_thinking: true, 不强制 JSON 格式)
       const outlineConception = await runStageOneThinkingConception(
         provider,
-        `${prompt}\n\n【第一步任务：剧本场次拆解与戏剧节拍构思】请先不输出 JSON，以自由文字形式深度分析本章的核心戏剧冲突、情绪转折、必须保留的可见动作/服装/姿态事件（标明对应段落编号 p_x）、场次节拍（Beat）切分逻辑以及结尾钩子，形成清晰的场次拆解文字大纲。`,
-        '你是一位专业短剧总编剧与戏剧构作师，擅长按戏剧节拍（Beat）与潜台词转折拆解剧本场次。',
-        { stream: true, temperature: 0.6, maxTokens: 4096 }
+        `${prompt}\n\n【第一步任务：剧本场次拆解与戏剧节拍构思】请先不输出 JSON，以自由文字形式简明分析本章的核心戏剧冲突、情绪转折、必须保留的可见动作/服装/姿态事件（标明对应段落编号 p_x）、场次节拍（Beat）切分逻辑以及结尾钩子，形成清晰的场次拆解文字大纲（控制在 400 字以内）。`,
+        '你是一位专业短剧总编剧与戏剧构作师，擅长按戏剧节拍（Beat）与潜台词转折拆解剧本场次。请将内部思考控制在 300 字以内，直接给出简明构思大纲。',
+        { stream: true, temperature: 0.6, maxTokens: 2048 }
       );
       // Scheme C Step 2: 提纲 JSON 格式化提取 (enable_thinking: false, 严格 JSON 结构转换)
       const formattingPrompt = outlineConception
@@ -823,9 +823,9 @@ export class ScriptGenerationService {
             // Scheme C Step 1: 剧本分场拆解 & 戏剧调度构思 (enable_thinking: true, 自由文本)
             sceneConception = await runStageOneThinkingConception(
               provider,
-              `${scenePrompt}\n\n【第一步任务：分场戏剧调度与表演节拍构思】请先不输出 JSON，以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排，确保原样保留必保事件与可见画面细节。`,
-              '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。',
-              { stream: true, temperature: 0.6, maxTokens: 4096 }
+              `${scenePrompt}\n\n【第一步任务：分场戏剧调度与表演节拍构思】请先不输出 JSON，以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排（控制在 400 字以内），确保原样保留必保事件与可见画面细节。`,
+              '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。请将内部思考控制在 300 字以内，直接给出简明构思大纲。',
+              { stream: true, temperature: 0.6, maxTokens: 2048 }
             );
           }
           // Scheme C Step 2: 分场剧本 JSON 格式化 & 资产提取 (enable_thinking: false, 严格 JSON)

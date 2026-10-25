@@ -1169,8 +1169,8 @@ export async function runFactWorkflow(input: {
             continuity: groupState,
             instructions: input.instructions,
           }),
-          '你是一位专业影视导演。请先不输出 JSON，以自由文字形式完成本组分镜的导演调度构思：理解戏剧冲突与情绪转折，确立 3D 空间机位轴线与景别过渡节奏，并为每个镜头槽位（s1, s2...）从其候选 fact_ids 中选出最具视觉张力的核心画面事实（primary_fact_id）并简述理由。',
-          { stream: true, temperature: 0.6, maxTokens: 2048 }
+          '你是一位专业影视导演。请先不输出 JSON，以自由文字形式完成本组分镜的导演调度构思（控制在 250 字以内，内部思考控制在 250 字以内）：理解戏剧冲突与情绪转折，确立 3D 空间机位轴线与景别过渡节奏，并为每个镜头槽位（s1, s2...）从其候选 fact_ids 中选出最具视觉张力的核心画面事实（primary_fact_id）并简述理由。',
+          { stream: true, temperature: 0.6, maxTokens: 1536 }
         );
       }
       const choices = Object.fromEntries(slotFacts.map((fs, i) => [`s${i + 1}`, fs.length ? z.enum(fs.map(f => f.id) as [string, ...string[]]) : z.null()]));

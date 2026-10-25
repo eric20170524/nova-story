@@ -89,7 +89,7 @@ export class OpenAIProvider implements AIProvider {
             };
 
             if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
-                request.max_tokens = this.isRemoteLab() ? Math.max(options.maxTokens, 2048) : options.maxTokens;
+                request.max_tokens = options.maxTokens;
             }
 
             this.applyThinkingConfig(request, options?.enableThinking);
@@ -111,6 +111,10 @@ export class OpenAIProvider implements AIProvider {
                 }
                 if (!content.trim() && options?.enableThinking && reasoningContent.trim()) {
                     content = reasoningContent;
+                }
+                if (options?.enableThinking && finishReason === 'length' && content.trim()) {
+                    logger.info(`[OpenAI Thinking Conception Output (length-capped)]: ${truncateLog(content)}`);
+                    return content;
                 }
                 // A closed connection or token limit must never turn a partial
                 // rewrite into a successful replacement of the original chapter.
@@ -177,7 +181,7 @@ export class OpenAIProvider implements AIProvider {
             };
 
             if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
-                request.max_tokens = this.isRemoteLab() ? Math.max(options.maxTokens, 2048) : options.maxTokens;
+                request.max_tokens = options.maxTokens;
             }
 
             this.applyThinkingConfig(request, options?.enableThinking ?? false);
