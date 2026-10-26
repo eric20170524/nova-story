@@ -872,6 +872,55 @@ test('qwen-image 2.1 compile uses its encoder and keeps the SD latent path off',
   assert.equal(remoteCompiled['11'].inputs.vae_name, 'qwen_image_2.1_vae_bf16.safetensors');
 });
 
+test('qwen-image 2.1 compile supports multi-character references and female-only negative prompt', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8'));
+  const bindings = [
+    { slot: 1, character_id: 20, name: '陆嘉静', english_name: 'Lu Jiajing', gender: 'female', image_url: '/static/generated/portrait_20.png', plate: 'face' as const },
+    { slot: 2, character_id: 22, name: '南宫雪', english_name: 'Nangong Xue', gender: 'female', image_url: '/static/generated/portrait_22.png', plate: 'face' as const },
+    { slot: 3, character_id: 21, name: '裴雨涵', english_name: 'Pei Yuhan', gender: 'female', image_url: '/static/generated/portrait_21.png', plate: 'face' as const },
+  ];
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      shot_type: 'Wide Shot',
+      prompt_composed: true,
+      character_ref_urls: bindings.map(b => b.image_url),
+      character_ref_bindings: bindings,
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'Lu Jiajing and Nangong Xue stand before the divine mirror while Pei Yuhan appears inside it.',
+    'standard',
+    { width: 1280, height: 720 },
+    {
+      advanced: { nsfw_enabled: false },
+      comfyui: { mode: 'remote' }
+    }
+  );
+
+  assert.ok(compiled['6'].inputs.image_1, 'Expected image_1 on TextEncodeQwenImage21');
+  assert.ok(compiled['6'].inputs.image_2, 'Expected image_2 on TextEncodeQwenImage21');
+  assert.ok(compiled['6'].inputs.image_3, 'Expected image_3 on TextEncodeQwenImage21');
+
+  const load1 = String(compiled['6'].inputs.image_1[0]);
+  const load2 = String(compiled['6'].inputs.image_2[0]);
+  const load3 = String(compiled['6'].inputs.image_3[0]);
+  assert.equal(compiled[load1].inputs.image, 'portrait_20.png');
+  assert.equal(compiled[load2].inputs.image, 'portrait_22.png');
+  assert.equal(compiled[load3].inputs.image, 'portrait_21.png');
+
+  assert.match(compiled['6'].inputs.prompt, /<Picture 1> \(image 1\) is the identity reference for Lu Jiajing/);
+  assert.match(compiled['6'].inputs.prompt, /<Picture 2> \(image 2\) is the identity reference for Nangong Xue/);
+  assert.match(compiled['6'].inputs.prompt, /<Picture 3> \(image 3\) is the identity reference for Pei Yuhan/);
+  assert.match(compiled['6'].inputs.prompt, /stand before the divine mirror/);
+
+  assert.match(compiled['6'].inputs.negative_prompt, /1boy, 1man, male, masculine/);
+  assert.match(compiled['6'].inputs.negative_prompt, /adam's apple/);
+  assert.equal(compiled['3'].inputs.denoise, 1);
+});
+
 test('character_ref_url drives img2img for turnaround (Tier A dual-field API)', async () => {
   const compiled = await compileComfyWorkflow(
     {

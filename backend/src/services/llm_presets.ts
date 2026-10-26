@@ -113,8 +113,8 @@ export function applyKnownRemoteLlm(settings: Record<string, any>): Record<strin
     if (!key || key === 'ollama') {
         llm.api_key = '';
         const envKey = isQwen
-            ? (process.env.QWEN38_API_KEY || process.env.LLM_API_KEY)
-            : (process.env.GEMMA4_API_KEY || process.env.LLM_API_KEY);
+            ? (process.env.QWEN38_API_KEY || process.env.QWEN_REMOTE_API_KEY || process.env.LLM_API_KEY)
+            : (process.env.GEMMA4_API_KEY || process.env.GEMMA_REMOTE_API_KEY || process.env.LLM_API_KEY);
         const fromEnv = String(envKey || '').trim();
         if (fromEnv && fromEnv !== 'ollama') {
             llm.api_key = fromEnv;

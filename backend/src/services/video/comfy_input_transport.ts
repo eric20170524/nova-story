@@ -81,68 +81,100 @@ export class ComfyInputTransport {
     comfyService?: { authenticatedFetch: (url: string, init?: RequestInit, timeoutMs?: number) => Promise<Response> };
   }): Promise<ComfyInputUploadResult> {
     const baseUrl = options.baseUrl.replace(/\/$/, '');
-    const timeoutMs = Math.max(500, options.timeoutMs ?? 15_000);
+    const timeoutMs = Math.max(500, options.timeoutMs ?? 60_000);
     const subfolder = String(options.subfolder ?? 'novastory').replace(/^\/+|\/+$/g, '');
 
-    const form = new FormData();
-    const blob = new Blob([options.buffer], {
-      type: options.mimeType || 'application/octet-stream'
-    });
-    form.append('image', blob, options.filename);
-    form.append('type', 'input');
-    form.append('overwrite', 'true');
-    if (subfolder) form.append('subfolder', subfolder);
+    let uploadBuffer = options.buffer;
+    let uploadMime = options.mimeType || 'application/octet-stream';
+    if (options.isRemote && uploadBuffer.length > 400_000) {
+      try {
+        const sharp = (await import('sharp')).default;
+        if (options.filename.toLowerCase().endsWith('.png')) {
+          uploadBuffer = await sharp(uploadBuffer).png({ compressionLevel: 9, effort: 7 }).toBuffer();
+          uploadMime = 'image/png';
+        } else if (options.filename.toLowerCase().endsWith('.jpg') || options.filename.toLowerCase().endsWith('.jpeg')) {
+          uploadBuffer = await sharp(uploadBuffer).jpeg({ quality: 95 }).toBuffer();
+          uploadMime = 'image/jpeg';
+        }
+      } catch (err) {
+        logger.warn(`Failed to optimize upload buffer with sharp: ${err}`);
+      }
+    }
 
-    let response: Response;
-    if (options.comfyService) {
-      response = await options.comfyService.authenticatedFetch('/upload/image', {
-        method: 'POST',
-        body: form
-      }, timeoutMs);
-    } else if (options.isRemote || options.auth?.username) {
-      const { ComfyUIService } = await import('../ai/comfyui_service');
-      const svc = new ComfyUIService(baseUrl, {
-        auth: options.auth,
-        isRemote: options.isRemote
-      });
-      response = await svc.authenticatedFetch('/upload/image', {
-        method: 'POST',
-        body: form
-      }, timeoutMs);
-    } else {
-      response = await withTimeout(timeoutMs, async (signal) => {
-        return fetch(`${baseUrl}/upload/image`, {
-          method: 'POST',
-          body: form,
-          signal
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        const form = new FormData();
+        const blob = new Blob([uploadBuffer], {
+          type: uploadMime
         });
-      });
-    }
+        form.append('image', blob, options.filename);
+        form.append('type', 'input');
+        form.append('overwrite', 'true');
+        if (subfolder && !options.isRemote) form.append('subfolder', subfolder);
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(
-        `ComfyUI reference upload failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ''}`
-      );
-    }
+        let response: Response;
+        if (options.comfyService) {
+          response = await options.comfyService.authenticatedFetch('/upload/image', {
+            method: 'POST',
+            body: form
+          }, timeoutMs);
+        } else if (options.isRemote || options.auth?.username) {
+          const { ComfyUIService } = await import('../ai/comfyui_service');
+          const svc = new ComfyUIService(baseUrl, {
+            auth: options.auth,
+            isRemote: options.isRemote
+          });
+          const assignedName = await svc.uploadImage(uploadBuffer, options.filename);
+          return {
+            name: assignedName,
+            subfolder: '',
+            type: 'input',
+            inputName: assignedName
+          };
+        } else {
+          response = await withTimeout(timeoutMs, async (signal) => {
+            return fetch(`${baseUrl}/upload/image`, {
+              method: 'POST',
+              body: form,
+              signal
+            });
+          });
+        }
 
-    const payload = await response.json() as Record<string, unknown>;
-    const name = String(payload.name || '').trim();
-    const returnedSubfolder = typeof payload.subfolder === 'string'
-      ? payload.subfolder.replace(/^\/+|\/+$/g, '')
-      : String(subfolder || '').replace(/^\/+|\/+$/g, '');
-    const type = String(payload.type || 'input');
-    if (!name) {
-      throw new Error('ComfyUI reference upload did not return a file name');
-    }
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '');
+          throw new Error(
+            `ComfyUI reference upload failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ''}`
+          );
+        }
 
-    const inputName = returnedSubfolder ? `${returnedSubfolder}/${name}` : name;
-    logger.info(`Uploaded NovaStory reference to ComfyUI input: ${inputName}`);
-    return {
-      name,
-      subfolder: returnedSubfolder,
-      type,
-      inputName
-    };
+        const payload = await response.json() as Record<string, unknown>;
+        const name = String(payload.name || '').trim();
+        const returnedSubfolder = typeof payload.subfolder === 'string'
+          ? payload.subfolder.replace(/^\/+|\/+$/g, '')
+          : String(subfolder || '').replace(/^\/+|\/+$/g, '');
+        const type = String(payload.type || 'input');
+        if (!name) {
+          throw new Error('ComfyUI reference upload did not return a file name');
+        }
+
+        const inputName = returnedSubfolder ? `${returnedSubfolder}/${name}` : name;
+        logger.info(`Uploaded NovaStory reference to ComfyUI input: ${inputName}`);
+        return {
+          name,
+          subfolder: returnedSubfolder,
+          type,
+          inputName
+        };
+      } catch (err: any) {
+        lastError = err;
+        logger.warn(`Reference upload attempt ${attempt}/3 failed: ${err.message}`);
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
+      }
+    }
+    throw lastError;
   }
 }

@@ -23,6 +23,8 @@ export type ImageRefRole = 'character' | 'composition' | 'legacy';
 export interface ResolvedReferenceUrls {
   /** Explicit or legacy-mapped character / identity image */
   characterRefUrl: string | null;
+  /** Explicit multi-character identity images */
+  characterRefUrls: string[];
   /** Explicit composition / pose / layout image (Tier B) */
   compositionRefUrl: string | null;
   /** Raw legacy single slot (ref_image_url | init_image_url) */
@@ -100,10 +102,22 @@ export const resolveReferenceUrls = (workflowData: any): ResolvedReferenceUrls =
     nonEmptyUrl(workflowData?.ref_image_url)
     || nonEmptyUrl(workflowData?.init_image_url);
 
+  const multiCharacterUrls = Array.isArray(workflowData?.character_ref_urls)
+    ? workflowData.character_ref_urls.map(nonEmptyUrl).filter((u: unknown): u is string => Boolean(u))
+    : [];
+
   const characterRefUrl =
     nonEmptyUrl(workflowData?.character_ref_url)
     || nonEmptyUrl(workflowData?.character_reference_url)
+    || multiCharacterUrls[0]
     || legacyRefUrl;
+
+  const characterRefUrls = Array.from(
+    new Set([
+      ...(characterRefUrl ? [characterRefUrl] : []),
+      ...multiCharacterUrls,
+    ])
+  );
 
   const compositionRefUrl =
     nonEmptyUrl(workflowData?.composition_ref_url)
@@ -112,10 +126,10 @@ export const resolveReferenceUrls = (workflowData: any): ResolvedReferenceUrls =
     || null;
 
   const urlsToCopy = Array.from(
-    new Set([characterRefUrl, compositionRefUrl].filter(Boolean) as string[])
+    new Set([...characterRefUrls, compositionRefUrl].filter(Boolean) as string[])
   );
 
-  return { characterRefUrl, compositionRefUrl, legacyRefUrl, urlsToCopy };
+  return { characterRefUrl, characterRefUrls, compositionRefUrl, legacyRefUrl, urlsToCopy };
 };
 
 const readRecord = (value: unknown): Record<string, any> | null => {

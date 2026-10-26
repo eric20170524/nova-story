@@ -362,9 +362,12 @@ function desiredLlm(settings) {
     };
   }
   if (llmMode === 'remote') {
-    const isRemoteQwen = rawLlmMode === 'qwen' ||
+    const explicitGemma = rawLlmMode === 'gemma4' || rawLlmMode === 'gemma';
+    const explicitQwen = rawLlmMode === 'qwen' || rawLlmMode === 'qwen38' || rawLlmMode === 'qwen3.8' || rawLlmMode === 'qwen3.8-27b';
+    const isRemoteQwen = explicitQwen || (!explicitGemma && (
       String(current.model || '').toLowerCase() === QWEN38_REMOTE_MODEL.toLowerCase() ||
-      String(current.base_url || '').includes('/qwen38');
+      String(current.base_url || '').includes('/qwen38')
+    ));
     if (isRemoteQwen) {
       return { provider: 'openai', model: QWEN38_REMOTE_MODEL, base_url: QWEN38_REMOTE_BASE_URL };
     }
@@ -1122,10 +1125,10 @@ async function requireChapterReview(chapter) {
   }
   assertReview(state.reviews?.chapters?.[chapter.id], snapshot, `Chapter ${chapter.index} chapter_ready`);
 }
-async function assertPriorChaptersReady(chapter, scope = null) {
+async function assertPriorChaptersReady(chapter, scope = null, requireChapter = true) {
   for (const prior of (scope || await chapters()).filter(item => item.index < chapter.index)) {
     await requireImageReview(prior);
-    await requireChapterReview(prior);
+    if (requireChapter) await requireChapterReview(prior);
   }
 }
 async function runChapterProductionStage(handler, selected = null) {
@@ -1133,7 +1136,8 @@ async function runChapterProductionStage(handler, selected = null) {
   for (const chapter of selected || scope) {
     // Still-only runs can move on when the operator asked for a later chapter's images.
     // Full production and video still wait until earlier chapters are accepted.
-    if (stage !== 'assets' && handler !== assets && stage !== 'images' && handler !== images) await assertPriorChaptersReady(chapter, scope);
+    const isStillStage = stage === 'assets' || handler === assets || stage === 'images' || handler === images;
+    await assertPriorChaptersReady(chapter, scope, !isStillStage);
     await requireContinuityReview();
     activeProductionChapterId = chapter.id;
     try { await handler([chapter]); }

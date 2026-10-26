@@ -148,7 +148,7 @@ export class SettingsManager {
             const localProviders = settings.llm.provider === 'ollama' || settings.llm.provider === 'local_llm';
             settings.llm.api_key = localProviders ? 'ollama' : llmApiKeyEnv;
         }
-        if (settings.llm?.provider === 'gemini' && process.env.GEMINI_API_KEY) {
+        if (settings.llm?.provider === 'gemini' && !settings.llm.api_key && process.env.GEMINI_API_KEY) {
             settings.llm.api_key = process.env.GEMINI_API_KEY;
         }
 

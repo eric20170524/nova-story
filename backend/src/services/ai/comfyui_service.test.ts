@@ -324,3 +324,46 @@ test('ComfyUIService uploadWorkflowReferences leaves local workflow intact', asy
     const res = await service.uploadWorkflowReferences(workflow, '/tmp');
     assert.equal(res['1'].inputs.image, 'test.png');
 });
+
+test('ComfyUIService uploadWorkflowReferences maps multi-image slots to images.image_N for TextEncodeQwenImage21', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'comfy-upload-multi-'));
+    fs.writeFileSync(path.join(root, 'ref1.png'), 'bytes1');
+    fs.writeFileSync(path.join(root, 'ref2.png'), 'bytes2');
+    fs.writeFileSync(path.join(root, 'ref3.png'), 'bytes3');
+
+    const service = ComfyUIService.fromSettings({
+        mode: 'remote',
+        remote_base_url: 'https://comfy.example.com',
+        remote_username: '',
+        remote_password: ''
+    });
+    service.uploadImage = async (_buffer: Buffer, filename: string) => `remote_${filename}`;
+
+    const workflow = {
+        '1': { class_type: 'LoadImage', inputs: { image: 'ref1.png' } },
+        '2': { class_type: 'LoadImage', inputs: { image: 'ref2.png' } },
+        '3': { class_type: 'LoadImage', inputs: { image: 'ref3.png' } },
+        '4': {
+            class_type: 'TextEncodeQwenImage21',
+            inputs: {
+                prompt: 'test prompt',
+                image_1: ['1', 0],
+                image_2: ['2', 0],
+                image_3: ['3', 0],
+            }
+        }
+    };
+
+    const res = await service.uploadWorkflowReferences(workflow, root);
+    assert.equal(res['1'].inputs.image, 'remote_ref1.png');
+    assert.equal(res['2'].inputs.image, 'remote_ref2.png');
+    assert.equal(res['3'].inputs.image, 'remote_ref3.png');
+    assert.deepEqual(res['4'].inputs['images.image_1'], ['1', 0]);
+    assert.deepEqual(res['4'].inputs['images.image_2'], ['2', 0]);
+    assert.deepEqual(res['4'].inputs['images.image_3'], ['3', 0]);
+    assert.equal(res['4'].inputs.image_1, undefined);
+    assert.equal(res['4'].inputs.image_2, undefined);
+    assert.equal(res['4'].inputs.image_3, undefined);
+
+    fs.rmSync(root, { recursive: true, force: true });
+});

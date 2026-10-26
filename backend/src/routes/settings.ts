@@ -178,7 +178,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/verify-llm', async (request, reply) => {
-    const config = request.body as any;
+    const config = (request.body || {}) as any;
     const stored = SettingsManager.loadSettings();
     const bodyLlm = (config.llm || config || {}) as LLMProviderConfig;
     const llmConfig: LLMProviderConfig = mergeVerifyLlmConfig(stored.llm, bodyLlm);

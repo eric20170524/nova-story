@@ -97,7 +97,7 @@ export class GpuLeaseService {
     kind: 'image' | 'video' | 'text' = 'video',
     timeoutMs?: number
   ): Promise<GpuLease> {
-    const defaultTimeout = kind === 'video' ? 25 * 60 * 1000 : 5 * 60 * 1000;
+    const defaultTimeout = 30 * 60 * 1000;
     const effectiveTimeout = timeoutMs || defaultTimeout;
 
     if (this.currentLease?.owner_task_id === taskId) {

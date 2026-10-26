@@ -33,15 +33,18 @@ export function extractThinkingConceptionText(raw: string): string {
   const withoutCompleteThink = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   const withoutUnclosedThink = withoutCompleteThink.replace(/<think>[\s\S]*$/i, '').trim();
   if (withoutUnclosedThink) return withoutUnclosedThink;
-  const thinkMatch = text.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
-  return thinkMatch?.[1]?.trim() || '';
+  // Only fall back to inner <think> text if the <think> tag was properly closed.
+  // An unclosed <think> with no outer text means generation was truncated mid-thought.
+  const closedThinkMatch = text.match(/<think>([\s\S]*?)<\/think>/i);
+  return closedThinkMatch?.[1]?.trim() || '';
 }
 
 /**
  * Scheme C Stage-1 helper: Run free-text thinking/conception (`enable_thinking: true`,
  * no JSON schema forced) before Stage-2 strict JSON formatting (`enable_thinking: false`).
  * Gracefully degrades to empty string when called against unit-test mock providers
- * that do not implement `generateText` or stub it out to throw.
+ * that do not implement `generateText` or when Stage-1 fails, so Stage-2 owns
+ * deterministic error and budget accounting.
  */
 export async function runStageOneThinkingConception(
   provider: AIProvider,
@@ -52,6 +55,7 @@ export async function runStageOneThinkingConception(
   if (!provider || typeof provider.generateText !== 'function') return '';
   let currentMaxTokens = options?.maxTokens;
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (options?.signal?.aborted) throw options.signal.reason;
     try {
       const raw = await provider.generateText(prompt, systemInstruction, {
         ...options,
@@ -62,9 +66,10 @@ export async function runStageOneThinkingConception(
       if (!cleaned || cleaned === 'mock text') return '';
       return cleaned;
     } catch (error: any) {
+      if (options?.signal?.aborted) throw options.signal.reason;
       const msg = String(error?.message || error || '');
-      // Unit-test stubs that forbid or omit free-text calls should proceed to Stage 2 JSON formatting.
-      if (/unexpected.*text|no text|never generates free text|unhandled/i.test(msg)) {
+      // Unit-test stubs that forbid or omit free-text calls should proceed immediately to Stage 2 JSON formatting.
+      if (/unexpected|no text|never generates free text|unhandled|not implemented/i.test(msg)) {
         return '';
       }
       if (/maximum context length/i.test(msg) && currentMaxTokens !== undefined && attempt < 2) {
@@ -79,7 +84,7 @@ export async function runStageOneThinkingConception(
         await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
         continue;
       }
-      throw error;
+      return '';
     }
   }
   return '';

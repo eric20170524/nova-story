@@ -483,7 +483,11 @@ export class VideoGenerationService {
         const image = JSON.parse(project?.settings || '{}').image_generation;
         style = image ? { style: image.style, model: image.model, nsfw_mode: image.nsfw_mode } : null;
       } catch { /* Default style. */ }
-      compiledSpec = await VideoSpecCompiler.compile({ request, scene: sourceScene, character, style });
+      try {
+        compiledSpec = await VideoSpecCompiler.compile({ request, scene: sourceScene, character, style });
+      } catch (err: any) {
+        blockers.push(`Spec compilation failed: ${err?.message || err}`);
+      }
     }
 
     if (request.workflow_id === 'grok_imagine_browser') {

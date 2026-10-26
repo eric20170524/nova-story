@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import type { AIProvider, ImageGenerationOptions, StructuredGenOptions, TextGenOptions } from './base';
+import { extractThinkingConceptionText, type AIProvider, type ImageGenerationOptions, type StructuredGenOptions, type TextGenOptions } from './base';
 import { logger } from '../../core/logging';
 import { inheritCharacterTraitConfidence } from '../../schemas/llm';
 
@@ -29,10 +29,10 @@ export class OpenAIProvider implements AIProvider {
             timeout: options.timeoutMs ?? (options.isOllama ? 600_000 : 60_000),
             maxRetries: options.isOllama ? 0 : 2,
         });
-        this.model = /qwen3\.?8/i.test(model) ? 'qwen3.8-27b' : model;
-        this.baseUrl = baseUrl || '';
-        this.imageModel = 'dall-e-3';
         this.isOllama = options.isOllama === true;
+        this.baseUrl = baseUrl || '';
+        this.model = !this.isOllama && /^qwen3\.?8-27b$/i.test(model.trim()) ? 'qwen3.8-27b' : model;
+        this.imageModel = 'dall-e-3';
     }
 
     /** Public Gemma is served through EdgeOne, which answers 524 if a completion stays silent. */
@@ -109,10 +109,10 @@ export class OpenAIProvider implements AIProvider {
                     reasoningContent += (choice?.delta as any)?.reasoning_content || (choice?.delta as any)?.reasoning || '';
                     if (choice?.finish_reason) finishReason = choice.finish_reason;
                 }
-                if (!content.trim() && options?.enableThinking && reasoningContent.trim()) {
+                if (!content.trim() && options?.enableThinking && finishReason === 'stop' && reasoningContent.trim()) {
                     content = reasoningContent;
                 }
-                if (options?.enableThinking && finishReason === 'length' && content.trim()) {
+                if (options?.enableThinking && finishReason === 'length' && extractThinkingConceptionText(content)) {
                     logger.info(`[OpenAI Thinking Conception Output (length-capped)]: ${truncateLog(content)}`);
                     return content;
                 }
@@ -125,14 +125,17 @@ export class OpenAIProvider implements AIProvider {
                 return content;
             }
             const response = await this.openai.chat.completions.create(request, requestOptions);
-
-            if (response.choices[0]?.finish_reason !== 'stop') {
-                throw new Error(`Text generation incomplete: finish_reason=${response.choices[0]?.finish_reason || 'missing'}`);
-            }
-
+            const nonStreamFinishReason = response.choices[0]?.finish_reason;
             let content = response.choices[0]?.message?.content || '';
-            if (!content.trim() && options?.enableThinking) {
+            if (!content.trim() && options?.enableThinking && nonStreamFinishReason === 'stop') {
                 content = (response.choices[0]?.message as any)?.reasoning_content || (response.choices[0]?.message as any)?.reasoning || '';
+            }
+            if (options?.enableThinking && nonStreamFinishReason === 'length' && extractThinkingConceptionText(content)) {
+                logger.info(`[OpenAI Thinking Conception Output (length-capped)]: ${truncateLog(content)}`);
+                return content;
+            }
+            if (nonStreamFinishReason !== 'stop' || !content.trim()) {
+                throw new Error(`Text generation incomplete: finish_reason=${nonStreamFinishReason || 'missing'}`);
             }
             logger.info(`[OpenAI Text Output]: ${truncateLog(content)}`);
 
@@ -160,7 +163,12 @@ export class OpenAIProvider implements AIProvider {
             }
             messages.push({ role: 'user', content: prompt });
 
-            const schemaRef = z.toJSONSchema(responseSchema) as any;
+            let schemaRef: any = null;
+            try {
+                schemaRef = z.toJSONSchema(responseSchema) as any;
+            } catch {
+                schemaRef = null;
+            }
             const temperature =
                 typeof options?.temperature === 'number' ? options.temperature : 0.1;
 
@@ -168,7 +176,7 @@ export class OpenAIProvider implements AIProvider {
                 model: this.model,
                 messages,
                 temperature,
-                response_format: this.isOllama
+                response_format: (this.isOllama && schemaRef)
                     ? {
                         type: 'json_schema',
                         json_schema: {

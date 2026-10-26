@@ -221,4 +221,24 @@ test('isRemotePresetLlm identifies both Gemma and Qwen presets', () => {
     assert.equal(isRemotePresetLlm({ model: 'gemma-4-31b' }), true);
     assert.equal(isRemotePresetLlm({ model: 'Qwen3.8-27B' }), true);
     assert.equal(isRemotePresetLlm({ model: 'novastory-qwen3.5:9b' }), false);
+
+    const prevQwen = process.env.QWEN38_API_KEY;
+    const prevQwenRemote = process.env.QWEN_REMOTE_API_KEY;
+    const prevLlm = process.env.LLM_API_KEY;
+    try {
+        delete process.env.QWEN38_API_KEY;
+        delete process.env.QWEN_REMOTE_API_KEY;
+        process.env.LLM_API_KEY = 'ollama';
+        assert.equal(resolveLlmApiKey({ provider: 'openai', model: QWEN38_REMOTE_MODEL, base_url: QWEN38_REMOTE_BASE_URL, api_key: '' }, 'openai'), '');
+        assert.equal(resolveLlmApiKey({ provider: 'openai', model: QWEN38_REMOTE_MODEL, base_url: QWEN38_REMOTE_BASE_URL, api_key: 'ollama' }, 'openai'), '');
+        process.env.QWEN38_API_KEY = 'qwen-env-key';
+        assert.equal(resolveLlmApiKey({ provider: 'openai', model: QWEN38_REMOTE_MODEL, base_url: QWEN38_REMOTE_BASE_URL, api_key: '' }, 'openai'), 'qwen-env-key');
+    } finally {
+        if (prevQwen === undefined) delete process.env.QWEN38_API_KEY;
+        else process.env.QWEN38_API_KEY = prevQwen;
+        if (prevQwenRemote === undefined) delete process.env.QWEN_REMOTE_API_KEY;
+        else process.env.QWEN_REMOTE_API_KEY = prevQwenRemote;
+        if (prevLlm === undefined) delete process.env.LLM_API_KEY;
+        else process.env.LLM_API_KEY = prevLlm;
+    }
 });

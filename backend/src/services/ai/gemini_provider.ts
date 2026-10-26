@@ -1,16 +1,9 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { z } from 'zod';
-import { setGlobalDispatcher, ProxyAgent } from 'undici';
-import { AIProvider, ImageGenerationOptions } from './base';
+import { setGlobalDispatcher, EnvHttpProxyAgent } from 'undici';
+import { AIProvider, ImageGenerationOptions, StructuredGenOptions, TextGenOptions } from './base';
 import { logger } from '../../core/logging';
 import { SettingsManager } from '../../core/settings_manager';
-
-try {
-    const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://127.0.0.1:7890';
-    if (proxyUrl) {
-        setGlobalDispatcher(new ProxyAgent(proxyUrl));
-    }
-} catch (e) {}
 
 const DEFAULT_SAFETY_SETTINGS = [
     { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -32,6 +25,16 @@ export class GeminiProvider implements AIProvider {
     private apiKey: string;
 
     constructor(apiKey: string, model: string = 'gemini-3-flash-preview') {
+        const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+        if (proxyUrl) {
+            try {
+                setGlobalDispatcher(new EnvHttpProxyAgent({
+                    httpProxy: process.env.HTTP_PROXY || proxyUrl,
+                    httpsProxy: process.env.HTTPS_PROXY || proxyUrl,
+                    noProxy: process.env.NO_PROXY || '127.0.0.1,localhost,::1',
+                }));
+            } catch {}
+        }
         this.apiKey = apiKey;
         this.ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 60000, headers: { 'User-Agent': 'aistudio-build' } } });
         this.model = model;
@@ -41,15 +44,15 @@ export class GeminiProvider implements AIProvider {
         action: (modelName: string) => Promise<any>
     ): Promise<any> {
         const candidateModels = [
+            this.model,
             'gemini-3-flash-preview',
             'gemini-3.5-flash-lite',
             'gemini-3.1-flash-lite',
             'gemini-3.5-flash',
-            this.model,
             'gemini-3.8-flash',
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite'
-        ];
+        ].filter(Boolean);
         const uniqueModels = Array.from(new Set(candidateModels));
         let lastError: any = null;
 
@@ -62,9 +65,13 @@ export class GeminiProvider implements AIProvider {
                     const errMsg = String(error?.message || error);
                     logger.warn(`Gemini model ${model} failed (${errMsg.slice(0, 100)}), trying next candidate...`);
                     if (
+                        error?.status === 404 ||
                         error?.status === 429 ||
                         error?.status === 503 ||
                         error?.status === 504 ||
+                        errMsg.includes('404') ||
+                        errMsg.includes('NOT_FOUND') ||
+                        errMsg.includes('not found') ||
                         errMsg.includes('429') ||
                         errMsg.includes('503') ||
                         errMsg.includes('504') ||
@@ -87,12 +94,21 @@ export class GeminiProvider implements AIProvider {
         throw lastError;
     }
 
-    async generateText(prompt: string, systemInstruction?: string): Promise<string> {
+    async generateText(prompt: string, systemInstruction?: string, options?: TextGenOptions): Promise<string> {
         const config: any = {
             safetySettings: DEFAULT_SAFETY_SETTINGS,
         };
         if (systemInstruction) {
             config.systemInstruction = systemInstruction;
+        }
+        if (typeof options?.temperature === 'number') {
+            config.temperature = options.temperature;
+        }
+        if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
+            config.maxOutputTokens = options.maxTokens;
+        }
+        if (options?.signal) {
+            config.abortSignal = options.signal;
         }
 
         logger.info(`[Gemini Prompt Input]: ${truncateLog(prompt)}`);
@@ -117,7 +133,7 @@ export class GeminiProvider implements AIProvider {
         prompt: string,
         responseSchema: z.ZodSchema<T>,
         systemInstruction?: string,
-        options?: { temperature?: number; maxTokens?: number; systemInstruction?: string }
+        options?: StructuredGenOptions
     ): Promise<T> {
         const schemaRef = z.toJSONSchema(responseSchema) as any;
         const sys = options?.systemInstruction ?? systemInstruction;
@@ -133,6 +149,9 @@ export class GeminiProvider implements AIProvider {
         }
         if (typeof options?.maxTokens === 'number' && options.maxTokens > 0) {
             config.maxOutputTokens = Math.max(options.maxTokens, 4096);
+        }
+        if (options?.signal) {
+            config.abortSignal = options.signal;
         }
 
         if (sys) {

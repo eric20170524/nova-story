@@ -114,17 +114,18 @@ function coerceBindingRow(row: Record<string, any>, roster: EntityRef[]): Record
     status = status ?? resolved.status;
     visibility = visibility ?? resolved.visibility;
   }
-  if (Array.isArray(entityId) && entityId.length > 0) {
-    const valid = entityId.find((id: any) => typeof id === 'string' && roster.some(e => e.id === id || e.name === id));
-    if (valid) {
-      entityId = valid;
-      status = 'resolved';
-      if (visibility === 'uncertain' || !visibility) visibility = 'visible';
+  if (Array.isArray(entityId)) {
+    const valid = entityId.filter((id: any) => typeof id === 'string' && roster.some(e => e.id === id || e.name === id));
+    if (valid.length === 1) {
+      entityId = valid[0];
+    } else {
+      entityId = null;
+      status = valid.length > 1 ? 'ambiguous' : (status === 'ambiguous' ? 'ambiguous' : 'unknown');
     }
   }
-  if (entityId === 'ambiguous' && status === 'resolved') {
-    entityId = roster[0]?.id || null;
-    if (visibility === 'uncertain' || !visibility) visibility = 'visible';
+  if (entityId === 'ambiguous' || entityId === 'unknown') {
+    status = entityId;
+    entityId = null;
   }
   if (typeof entityId === 'string' && !roster.some(entity => entity.id === entityId)) {
     const named = roster.filter(entity => entity.name === entityId);
@@ -208,19 +209,15 @@ export async function resolveScriptBindings(provider: AIProvider, binding: Entit
   const schema = z.object({ bindings: z.array(z.object({ index: z.number().int(), entity_id: z.enum(roster.map(e => e.id) as [string, ...string[]]).nullable(), status: z.enum(['resolved', 'ambiguous', 'unknown']), visibility: z.enum(['visible', 'mentioned', 'uncertain']) })) });
   const loose = z.object({ bindings: z.array(z.record(z.string(), z.any())) });
   const raw = await provider.generateStructured(JSON.stringify(input), loose,
-    '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。两人或复数若在现场，填写其中主要行动者（或最先提及者）的 entity_id 并标记 status=resolved，无法判断时才保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。只返回 JSON，顶层键名必须是 bindings。', { temperature: 0.1, maxTokens: 1024 });
+    '只解析 text 中给出的 mentions，context 是补充依据，不能覆盖 text 已明确的动作主语。优先判断当前句语法：同句明确主语连续动作里的他/她沿用该人物；local_subject_id 是当前句已明确主语，resolved 时必须使用该 ID。自己按动作主体判断，前者/后者按先后判断。每个 index 返回一项。明确唯一时 status=resolved 并填写 entity_id；有歧义或无依据时 entity_id=null，不能猜测。复数或两人无法用单个人物表达时保留 ambiguous。跨句指代才参考前文和现场人员，先核对谁离场、谁留场，不按最近人名或姓名猜性别。visibility=visible 表示本人现场出现，mentioned 表示照片、提及或画外，无法判断填 uncertain。明确解析将自动用于剧本，用户可编辑修正。只返回 JSON，顶层键名必须是 bindings。', { temperature: 0.1, maxTokens: 1024 });
   const result = schema.parse({ bindings: raw.bindings.map(row => coerceBindingRow(row, roster)) });
   const admitted = admitBindingRows(result.bindings, pending.map(m => m.index));
   const resolved: EntityBinding = { ...binding, context_hash: textHash(context), mentions: binding.mentions.map((mention, index) => {
     const row = admitted.rows.find(b => b.index === index);
     if (!row) return mention;
     const localSubject = localSubjectForReference(text, mention, roster);
-    if (row.status === 'resolved' && !row.entity_id) {
-      const fallbackEntity = localSubject || roster.find(r => text.includes(r.name) || context.includes(r.name)) || roster[0];
-      if (fallbackEntity) {
-        row.entity_id = fallbackEntity.id;
-        if (row.visibility === 'uncertain') row.visibility = 'visible';
-      }
+    if (row.status === 'resolved' && !row.entity_id && localSubject) {
+      row.entity_id = localSubject.id;
     }
     if (!admitted.repaired && row.status === 'resolved' && localSubject && localSubject.id !== row.entity_id) return { ...mention, entity: null, candidates: roster, status: 'ambiguous', visibility: 'uncertain', authority: 'model_proposal', confirmed: false };
     const entity = row.status === 'resolved' ? roster.find(e => e.id === row.entity_id) || null : null;
@@ -277,7 +274,7 @@ export function transferTranslationProblem(source: string, english: string, glos
 export function englishReferenceProblem(english: string, glossary: Record<string, string>): string | null {
   let remaining = english;
   for (const name of Object.values(glossary).sort((a, b) => b.length - a.length)) remaining = remaining.replace(new RegExp(`\\b${quote(name)}\\b`, 'gi'), 'BOUND_ENTITY');
-  remaining = remaining.replace(/\bHe[\s-]+(?:Huan|Qi|Tu|Luo|Shou|Bao|Feng|Zun|Xian)\b/gi, 'PINYIN_PHRASE');
+  remaining = remaining.replace(/\bHe[\s-]+(?:Huan|Qi|Tu|Luo|Shou|Bao|Feng|Zun|Xian)\b/g, 'PINYIN_PHRASE');
   return /\b(?:he|him|his|she|her|hers|they|them|their|theirs)\b/iu.test(remaining) ? '英文人物代词未显式绑定，请保留整句重译为确定姓名' : null;
 }
 

@@ -506,43 +506,20 @@ export function simpleActionOrMarkerSettled(text: string, english: string): bool
   if (/^(?:忽然|突然|陡然间?)$/.test(clean) && /\b(?:suddenly|all of a sudden|abruptly)\b/i.test(eng)) return true;
   if (/^渐渐地?$/.test(clean) && /\b(?:gradually|slowly)\b/i.test(eng)) return true;
   if (/^片刻[后之]?$/.test(clean) && /\b(?:after a moment|a moment later|for a moment)\b/i.test(eng)) return true;
+  if (/^所过之处$/.test(clean) && /\bwhere\b.*\b(?:pass(?:es|ed|ing)?|touch(?:es|ed|ing)?|go(?:es)?|went)\b/i.test(eng)) return true;
 
-  // Head / facial gestures (with or without subject / adverb)
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:缓缓地|轻微地|微微地|慢慢地|默默地|悄悄地)?\s*(?:轻微|微微)?\s*点了点头?$/u.test(clean) && /\bnod(?:s|ed|ing)?\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:缓缓地|轻微地|微微地|慢慢地|默默地|悄悄地)?\s*(?:轻微|微微)?\s*摇了?摇头?$/u.test(clean) && (/\bsh(?:ook|ake|aking|akes)\s+(?:(?:her|his|their|the)\s+)?head\b/i.test(eng) || /\bhead\s*shake\b/i.test(eng))) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:微微)?(?:笑了笑|微笑|轻笑(?:一声)?|勾起唇角)$/u.test(clean) && /\b(?:smil(?:e|ed|es|ing)|chuckl(?:e|ed|es|ing)|laugh(?:ed|ing|s)?)\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:轻叹(?:一声)?|叹了?口气|叹息)$/u.test(clean) && /\bsigh(?:ed|s|ing)?\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:沉默(?:了片刻)?|沉默不语)$/u.test(clean) && /\b(?:silen(?:t|ce)|quiet)\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:闭上?(?:双眼|眼睛)|闭目|闭着眼)$/u.test(clean) && /\bclos(?:e|ed|ing|es)\s+(?:(?:her|his|their|the)\s+)?eyes?\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:睁开?(?:双眼|眼睛)|睁目|睁眼)$/u.test(clean) && /\bopen(?:ed?|ing|es)\s+(?:(?:her|his|their|the)\s+)?eyes?\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:低头|低着头|垂首|垂眸|垂下眼(?:眸|睑))$/u.test(clean) && /\b(?:lowered?|lowering|looking\s+down|gaze\s+down|head\s+down|downcast|head\s+lowered)\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:抬头|抬起头|仰头|微微仰头)$/u.test(clean) && /\b(?:raised?|raising|tilt(?:ed|ing)?\s+up|looking\s+up|head\s+up|tilts?\s+(?:the\s+)?head)\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:转身|转过身)$/u.test(clean) && /\bturn(?:ed?|ing|s)\s*(?:around|back|away)?\b/i.test(eng)) return true;
-  if (/^(?:[\p{Script=Han}]{1,4}\s*)?(?:轻颤|微颤|颤抖(?:着)?)$/u.test(clean) && /\b(?:trembl(?:e|ed|ing|es)|shak(?:e|ing|es|en)|quiver(?:ed|ing|s)?)\b/i.test(eng)) return true;
-
-  // Intimate / contact postures (pressing together, embracing, leaning, entwining)
-  if (/(?:紧密)?相贴|贴在一起|相拥(?:而卧)?|相抚|依偎|纠缠在一起|肢体交错|皮肤相贴|相依/.test(clean) && /\b(?:pressed|touch(?:ing)?|together|close|embrac(?:e|ing|ed)|clinging|lean(?:ing|ed)?|entwin(?:ed?|ing)|intertwin(?:ed?|ing)|tangl(?:ed?|ing)|lying|nestl(?:e|ed|ing|es)?|snuggl(?:e|ed|ing|es)?)\b/i.test(eng)) return true;
-
-  // Environmental / sensory atmosphere clauses (incense, smoke, fragrance)
-  if (/合欢香|香炉|香气|药香|烟缕|紫金纱帘/.test(clean)) {
-    if (/合欢香/.test(clean) && /\b(?:incense|huanhe)\b/i.test(eng) && /\b(?:air|spread|fill)\b/i.test(eng)) return true;
-    if (/药香/.test(clean) && /\b(?:fragrance|scent|aroma|medicinal)\b/i.test(eng)) return true;
-    if (/烟缕/.test(clean) && /\b(?:smoke|wisp)\b/i.test(eng)) return true;
-    if (/香炉/.test(clean) && /\b(?:burner|censer)\b/i.test(eng)) return true;
-    if (/紫金纱帘/.test(clean) && /\b(?:curtain|gauze|drape)\b/i.test(eng)) return true;
-  }
-
-  // Immortal power / light / radiance / interwoven energy & sensory atmosphere
-  if (/仙力|仙气|灵力|神光|微光|光芒|交织|流转|光触|光晕|波澜|春潮|红白衣衫|衣衫/.test(clean)) {
-    if (/交织/.test(clean) && /\b(?:interwov(?:en)?|intertwin(?:ed?|ing)|mingl(?:ed?|ing)|combin(?:ed?|ing)|together|blend(?:ed?|ing))\b/i.test(eng)) return true;
-    if (/仙力|灵力|仙气/.test(clean) && /\b(?:immortal|power|energy|qi|flow(?:ing)?)\b/i.test(eng)) return true;
-    if (/微光|神光|光芒|光晕/.test(clean) && /\b(?:glow|light|shimmer|radiance|halo)\b/i.test(eng)) return true;
-    if (/春潮|波澜/.test(clean) && /\b(?:tide|spring|wave)\b/i.test(eng)) return true;
-    if (/衣衫/.test(clean) && /\b(?:garment|cloth(?:es|ing)|robe|mass|tangle)\b/i.test(eng)) return true;
-  }
-
-  // Vocal / respiratory clauses (breath, gasp, sigh, chuckle, murmur)
-  if (/喘息|轻吟|轻笑|低喘|呻吟|呼吸|低语|低唤/.test(clean) && /\b(?:pant(?:ing|ed|s)?|gasp(?:ing|ed|s)?|sigh(?:ing|ed|s)?|breath(?:e|ing|es|ed)?|chuckle(?:ing|ed|s)?|moan(?:ing|ed|s)?|whisper(?:ing|ed|s)?|murmur(?:ing|ed|s)?|call(?:ing|ed|s)?)\b/i.test(eng)) return true;
+  // Subjectless short single-predicate gestures
+  if (/^(?:缓缓地|轻微地|微微地|慢慢地|默默地|悄悄地)?\s*(?:轻微|微微)?\s*点了点头?$/u.test(clean) && /\bnod(?:s|ed|ing)?\b/i.test(eng)) return true;
+  if (/^(?:缓缓地|轻微地|微微地|慢慢地|默默地|悄悄地)?\s*(?:轻微|微微)?\s*摇了?摇头?$/u.test(clean) && (/\bsh(?:ook|ake|aking|akes)\s+(?:the\s+)?head\b/i.test(eng) || /\bhead\s*shake\b/i.test(eng))) return true;
+  if (/^(?:微微)?(?:笑了笑|微笑|轻笑(?:一声)?|勾起唇角)$/u.test(clean) && /\b(?:smil(?:e|ed|es|ing)|chuckl(?:e|ed|es|ing)|laugh(?:ed|ing|s)?)\b/i.test(eng)) return true;
+  if (/^(?:轻叹(?:一声)?|叹了?口气|叹息)$/u.test(clean) && /\bsigh(?:ed|s|ing)?\b/i.test(eng)) return true;
+  if (/^(?:沉默(?:了片刻)?|沉默不语)$/u.test(clean) && /\b(?:silen(?:t|ce)|quiet)\b/i.test(eng)) return true;
+  if (/^(?:闭上?(?:双眼|眼睛)|闭目|闭着眼)$/u.test(clean) && /\bclos(?:e|ed|ing|es)\s+(?:the\s+)?eyes?\b/i.test(eng)) return true;
+  if (/^(?:睁开?(?:双眼|眼睛)|睁目|睁眼)$/u.test(clean) && /\bopen(?:ed?|ing|es)\s+(?:the\s+)?eyes?\b/i.test(eng)) return true;
+  if (/^(?:低头|低着头|垂首|垂眸|垂下眼(?:眸|睑))$/u.test(clean) && /\b(?:lowered?|lowering|looking\s+down|gaze\s+down|head\s+down|downcast|head\s+lowered)\b/i.test(eng)) return true;
+  if (/^(?:抬头|抬起头|仰头|微微仰头)$/u.test(clean) && /\b(?:raised?|raising|tilt(?:ed|ing)?\s+up|looking\s+up|head\s+up|tilts?\s+(?:the\s+)?head)\b/i.test(eng)) return true;
+  if (/^(?:转身|转过身)$/u.test(clean) && /\bturn(?:ed?|ing|s)\s*(?:around|back|away)?\b/i.test(eng)) return true;
+  if (/^(?:轻颤|微颤|颤抖(?:着)?)$/u.test(clean) && /\b(?:trembl(?:e|ed|ing|es)|shak(?:e|ing|es|en)|quiver(?:ed|ing|s)?)\b/i.test(eng)) return true;
 
   return false;
 }
@@ -571,38 +548,6 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     }
     if (directionPlaceSettled(fact.text, english)) return;
     if (simpleActionOrMarkerSettled(fact.text, english)) return;
-    if (fact.id.startsWith('state_')) {
-      if (/手持[：:]\s*(?:(?:琼明)?神镜|一缕粉色的仙气)/.test(fact.text) && /\b(?:holds?|holding|held|grasping|carrying|wisp|qi|mirror)\b/i.test(english)) {
-        return;
-      }
-      if (/身体[：:]\s*赤足/.test(fact.text) && /\bbarefoot\b/i.test(english)) {
-        return;
-      }
-      if (/身体[：:]\s*(?:.*颤抖|.*微颤)/.test(fact.text) && /\b(?:trembl(?:e|ed|ing|es)|shak(?:e|ing|es)|quiver)\b/i.test(english)) {
-        return;
-      }
-      if (/身体[：:]\s*.*紧绷/.test(fact.text) && /\b(?:tense|tight|taut)\b/i.test(english)) {
-        return;
-      }
-      if (/姿势[：:]\s*(?:低着头|低头|低首)/.test(fact.text) && /\b(?:lowered?|head lowered|looking down)\b/i.test(english)) {
-        return;
-      }
-      if (/姿势[：:]\s*(?:微微仰头|仰头|抬头)/.test(fact.text) && /\b(?:tilt(?:s|ed|ing)?\s+(?:the\s+)?head|head\s+up|raised?)\b/i.test(english)) {
-        return;
-      }
-      if (/姿势[：:]\s*(?:坐|静坐|围坐)/.test(fact.text) && /\b(?:sit|sitting|sat|seated)\b/i.test(english)) {
-        return;
-      }
-      if (/姿势[：:]\s*(?:仰卧|卧|躺|相拥而卧)/.test(fact.text) && /\b(?:ly|lying|lie|reclining|recline|embrace)\b/i.test(english)) {
-        return;
-      }
-      if (/姿势[：:]\s*(?:跪|跪坐|跪在一旁)/.test(fact.text) && /\b(?:kneel|kneeling|knelt)\b/i.test(english)) {
-        return;
-      }
-      if (/衣着[：:]\s*(?:红裙|月白色的仙裙)/.test(fact.text) && /\b(?:dress|gown|skirt|robe)\b/i.test(english)) {
-        return;
-      }
-    }
   }
   const schema = z.object({ faithful: z.boolean() }).strict();
   let result: z.infer<typeof schema>;
@@ -807,7 +752,7 @@ export async function runFactWorkflow(input: {
           return value;
         } catch (e: any) {
           error = e?.message || String(e);
-          const terminalReview = error.startsWith('连续状态待核对:');
+          const terminalReview = error.startsWith('连续状态待核对:') || error.startsWith('连续状态归属待核对:');
           const cannotRepair = terminalReview || (stage.startsWith('repair:') ? attempts >= 2 : !await consumeRepair());
           if (e instanceof WorkflowTransportError || /超过.*预算|超出.*预算|超预算/.test(error) || cannotRepair) {
             p.phase = 'needs_review'; p.error = error;
@@ -855,19 +800,30 @@ export async function runFactWorkflow(input: {
           );
         };
         const classified = await askClassify(batch, repair);
+        const dedupedInitial: typeof classified.items = [];
+        const classifiedIds = new Set<string>();
+        for (const item of classified.items) {
+          if (!classifiedIds.has(item.id)) {
+            classifiedIds.add(item.id);
+            dedupedInitial.push(item);
+          }
+        }
+        classified.items = dedupedInitial;
         let followUpAttempts = 0;
         while (classified.items.length < batch.length && followUpAttempts < 3) {
           followUpAttempts++;
-          const classifiedIds = new Set(classified.items.map(i => i.id));
           const missing = batch.filter(u => !classifiedIds.has(u.id));
           if (!missing.length) break;
           const followUp = await askClassify(missing, '请补全剩余项分类');
+          let added = 0;
           for (const item of followUp.items) {
             if (!classifiedIds.has(item.id)) {
               classified.items.push(item);
               classifiedIds.add(item.id);
+              added++;
             }
           }
+          if (added === 0) break;
         }
         if (classified.items.length !== batch.length || new Set(classified.items.map(i => i.id)).size !== batch.length) throw new FactWorkflowError('分类结果缺项或重复');
         let lastVisualBeat = prior.length ? prior.at(-1)!.beat : -1;
@@ -1041,17 +997,35 @@ export async function runFactWorkflow(input: {
         // model to classify an undeclared door/window as a person's presence.
         if (!entities.length) return [];
         const allowedAttributes = new Set<string>(FACT_STATE_ATTRIBUTES);
-        const schema = z.object({ states: z.array(z.object({ entity: z.string().min(1), attribute: z.string().min(1), value: z.string().min(1), item: z.string().optional(), operation: z.string().optional() })) });
+        const schema = z.object({
+          states: z.preprocess(
+            (v) => (Array.isArray(v) ? v : []),
+            z.array(
+              z.object({
+                entity: z.string().nullable().optional(),
+                attribute: z.string().nullable().optional(),
+                value: z.string().nullable().optional(),
+                item: z.string().nullable().optional(),
+                operation: z.string().nullable().optional(),
+              })
+            )
+          ).default([]),
+        });
         const ask = async (note: string) => provider.generateStructured(JSON.stringify({ task: 'state', facts: group.map(f => ({ id: f.id, text: f.text })), context, entities, binding: source.binding, repair: note }), schema,
           'Read this one fact. context is earlier text in the same action block; binding fixes the person this fact is about. Extract explicit states. presence = entry or exit. wardrobe = a garment, not a body part. holding = an external prop, not a body part and not a touch without an object. 手指、手、发丝等身体部位绝不是 holding 道具，绞着手指、轻触等动作严禁填为 holding。 position = a place, not a posture. pose = sitting, lying, kneeling, or another posture. body = a body condition such as bare feet or an uncovered body. expression = face, blush, gaze, or emotion like 不安, and it is not carried to later shots. pending_action = an unfinished action. item quotes the garment, prop, body part, or posture from this fact when the attribute uses one. operation is set, or remove only for an explicitly completed removal or release. value MUST be an exact contiguous substring of this fact (NOT from context). If this fact states none of these, return states:[]. entity MUST be in entities when supplied, consistent with binding and explicit ownership. An earlier mentioned person is not ownership evidence. Do not paraphrase or write 无, none or English. Absent attributes are omitted. Return states with entity, attribute, value, item and operation where applicable; states:[] if none is explicit.', { temperature: 0.1, maxTokens: 320 });
         const itemAttributes = new Set(['wardrobe', 'holding', 'body', 'expression', 'pose']);
-        const cleanStates = (rows: Array<{ entity: string; attribute: string; value: string; item?: string; operation?: string }>): Array<{ entity: string; attribute: string; value: string; item?: string; operation?: 'set' | 'remove' }> => rows
+        const cleanStates = (rows: Array<{ entity?: string | null; attribute?: string | null; value?: string | null; item?: string | null; operation?: string | null }>): Array<{ entity: string; attribute: string; value: string; item?: string; operation?: 'set' | 'remove' }> => rows
           .map(s => {
+            const entity = (s.entity ?? '').trim();
+            const attribute = (s.attribute ?? '').trim();
+            const value = (s.value ?? '').trim();
+            const item = s.item != null ? s.item : undefined;
             const normalizedOp: 'set' | 'remove' | undefined = (s.operation === 'set' || s.operation === 'remove') ? s.operation : undefined;
-            const { operation: _operation, item, ...rest } = s;
             return {
-              ...rest,
-              ...(itemAttributes.has(s.attribute) && item !== undefined ? { item } : {}),
+              entity,
+              attribute,
+              value,
+              ...(itemAttributes.has(attribute) && item !== undefined ? { item } : {}),
               ...(normalizedOp !== undefined ? { operation: normalizedOp } : {}),
             };
           })
@@ -1074,7 +1048,7 @@ export async function runFactWorkflow(input: {
         }
         const owners = boundVisibleEntities(source.binding).map(e => e.name);
         let evidence = evidencedContinuityStates(source.text, statesCleaned, context, owners);
-        if (evidence.rejected.length) {
+        if (evidence.rejected.length && await consumeRepair()) {
           const note = continuityEvidenceRepair(source.text, evidence.rejected, context);
           try {
             const retried = cleanStates((await ask(note)).states);
@@ -1083,7 +1057,9 @@ export async function runFactWorkflow(input: {
               statesCleaned = retried;
               evidence = retriedEvidence;
             }
-          } catch {}
+          } catch (err) {
+            if (err instanceof WorkflowTransportError) throw err;
+          }
         }
         if (evidence.rejected.length) {
           source.states = statesCleaned; p.state_review_pending = [...new Set([...(p.state_review_pending || []), source.id])]; p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`连续状态归属待核对: ${source.text} ${continuityEvidenceRepair(source.text, evidence.rejected, context)}`);
@@ -1169,8 +1145,8 @@ export async function runFactWorkflow(input: {
             continuity: groupState,
             instructions: input.instructions,
           }),
-          '你是一位专业影视导演。请先不输出 JSON，以自由文字形式完成本组分镜的导演调度构思（控制在 250 字以内，内部思考控制在 250 字以内）：理解戏剧冲突与情绪转折，确立 3D 空间机位轴线与景别过渡节奏，并为每个镜头槽位（s1, s2...）从其候选 fact_ids 中选出最具视觉张力的核心画面事实（primary_fact_id）并简述理由。',
-          { stream: true, temperature: 0.6, maxTokens: 1536 }
+          '你是一位专业影视导演。请先不输出 JSON，以自由文字形式完成本组分镜的导演调度构思（控制在 200 字以内，内部思考控制在 150 字以内）：理解戏剧冲突与情绪转折，确立 3D 空间机位轴线与景别过渡节奏，并为每个镜头槽位（s1, s2...）从其候选 fact_ids 中选出最具视觉张力的核心画面事实（primary_fact_id）并简述理由。',
+          { stream: true, temperature: 0.6, maxTokens: 1024 }
         );
       }
       const choices = Object.fromEntries(slotFacts.map((fs, i) => [`s${i + 1}`, fs.length ? z.enum(fs.map(f => f.id) as [string, ...string[]]) : z.null()]));
@@ -1257,33 +1233,42 @@ export async function runFactWorkflow(input: {
           const result = await provider.generateStructured(JSON.stringify({ task: 'translate', facts: batch, required_terms: batch.map(f => ({ id: f.id, terms: bodyOwnerTerms(f.text, input.glossary) })).filter(f => f.terms.length), bindings: selected.filter(f => batch.some(row => row.id === f.id)).map(f => ({ id: f.id, mentions: f.binding?.mentions.map(m => ({ text: m.text, entity: m.entity, visibility: m.visibility })) })), glossary: input.glossary, places: doc.locations.map(location => location.name), repair: repairNote }), translationSchema,
             '只翻译 facts 数组的条目，返回条目数量和 ID 必须与 facts 完全相同。bindings 和 glossary 只是对应关系，禁止把它们作为新增事实翻译。places 是剧本地点。朝加地点再加“的方向”表示走向该地，句首的朝是朝向，不是姓，地名必须整词保留。required_terms 是已确定的身体所有者短语，必须原样写进对应条目的 english，不能改成 his/her。把每条编号事实直译为短英文句，保持原意全部内容，不写镜头、风格或技术标签。保留身份、数量、施受关系、颜色、左右、否定和所有连接词后的事实。禁止补人物、环境、道具、情绪。专名只使用项目glossary给出的译名，无译名时音译，所有人物引用都写确定姓名，绝对禁止使用任何第三人称或物主代词（禁止使用 he/she/him/her/his/they/them/their/theirs，禁止写 their immortal powers，写 the immortal powers 或省略代词；禁止写 her/his chest，写 the chest 或确定人名所有格）。未绑定的人物不能新增。english 只能写英文，禁止出现汉字。返回每条相同id及english。', { temperature: 0.1, maxTokens: 512 });
           for (const t of result.translations) {
-            if (!batch.some(b => b.id === t.id)) {
-              const match = batch.find(b => b.id.startsWith(t.id) || t.id.startsWith(b.id));
-              if (match) t.id = match.id;
+            if (!batch.some(b => b.id === t.id) && t.id.length >= 4) {
+              const candidates = batch.filter(b => !result.translations.some(x => x.id === b.id) && (b.id.startsWith(t.id) || t.id.startsWith(b.id)));
+              if (candidates.length === 1) t.id = candidates[0]!.id;
             }
           }
-          while (result.translations.length < batch.length) {
-            const missing = batch.filter(f => !result.translations.some(t => t.id === f.id));
+          const seenIds = new Set<string>();
+          result.translations = result.translations.filter(t => {
+            if (!batch.some(b => b.id === t.id) || seenIds.has(t.id)) return false;
+            seenIds.add(t.id);
+            return true;
+          });
+          let followUpAttempts = 0;
+          while (result.translations.length < batch.length && followUpAttempts < 2) {
+            followUpAttempts++;
+            const missing = batch.filter(f => !seenIds.has(f.id));
             if (missing.length === 0) break;
             const subIdSchema = z.string().min(1);
             const subSchema = z.object({ translations: z.array(z.object({ id: subIdSchema, english: z.string().min(1) })) });
             try {
               const supplemented = await provider.generateStructured(JSON.stringify({ task: 'translate', facts: missing, required_terms: missing.map(f => ({ id: f.id, terms: bodyOwnerTerms(f.text, input.glossary) })).filter(f => f.terms.length), bindings: selected.filter(f => missing.some(row => row.id === f.id)).map(f => ({ id: f.id, mentions: f.binding?.mentions.map(m => ({ text: m.text, entity: m.entity, visibility: m.visibility })) })), glossary: input.glossary, places: doc.locations.map(location => location.name), repair: '请补全剩余项翻译' }), subSchema,
                 '只翻译 facts 数组的条目，返回条目数量和 ID 必须与 facts 完全相同。bindings 和 glossary 只是对应关系，禁止把它们作为新增事实翻译。places 是剧本地点。朝加地点再加“的方向”表示走向该地，句首的朝是朝向，不是姓，地名必须整词保留。required_terms 是已确定的身体所有者短语，必须原样写进对应条目的 english，不能改成 his/her。把每条编号事实直译为短英文句，保持原意全部内容，不写镜头、风格或技术标签。保留身份、数量、施受关系、颜色、左右、否定和所有连接词后的事实。禁止补人物、环境、道具、情绪。专名只使用项目glossary给出的译名，无译名时音译，所有人物引用都写确定姓名，绝对禁止使用任何第三人称或物主代词（禁止使用 he/she/him/her/his/they/them/their/theirs，禁止写 their immortal powers，写 the immortal powers 或省略代词；禁止写 her/his chest，写 the chest 或确定人名所有格）。未绑定的人物不能新增。english 只能写英文，禁止出现汉字。返回每条相同id及english。', { temperature: 0.1, maxTokens: 512 });
-              if (supplemented.translations.length > 0) {
-                for (const row of supplemented.translations) {
-                  if (!missing.some(b => b.id === row.id)) {
-                    const match = missing.find(b => b.id.startsWith(row.id) || row.id.startsWith(b.id));
-                    if (match) row.id = match.id;
-                  }
-                  if (!result.translations.some(t => t.id === row.id)) {
-                    result.translations.push(row);
-                  }
+              let added = 0;
+              for (const row of supplemented.translations) {
+                if (!missing.some(b => b.id === row.id) && row.id.length >= 4) {
+                  const candidates = missing.filter(b => !seenIds.has(b.id) && (b.id.startsWith(row.id) || row.id.startsWith(b.id)));
+                  if (candidates.length === 1) row.id = candidates[0]!.id;
                 }
-              } else {
-                break;
+                if (missing.some(b => b.id === row.id) && !seenIds.has(row.id)) {
+                  seenIds.add(row.id);
+                  result.translations.push(row);
+                  added++;
+                }
               }
-            } catch {
+              if (added === 0) break;
+            } catch (err) {
+              if (err instanceof WorkflowTransportError) throw err;
               break;
             }
           }
@@ -1309,39 +1294,7 @@ export async function runFactWorkflow(input: {
             if (containsCjk(row.english)) problems.push(`${fact.id} 仍含中文「${row.english}」`);
             const missingTerms = bodyOwnerTerms(fact.text, input.glossary).filter(term => !row.english.toLowerCase().includes(term.toLowerCase()));
             if (missingTerms.length) throw new FactWorkflowError(`译文待核对: ${fact.id} 身体部位归属须原样写出 ${missingTerms.join(', ')}`, 502);
-            let referenceProblem = englishReferenceProblem(row.english, input.glossary);
-            if (referenceProblem) {
-              const charNames = names.map(n => input.glossary[n] || n).filter(Boolean);
-              const formatNames = (list: string[]) => {
-                if (list.length === 0) return '';
-                if (list.length === 1) return list[0]!;
-                if (list.length === 2) return `${list[0]} and ${list[1]}`;
-                return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
-              };
-              const factMentionedNames = Object.keys(input.glossary).filter(cn => fact.text.includes(cn)).map(cn => input.glossary[cn]!);
-              const targetNames = factMentionedNames.length > 0 ? factMentionedNames : charNames;
-              const joinedNames = formatNames(targetNames);
-              let sanitized = row.english
-                .replace(/\btheir\b/gi, 'the')
-                .replace(/\b(?:her|his)\b(?=\s+[a-z])/gi, 'the')
-                .replace(/\bHe\s+Huan\b/gi, 'Huanhe');
-              if (joinedNames) {
-                sanitized = sanitized
-                  .replace(/\bThey\b/g, joinedNames)
-                  .replace(/\bthey\b/g, joinedNames)
-                  .replace(/\bthem\b/g, joinedNames);
-                if (targetNames.length === 1) {
-                  sanitized = sanitized
-                    .replace(/\b(?:She|He)\b/g, targetNames[0]!)
-                    .replace(/\b(?:she|he)\b/g, targetNames[0]!)
-                    .replace(/\b(?:her|him)\b/g, targetNames[0]!);
-                }
-              }
-              if (!englishReferenceProblem(sanitized, input.glossary)) {
-                row.english = sanitized;
-                referenceProblem = null;
-              }
-            }
+            const referenceProblem = englishReferenceProblem(row.english, input.glossary);
             if (referenceProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${referenceProblem}。上次译文「${row.english}」。须改用 facts 中人物的完整译名及其所有格，不能保留 his/her。`, 502);
             const relationProblem = transferTranslationProblem(fact.text, row.english, input.glossary);
             if (relationProblem) throw new FactWorkflowError(`译文待核对: ${fact.id} ${relationProblem}`, 502);
@@ -1388,11 +1341,26 @@ export async function runFactWorkflow(input: {
           // Each source sentence is audited on its own translation. The still is composed later.
           const failed: string[] = [];
           for (const fact of literal) {
-            const english = translations.find(row => row.id === fact.id)?.english || '';
+            let english = translations.find(row => row.id === fact.id)?.english || '';
+            if (!english.trim()) {
+              if (fact.id === 'interior_exterior') english = fact.text === '室内' ? 'Indoors.' : 'Outdoors.';
+              else if (fact.id === 'time_of_day') {
+                const knownTime: Record<string, string> = { '白天': 'Daytime.', '夜间': 'Night.', '黎明': 'Dawn.', '黄昏': 'Dusk.' };
+                english = knownTime[fact.text] || 'Daytime.';
+              } else if (fact.id === 'location' && input.glossary[fact.text]) {
+                english = input.glossary[fact.text]!;
+              }
+              if (english) {
+                const existing = translations.find(row => row.id === fact.id);
+                if (existing) existing.english = english;
+                else translations.push({ id: fact.id, english });
+              }
+            }
             try {
               await auditFacts(provider, [fact], english, context);
             } catch (error: any) {
-              if (!String(error?.message || '').startsWith('译文待核对')) throw error;
+              const msg = String(error?.message || '');
+              if (!msg.startsWith('译文待核对') && !msg.includes('译文格式错误')) throw error;
               failed.push(fact.id);
             }
           }

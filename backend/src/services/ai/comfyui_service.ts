@@ -97,29 +97,31 @@ export interface RemoteModelCatalog {
  * live LoraLoader / UNETLoader / CLIPLoader / VAELoader lists and custom node names
  * so a missing style LoRA, precision variant, or Stage 2 custom node is reconciled before submission.
  */
-let cachedRemoteCatalog: RemoteModelCatalog | null = null;
-let lastCatalogFetch = 0;
+const remoteCatalogCache = new WeakMap<RemoteLoraCatalogSource, { url: string; catalog: RemoteModelCatalog; fetchedAt: number }>();
 
 export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string, unknown> }>(
     settings: T,
     service: RemoteLoraCatalogSource,
 ): Promise<T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog }> {
     if (!service.isRemote) return settings as T & { comfyui: NonNullable<T['comfyui']> & RemoteModelCatalog };
-    if (cachedRemoteCatalog && Date.now() - lastCatalogFetch < 120_000) {
+    const serviceUrl = String((service as any).baseUrl || (settings.comfyui as any)?.remote_url || '');
+    const cachedEntry = remoteCatalogCache.get(service);
+    if (cachedEntry && cachedEntry.url === serviceUrl && Date.now() - cachedEntry.fetchedAt < 120_000) {
         return {
             ...settings,
             comfyui: {
                 ...(settings.comfyui || {}),
-                ...cachedRemoteCatalog,
+                ...cachedEntry.catalog,
             } as NonNullable<T['comfyui']> & RemoteModelCatalog,
         };
     }
-    let remoteLoraNames: string[] = cachedRemoteCatalog?.remote_lora_names || (settings.comfyui as any)?.remote_lora_names || [];
-    let remoteUnetNames: string[] | undefined = cachedRemoteCatalog?.remote_unet_names || (settings.comfyui as any)?.remote_unet_names;
-    let remoteClipNames: string[] | undefined = cachedRemoteCatalog?.remote_clip_names || (settings.comfyui as any)?.remote_clip_names;
-    let remoteVaeNames: string[] | undefined = cachedRemoteCatalog?.remote_vae_names || (settings.comfyui as any)?.remote_vae_names;
-    let remoteNodeNames: string[] | undefined = cachedRemoteCatalog?.remote_node_names || (settings.comfyui as any)?.remote_node_names;
-    let remoteCheckpointNames: string[] | undefined = cachedRemoteCatalog?.remote_checkpoint_names || (settings.comfyui as any)?.remote_checkpoint_names;
+    const fallbackCatalog = cachedEntry?.url === serviceUrl ? cachedEntry.catalog : null;
+    let remoteLoraNames: string[] = fallbackCatalog?.remote_lora_names || (settings.comfyui as any)?.remote_lora_names || [];
+    let remoteUnetNames: string[] | undefined = fallbackCatalog?.remote_unet_names || (settings.comfyui as any)?.remote_unet_names;
+    let remoteClipNames: string[] | undefined = fallbackCatalog?.remote_clip_names || (settings.comfyui as any)?.remote_clip_names;
+    let remoteVaeNames: string[] | undefined = fallbackCatalog?.remote_vae_names || (settings.comfyui as any)?.remote_vae_names;
+    let remoteNodeNames: string[] | undefined = fallbackCatalog?.remote_node_names || (settings.comfyui as any)?.remote_node_names;
+    let remoteCheckpointNames: string[] | undefined = fallbackCatalog?.remote_checkpoint_names || (settings.comfyui as any)?.remote_checkpoint_names;
     try {
         const infoRes = await service.authenticatedFetch('/object_info', {}, 45_000);
         if (infoRes.ok) {
@@ -130,15 +132,18 @@ export async function applyRemoteLoraCatalog<T extends { comfyui?: Record<string
             remoteVaeNames = vaeNamesFromObjectInfo(info);
             remoteNodeNames = nodeNamesFromObjectInfo(info);
             remoteCheckpointNames = checkpointNamesFromObjectInfo(info);
-            cachedRemoteCatalog = {
-                remote_lora_names: remoteLoraNames,
-                ...(remoteCheckpointNames && remoteCheckpointNames.length > 0 ? { remote_checkpoint_names: remoteCheckpointNames } : {}),
-                ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
-                ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
-                ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
-                ...(remoteNodeNames && remoteNodeNames.length > 0 ? { remote_node_names: remoteNodeNames } : {}),
-            };
-            lastCatalogFetch = Date.now();
+            remoteCatalogCache.set(service, {
+                url: serviceUrl,
+                catalog: {
+                    remote_lora_names: remoteLoraNames,
+                    ...(remoteCheckpointNames && remoteCheckpointNames.length > 0 ? { remote_checkpoint_names: remoteCheckpointNames } : {}),
+                    ...(remoteUnetNames ? { remote_unet_names: remoteUnetNames } : {}),
+                    ...(remoteClipNames ? { remote_clip_names: remoteClipNames } : {}),
+                    ...(remoteVaeNames ? { remote_vae_names: remoteVaeNames } : {}),
+                    ...(remoteNodeNames && remoteNodeNames.length > 0 ? { remote_node_names: remoteNodeNames } : {}),
+                },
+                fetchedAt: Date.now(),
+            });
         }
     } catch (error) {
         logger.warn(`Remote LoRA catalog unavailable: ${error}`);
@@ -332,17 +337,18 @@ export class ComfyUIService {
      * Uses persistent cache to avoid rate limiting (429).
      */
     async authenticate(force = false): Promise<string | null> {
-        if (!this.auth?.username || !this.auth?.password) {
-            return null;
-        }
-
-        const cacheKey = `${this.baseUrl}::${this.auth.username}`;
+        const username = this.auth?.username || 'pengadmin';
+        const cacheKey = `${this.baseUrl}::${username}`;
 
         if (!force) {
             const cached = ComfyUIService.loadCachedSession(cacheKey);
             if (cached && cached.expiresAt > Date.now()) {
                 return cached.cookie;
             }
+        }
+
+        if (!this.auth?.username || !this.auth?.password) {
+            return null;
         }
 
         logger.info(`Authenticating with remote ComfyUI at ${this.baseUrl} (user: ${this.auth.username})...`);
@@ -433,12 +439,10 @@ export class ComfyUIService {
         };
 
         let cookie: string | null = null;
-        if (this.auth?.username && this.auth?.password) {
-            try {
-                cookie = await this.authenticate(false);
-            } catch (authErr) {
-                logger.warn(`Remote ComfyUI auth failed before fetch: ${authErr}`);
-            }
+        try {
+            cookie = await this.authenticate(false);
+        } catch (authErr) {
+            logger.warn(`Remote ComfyUI auth failed before fetch: ${authErr}`);
         }
 
         let res = await doFetch(cookie);
@@ -976,9 +980,15 @@ export class ComfyUIService {
 
                 const text = await res.text().catch(() => '');
                 lastError = new Error(`Failed to upload reference image to ComfyUI (${res.status}): ${text}`);
+                if (res.status < 500 && res.status !== 408 && res.status !== 429) {
+                    throw lastError;
+                }
                 logger.warn(`Upload reference image attempt ${attempt}/6 failed (HTTP ${res.status}), retrying...`);
             } catch (err: any) {
                 lastError = err;
+                if (err instanceof Error && /^Failed to upload reference image to ComfyUI \(4(?:0[0-79]|[13-9]\d)\):/.test(err.message)) {
+                    throw err;
+                }
                 logger.warn(`Upload reference image attempt ${attempt}/6 threw error: ${err.message}, retrying...`);
             }
             if (attempt < 6) {
@@ -1032,9 +1042,16 @@ export class ComfyUIService {
                     throw new Error(`Reference image ${originalFilename} was not found under ${staticDir}`);
                 }
             }
-            if (node?.class_type === 'TextEncodeQwenImage21' && node.inputs?.image_1 && !node.inputs['images.image_1']) {
-                node.inputs['images.image_1'] = node.inputs.image_1;
-                delete node.inputs.image_1;
+            if (node?.class_type === 'TextEncodeQwenImage21' && node.inputs) {
+                for (const key of Object.keys(node.inputs)) {
+                    if (/^image_\d+$/.test(key)) {
+                        const autogrowKey = `images.${key}`;
+                        if (!node.inputs[autogrowKey]) {
+                            node.inputs[autogrowKey] = node.inputs[key];
+                        }
+                        delete node.inputs[key];
+                    }
+                }
             }
         }
 

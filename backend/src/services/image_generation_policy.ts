@@ -308,6 +308,26 @@ export const NSFW_ATMOSPHERE_SENTENCE =
 export const CHILD_SAFETY_NEGATIVE =
   'low quality, worst quality, bad anatomy, extra limbs, text, watermark, child, loli, shota, blurry face, mutated hands';
 
+export const FEMALE_ONLY_GENDER_DRIFT_NEGATIVE =
+  "1boy, 1man, male, masculine, man, boy, male face, masculine jawline, adam's apple, flat male chest, male clothing";
+
+export const isAllFemaleShot = (workflowData: any, prompt: string = ''): boolean => {
+  const bindings = Array.isArray(workflowData?.character_ref_bindings)
+    ? workflowData.character_ref_bindings
+    : [];
+  if (bindings.length > 0) {
+    const genders = bindings.map((b: any) => String(b?.gender || '').toLowerCase()).filter(Boolean);
+    if (genders.length > 0 && genders.every((g: string) => g === 'female' || g === 'woman')) {
+      return true;
+    }
+    if (genders.some((g: string) => g === 'male' || g === 'man')) {
+      return false;
+    }
+  }
+  const subjectType = inferPromptSubjectType(prompt, workflowData?.subject_type);
+  return subjectType === 'female_human';
+};
+
 /** Booru subject tags. Natural-language "no people" does not keep AutismMix off a figure. */
 export const LIBRARY_PLATE_PERSON_NEGATIVE =
   '1girl, 2girls, 1boy, solo, human, person, people, character, face, portrait, hands';

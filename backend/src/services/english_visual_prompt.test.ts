@@ -854,3 +854,58 @@ test('a still leaves speech facts unpainted and keeps a stored pose beside the p
   assert.equal(materials.facts.some((fact) => fact.text.includes('问了一句')), false);
   assert.equal(materials.characters[0]?.pose, '坐在椅上');
 });
+
+test('a standing action in visual facts overrides a conflicting sitting pose from continuity states', () => {
+  const materials = shotImageMaterialsFromSpec({
+    location: '清暮宫·神镜前',
+    primary_action: '陆嘉静立于神镜前，',
+    visual_facts: [{ id: 'f_c935', kind: 'visual', text: '陆嘉静立于神镜前，' }],
+    continuity_states: [{ entity: '陆嘉静', attribute: 'pose', value: '静坐姿态', fact_id: 'f_prev' }],
+    visible_subjects: ['陆嘉静'],
+  }, [{ name: '陆嘉静', visual_tags: { hair: 'black hair' } }]);
+  assert.equal(materials.characters[0]?.pose, '立于');
+  assert.equal(materials.facts.some((fact) => fact.text.includes('静坐姿态')), false);
+  assert.equal(materials.facts.some((fact) => fact.text.includes('立于神镜前')), true);
+});
+
+test('a compound accessory fact survives when auditor quotes conjunction pieces', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'preserved' as const,
+      evidence: 'adorned with a silver hairpin and a faint cyan immortal sigil on her chest',
+    }],
+  }));
+  await assertEnglishFidelity(
+    '陆嘉静的配饰：Qiongming Divine Mirror、silver hairpin、faint cyan immortal sigil on chest',
+    'She wears a moon-white dress, adorned with a silver hairpin and a faint cyan immortal sigil on her chest.',
+  );
+});
+
+test('auditor dictionary response format parses correctly', async () => {
+  setVisualPromptVerifierForTests((async () => ({
+    0: {
+      id: 0,
+      status: 'preserved',
+      evidence: 'silver hairpin',
+    },
+  })) as any);
+  await assertEnglishFidelity(
+    '陆嘉静的配饰：silver hairpin',
+    'She wears a moon-white dress with a silver hairpin.',
+  );
+});
+
+test('a narrative silence or pause survives when picture depicts stillness or composed silence', async () => {
+  setVisualPromptVerifierForTests(async () => ({
+    facts: [{
+      id: 0,
+      status: 'missing' as const,
+      evidence: '',
+    }],
+  }));
+  await assertEnglishFidelity(
+    '陆嘉静沉默了片刻',
+    'Lu Jiajing sits upright in a composed posture, her fingertips resting on her sleeve, remaining completely still.',
+  );
+});

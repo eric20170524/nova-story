@@ -18,6 +18,8 @@ import {
 import {
     applyPromptEnhancement,
     CHILD_SAFETY_NEGATIVE,
+    FEMALE_ONLY_GENDER_DRIFT_NEGATIVE,
+    isAllFemaleShot,
     ORIENTAL_REALISTIC_NEGATIVE,
     isAdultLookLoraName,
     mergeClipPositivePrompt,
@@ -57,7 +59,7 @@ import { persistFormalCandidateResult, retainUnverifiedPrompt } from './formal_s
 import { formalRenderAllowed } from './formal_storyboard_plan';
 import { requireProductionReferencePin, persistProductionImageResult, type ProductionReferencePin } from './scene_production_media';
 import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
-import { resolveSceneIdentityPlate } from './character_reference_plates';
+import { resolveSceneIdentityPlate, buildQwenMultiReferencePrefix } from './character_reference_plates';
 import {
     createProgressPublisher,
     runVramHandoffForImageGen,
@@ -641,11 +643,13 @@ export const compileComfyWorkflow = async (
     const preserveTemplateConditioning =
         modelFamily === 'pony' && !isAnimagineXl && /pony/i.test(JSON.stringify(workflow));
 
+    const allFemale = isAllFemaleShot(enrichedWorkflowData, finalPrompt);
     const orientalRealistic = String(enrichedWorkflowData.style_preset || '').toLowerCase() === 'oriental_realistic';
     const negativeParts = promptComposed
         ? [
             String(workflowData?.negative_prompt || '').trim(),
             CHILD_SAFETY_NEGATIVE,
+            allFemale ? FEMALE_ONLY_GENDER_DRIFT_NEGATIVE : '',
             orientalRealistic && shotUsesOrientalFaceNegative(enrichedWorkflowData) ? ORIENTAL_REALISTIC_NEGATIVE : '',
         ]
         : [
@@ -654,6 +658,7 @@ export const compileComfyWorkflow = async (
                 enrichedWorkflowData.subject_type
             ),
             plan.enhancement.negativeExtra,
+            allFemale ? FEMALE_ONLY_GENDER_DRIFT_NEGATIVE : '',
             autismMixScene
                 ? 'western comic, thick ink outlines, comic strip, triptych, split screen, multiple panels, 3d render, photorealistic'
                 : ''
@@ -685,7 +690,15 @@ export const compileComfyWorkflow = async (
         const negativeId = Array.isArray(sampler.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
 
         if (positiveId && workflow[positiveId]?.class_type === 'TextEncodeQwenImage21' && workflow[positiveId].inputs) {
-            workflow[positiveId].inputs.prompt = promptComposed ? subjectSafePrompt : effectivePrompt;
+            let promptText = promptComposed ? subjectSafePrompt : effectivePrompt;
+            const bindings = Array.isArray(workflowData?.character_ref_bindings) ? workflowData.character_ref_bindings : [];
+            if (bindings.length > 0 && !promptText.includes('<Picture 1>')) {
+                const prefix = buildQwenMultiReferencePrefix(bindings, workflowData?.glossary || {});
+                if (prefix) {
+                    promptText = `${prefix} ${promptText}`;
+                }
+            }
+            workflow[positiveId].inputs.prompt = promptText;
             workflow[positiveId].inputs.negative_prompt = negativePrompt;
         } else if (positiveId && workflow[positiveId]?.inputs) {
             const templateText = String(workflow[positiveId].inputs.text || '').trim();
@@ -975,26 +988,36 @@ export const compileComfyWorkflow = async (
                 encoderId = posId;
             }
         }
-        if (encoderId && characterRefUrl) {
-            const referenceFilename = path.basename(String(characterRefUrl));
-            let loadId = findNodeId(
-                workflow,
-                (node) => node?.class_type === 'LoadImage' && node?._meta?.title === 'NovaStory Character Reference'
-            );
-            if (!loadId) {
-                loadId = nextNodeId(workflow);
-                workflow[loadId] = {
-                    inputs: { image: referenceFilename },
-                    class_type: 'LoadImage',
-                    _meta: { title: 'NovaStory Character Reference' }
-                };
-            } else if (workflow[loadId]?.inputs) {
-                workflow[loadId].inputs.image = referenceFilename;
+        const characterRefUrls = Array.isArray(workflowData?.character_ref_urls) && workflowData.character_ref_urls.length > 0
+            ? workflowData.character_ref_urls
+            : (refPlan.refs.characterRefUrls?.length ? refPlan.refs.characterRefUrls : (characterRefUrl ? [characterRefUrl] : []));
+
+        if (encoderId && characterRefUrls.length > 0) {
+            for (let idx = 0; idx < Math.min(characterRefUrls.length, 16); idx++) {
+                const slotIndex = idx + 1;
+                const referenceFilename = path.basename(String(characterRefUrls[idx]));
+                const expectedTitle = slotIndex === 1
+                    ? 'NovaStory Character Reference'
+                    : `NovaStory Character Reference ${slotIndex}`;
+                let loadId = findNodeId(
+                    workflow,
+                    (node) => node?.class_type === 'LoadImage' && node?._meta?.title === expectedTitle
+                );
+                if (!loadId) {
+                    loadId = nextNodeId(workflow);
+                    workflow[loadId] = {
+                        inputs: { image: referenceFilename },
+                        class_type: 'LoadImage',
+                        _meta: { title: expectedTitle }
+                    };
+                } else if (workflow[loadId]?.inputs) {
+                    workflow[loadId].inputs.image = referenceFilename;
+                }
+                workflow[encoderId].inputs[`image_${slotIndex}`] = [loadId, 0];
+                logger.info(`Wired Qwen-VL character reference ${referenceFilename} as image_${slotIndex}`);
             }
-            workflow[encoderId].inputs.image_1 = [loadId, 0];
             const vaeId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
             if (vaeId) workflow[encoderId].inputs.vae = [vaeId, 0];
-            logger.info(`Wired Qwen-VL character reference ${referenceFilename} as image_1`);
         }
         for (const node of Object.values(workflow) as any[]) {
             if (node?.class_type?.includes('KSampler') && node.inputs && !isFaceDetailStage2Node(node)) node.inputs.denoise = 1;
@@ -1294,6 +1317,7 @@ export class GenerationService {
 
         let redis: Redis | null = null;
         let gpuLease: Awaited<ReturnType<typeof GpuLeaseService.acquireLease>> | null = null;
+        let leaseHeartbeat: NodeJS.Timeout | null = null;
         const redisUrl = process.env.REDIS_URL;
         if (redisUrl) {
             try {
@@ -1463,8 +1487,12 @@ export class GenerationService {
                     if (character) character.visual_tags = ref.visual_tags;
                 }
                 if (productionPin) {
-                    effectiveWorkflowData.character_ref_urls = productionPin.references.filter(ref => ref.kind === 'character').map(ref => ref.image_url);
+                    effectiveWorkflowData.pinned_character_refs = productionPin.references.filter(ref => ref.kind === 'character');
+                    effectiveWorkflowData.character_ref_urls = effectiveWorkflowData.pinned_character_refs.map((ref: any) => ref.image_url);
                     effectiveWorkflowData.character_ref_url = effectiveWorkflowData.character_ref_urls[0];
+                }
+                if (sceneProjectId != null && !['portrait', 'turnaround', 'turnaround_panel'].includes(String(effectiveWorkflowData?.gen_type || 'scene').toLowerCase())) {
+                    effectiveWorkflowData = resolveSceneIdentityPlate(effectiveWorkflowData, characters);
                 }
                 const materials = shotImageMaterialsFromSpec(
                     effectiveWorkflowData.shot_spec,
@@ -1627,7 +1655,12 @@ export class GenerationService {
 
                 // Acquire GPU lease to ensure single concurrent access to GPU and retain
                 // the exact lease identity until the pipeline fully unwinds.
-                gpuLease = await GpuLeaseService.acquireLease(taskId, 'image');
+                gpuLease = await GpuLeaseService.acquireLease(taskId, 'image', 30 * 60 * 1000);
+                leaseHeartbeat = setInterval(() => {
+                    if (gpuLease) {
+                        GpuLeaseService.heartbeat(gpuLease.lease_id, taskId);
+                    }
+                }, 20_000);
 
                 // Plan 1: auto VRAM handoff — unload local LLM before Pony/SDXL claims GPU
                 await runVramHandoffForImageGen(progressHandler);
@@ -1641,11 +1674,13 @@ export class GenerationService {
                 }
 
                 if (sceneProjectId != null && !['portrait', 'turnaround', 'turnaround_panel'].includes(String(effectiveWorkflowData?.gen_type || 'scene').toLowerCase())) {
-                    const plateCharacters = await db.all(
-                        'SELECT id, name, visual_tags FROM character WHERE project_id = ?',
-                        sceneProjectId
-                    );
-                    effectiveWorkflowData = resolveSceneIdentityPlate(effectiveWorkflowData, plateCharacters);
+                    if (!effectiveWorkflowData?.character_ref_bindings?.length) {
+                        const plateCharacters = await db.all(
+                            'SELECT id, name, visual_tags FROM character WHERE project_id = ?',
+                            sceneProjectId
+                        );
+                        effectiveWorkflowData = resolveSceneIdentityPlate(effectiveWorkflowData, plateCharacters);
+                    }
                 }
 
                 if (!comfyService.isRemote) {
@@ -1865,6 +1900,7 @@ export class GenerationService {
                 });
             } catch (e) {}
         } finally {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat);
             if (gpuLease) {
                 GpuLeaseService.releaseLease(gpuLease.lease_id, taskId);
             }

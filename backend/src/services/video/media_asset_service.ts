@@ -400,7 +400,7 @@ export class MediaAssetService {
     if (useHttp) {
       const timeoutMs = Math.max(
         500,
-        Number(process.env.NOVASTORY_COMFY_REFERENCE_UPLOAD_TIMEOUT_MS || 15_000)
+        Number(process.env.NOVASTORY_COMFY_REFERENCE_UPLOAD_TIMEOUT_MS || 60_000)
       );
       const isRemote = comfySettings.mode === 'remote';
       const uploaded = await ComfyInputTransport.uploadInput({

@@ -98,7 +98,7 @@ export class ComfyH3Provider {
     });
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
+  private async fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
     return this.comfyService.authenticatedFetch(url, init, timeoutMs);
   }
 
@@ -139,7 +139,7 @@ export class ComfyH3Provider {
 
   async getHistory(promptId: string): Promise<Record<string, any> | null> {
     try {
-      const res = await this.comfyService.authenticatedFetch(`/history/${promptId}`, {}, 5000);
+      const res = await this.comfyService.authenticatedFetch(`/history/${promptId}`, {}, 20000);
       if (res.ok) return (await res.json()) as Record<string, any>;
     } catch {
       /* offline */
@@ -149,14 +149,20 @@ export class ComfyH3Provider {
 
   async downloadFile(filename: string, subfolder = '', type = 'output'): Promise<Buffer | null> {
     const url = `/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
-    try {
-      const res = await this.comfyService.authenticatedFetch(url, {}, 30_000);
-      if (res.ok) {
-        const ab = await res.arrayBuffer();
-        return Buffer.from(ab);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const res = await this.comfyService.authenticatedFetch(url, {}, 30_000);
+        if (res.ok) {
+          const ab = await res.arrayBuffer();
+          return Buffer.from(ab);
+        }
+        logger.warn(`Failed to download output ${filename} from ComfyUI (HTTP ${res.status}), attempt ${attempt}/3`);
+      } catch (err) {
+        logger.warn(`Failed to download output ${filename} from ComfyUI: ${err}, attempt ${attempt}/3`);
       }
-    } catch (err) {
-      logger.warn(`Failed to download output ${filename} from ComfyUI: ${err}`);
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
     }
     return null;
   }
@@ -215,21 +221,38 @@ export class ComfyH3Provider {
       return { status: 'error', videos: [], error: `ComfyUI WebSocket connection failed: ${err}` };
     }
 
+    let promptId = '';
     try {
-      const submitRes = await this.fetchWithTimeout(`${this.baseUrl}/prompt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: workflow, client_id: this.clientId })
-      }, 10_000);
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const submitRes = await this.fetchWithTimeout(`${this.baseUrl}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: workflow, client_id: this.clientId })
+          }, 20_000);
 
-      if (!submitRes.ok) {
-        const errText = await submitRes.text();
-        ws.close();
-        return { status: 'error', videos: [], error: `ComfyUI prompt queue error (${submitRes.status}): ${errText}` };
+          if (submitRes.ok) {
+            const resJson = await submitRes.json() as Record<string, any>;
+            promptId = String(resJson.prompt_id || '');
+            if (promptId) break;
+          }
+
+          const errText = await submitRes.text().catch(() => '');
+          logger.warn(`ComfyUI /prompt submit attempt ${attempt}/4 failed (${submitRes.status}): ${errText}`);
+          if (attempt === 4) {
+            ws.close();
+            return { status: 'error', videos: [], error: `ComfyUI prompt queue error (${submitRes.status}): ${errText}` };
+          }
+        } catch (err: any) {
+          logger.warn(`ComfyUI /prompt submit attempt ${attempt}/4 threw: ${err.message}`);
+          if (attempt === 4) {
+            ws.close();
+            return { status: 'error', videos: [], error: `ComfyUI prompt queue error: ${err.message}` };
+          }
+        }
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
       }
 
-      const resJson = await submitRes.json() as Record<string, any>;
-      const promptId = String(resJson.prompt_id || '');
       if (!promptId) {
         ws.close();
         return { status: 'error', videos: [], error: 'No prompt_id returned from ComfyUI' };
@@ -287,32 +310,45 @@ export class ComfyH3Provider {
           });
         };
 
-        const fetchHistoryFallback = async () => {
-          try {
-            const histRes = await this.fetchWithTimeout(`${this.baseUrl}/history/${promptId}`, {}, 5000);
-            if (!histRes.ok) return;
-            const histData = await histRes.json() as Record<string, any>;
-            const promptOutputs = histData[promptId]?.outputs || {};
-            for (const nodeId of Object.keys(promptOutputs)) {
-              const nodeOut = promptOutputs[nodeId];
-              const list = nodeOut.videos || nodeOut.gifs || nodeOut.images || [];
-              for (const item of list) {
-                if (collectedVideos.some((video) => video.filename === item.filename && video.subfolder === item.subfolder)) {
-                  continue;
-                }
-                const buf = await this.downloadFile(item.filename, item.subfolder, item.type);
-                if (buf) {
-                  collectedVideos.push({
-                    filename: item.filename,
-                    subfolder: item.subfolder,
-                    type: item.type,
-                    buffer: buf
-                  });
+        const fetchHistoryFallback = async (existingEntry?: Record<string, any>) => {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              let entry = existingEntry;
+              if (!entry) {
+                const histRes = await this.fetchWithTimeout(`${this.baseUrl}/history/${promptId}`, {}, 20000);
+                if (histRes.ok) {
+                  const histData = await histRes.json() as Record<string, any>;
+                  entry = histData[promptId];
                 }
               }
+              if (!entry) {
+                if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+                continue;
+              }
+              const promptOutputs = entry.outputs || {};
+              for (const nodeId of Object.keys(promptOutputs)) {
+                const nodeOut = promptOutputs[nodeId];
+                const list = nodeOut.videos || nodeOut.gifs || nodeOut.images || [];
+                for (const item of list) {
+                  if (collectedVideos.some((video) => video.filename === item.filename && video.subfolder === item.subfolder)) {
+                    continue;
+                  }
+                  const buf = await this.downloadFile(item.filename, item.subfolder, item.type);
+                  if (buf) {
+                    collectedVideos.push({
+                      filename: item.filename,
+                      subfolder: item.subfolder,
+                      type: item.type,
+                      buffer: buf
+                    });
+                  }
+                }
+              }
+              if (collectedVideos.length > 0) return;
+            } catch (err) {
+              logger.warn(`History fetch error attempt ${attempt}/3: ${err}`);
+              if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
             }
-          } catch (err) {
-            logger.warn(`History fetch error: ${err}`);
           }
         };
 
@@ -342,11 +378,12 @@ export class ComfyH3Provider {
               if (!data.node && (!data.prompt_id || data.prompt_id === promptId)) {
                 setTimeout(async () => {
                   if (collectedVideos.length === 0) await fetchHistoryFallback();
-                  cleanup({
-                    status: collectedVideos.length > 0 ? 'completed' : 'error',
-                    error: collectedVideos.length === 0 ? 'No video outputs collected' : undefined,
-                    promptStopped: true
-                  });
+                  if (collectedVideos.length > 0) {
+                    cleanup({
+                      status: 'completed',
+                      promptStopped: true
+                    });
+                  }
                 }, 1000);
               }
             } else if (msgType === 'executed' && data.prompt_id === promptId) {
@@ -379,16 +416,19 @@ export class ComfyH3Provider {
 
         pollInterval = setInterval(async () => {
           try {
-            const histRes = await this.fetchWithTimeout(`${this.baseUrl}/history/${promptId}`, {}, 5000);
+            const histRes = await this.fetchWithTimeout(`${this.baseUrl}/history/${promptId}`, {}, 15000);
             if (!histRes.ok) return;
             const histData = await histRes.json() as Record<string, any>;
             if (histData[promptId]) {
-              await fetchHistoryFallback();
-              cleanup({
-                status: collectedVideos.length > 0 ? 'completed' : 'error',
-                error: collectedVideos.length === 0 ? 'ComfyUI history completed without video outputs' : undefined,
-                promptStopped: true
-              });
+              await fetchHistoryFallback(histData[promptId]);
+              if (collectedVideos.length > 0) {
+                cleanup({
+                  status: 'completed',
+                  promptStopped: true
+                });
+              } else {
+                logger.warn(`Prompt ${promptId} present in ComfyUI history but video output not yet collected; will retry next cycle`);
+              }
             }
           } catch {}
         }, 5000);
@@ -397,6 +437,13 @@ export class ComfyH3Provider {
           setTimeout(async () => {
             if (!isDone) {
               await fetchHistoryFallback();
+              if (collectedVideos.length > 0) {
+                cleanup({
+                  status: 'completed',
+                  promptStopped: true
+                });
+                return;
+              }
               const stopped = await this.promptOwnership.waitForPromptToStop(promptId, 3000);
               if (!stopped) {
                 logger.warn(
@@ -404,6 +451,7 @@ export class ComfyH3Provider {
                 );
                 return;
               }
+              await fetchHistoryFallback();
               cleanup({
                 status: collectedVideos.length > 0 ? 'completed' : 'error',
                 error: collectedVideos.length === 0 ? 'ComfyUI connection closed before video output was available' : undefined,

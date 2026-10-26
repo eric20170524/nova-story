@@ -299,6 +299,54 @@ export function continuityPromptLines(states: unknown[]): string[] {
   }).filter(Boolean);
 }
 
+function extractEntityPoseFromFact(text: string, entity: string): string | null {
+  if (!text || !entity) return null;
+  const entityIdx = text.indexOf(entity);
+  if (entityIdx === -1) return null;
+  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 20);
+  const standMatch = windowText.match(/立于|立在|屹立|矗立|站立|站着|站起|起身|挺立/);
+  if (standMatch) return standMatch[0];
+  const sitMatch = windowText.match(/端坐|盘坐|静坐|坐在|坐于|坐着|落座/);
+  if (sitMatch) return sitMatch[0];
+  const walkMatch = windowText.match(/行走|前行|走动|漫步|穿梭|奔跑|踱步/);
+  if (walkMatch) return walkMatch[0];
+  const lieMatch = windowText.match(/卧于|躺在|平躺|伏在|趴在|斜倚/);
+  if (lieMatch) return lieMatch[0];
+  const kneelMatch = windowText.match(/下跪|跪坐|跪倒|跪在/);
+  if (kneelMatch) return kneelMatch[0];
+  return null;
+}
+
+function poseConflictsWithNew(storedPose: string, newPose: string): boolean {
+  const isSit = (s: string) => /坐/.test(s);
+  const isStand = (s: string) => /立|站/.test(s);
+  const isMove = (s: string) => /走|行|奔|跑|跃/.test(s);
+  const isLie = (s: string) => /卧|躺/.test(s);
+  if (isSit(storedPose) && (isStand(newPose) || isMove(newPose))) return true;
+  if (isStand(storedPose) && (isSit(newPose) || isLie(newPose))) return true;
+  if (isMove(storedPose) && (isSit(newPose) || isLie(newPose))) return true;
+  return false;
+}
+
+export function filterConflictingContinuityStates(states: unknown[], facts: string[]): unknown[] {
+  if (!Array.isArray(states) || !states.length || !facts.length) return states;
+  const allFactsText = facts.join('，');
+  return states.filter(state => {
+    if (!state || typeof state !== 'object') return true;
+    const row = state as Record<string, unknown>;
+    const attribute = String(row.attribute || row.attribute_id || '');
+    if (attribute !== 'pose') return true;
+    const entity = String(row.entity || '').trim();
+    const storedPose = String(row.value || row.canonical_value || '').trim();
+    if (!entity || !storedPose) return true;
+    const newPose = extractEntityPoseFromFact(allFactsText, entity);
+    if (newPose && poseConflictsWithNew(storedPose, newPose)) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export function visibleFacts(spec: Record<string, any>, primaryAction: string): string[] {
   const facts: string[] = [];
   const listed = Array.isArray(spec.visual_facts) ? spec.visual_facts : [];
@@ -306,7 +354,9 @@ export function visibleFacts(spec: Record<string, any>, primaryAction: string): 
     const text = typeof fact === 'string' ? fact : fact?.text;
     if (text) facts.push(String(text).trim());
   }
-  facts.push(...continuityPromptLines(Array.isArray(spec.continuity_states) ? spec.continuity_states : []));
+  const rawStates = Array.isArray(spec.continuity_states) ? spec.continuity_states : [];
+  const filteredStates = filterConflictingContinuityStates(rawStates, facts);
+  facts.push(...continuityPromptLines(filteredStates));
   for (const prop of Array.isArray(spec.key_props) ? spec.key_props : []) {
     if (prop) facts.push(String(prop).trim());
   }
@@ -331,6 +381,11 @@ export const VideoSpecCompiler = {
     const requestedMove = String(scene.camera_movement || '').trim();
     const cameraMove = requestedMove && !['static', 'none'].includes(requestedMove.toLowerCase()) ? requestedMove : '';
     const cameraMotion = cameraMove ? `Smooth camera movement: ${cameraMove}.` : 'Locked camera, static frame with no camera movement.';
+    const factTexts = Array.isArray(spec.visual_facts) ? spec.visual_facts.map((f: any) => typeof f === 'string' ? f : f?.text || '').filter(Boolean) : [];
+    const filteredContinuityStates = filterConflictingContinuityStates(
+      Array.isArray(spec.continuity_states) ? spec.continuity_states : [],
+      factTexts
+    );
     const materials: VideoMotionMaterials = {
       visible_facts: visibleFacts(spec, primaryAction),
       appearance,
@@ -341,7 +396,7 @@ export const VideoSpecCompiler = {
       profile: request.profile,
       primary_action: primaryAction,
       camera_angle: String(scene.camera_angle || spec.camera_angle || '').trim(),
-      continuity_states: continuityPromptLines(Array.isArray(spec.continuity_states) ? spec.continuity_states : []),
+      continuity_states: continuityPromptLines(filteredContinuityStates),
       shot_intent: String(spec.shot_intent || ''),
       subject_scale: String(spec.subject_scale || ''),
       style: options.style || null,

@@ -457,11 +457,12 @@ export class ScriptGenerationService {
 
     try {
       // Scheme C Step 1: 剧本场次拆解 & 戏剧节拍构思 (enable_thinking: true, 不强制 JSON 格式)
+      const stepOneOutlinePrompt = prompt.replace(/---\s*输出格式规范\s*---[\s\S]*$/u, '').trim();
       const outlineConception = await runStageOneThinkingConception(
         provider,
-        `${prompt}\n\n【第一步任务：剧本场次拆解与戏剧节拍构思】请先不输出 JSON，以自由文字形式简明分析本章的核心戏剧冲突、情绪转折、必须保留的可见动作/服装/姿态事件（标明对应段落编号 p_x）、场次节拍（Beat）切分逻辑以及结尾钩子，形成清晰的场次拆解文字大纲（控制在 400 字以内）。`,
-        '你是一位专业短剧总编剧与戏剧构作师，擅长按戏剧节拍（Beat）与潜台词转折拆解剧本场次。请将内部思考控制在 300 字以内，直接给出简明构思大纲。',
-        { stream: true, temperature: 0.6, maxTokens: 2048 }
+        `${stepOneOutlinePrompt}\n\n【第一步任务：剧本场次拆解与戏剧节拍构思】\n请以自由文字形式简明分析本章的核心戏剧冲突、情绪转折、必须保留的可见动作/服装/姿态事件（标明对应段落编号 p_x）、场次节拍（Beat）切分逻辑以及结尾钩子，形成清晰的场次拆解文字大纲（控制在 300 字以内，不要输出 JSON）。`,
+        '你是一位专业短剧总编剧与戏剧构作师，擅长按戏剧节拍（Beat）与潜台词转折拆解剧本场次。请快速思考（思考过程不超过 200 字），直接给出简明场次拆解大纲。',
+        { stream: true, temperature: 0.6, maxTokens: 1024 }
       );
       // Scheme C Step 2: 提纲 JSON 格式化提取 (enable_thinking: false, 严格 JSON 结构转换)
       const formattingPrompt = outlineConception
@@ -821,17 +822,20 @@ export class ScriptGenerationService {
         try {
           if (attempt === 0) {
             // Scheme C Step 1: 剧本分场拆解 & 戏剧调度构思 (enable_thinking: true, 自由文本)
+            const stepOneScenePrompt = scenePrompt.replace(/---\s*输出格式规范\s*---[\s\S]*$/u, '').trim();
             sceneConception = await runStageOneThinkingConception(
               provider,
-              `${scenePrompt}\n\n【第一步任务：分场戏剧调度与表演节拍构思】请先不输出 JSON，以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排（控制在 400 字以内），确保原样保留必保事件与可见画面细节。`,
-              '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。请将内部思考控制在 300 字以内，直接给出简明构思大纲。',
-              { stream: true, temperature: 0.6, maxTokens: 2048 }
+              `${stepOneScenePrompt}\n\n--- 输出要求 ---\n请以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排（控制在 300 字以内，不要输出 JSON），确保原样保留必保事件与可见画面细节。`,
+              '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。请快速思考（思考过程不超过 200 字），直接给出简明构思大纲。',
+              { stream: true, temperature: 0.6, maxTokens: 1024 }
             );
           }
           // Scheme C Step 2: 分场剧本 JSON 格式化 & 资产提取 (enable_thinking: false, 严格 JSON)
-          const formattedScenePrompt = sceneConception
+          const formattedScenePrompt = (attempt === 0 && sceneConception)
             ? `${attemptPrompt}\n\n--- 第一步：分场戏剧调度与表演构思大纲（请严格提取并转换为 JSON） ---\n${sceneConception}`
-            : attemptPrompt;
+            : (sceneConception
+              ? `${scenePrompt}\n\n--- 第一步：分场戏剧调度与表演构思大纲（请严格提取并转换为 JSON） ---\n${sceneConception}${attemptPrompt.slice(scenePrompt.length)}`
+              : attemptPrompt);
           rawScene = await provider.generateStructured(
             formattedScenePrompt,
             GeneratedSceneResponseSchema,
@@ -1098,11 +1102,12 @@ export class ScriptGenerationService {
 
     try {
       // Scheme C Step 1: 分场改写戏剧调度构思 (enable_thinking: true, 自由文本)
+      const stepOneRewritePrompt = prompt.replace(/---\s*输出格式规范\s*---[\s\S]*$/u, '').trim();
       const rewriteConception = await runStageOneThinkingConception(
         provider,
-        `${prompt}\n\n【第一步任务：分场改写与戏剧张力构思】请先不输出 JSON，以自由文字形式分析本场戏的核心冲突升级点、外部动作设计与对白潜台词打磨方案，确保必保事件与关键道具完整保留。`,
-        '你是一位专业短剧导演与精修编剧，擅长通过动作细节和潜台词强化单场戏剧张力。',
-        { stream: true, temperature: 0.6, maxTokens: 4096 }
+        `${stepOneRewritePrompt}\n\n--- 输出要求 ---\n请以自由文字形式分析本场戏的核心冲突升级点、外部动作设计与对白潜台词打磨方案（控制在 300 字以内，不要输出 JSON），确保必保事件与关键道具完整保留。`,
+        '你是一位专业短剧导演与精修编剧，擅长通过动作细节和潜台词强化单场戏剧张力。请快速思考（思考过程不超过 200 字），直接给出简明构思大纲。',
+        { stream: true, temperature: 0.6, maxTokens: 1024 }
       );
       // Scheme C Step 2: 分场改写 JSON 格式化转换 (enable_thinking: false, 严格 JSON)
       const formattedRewritePrompt = rewriteConception

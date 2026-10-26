@@ -428,5 +428,17 @@ test('Scheme C: generateText supports enableThinking=true while generateStructur
         assert.equal(structuredRequestBody.reasoning_effort, 'none');
         assert.equal(structuredRequestBody.response_format.type, 'json_object');
     }, 'Qwen3.8-27B');
+
+    // Unclosed <think> truncated at finish_reason=length must reject rather than leak unfinished thought
+    await withTextServer((response) => {
+        response.setHeader('content-type', 'text/event-stream');
+        sendChunk(response, '<think>思考尚未完成就被截断', 'length');
+        response.end('data: [DONE]\n\n');
+    }, async provider => {
+        await assert.rejects(
+            () => provider.generateText('请输出导演分镜构思', '你是分镜导演', { enableThinking: true, maxTokens: 128 }),
+            /未完整结束/
+        );
+    }, 'Qwen3.8-27B');
 });
 

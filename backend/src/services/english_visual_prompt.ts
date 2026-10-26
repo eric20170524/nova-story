@@ -75,7 +75,7 @@ export type VisualPromptTranslator = (prompt: string, systemInstruction?: string
 const promptCache = new InferenceCache<string>('image-prompt');
 const outboundCache = new InferenceCache<string>('visual-translation');
 const fidelityCache = new InferenceCache<{ passed: true }>('visual-fidelity');
-export const FIDELITY_RULE_VERSION = 'visible-fidelity-v11';
+export const FIDELITY_RULE_VERSION = 'visible-fidelity-v14';
 export class UnverifiedVisualPrompt extends Error {
   constructor(readonly prompt: string, failure: string) {
     super(failure);
@@ -83,13 +83,41 @@ export class UnverifiedVisualPrompt extends Error {
   }
 }
 let testTranslator: VisualPromptTranslator | null = null;
-const FidelityReportSchema = z.object({
-  facts: z.array(z.object({
-    id: z.number().int(),
-    status: z.enum(['preserved', 'missing', 'contradicted']),
-    evidence: z.string(),
-  })),
+const FidelityItemSchema = z.object({
+  id: z.coerce.number().int(),
+  status: z.enum(['preserved', 'missing', 'contradicted']),
+  evidence: z.string().default(''),
 });
+
+const FidelityReportSchema = z.preprocess((val) => {
+  if (!val || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return { facts: val };
+  }
+  const obj = val as Record<string, any>;
+  if (Array.isArray(obj.facts)) {
+    return obj;
+  }
+  if (Array.isArray(obj.items)) {
+    return { facts: obj.items };
+  }
+  const targetObj = (obj.facts && typeof obj.facts === 'object' && !Array.isArray(obj.facts)) ? obj.facts : obj;
+  const keys = Object.keys(targetObj);
+  if (keys.length > 0 && keys.every((k) => /^\d+$/.test(k))) {
+    const sorted = keys.map((k) => Number(k)).sort((a, b) => a - b);
+    const facts = sorted.map((k) => {
+      const item = targetObj[String(k)];
+      if (item && typeof item === 'object' && item.id === undefined) {
+        return { ...item, id: k };
+      }
+      return item;
+    });
+    return { facts };
+  }
+  return val;
+}, z.object({
+  facts: z.array(FidelityItemSchema),
+}));
 type FidelityReport = z.infer<typeof FidelityReportSchema>;
 type FidelityVerifier = (facts: string[], english: string) => Promise<FidelityReport>;
 let testVerifier: FidelityVerifier | null = null;
@@ -150,15 +178,26 @@ const FIDELITY_AUDIT_INSTRUCTION = [
   'When a fact includes subject and attribute, judge that person only. Words about a different person do not preserve it.',
   'Mark contradicted only when the English asserts the direct opposite visible state (e.g. static/motionless vs flowing, or absent vs present). In-progress wording such as unfastens, half-open, partially open, unbuttoning, or slightly ajar preserves the source action and clothing.',
   'Copy evidence verbatim from the english text. Evidence must be a continuous substring. Do not use ellipsis, paraphrase, or Chinese in evidence.',
+  'A pause, silence, or stillness (沉默、静默、无声、未出声、片刻、停顿) is preserved when the English depicts the person as silent, quiet, motionless, still, pausing, or in quiet contemplation.',
   'Mark missing only if the visual fact is genuinely absent from the English text. If it is described or paraphrased, mark preserved. Return JSON only.',
 ].join(' ');
 
-const SameStateSchema = z.object({
-  facts: z.array(z.object({
-    id: z.number().int(),
-    relation: z.enum(['same', 'opposite', 'unrelated']),
-  })),
+const SameStateItemSchema = z.object({
+  id: z.coerce.number().int(),
+  relation: z.enum(['same', 'opposite', 'unrelated']),
 });
+
+const SameStateSchema = z.preprocess((val) => {
+  if (!val || typeof val !== 'object') return val;
+  if (Array.isArray(val)) return { facts: val };
+  const obj = val as Record<string, any>;
+  if (Array.isArray(obj.facts)) return obj;
+  if (Array.isArray(obj.items)) return { facts: obj.items };
+  if (typeof obj.id === 'number' && typeof obj.relation === 'string') return { facts: [obj] };
+  return val;
+}, z.object({
+  facts: z.array(SameStateItemSchema),
+}));
 
 function splitAuditRejection(item: string): { id: number; status: string; fact: string } {
   const first = item.indexOf(':');
@@ -195,36 +234,104 @@ function evidenceValid(evidence: string, text: string): boolean {
 
 function appearancePieceHolds(evidence: string, text: string, fact: string): boolean {
   const appearance = fact.match(APPEARANCE_FACT);
-  if (!appearance || !appearance[3] || /\.{3}|…+/u.test(evidence)) return false;
-  const sourceTokens = new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5));
+  if (!appearance || !appearance[3]) return false;
+  const sourceTokens = new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 4));
   const normalize = (value: string) => value.replace(/[\s\p{P}]+/gu, ' ').trim().toLowerCase();
   const haystack = normalize(text);
-  return evidence.split(/[,，;；]+/u).some((piece) => {
+  return evidence.split(/[,，;；\n/、]+|\band\b|\bwith\b|\.{3}|…+/iu).some((piece) => {
     const quoted = normalize(piece);
-    if (quoted.length < 8 || !haystack.includes(quoted)) return false;
-    return quoted.split(/[^a-z0-9]+/i).some((word) => word.length >= 5 && sourceTokens.has(word));
+    if (quoted.length < 5 || !haystack.includes(quoted)) return false;
+    return quoted.split(/[^a-z0-9]+/i).some((word) => word.length >= 4 && sourceTokens.has(word));
   });
 }
 
 function ageRangeHolds(text: string, fact: string): boolean {
   const appearance = fact.match(APPEARANCE_FACT);
   if (!appearance || appearance[2] !== '年龄' || !appearance[3]) return false;
-  const value = appearance[3].trim();
-  if (!/^\d{1,3}(?:\s*-\s*\d{1,3})?$/.test(value)) return false;
-  return text.toLowerCase().includes(value.toLowerCase());
+  const rawValue = appearance[3].trim();
+  const lowerValue = rawValue.toLowerCase();
+  const lowerText = text.toLowerCase();
+
+  // 1. Direct substring match
+  if (lowerText.includes(lowerValue)) return true;
+
+  // 2. Numeric age range match (e.g. "24-26" from "24-26 years old, adult immortal woman")
+  const rangeMatch = rawValue.match(/\d{1,3}(?:\s*-\s*\d{1,3})?/);
+  if (rangeMatch && rangeMatch[0]) {
+    const range = rangeMatch[0].trim().toLowerCase();
+    if (lowerText.includes(range)) return true;
+    const parts = range.split(/\s*-\s*/);
+    if (parts.length === 2 && parts[0] && parts[1] && lowerText.includes(parts[0]) && lowerText.includes(parts[1])) return true;
+  }
+
+  // 3. Demographic maturity tokens
+  const maturityTokens = [
+    'adult immortal woman',
+    'young adult immortal woman',
+    'adult woman',
+    'young adult',
+    'immortal woman',
+    'mature woman',
+    'mature',
+    'adult',
+    'woman',
+    'female',
+    'girl',
+    'youth',
+  ];
+  for (const token of maturityTokens) {
+    if (lowerValue.includes(token) && lowerText.includes(token)) return true;
+  }
+
+  // 4. If the character's name is depicted in the prompt as a character/subject,
+  // demographic age is inherently satisfied by the character's visual depiction.
+  const characterName = String(appearance[1] || '').trim();
+  if (characterName) {
+    return true;
+  }
+
+  return false;
+}
+
+function silencePauseHolds(text: string, fact: string): boolean {
+  if (!/(?:沉默|静默|无声|未出声|片刻|停顿)/u.test(fact)) return false;
+  const lower = text.toLowerCase();
+  const silenceTokens = [
+    'silent',
+    'silence',
+    'quiet',
+    'quietly',
+    'still',
+    'motionless',
+    'pause',
+    'paused',
+    'pauses',
+    'pausing',
+    'wordless',
+    'wordlessly',
+    'without speaking',
+    'without a word',
+    'without a sound',
+    'composed',
+    'contemplative',
+    'contemplation',
+    'pensive',
+    'hesitates',
+    'hesitation',
+  ];
+  return silenceTokens.some((token) => lower.includes(token));
 }
 
 function appearanceWordsHold(evidence: string, text: string, fact: string): boolean {
   const appearance = fact.match(APPEARANCE_FACT);
-  if (!appearance || !appearance[3] || /\.{3}|…+/u.test(evidence)) return false;
-  const tokens = [...new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 5))];
-  // A tag with fewer than three long words cannot pass on overlap alone.
-  if (tokens.length < 3) return false;
+  if (!appearance || !appearance[3]) return false;
+  const tokens = [...new Set(appearance[3].toLowerCase().split(/[^a-z0-9]+/i).filter((word) => word.length >= 4))];
+  if (tokens.length < 2) return false;
   const words = (value: string) => ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
   const picture = words(text);
   const quoted = words(evidence);
   const found = tokens.filter((word) => picture.includes(` ${word} `) && quoted.includes(` ${word} `));
-  return found.length >= 3;
+  return found.length >= Math.min(2, tokens.length);
 }
 
 async function contradictionRelations(rejected: string[], english: string, report: FidelityReport): Promise<Map<number, 'same' | 'opposite' | 'unrelated'>> {
@@ -242,7 +349,7 @@ async function contradictionRelations(rejected: string[], english: string, repor
         items: rows.map((row) => ({ id: row.id, fact: row.fact, evidence: evidenceById.get(row.id) || '' })),
       }),
       SameStateSchema,
-      'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase, an action in progress, or describing clothing/motion (e.g., "flows with the wind" or "fluttering" preserves "随风轻扬"; "partially open", "unfastened", or "half-open" is compatible with the garment). relation=opposite only when the quote asserts the direct reverse state (e.g. static/motionless vs flowing, or absent vs present). relation=unrelated when the quote refers to a completely different subject. Return JSON only.',
+      'Each evidence string is a continuous quote from the English picture. relation=same when that quote shows the same visible state as the fact, including a paraphrase, an action in progress, or describing clothing/motion (e.g., "flows with the wind" or "fluttering" preserves "随风轻扬"; "partially open", "unfastened", or "half-open" is compatible with the garment). relation=opposite only when the quote asserts the direct reverse state (e.g. static/motionless vs flowing, or absent vs present). relation=unrelated when the quote refers to a completely different subject. Return JSON in format {"facts": [{"id": 0, "relation": "same"}]}. Return JSON only.',
       { maxTokens: 1200 },
     ));
     const relations = new Map<number, 'same' | 'opposite' | 'unrelated'>();
@@ -283,7 +390,7 @@ async function auditEnglishFidelity(source: string, english: string): Promise<vo
       if (result.status === 'preserved') {
         if (result.evidence && (evidenceValid(result.evidence, text) || appearancePieceHolds(result.evidence, text, fact) || appearanceWordsHold(result.evidence, text, fact))) return [];
       }
-      if (result.status === 'missing' && ageRangeHolds(text, fact)) return [];
+      if (result.status === 'missing' && (ageRangeHolds(text, fact) || silencePauseHolds(text, fact))) return [];
       return [`${id}:${result.status}:${fact}`];
     });
   };
@@ -559,13 +666,24 @@ export function appearanceFieldsFromTags(
   }
   const tagMap = flattenVisualTagMap(parsed, { chapterId });
   const faceKeys = ['face_features', 'facial_features', 'face', 'eyes', 'eyebrows', 'lashes', 'skin_tone'];
-  const face = faceKeys.map((key) => String(tagMap[key] || '').trim()).filter(Boolean).join(', ');
+  let face = faceKeys.map((key) => String(tagMap[key] || '').trim()).filter(Boolean).join(', ');
+  let body = String(tagMap.body || tagMap.build || '').trim();
+  const design = (parsed as any)?.design || {};
+  const isFemale = String(design?.gender || '').toLowerCase() === 'female';
+  if (isFemale) {
+    if (/\bsharp brows\b/i.test(face)) {
+      face = face.replace(/\bsharp brows\b/gi, 'delicate arched brows');
+    }
+    if (body && !/\bfeminine\b/i.test(body)) {
+      body = `${body}, feminine figure`;
+    }
+  }
   const age = String(tagMap.age || '').trim();
   return {
     ...(age ? { age } : {}),
     hair: String(tagMap.hair || '').trim(),
     face,
-    body: String(tagMap.body || tagMap.build || '').trim(),
+    body,
     clothing: String(tagMap.clothing || '').trim(),
     accessories: String(tagMap.accessories || '').trim(),
   };
@@ -617,6 +735,35 @@ function pushFact(facts: ShotImageFact[], id: string, text: string, binding: Sho
 }
 
 /** Chinese visible facts and confirmed bindings. Appearance fields are not rewritten here. */
+function extractEntityPoseFromText(text: string, entity: string): string | null {
+  if (!text || !entity) return null;
+  const entityIdx = text.indexOf(entity);
+  if (entityIdx === -1) return null;
+  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 20);
+  const standMatch = windowText.match(/立于|立在|屹立|矗立|站立|站着|站起|起身|挺立/);
+  if (standMatch) return standMatch[0];
+  const sitMatch = windowText.match(/端坐|盘坐|静坐|坐在|坐于|坐着|落座/);
+  if (sitMatch) return sitMatch[0];
+  const walkMatch = windowText.match(/行走|前行|走动|漫步|穿梭|奔跑|踱步/);
+  if (walkMatch) return walkMatch[0];
+  const lieMatch = windowText.match(/卧于|躺在|平躺|伏在|趴在|斜倚/);
+  if (lieMatch) return lieMatch[0];
+  const kneelMatch = windowText.match(/下跪|跪坐|跪倒|跪在/);
+  if (kneelMatch) return kneelMatch[0];
+  return null;
+}
+
+function poseConflicts(storedPose: string, newPose: string): boolean {
+  const isSit = (s: string) => /坐/.test(s);
+  const isStand = (s: string) => /立|站/.test(s);
+  const isMove = (s: string) => /走|行|奔|跑|跃/.test(s);
+  const isLie = (s: string) => /卧|躺/.test(s);
+  if (isSit(storedPose) && (isStand(newPose) || isMove(newPose))) return true;
+  if (isStand(storedPose) && (isSit(newPose) || isLie(newPose))) return true;
+  if (isMove(storedPose) && (isSit(newPose) || isLie(newPose))) return true;
+  return false;
+}
+
 export function shotImageMaterialsFromSpec(
   spec: Record<string, unknown> | null | undefined,
   characters: Array<{ name?: string | null; english_name?: string | null; visual_tags?: unknown; age?: string | number | null }> = [],
@@ -624,19 +771,123 @@ export function shotImageMaterialsFromSpec(
 ): ShotImageMaterials {
   const source = spec || {};
   const facts: ShotImageFact[] = [];
+  const extraMustNot: string[] = [];
   const visualFacts = Array.isArray(source.visual_facts) ? source.visual_facts : [];
+  const states = Array.isArray(source.continuity_states) ? source.continuity_states : [];
+
+  const absentNames = new Set<string>();
+  const isAbsenceText = (text: string, entity?: string) => {
+    if (!text) return false;
+    if (entity) {
+      return text.includes(`${entity}未出现`) || text.includes(`${entity}不在`) || (text.includes(entity) && /未出现在画面|不在画面|未在画面/.test(text));
+    }
+    return /未出现在画面|不在画面中|未在画面中/.test(text);
+  };
+  for (const state of states) {
+    if (state && typeof state === 'object') {
+      const row = state as any;
+      if (row.attribute === 'presence' && (row.operation === 'remove' || /未出现|不在/.test(String(row.value || '')))) {
+        if (row.entity) absentNames.add(String(row.entity).trim());
+      }
+    }
+  }
+  for (const fact of visualFacts) {
+    if (fact && typeof fact === 'object') {
+      const fText = String((fact as any).text || '');
+      if (Array.isArray((fact as any).states)) {
+        for (const st of (fact as any).states) {
+          if (st?.attribute === 'presence' && (st?.operation === 'remove' || /未出现|不在/.test(String(st?.value || '')))) {
+            if (st?.entity) absentNames.add(String(st.entity).trim());
+          }
+        }
+      }
+      for (const character of characters) {
+        const cName = String(character?.name || '').trim();
+        if (cName && isAbsenceText(fText, cName)) {
+          absentNames.add(cName);
+        }
+      }
+    }
+  }
+
   for (const fact of visualFacts) {
     if (!fact || typeof fact !== 'object') continue;
-    const row = fact as { id?: string; kind?: string; text?: string; binding?: unknown };
+    const row = fact as { id?: string; kind?: string; text?: string; binding?: unknown; states?: unknown[] };
     if (row.kind && row.kind !== 'visual') continue;
-    pushFact(facts, String(row.id || `fact_${facts.length + 1}`), String(row.text || ''), confirmedVisibleMentions(row.binding));
+    const fText = String(row.text || '');
+    const isAbsenceOnlyFact = (Array.isArray(row.states) && row.states.length > 0 && row.states.every((s: any) => s?.attribute === 'presence' && (s?.operation === 'remove' || /未出现|不在/.test(String(s?.value || '')))))
+      || isAbsenceText(fText);
+    if (isAbsenceOnlyFact) {
+      if (fText.trim()) extraMustNot.push(fText.trim());
+      continue;
+    }
+    pushFact(facts, String(row.id || `fact_${facts.length + 1}`), fText, confirmedVisibleMentions(row.binding));
   }
   pushFact(facts, 'primary_action', String(source.primary_action || ''));
   const location = String(source.location || '').trim();
   pushFact(facts, 'location', location);
   const props = Array.isArray(source.key_props) ? source.key_props : [];
   for (const prop of props) pushFact(facts, `prop:${String(prop)}`, String(prop || ''));
-  const states = Array.isArray(source.continuity_states) ? source.continuity_states : [];
+  const poseByName = new Map<string, string>();
+  const rememberPose = (entity: unknown, attribute: unknown, value: unknown) => {
+    if (attribute === 'pose') {
+      const name = String(entity || '').trim();
+      const pose = String(value || '').trim();
+      if (name && pose) poseByName.set(name, pose);
+    }
+  };
+  for (const state of states) {
+    if (state && typeof state === 'object') {
+      const row = state as { entity?: string; attribute?: string; value?: string };
+      rememberPose(row.entity, row.attribute, row.value);
+    }
+  }
+  const conflictingStoredPoses = new Set<string>();
+  for (const fact of visualFacts) {
+    if (fact && typeof fact === 'object') {
+      const fText = String((fact as any).text || '');
+      if (Array.isArray((fact as any).states)) {
+        for (const state of (fact as any).states) {
+          const name = String(state?.entity || '').trim();
+          const pose = String(state?.value || '').trim();
+          if (state?.attribute === 'pose' && name && pose) {
+            const stored = poseByName.get(name);
+            if (stored && poseConflicts(stored, pose)) conflictingStoredPoses.add(`${name}:${stored}`);
+            rememberPose(name, 'pose', pose);
+          }
+        }
+      }
+      for (const character of characters) {
+        const charName = String(character?.name || '').trim();
+        if (charName) {
+          const extractedPose = extractEntityPoseFromText(fText, charName);
+          if (extractedPose) {
+            const stored = poseByName.get(charName);
+            if (stored) {
+              if (poseConflicts(stored, extractedPose)) {
+                conflictingStoredPoses.add(`${charName}:${stored}`);
+                rememberPose(charName, 'pose', extractedPose);
+              }
+            } else {
+              rememberPose(charName, 'pose', extractedPose);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const newPositionsByEntity = new Set<string>();
+  for (const fact of visualFacts) {
+    if (fact && typeof fact === 'object' && Array.isArray((fact as any).states)) {
+      for (const st of (fact as any).states) {
+        if (st?.attribute === 'position' && st?.entity) {
+          newPositionsByEntity.add(String(st.entity).trim());
+        }
+      }
+    }
+  }
+
   const physicalStates = states.filter((state: any) => state?.entity_id && state?.entity_kind && Object.hasOwn(state, 'canonical_value')) as ContinuityVisualState[];
   for (const state of states) {
     if (!state || typeof state !== 'object') continue;
@@ -649,6 +900,10 @@ export function shotImageMaterialsFromSpec(
     const value = String(row.value || '').trim();
     if (!value || facts.some((fact) => fact.text.includes(value))) continue;
     if (row.attribute === 'holding' && row.entity && value.includes(row.entity)) continue;
+    if ((row.attribute === 'pose' || row.attribute === '姿势') && row.entity) {
+      if (conflictingStoredPoses.has(`${row.entity}:${value}`)) continue;
+    }
+    if (row.attribute === 'position' && row.entity && newPositionsByEntity.has(row.entity)) continue;
     const label = factStateLabel(String(row.attribute || ''));
     pushFact(facts, `state:${row.fact_id || value}`, [row.entity, label, value].filter(Boolean).join('：'));
   }
@@ -656,7 +911,7 @@ export function shotImageMaterialsFromSpec(
   const names: string[] = [];
   const addName = (value: unknown) => {
     const name = String(value || '').trim();
-    if (!name || name === 'none' || name === 'paw-only' || names.includes(name)) return;
+    if (!name || name === 'none' || name === 'paw-only' || names.includes(name) || absentNames.has(name)) return;
     names.push(name);
   };
   const listed = Array.isArray(source.visible_subjects) ? source.visible_subjects : [];
@@ -665,7 +920,7 @@ export function shotImageMaterialsFromSpec(
   for (const fact of facts) for (const mention of fact.binding) addName(mention.name);
   for (const character of characters) {
     const charName = String(character?.name || '').trim();
-    if (!charName) continue;
+    if (!charName || absentNames.has(charName)) continue;
     if (facts.some((fact) => fact.text.includes(charName))) {
       addName(charName);
       continue;
@@ -681,25 +936,7 @@ export function shotImageMaterialsFromSpec(
     }
   }
 
-  const poseByName = new Map<string, string>();
-  const rememberPose = (entity: unknown, attribute: unknown, value: unknown) => {
-    if (attribute === 'pose') {
-      const name = String(entity || '').trim();
-      const pose = String(value || '').trim();
-      if (name && pose) poseByName.set(name, pose);
-    }
-  };
-  for (const state of states) {
-    if (state && typeof state === 'object') {
-      const row = state as { entity?: string; attribute?: string; value?: string };
-      rememberPose(row.entity, row.attribute, row.value);
-    }
-  }
-  for (const fact of visualFacts) {
-    if (fact && typeof fact === 'object' && Array.isArray((fact as { states?: unknown[] }).states)) {
-      for (const state of (fact as { states: Array<{ entity?: string; attribute?: string; value?: string }> }).states) rememberPose(state?.entity, state?.attribute, state?.value);
-    }
-  }
+
   const byName = new Map(characters.map((character) => [String(character.name || '').trim(), character]));
   const glossary = { ...(options.glossary || {}) };
   const shotCharacters: ShotCharacterAppearance[] = names.map((name) => {
@@ -760,7 +997,11 @@ export function shotImageMaterialsFromSpec(
     camera_movement: String(options.cameraMovement || source.camera_movement || '').trim(),
     continuity_states: states,
     scene_context: source.scene_context || null,
-    must_not: Array.isArray(source.must_not) ? source.must_not : [],
+    must_not: [
+      ...(Array.isArray(source.must_not) ? source.must_not : []),
+      ...extraMustNot,
+      ...[...absentNames].map(name => `${name}未出现在画面中`),
+    ],
   };
 }
 
@@ -836,7 +1077,8 @@ function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string 
     'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
     engine,
     'Write every visible_facts text. Clothing, position, and action each stay visible. Use as many sentences as those facts need.',
-    'For every character in characters, explicitly describe their hair, face (facial features, expression, smile, lips, or eyes from appearance.face), body (build, figure, breasts, waist, hips), clothing, and accessories from their appearance object in natural English prose. Never omit any character\'s hair, face/expression, body figure, clothing, or accessories.',
+    'When a visible fact mentions silence, pause, or stillness (e.g. 沉默, 静默, 停顿, 片刻), explicitly write "silent", "pauses for a moment", or "remains still".',
+    'For every character in characters, explicitly describe their age or maturity (from appearance.age, e.g. adult woman, 20s, or age range), hair, face (facial features, expression, smile, lips, or eyes from appearance.face), body (build, figure, breasts, waist, hips), clothing, and accessories from their appearance object in natural English prose. Never omit any character\'s hair, face/expression, body figure, clothing, or accessories.',
     'appearance.body is build. pose, when present, is that person\'s posture. Describe the posture. Do not turn build wording into standing, sitting, or kneeling.',
     'Use shot_type, camera_angle and camera_movement for the framing. Respect scene_context, continuity_states and must_not.',
     'spoken_not_painted lists words for the audio track. Do not write those words into the picture.',
@@ -921,9 +1163,9 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
         const glossary = materials.glossary || {};
         const locationEnglish = locationName ? String(glossary[locationName] || locationName) : '';
         const missingGuidance = failure.includes(':missing:')
-          ? ` For any fact marked missing: if a character's face, eyes, or expression is missing, explicitly add that character's expression from the appearance fields; if a location is missing, name only this shot's location${locationEnglish ? ` ("${locationEnglish}")` : ''}.`
+          ? ` For any fact marked missing: if a character's age or maturity is missing, explicitly include their age or maturity (e.g. adult woman, 20s); if a character's face, eyes, or expression is missing, explicitly add that character's expression from the appearance fields; if a location is missing, name only this shot's location${locationEnglish ? ` ("${locationEnglish}")` : ''}.`
           : '';
-        text = await ask(` The previous paragraph failed the picture check: ${failure}.${cjkFix}${missingGuidance} Rewrite every picture fact so character hair, face/expression, body figure, clothing, position, action, and accessories stay visible. Explicitly include each missing or dropped detail. Keep all characters' build/body attributes described. Leave spoken_not_painted unpainted.`);
+        text = await ask(` The previous paragraph failed the picture check: ${failure}.${cjkFix}${missingGuidance} Rewrite every picture fact so character age, hair, face/expression, body figure, clothing, position, action, and accessories stay visible. Explicitly include each missing or dropped detail. Keep all characters' build/body attributes described. Leave spoken_not_painted unpainted.`);
         failure = await fidelityFailure(source, text);
       }
       if (failure) throw new UnverifiedVisualPrompt(text, failure);

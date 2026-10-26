@@ -36,12 +36,11 @@ export function resolveLlmApiKey(llmConfig: LLMProviderConfig, providerType: str
     if (isLocalLlm) return 'ollama';
     if (isRemotePresetLlm(llmConfig)) {
         if (configuredKey && configuredKey !== 'ollama') return configuredKey;
-        if (isRemoteQwenLlm(llmConfig)) {
-            return process.env.QWEN_REMOTE_API_KEY || process.env.LLM_API_KEY || 'qwn_hCOfqyB5a5YQr8ka_a5Jd977-Fx1C_UC_GMM2LCxLDqRxs0a';
-        }
-        if (isRemoteGemmaLlm(llmConfig)) {
-            return process.env.GEMMA_REMOTE_API_KEY || process.env.LLM_API_KEY || '060338a5907f38dfc75b107d7ca0795e8546153655ea75ae';
-        }
+        const rawEnvKey = isRemoteQwenLlm(llmConfig)
+            ? (process.env.QWEN38_API_KEY || process.env.QWEN_REMOTE_API_KEY || process.env.LLM_API_KEY)
+            : (process.env.GEMMA4_API_KEY || process.env.GEMMA_REMOTE_API_KEY || process.env.LLM_API_KEY);
+        const envKey = String(rawEnvKey || '').trim();
+        return envKey && envKey !== 'ollama' ? envKey : '';
     }
     return configuredKey || appSettings.OPENAI_API_KEY;
 }
