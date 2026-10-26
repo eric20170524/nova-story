@@ -19,6 +19,8 @@ import {
   X,
   Check,
   Sparkles,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { EntityBindingReview } from '../components/story/EntityBindingReview';
@@ -35,13 +37,15 @@ export const ScriptEditor: React.FC = () => {
   const { showToast } = useToast();
   const doc = useScriptDocument();
   const candidates = useScriptCandidates(doc);
-  const [activeTab, setActiveTab] = useState<'scenes' | 'outline' | 'locations_props'>('scenes');
+  const [activeTab, setActiveTab] = useState<'script' | 'locations_props'>('script');
+  const [outlineOpen, setOutlineOpen] = useState(true);
   const [showProsePanel, setShowProsePanel] = useState(true);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [markdownContent, setMarkdownContent] = useState('');
   const [copied, setCopied] = useState(false);
 
   const {
+    projectIdStr,
     chapters,
     selectedChapter,
     characters,
@@ -68,6 +72,30 @@ export const ScriptEditor: React.FC = () => {
     handleRestore,
     handleRefreshSource,
   } = doc;
+  React.useEffect(() => {
+    if (!projectIdStr) return;
+    try {
+      const raw = localStorage.getItem(`novastory_script_outline_open_${projectIdStr}`);
+      setOutlineOpen(raw !== '0');
+    } catch {
+      setOutlineOpen(true);
+    }
+  }, [projectIdStr]);
+
+  const toggleOutlineOpen = () => {
+    setOutlineOpen((current) => {
+      const next = !current;
+      if (projectIdStr) {
+        try {
+          localStorage.setItem(`novastory_script_outline_open_${projectIdStr}`, next ? '1' : '0');
+        } catch {
+          /* ignore */
+        }
+      }
+      return next;
+    });
+  };
+
   const {
     generatingOutline,
     generatingScript,
@@ -558,49 +586,33 @@ export const ScriptEditor: React.FC = () => {
 
             {scriptData && document && (
               <>
-                {/* Tabs Bar */}
+                {/* Tabs Bar: 剧本(提纲+分场) | 地点道具 */}
                 <div className="flex items-center px-4 sm:px-6 pt-3 border-b border-slate-200 dark:border-slate-800 gap-4 bg-slate-50/50 dark:bg-[#090d16]/50">
                   <button
                     type="button"
-                    onClick={() => setActiveTab('scenes')}
+                    data-testid="script-tab-script"
+                    onClick={() => setActiveTab('script')}
                     className={`pb-2 text-xs sm:text-sm font-medium transition-all relative ${
-                      activeTab === 'scenes'
+                      activeTab === 'script'
                         ? 'text-indigo-600 dark:text-indigo-400'
                         : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
                     }`}
                   >
                     <span className="flex items-center gap-1.5">
                       <Layers size={14} />
-                      {t('script_editor.tab_scenes')}
+                      {t('script_editor.tab_script', '剧本')}
                       <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-slate-200 dark:bg-slate-800">
                         {document.scenes.length}
                       </span>
                     </span>
-                    {activeTab === 'scenes' && (
+                    {activeTab === 'script' && (
                       <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 rounded-full" />
                     )}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setActiveTab('outline')}
-                    className={`pb-2 text-xs sm:text-sm font-medium transition-all relative ${
-                      activeTab === 'outline'
-                        ? 'text-indigo-600 dark:text-indigo-400'
-                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <BookOpen size={14} />
-                      {t('script_editor.tab_outline')}
-                    </span>
-                    {activeTab === 'outline' && (
-                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 rounded-full" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
+                    data-testid="script-tab-locations"
                     onClick={() => setActiveTab('locations_props')}
                     className={`pb-2 text-xs sm:text-sm font-medium transition-all relative ${
                       activeTab === 'locations_props'
@@ -621,9 +633,255 @@ export const ScriptEditor: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Tab 1: Scenes View */}
-                {activeTab === 'scenes' && (
-                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
+                {/* Script split: 改编提纲 (左) | 分场正文 (右) */}
+                {activeTab === 'script' && (
+                  <div className="flex-1 flex flex-col sm:flex-row min-h-0 overflow-hidden" data-testid="script-split-view">
+                    {outlineOpen ? (
+                      <aside
+                        data-testid="script-outline-pane"
+                        className="w-full sm:w-[38%] sm:max-w-md lg:max-w-lg max-h-[42vh] sm:max-h-none flex-shrink-0 border-b sm:border-b-0 sm:border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 bg-slate-50/40 dark:bg-[#090d16]/40"
+                      >
+                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <BookOpen size={14} className="text-indigo-500 flex-shrink-0" />
+                            <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
+                              {t('script_editor.tab_outline')}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            data-testid="script-outline-collapse"
+                            onClick={toggleOutlineOpen}
+                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800"
+                            title={t('script_editor.outline_collapse', '收起提纲')}
+                          >
+                            <ChevronLeft size={14} />
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 custom-scrollbar">
+                    {/* Logline */}
+                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
+                      <label className="block text-xs font-semibold mb-2">
+                        {t('script_editor.outline_logline')}
+                      </label>
+                      <textarea
+                        value={document.outline.logline}
+                        onChange={(e) =>
+                          updateDoc((doc) => ({
+                            ...doc,
+                            outline: { ...doc.outline, logline: e.target.value },
+                          }))
+                        }
+                        rows={3}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        placeholder={t('script_editor.outline_logline_placeholder')}
+                      />
+                    </div>
+
+                    {/* Must-Keep Events */}
+                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="text-xs font-semibold">
+                          {t('script_editor.must_keep_events')}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newId = `ev_${Date.now()}`;
+                            updateDoc((doc) => ({
+                              ...doc,
+                              outline: {
+                                ...doc.outline,
+                                mustKeepEvents: [
+                                  ...doc.outline.mustKeepEvents,
+                                  { id: newId, text: '', sourceParagraphIds: [] },
+                                ],
+                              },
+                            }));
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-xs bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 flex items-center gap-1 font-medium"
+                        >
+                          <Plus size={12} />
+                          {t('script_editor.add_event')}
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {document.outline.mustKeepEvents.map((ev, eIdx) => (
+                          <div key={ev.id} className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-mono text-slate-400 w-12">
+                              {ev.id}
+                            </span>
+                            <input
+                              type="text"
+                              value={ev.text}
+                              onChange={(e) => {
+                                const text = e.target.value;
+                                updateDoc((doc) => {
+                                  const events = [...doc.outline.mustKeepEvents];
+                                  const item = events[eIdx];
+                                  if (item) events[eIdx] = { ...item, text, binding: undefined };
+                                  return { ...doc, outline: { ...doc.outline, mustKeepEvents: events } };
+                                });
+                              }}
+                              className="flex-1 p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                              placeholder={t('script_editor.event_text_placeholder')}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateDoc((doc) => {
+                                  const events = [...doc.outline.mustKeepEvents];
+                                  events.splice(eIdx, 1);
+                                  return { ...doc, outline: { ...doc.outline, mustKeepEvents: events } };
+                                });
+                              }}
+                              className="p-1 text-red-400 hover:text-red-600"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                            {ev.binding && <EntityBindingReview binding={ev.binding} characters={reviewCharacters} onChange={async binding => {
+                              const edited = await editScriptReferences(ev.text, binding);
+                              if (scriptDataRef.current?.id !== scriptData?.id) return;
+                              updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map(item => item.id === ev.id && item.text === ev.text ? { ...item, ...edited } : item) } }));
+                            }} />}
+                            {ev.binding?.mentions.some(mention => !mention.confirmed) ? <button type="button" className="text-xs rounded border px-2 py-1" onClick={() => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx && item.binding ? { ...item, binding: { ...item.binding, mentions: item.binding.mentions.map(m => m.status === 'resolved' && m.entity && m.visibility !== 'uncertain' ? { ...m, authority: 'human', confirmed: true } : m) } } : item) } }))}>已核对这条改编的人物关系</button> : null}
+                            {ev.sourceBindings?.map((source, sourceIndex) => source.binding.mentions.length ? <div key={source.paragraph_id} className="w-full p-2 rounded bg-slate-50 dark:bg-slate-800">
+                              {scriptData?.sourceSnapshot?.paragraphSnapshots && <p className="text-xs mb-1 text-slate-500">前文：{(() => { const paragraphs = scriptData.sourceSnapshot.paragraphSnapshots; const index = paragraphs.findIndex(p => p.id === source.paragraph_id); return paragraphs.slice(Math.max(0, index - 2), Math.max(0, index)).map(p => p.text).join(' '); })() || '无前文'}</p>}
+                              <p className="text-xs mb-1">原文：{source.text}</p>
+                              <EntityBindingReview binding={source.binding} characters={reviewCharacters} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, sourceBindings: item.sourceBindings!.map((entry, j) => j === sourceIndex ? { ...entry, binding } : entry) } : item) } }))} />
+                            </div> : null)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Dramatic Beats */}
+                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="text-xs font-semibold">
+                          {t('script_editor.dramatic_beats')}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newId = `beat_${Date.now()}`;
+                            updateDoc((doc) => ({
+                              ...doc,
+                              outline: {
+                                ...doc.outline,
+                                beats: [...doc.outline.beats, { id: newId, purpose: '', eventIds: [] }],
+                              },
+                            }));
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-xs bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 flex items-center gap-1 font-medium"
+                        >
+                          <Plus size={12} />
+                          {t('script_editor.add_beat')}
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {document.outline.beats.map((beat, bIdx) => (
+                          <div key={beat.id} className="flex items-center gap-2">
+                            <span className="text-[11px] font-medium text-slate-500 w-16">
+                              第 {bIdx + 1} 拍
+                            </span>
+                            <input
+                              type="text"
+                              value={beat.purpose}
+                              onChange={(e) => {
+                                const purpose = e.target.value;
+                                updateDoc((doc) => {
+                                  const beats = [...doc.outline.beats];
+                                  const item = beats[bIdx];
+                                  if (item) beats[bIdx] = { ...item, purpose };
+                                  return { ...doc, outline: { ...doc.outline, beats } };
+                                });
+                              }}
+                              className="flex-1 p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                              placeholder={t('script_editor.beat_purpose_placeholder')}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateDoc((doc) => {
+                                  const beats = [...doc.outline.beats];
+                                  beats.splice(bIdx, 1);
+                                  return { ...doc, outline: { ...doc.outline, beats } };
+                                });
+                              }}
+                              className="p-1 text-red-400 hover:text-red-600"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Ending Hook */}
+                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
+                      <label className="block text-xs font-semibold mb-2">
+                        {t('script_editor.ending_hook')}
+                      </label>
+                      <textarea
+                        value={document.outline.endingHook}
+                        onChange={(e) =>
+                          updateDoc((doc) => ({
+                            ...doc,
+                            outline: { ...doc.outline, endingHook: e.target.value },
+                          }))
+                        }
+                        rows={2}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        placeholder={t('script_editor.ending_hook_placeholder')}
+                      />
+                    </div>                        </div>
+                      </aside>
+                    ) : (
+                      <div className="hidden sm:flex flex-col items-center gap-2 w-9 flex-shrink-0 border-r border-slate-200 dark:border-slate-800 py-2 bg-slate-50/40 dark:bg-[#090d16]/40">
+                        <button
+                          type="button"
+                          data-testid="script-outline-expand"
+                          onClick={toggleOutlineOpen}
+                          className="p-1 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                          title={t('script_editor.outline_expand', '展开提纲')}
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                        <span className="text-[10px] font-semibold text-slate-400 writing-mode-vertical rotate-0 [writing-mode:vertical-rl]">
+                          {t('script_editor.tab_outline')}
+                        </span>
+                      </div>
+                    )}
+
+                    <div
+                      data-testid="script-scenes-pane"
+                      className="flex-1 flex flex-col min-w-0 min-h-0"
+                    >
+                      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-slate-200 dark:border-slate-800 flex-shrink-0 bg-white/70 dark:bg-[#0c1322]/50">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Layers size={14} className="text-indigo-500 flex-shrink-0" />
+                          <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">
+                            {t('script_editor.tab_scenes')}
+                          </span>
+                          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            {document.scenes.length}
+                          </span>
+                        </div>
+                        {!outlineOpen && (
+                          <button
+                            type="button"
+                            data-testid="script-outline-expand-mobile"
+                            onClick={toggleOutlineOpen}
+                            className="sm:hidden text-[11px] px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500"
+                          >
+                            {t('script_editor.outline_expand', '展开提纲')}
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
                     {document.scenes.map((scene, sIdx) => {
                       const locationName =
                         document.locations.find((l) => l.id === scene.locationId)?.name ||
@@ -1009,191 +1267,7 @@ export const ScriptEditor: React.FC = () => {
                         <Plus size={16} />
                         {t('script_editor.add_scene')}
                       </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab 2: Outline View */}
-                {activeTab === 'outline' && (
-                  <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
-                    {/* Logline */}
-                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
-                      <label className="block text-xs font-semibold mb-2">
-                        {t('script_editor.outline_logline')}
-                      </label>
-                      <textarea
-                        value={document.outline.logline}
-                        onChange={(e) =>
-                          updateDoc((doc) => ({
-                            ...doc,
-                            outline: { ...doc.outline, logline: e.target.value },
-                          }))
-                        }
-                        rows={3}
-                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                        placeholder={t('script_editor.outline_logline_placeholder')}
-                      />
-                    </div>
-
-                    {/* Must-Keep Events */}
-                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <label className="text-xs font-semibold">
-                          {t('script_editor.must_keep_events')}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newId = `ev_${Date.now()}`;
-                            updateDoc((doc) => ({
-                              ...doc,
-                              outline: {
-                                ...doc.outline,
-                                mustKeepEvents: [
-                                  ...doc.outline.mustKeepEvents,
-                                  { id: newId, text: '', sourceParagraphIds: [] },
-                                ],
-                              },
-                            }));
-                          }}
-                          className="px-2.5 py-1 rounded-lg text-xs bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 flex items-center gap-1 font-medium"
-                        >
-                          <Plus size={12} />
-                          {t('script_editor.add_event')}
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        {document.outline.mustKeepEvents.map((ev, eIdx) => (
-                          <div key={ev.id} className="flex flex-wrap items-center gap-2">
-                            <span className="text-[11px] font-mono text-slate-400 w-12">
-                              {ev.id}
-                            </span>
-                            <input
-                              type="text"
-                              value={ev.text}
-                              onChange={(e) => {
-                                const text = e.target.value;
-                                updateDoc((doc) => {
-                                  const events = [...doc.outline.mustKeepEvents];
-                                  const item = events[eIdx];
-                                  if (item) events[eIdx] = { ...item, text, binding: undefined };
-                                  return { ...doc, outline: { ...doc.outline, mustKeepEvents: events } };
-                                });
-                              }}
-                              className="flex-1 p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                              placeholder={t('script_editor.event_text_placeholder')}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                updateDoc((doc) => {
-                                  const events = [...doc.outline.mustKeepEvents];
-                                  events.splice(eIdx, 1);
-                                  return { ...doc, outline: { ...doc.outline, mustKeepEvents: events } };
-                                });
-                              }}
-                              className="p-1 text-red-400 hover:text-red-600"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                            {ev.binding && <EntityBindingReview binding={ev.binding} characters={reviewCharacters} onChange={async binding => {
-                              const edited = await editScriptReferences(ev.text, binding);
-                              if (scriptDataRef.current?.id !== scriptData?.id) return;
-                              updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map(item => item.id === ev.id && item.text === ev.text ? { ...item, ...edited } : item) } }));
-                            }} />}
-                            {ev.binding?.mentions.some(mention => !mention.confirmed) ? <button type="button" className="text-xs rounded border px-2 py-1" onClick={() => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx && item.binding ? { ...item, binding: { ...item.binding, mentions: item.binding.mentions.map(m => m.status === 'resolved' && m.entity && m.visibility !== 'uncertain' ? { ...m, authority: 'human', confirmed: true } : m) } } : item) } }))}>已核对这条改编的人物关系</button> : null}
-                            {ev.sourceBindings?.map((source, sourceIndex) => source.binding.mentions.length ? <div key={source.paragraph_id} className="w-full p-2 rounded bg-slate-50 dark:bg-slate-800">
-                              {scriptData?.sourceSnapshot?.paragraphSnapshots && <p className="text-xs mb-1 text-slate-500">前文：{(() => { const paragraphs = scriptData.sourceSnapshot.paragraphSnapshots; const index = paragraphs.findIndex(p => p.id === source.paragraph_id); return paragraphs.slice(Math.max(0, index - 2), Math.max(0, index)).map(p => p.text).join(' '); })() || '无前文'}</p>}
-                              <p className="text-xs mb-1">原文：{source.text}</p>
-                              <EntityBindingReview binding={source.binding} characters={reviewCharacters} onChange={binding => updateDoc(doc => ({ ...doc, outline: { ...doc.outline, mustKeepEvents: doc.outline.mustKeepEvents.map((item, i) => i === eIdx ? { ...item, sourceBindings: item.sourceBindings!.map((entry, j) => j === sourceIndex ? { ...entry, binding } : entry) } : item) } }))} />
-                            </div> : null)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Dramatic Beats */}
-                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <label className="text-xs font-semibold">
-                          {t('script_editor.dramatic_beats')}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newId = `beat_${Date.now()}`;
-                            updateDoc((doc) => ({
-                              ...doc,
-                              outline: {
-                                ...doc.outline,
-                                beats: [...doc.outline.beats, { id: newId, purpose: '', eventIds: [] }],
-                              },
-                            }));
-                          }}
-                          className="px-2.5 py-1 rounded-lg text-xs bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 flex items-center gap-1 font-medium"
-                        >
-                          <Plus size={12} />
-                          {t('script_editor.add_beat')}
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        {document.outline.beats.map((beat, bIdx) => (
-                          <div key={beat.id} className="flex items-center gap-2">
-                            <span className="text-[11px] font-medium text-slate-500 w-16">
-                              第 {bIdx + 1} 拍
-                            </span>
-                            <input
-                              type="text"
-                              value={beat.purpose}
-                              onChange={(e) => {
-                                const purpose = e.target.value;
-                                updateDoc((doc) => {
-                                  const beats = [...doc.outline.beats];
-                                  const item = beats[bIdx];
-                                  if (item) beats[bIdx] = { ...item, purpose };
-                                  return { ...doc, outline: { ...doc.outline, beats } };
-                                });
-                              }}
-                              className="flex-1 p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                              placeholder={t('script_editor.beat_purpose_placeholder')}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                updateDoc((doc) => {
-                                  const beats = [...doc.outline.beats];
-                                  beats.splice(bIdx, 1);
-                                  return { ...doc, outline: { ...doc.outline, beats } };
-                                });
-                              }}
-                              className="p-1 text-red-400 hover:text-red-600"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Ending Hook */}
-                    <div className="bg-white dark:bg-[#0c1322] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5">
-                      <label className="block text-xs font-semibold mb-2">
-                        {t('script_editor.ending_hook')}
-                      </label>
-                      <textarea
-                        value={document.outline.endingHook}
-                        onChange={(e) =>
-                          updateDoc((doc) => ({
-                            ...doc,
-                            outline: { ...doc.outline, endingHook: e.target.value },
-                          }))
-                        }
-                        rows={2}
-                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                        placeholder={t('script_editor.ending_hook_placeholder')}
-                      />
+                    </div>                      </div>
                     </div>
                   </div>
                 )}
