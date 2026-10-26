@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { ApiError, api } from '../../services/api';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -18,6 +19,24 @@ import {
   parseGenerateRequest,
   readIdeationHistory,
 } from './storyPlanRequests';
+
+const planOpenStorageKey = (projectId: string) => `novastory_story_plan_open_${projectId}`;
+
+function readPlanOpen(projectId: string): boolean {
+  try {
+    return localStorage.getItem(planOpenStorageKey(projectId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writePlanOpen(projectId: string, open: boolean) {
+  try {
+    localStorage.setItem(planOpenStorageKey(projectId), open ? '1' : '0');
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 type PlanPatch = { id: string; label: string; before: string | null; after: string | null };
 type PlanCandidate = {
@@ -82,6 +101,7 @@ export const StoryPlanPanel: React.FC<{
   const { t } = useLanguage();
   const { showToast } = useToast();
   const agent = useProjectAgentOptional();
+  const [open, setOpen] = useState(() => readPlanOpen(projectId));
   const [view, setView] = useState<PlanView | null>(null);
   const [candidate, setCandidate] = useState<PlanCandidate | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -125,8 +145,22 @@ export const StoryPlanPanel: React.FC<{
     planEpoch.current += 1;
     setView(null);
     setCandidate(null);
+    setOpen(readPlanOpen(projectId));
     void reload();
   }, [projectId, reload]);
+
+  const toggleOpen = () => {
+    setOpen((current) => {
+      const next = !current;
+      writePlanOpen(projectId, next);
+      return next;
+    });
+  };
+
+  const expandPlan = useCallback(() => {
+    setOpen(true);
+    writePlanOpen(projectId, true);
+  }, [projectId]);
 
   useEffect(() => {
     const onChange = (event: Event) => {
@@ -239,6 +273,7 @@ export const StoryPlanPanel: React.FC<{
     clearGenerateRequest(localStorage, projectId);
     setCandidate(result);
     setSelected((result.patches || []).map((patch) => patch.id));
+    expandPlan();
     showToast(
       result.state === 'stale'
         ? t('story.plan_stale', '来源已变化，请重新生成')
@@ -508,81 +543,115 @@ export const StoryPlanPanel: React.FC<{
     ? chaptersAwaitingReview(candidate)
     : [];
 
+  const candidateBadge = candidate
+    ? candidate.state === 'stale'
+      ? t('story.plan_stale', '来源已变化，请重新生成')
+      : t('story.plan_diff', '待采纳差异')
+    : null;
+
   return (
-    <section className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-[#0c1322]/80 px-3 py-3 space-y-2" data-plan-id={view ? String(view.project_id) : undefined}>
+    <section className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-[#0c1322]/80 px-3 py-2 space-y-2 flex-shrink-0" data-plan-id={view ? String(view.project_id) : undefined}>
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t('story.plan_title', '后续规划')}</h3>
+        <button
+          type="button"
+          data-testid="story-plan-toggle"
+          aria-expanded={open}
+          className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200"
+          onClick={toggleOpen}
+        >
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          {t('story.plan_title', '后续规划')}
+        </button>
         {view?.budget && (
           <span className="text-[11px] text-slate-500">
             {t('story.plan_budget', '已写')} {view.budget.written} / {t('story.plan_reserved', '预留')} {view.budget.reserved}
             {view.budget.target ? ` / ${view.budget.target}` : ''}
           </span>
         )}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <button type="button" data-testid="story-ideation-start" className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800" onClick={() => agent?.sendPrompt({ text: t('story.ideation_hello', '我想构思一本新小说'), conversationMode: 'ideation', dispatchId: crypto.randomUUID() })}>
-          {t('story.ideation_start', '构思开书')}
-        </button>
-        <button type="button" data-testid="story-blueprint-generate" disabled={busy} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('blueprint')}>
-          {t('story.plan_blueprint', '整理设定')}
-        </button>
-        <button type="button" data-testid="story-plan-generate" disabled={busy} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', activeEntries.length ? 'extend' : 'initial')}>
-          {t('story.plan_generate', '规划章节')}
-        </button>
-        <button type="button" data-testid="story-plan-extend" disabled={busy || !view} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', 'extend')}>
-          {t('story.plan_extend', '扩展规划')}
-        </button>
-        <button type="button" data-testid="story-plan-revise" disabled={busy || reviseIds.length === 0} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', 'revise')}>
-          {t('story.plan_revise', '修订所选')}
-        </button>
-        <button type="button" data-testid="story-next-chapter" disabled={busy || !view?.next_entry_id} className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-600 text-white disabled:opacity-50" onClick={createNext}>
-          {t('story.plan_next', '创建下一章')}
-        </button>
-        <button type="button" data-testid="story-auto-next" aria-pressed={Boolean(view?.document.autoCreateNextChapter)} disabled={!view || busy} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50" onClick={toggleAuto}>
-          {view?.document.autoCreateNextChapter ? t('story.plan_auto_on', '定稿后自动建章：开') : t('story.plan_auto_off', '定稿后自动建章：关')}
-        </button>
-      </div>
-      {futureEntries.length > 0 && (
-        <ul className="space-y-1 max-h-36 overflow-auto">
-          {futureEntries.map((entry) => (
-            <li key={entry.id} className="text-[11px] text-slate-600 dark:text-slate-300 flex gap-2">
-              <input type="checkbox" checked={reviseIds.includes(entry.id)} onChange={() => setReviseIds((ids) => ids.includes(entry.id) ? ids.filter((id) => id !== entry.id) : [...ids, entry.id])} />
-              <span className="font-medium">{entry.title}</span>
-              <span className="truncate text-slate-400">{entry.summary}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {candidate && (
-        <div className="rounded-xl border border-indigo-200 dark:border-indigo-900 p-2 space-y-1" data-candidate-id={candidate.id}>
-          <div className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300">
-            {candidate.state === 'stale' ? t('story.plan_stale', '来源已变化，请重新生成') : t('story.plan_diff', '待采纳差异')}
-          </div>
-          {(candidate.patches || []).map((patch) => (
-            <label key={patch.id} className="flex gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={selected.includes(patch.id)}
-                onChange={() => setSelected((ids) => ids.includes(patch.id) ? ids.filter((id) => id !== patch.id) : [...ids, patch.id])}
-              />
-              <span>
-                <span className="font-medium">{patch.label}</span>
-                {patch.before ? <span className="block line-through text-slate-400">{patch.before}</span> : null}
-                {patch.after ? <span className="block">{patch.after}</span> : null}
-              </span>
-            </label>
-          ))}
-          {reviewChapters.map((chapter) => (
-            <div key={chapter.id} data-testid="story-plan-chapter-preview" className="pl-5 text-[11px] text-slate-600 dark:text-slate-300">
-              <span className="font-medium">{chapter.title}</span>
-              <span className="text-slate-400"> · {chapter.targetWordCount}{t('story.plan_words', '字')}</span>
-              {chapter.summary ? <span className="block whitespace-pre-wrap">{chapter.summary}</span> : null}
-            </div>
-          ))}
-          <button type="button" data-testid="story-plan-candidate-apply" disabled={busy || candidate.state !== 'pending'} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-600 text-white disabled:opacity-50" onClick={applyCandidate}>
-            {t('story.plan_apply', '采纳所选')}
+        {!open && candidateBadge && (
+          <button
+            type="button"
+            data-testid="story-plan-collapsed-badge"
+            className={`text-[11px] px-2 py-0.5 rounded-full border truncate max-w-[16rem] ${
+              candidate?.state === 'stale'
+                ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200'
+                : 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
+            }`}
+            onClick={expandPlan}
+            title={candidateBadge}
+          >
+            {candidateBadge}
           </button>
-        </div>
+        )}
+      </div>
+      {open && (
+        <>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" data-testid="story-ideation-start" className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800" onClick={() => agent?.sendPrompt({ text: t('story.ideation_hello', '我想构思一本新小说'), conversationMode: 'ideation', dispatchId: crypto.randomUUID() })}>
+              {t('story.ideation_start', '构思开书')}
+            </button>
+            <button type="button" data-testid="story-blueprint-generate" disabled={busy} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('blueprint')}>
+              {t('story.plan_blueprint', '整理设定')}
+            </button>
+            <button type="button" data-testid="story-plan-generate" disabled={busy} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', activeEntries.length ? 'extend' : 'initial')}>
+              {t('story.plan_generate', '规划章节')}
+            </button>
+            <button type="button" data-testid="story-plan-extend" disabled={busy || !view} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', 'extend')}>
+              {t('story.plan_extend', '扩展规划')}
+            </button>
+            <button type="button" data-testid="story-plan-revise" disabled={busy || reviseIds.length === 0} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 disabled:opacity-50" onClick={() => generate('chapters', 'revise')}>
+              {t('story.plan_revise', '修订所选')}
+            </button>
+            <button type="button" data-testid="story-next-chapter" disabled={busy || !view?.next_entry_id} className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-600 text-white disabled:opacity-50" onClick={createNext}>
+              {t('story.plan_next', '创建下一章')}
+            </button>
+            <button type="button" data-testid="story-auto-next" aria-pressed={Boolean(view?.document.autoCreateNextChapter)} disabled={!view || busy} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-50" onClick={toggleAuto}>
+              {view?.document.autoCreateNextChapter ? t('story.plan_auto_on', '定稿后自动建章：开') : t('story.plan_auto_off', '定稿后自动建章：关')}
+            </button>
+          </div>
+          {futureEntries.length > 0 && (
+            <ul className="space-y-1 max-h-36 overflow-auto">
+              {futureEntries.map((entry) => (
+                <li key={entry.id} className="text-[11px] text-slate-600 dark:text-slate-300 flex gap-2">
+                  <input type="checkbox" checked={reviseIds.includes(entry.id)} onChange={() => setReviseIds((ids) => ids.includes(entry.id) ? ids.filter((id) => id !== entry.id) : [...ids, entry.id])} />
+                  <span className="font-medium">{entry.title}</span>
+                  <span className="truncate text-slate-400">{entry.summary}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {candidate && (
+            <div className="rounded-xl border border-indigo-200 dark:border-indigo-900 p-2 space-y-1" data-candidate-id={candidate.id}>
+              <div className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300">
+                {candidate.state === 'stale' ? t('story.plan_stale', '来源已变化，请重新生成') : t('story.plan_diff', '待采纳差异')}
+              </div>
+              {(candidate.patches || []).map((patch) => (
+                <label key={patch.id} className="flex gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(patch.id)}
+                    onChange={() => setSelected((ids) => ids.includes(patch.id) ? ids.filter((id) => id !== patch.id) : [...ids, patch.id])}
+                  />
+                  <span>
+                    <span className="font-medium">{patch.label}</span>
+                    {patch.before ? <span className="block line-through text-slate-400">{patch.before}</span> : null}
+                    {patch.after ? <span className="block">{patch.after}</span> : null}
+                  </span>
+                </label>
+              ))}
+              {reviewChapters.map((chapter) => (
+                <div key={chapter.id} data-testid="story-plan-chapter-preview" className="pl-5 text-[11px] text-slate-600 dark:text-slate-300">
+                  <span className="font-medium">{chapter.title}</span>
+                  <span className="text-slate-400"> · {chapter.targetWordCount}{t('story.plan_words', '字')}</span>
+                  {chapter.summary ? <span className="block whitespace-pre-wrap">{chapter.summary}</span> : null}
+                </div>
+              ))}
+              <button type="button" data-testid="story-plan-candidate-apply" disabled={busy || candidate.state !== 'pending'} className="text-[11px] px-2.5 py-1 rounded-lg bg-indigo-600 text-white disabled:opacity-50" onClick={applyCandidate}>
+                {t('story.plan_apply', '采纳所选')}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
