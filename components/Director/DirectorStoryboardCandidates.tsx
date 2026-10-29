@@ -116,12 +116,26 @@ export interface DirectorScreenplay {
   }>;
 }
 
+/** Director candidates only. Scene-production rounds reuse kind=storyboard with production_version 1. */
+export function isReviewableStoryboardChange(change: { kind: string; after_json?: string | null }): boolean {
+  if (change.kind !== 'storyboard') return false;
+  try {
+    return JSON.parse(change.after_json || '').production_version !== 1;
+  } catch {
+    return true;
+  }
+}
+
 interface DirectorStoryboardCandidatesProps {
   script: DirectorScreenplay | null;
   sceneIds: number[] | null;
   timelineReady: boolean;
   onApplied: () => void;
   onScriptChanged: () => void;
+  isOpen?: boolean;
+  onToggleOpen?: () => void;
+  hideHeader?: boolean;
+  onAttentionChange?: (openTaskCount: number) => void;
 }
 
 export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidatesProps> = ({
@@ -130,10 +144,16 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
   timelineReady,
   onApplied,
   onScriptChanged,
+  isOpen,
+  onToggleOpen,
+  hideHeader = false,
+  onAttentionChange,
 }) => {
   const { t } = useLanguage();
   const { showToast } = useToast();
-  const [panelExpanded, setPanelExpanded] = useState(true);
+  const [internalExpanded, setInternalExpanded] = useState(true);
+  const panelExpanded = isOpen !== undefined ? isOpen : internalExpanded;
+  const setPanelExpanded = onToggleOpen || (() => setInternalExpanded(!internalExpanded));
   const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
   const [editingCandidateJson, setEditingCandidateJson] = useState('');
@@ -183,7 +203,13 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
     } catch (error: any) { showToast(error.message || '事实核对未保存', 'error'); }
   };
 
-  const candidates = (script?.pendingChanges || []).filter((change) => { if (change.kind !== 'storyboard') return false; try { return JSON.parse(change.after_json).production_version !== 1; } catch { return true; } });
+  const candidates = (script?.pendingChanges || []).filter(isReviewableStoryboardChange);
+  const openTaskCount = tasks.filter((task) => task.status !== 'completed').length;
+  const onAttentionChangeRef = useRef(onAttentionChange);
+  onAttentionChangeRef.current = onAttentionChange;
+  useEffect(() => {
+    onAttentionChangeRef.current?.(openTaskCount);
+  }, [openTaskCount]);
   const confirmCandidate = candidates.find((candidate) => candidate.id === confirmCandidateId);
   const reviewTask = tasks.find((task) => task.task_id === reviewingTaskId) ?? null;
   useEffect(() => {
@@ -299,23 +325,25 @@ export const DirectorStoryboardCandidates: React.FC<DirectorStoryboardCandidates
         data-testid="storyboard-candidate-panel"
         className="flex min-h-0 min-w-0 max-h-[min(52dvh,36rem)] flex-col overflow-hidden border-b border-amber-200 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30"
       >
-        <div className={`shrink-0 px-4 lg:px-6 py-3 ${panelExpanded ? 'border-b border-amber-200/80 dark:border-amber-900/50' : ''}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              data-testid="storyboard-candidate-toggle"
-              className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200 cursor-pointer"
-              onClick={() => setPanelExpanded(!panelExpanded)}
-            >
-              {panelExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-              <GitPullRequest size={15} />
-              <span>{t('director.storyboard_panel_title')} ({candidates.length})</span>
-            </button>
-            <span className="text-[11px] text-amber-700/80 dark:text-amber-300/80 min-w-0 break-words">
-              {t('director.storyboard_panel_hint')}
-            </span>
+        {!hideHeader && (
+          <div className={`shrink-0 px-4 lg:px-6 py-3 ${panelExpanded ? 'border-b border-amber-200/80 dark:border-amber-900/50' : ''}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                data-testid="storyboard-candidate-toggle"
+                className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200 cursor-pointer"
+                onClick={() => setPanelExpanded(!panelExpanded)}
+              >
+                {panelExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                <GitPullRequest size={15} />
+                <span>{t('director.storyboard_panel_title')} ({candidates.length})</span>
+              </button>
+              <span className="text-[11px] text-amber-700/80 dark:text-amber-300/80 min-w-0 break-words">
+                {t('director.storyboard_panel_hint')}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         {panelExpanded && (
           <div
             data-testid="storyboard-candidate-scroll"

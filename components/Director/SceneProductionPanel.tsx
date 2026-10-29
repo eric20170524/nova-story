@@ -7,9 +7,18 @@ import { SceneProductionMediaPanel } from './SceneProductionMediaPanel';
 
 type Draft = { owner: string; base_script_revision: number; base_continuity_revision: number; round: string; block_ids: string[]; moment: string; entity_ids: string[]; shots: any[]; dirty: boolean };
 const key = (script: number, scene: string) => `novastory:production:${script}:${scene}`;
-export const SceneProductionPanel: React.FC<{ script: { id: number; revision: number } | null; onChanged: () => void }> = ({ script, onChanged }) => {
+export const SceneProductionPanel: React.FC<{
+  script: { id: number; revision: number } | null;
+  onChanged: () => void;
+  isOpen?: boolean;
+  onToggleOpen?: () => void;
+  hideStandaloneHeader?: boolean;
+}> = ({ script, onChanged, isOpen, onToggleOpen, hideStandaloneHeader = false }) => {
   const { t } = useLanguage(), { showToast } = useToast();
-  const [expanded, setExpanded] = useState(false), [view, setView] = useState<any>(null), [selected, setSelected] = useState(''), [draft, setDraft] = useState<Draft | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const expanded = isOpen !== undefined ? isOpen : internalExpanded;
+  const toggle = onToggleOpen || (() => setInternalExpanded(!internalExpanded));
+  const [view, setView] = useState<any>(null), [selected, setSelected] = useState(''), [draft, setDraft] = useState<Draft | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [replaceIds, setReplaceIds] = useState<number[]>([]), [preview, setPreview] = useState<any>(null);
   const message = (error:any) => {const key=`continuity.errors.${error.code}`;return t(key)===key?error.message:t(key);};
   const refresh = async (rebase = false) => {
@@ -52,15 +61,17 @@ export const SceneProductionPanel: React.FC<{ script: { id: number; revision: nu
     catch (error: any) { setError(message(error)); setPreview(null); } finally { setBusy(false); }
   };
   if (!script) return null;
-  const button = 'rounded border px-2 py-1 text-xs disabled:opacity-40';
+  const button = 'rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-2xs cursor-pointer';
   return <section data-testid="production-panel" className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0 min-w-0">
-    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
-      <button data-testid="production-toggle" className="flex items-center gap-2 text-sm font-medium cursor-pointer" onClick={() => setExpanded(!expanded)}>
-        {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-        <span>{t('production.title')}</span>
-      </button>
-    </div>
-    {expanded && <div className="max-h-[45vh] overflow-y-auto min-w-0 p-4 pt-0 space-y-3 text-xs">
+    {!hideStandaloneHeader && (
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-slate-100 dark:border-slate-800">
+        <button data-testid="production-toggle" className="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 hover:text-purple-600 dark:hover:text-purple-400 transition-colors cursor-pointer" onClick={toggle}>
+          {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          <span>{t('production.title')}</span>
+        </button>
+      </div>
+    )}
+    {expanded && <div className="max-h-[48vh] overflow-y-auto min-w-0 p-4 space-y-3.5 text-xs custom-scrollbar">
       <button className={button} data-testid="production-refresh" disabled={busy} onClick={() => void refresh(true)}>{t('production.refresh')}</button>
       {error && <p className="break-words text-red-600" role="alert">{error}</p>}
       {view && <>

@@ -1,6 +1,6 @@
 # 小说 → 改编提纲 → 分场正文 → 导演分镜：概念与对应关系
 
-日期：2026-10-26。状态：现行概念说明（面向使用与评审）。  
+日期：2026-10-26（2026-10-28 增补视听时长规律与三层连贯性机制）。状态：现行概念说明（面向使用与评审）。  
 实现与验收细节见 [structured_screenplay_module_2026-09-28.md](./structured_screenplay_module_2026-09-28.md)。
 
 ## 1. 一句话
@@ -131,7 +131,88 @@ flowchart TB
 | 构图草稿 / 正式分镜图 | 同一镜头上的制作阶段，不另建一套剧本 |
 | 小说直出分镜（旧路径） | 仍可能存在；镜头应标明来源是 chapter 还是 script，避免和剧本产物混淆 |
 
-## 8. 相关文档
+## 8. 视听时长规律与 >15s 拆镜原则
+
+在传统实拍与 AI 视频制片中，需要严格区分三个不同层级的时长概念，避免把「一场戏或一段表演很长」等同于「必须生成一个超长单镜头视频」：
+
+| 概念 | 英文 / 定位 | 典型时长 | 说明 |
+| --- | --- | --- | --- |
+| 实拍通条 | Master Take | 30s – 180s+ | 实拍现场演员一条演完不断，用于保表演连贯；进入剪辑台后会被切碎 |
+| 成片剪辑镜头 | Editorial Shot / `scene` | 电影 3–6s；短剧/漫剧 1.5–4s | 观众在成片里看到的不切机位画面；AI 视频单段超过 6–8s 极易出现物理崩坏、人脸漂移与节奏拖沓 |
+| AI 物理生成切片 | Generation Sub-clip | 模型上限 5–15s | 视频模型单次推理的物理时间窗口 |
+
+当剧本中某段独白、连续动作或镜头设计确实超过 15s 时，采用以下两种解法：
+
+1. **解法 A（90% 场景首选：导演机位切分 + J/L-Cut 声画分离）**
+   - **核心做法**：**声音不断，画面切机位**。例如一段 20s 的对白或动作，底层铺设一条完整连续的 20s 配音音轨，但画面拆分为多个 3–6s 的分镜组合：
+     - `0~6s`：说话者中景（Medium Shot）
+     - `6~9s`：切听话者眼神反应（Reaction Shot，说话者声音继续延续，即 **L-Cut**）
+     - `9~13s`：切手中道具或动作细节特写（Insert Shot，可复用九机位 `coverage` 机制）
+     - `13~20s`：切回说话者近景推镜头（Close-Up Push-in，情绪递进）
+   - **优势**：既天然规避 15s 模型物理上限与长视频画面崩坏，又符合专业短剧/影视的高密度视听节奏。
+
+2. **解法 B（10% 场景刚需：真·长镜头 / 一镜到底 >15s —— 子切片首尾帧接力 Sub-clip Chaining）**
+
+   解法 B 仍是设计规范。`sub_clips`、`keyframe_bridge`、`last_frame_relay` 还没有进入 [`ShotContractFieldsSchema`](../../backend/src/schemas/shot_contract.ts)。解法 A 的正反打、反应镜和特写可以走现有 [`coverage.ts`](../../backend/src/routes/coverage.ts)。落地顺序见 [scene_continuity_workflow_2026-10-09.md](./scene_continuity_workflow_2026-10-09.md) 的「对照现有架构的演进与落地建议」。
+   - **核心做法**：当叙事必须保持不切机位的连续长镜头（如 25s 一路推镜或边走边说）时，在同一个逻辑分镜（`scene`）下拆分为多个物理子切片（如 `Sub-clip 1: 0~10s`、`Sub-clip 2: 10~20s`、`Sub-clip 3: 20~25s`）：
+     - **首尾关键帧夹逼（Keyframe Bridge，推荐）**：先在生图阶段生成 `0s 关键帧图 A`、`10s 关键帧图 B`、`20s 关键帧图 C`（确保静图角色与空间一致），再分段用视频模型的 **First-Last Frame（首尾帧控制）** 生成 `A→B` 与 `B→C`，锁死长镜头轨迹与终点，消除累积漂移。
+     - **尾帧抽帧续拍（Last-Frame Relay）**：由 `图 A` 生成首段 10s 视频后，抽取末尾清晰未崩坏帧（必要时做轻度图生图高清修复去伪影）作为下一段 10s 视频的首帧继续接力生成。
+
+## 9. 三层连贯性保障机制（单镜内 → 单场多镜 → 跨场）
+
+这一节是分镜连贯性的设计规范，不是当前导演界面已经执行的管线。代码里已经有的是场记账本、`phase` / `time_scope`，以及同刻多机位 `coverage`。下面四把锁中的 Location Master Plate、场内固定的 Screen Direction、整场音轨按镜头时码对齐，以及图中的超长单镜子切片首尾帧接力，都还没有进入 [`ShotContractFieldsSchema`](../../backend/src/schemas/shot_contract.ts)。下一步与 [scene_continuity_workflow_2026-10-09.md](./scene_continuity_workflow_2026-10-09.md) 的「对照现有架构的演进与落地建议」一致。
+
+```mermaid
+flowchart TB
+  subgraph L1["第一层：跨分场连贯 (scriptScene 1 → N)"]
+    S1["分场 sc_1<br/>出场状态 Exit State"] -->|"故事时间流转 (同日/隔日/闪回)<br/>继承随身衣物/伤痕/持有物<br/>保留场地遗留物"| S2["分场 sc_2<br/>入场状态 Entry State"]
+  end
+  subgraph L2["第二层：单场内多镜连贯 (1 scriptScene → M shots)"]
+    S2 --> Anchor["场次视觉锚点：统一场景底图 + 光影色温 + 180°轴线"]
+    Anchor --> M1["镜头 1 (before moment)"]
+    Anchor --> M2["镜头 2 (during overlay)"]
+    Anchor --> M3["镜头 3 (after moment)"]
+    Audio["整场连续音轨脊柱 (对白 TTS + 环境底噪 Ambience + BGM)"] -.->|"时码对齐"| M1 & M2 & M3
+  end
+  subgraph L3["第三层：超长单镜内部连贯 (>15s Shot)"]
+    M2 --> C1["Sub-clip 2a (0~10s)<br/>KeyFrame A → B"]
+    C1 -->|"共享关键帧 B / 尾帧接力"| C2["Sub-clip 2b (10~18s)<br/>KeyFrame B → C"]
+  end
+```
+
+### 9.1 同一场戏内多个分镜（`1 scriptScene → M shots`）：四把锁
+
+一场戏拆成十几个镜头时，防止「换镜换人、换衣服、换背景、跳轴」的四项核心机制：
+
+1. **视觉锚点锁（Master Visual Anchor）—— 先定场设，再出分镜首帧**
+   - 严禁每个分镜仅凭文本独立盲抽（T2I/T2V）。
+   - 每场戏开拍前先锁定 **场次环境主图（Location Master Plate，统一空间结构、光源方向、色温、天气）** 与 **本场人物造型卡（Character Variant）**。场内所有镜头首帧均以此为视觉参考生成。
+2. **时刻状态机锁（Moment State：`before / during / after`）**
+   - 场内状态随动作推进，不能全场共用单一静态状态：
+     - **顺序动作分镜**（如：端杯 → 脱手悬空 → 落地摔碎）依次读取 `before`、`during_overlay`、`after` 对应 `moment` 的状态快照；
+     - **同刻多机位分镜**（如同一瞬间的全景 + 特写/反应镜 `coverage`）绑定**同一个 `moment_id`**，共享状态而不重复推进事件。
+3. **视听轴线与动势锁（180° Axis & Match on Action）**
+   - **轴线与朝向（Screen Direction）**：双人对话或对峙戏在场次内固定画面站位与视线方向（如「甲左面右、乙右面左」），无跨轴动作时正反打严格反向，防止视线跳轴。
+   - **动势顺接（Match on Action）**：连续动作切镜（如拔剑前半段切剑刃出鞘特写），后一镜首帧构图需承接上一镜末尾姿态与运动方向。
+4. **音轨脊柱锁（Continuous Audio Spine）**
+   - 整场戏的连贯感高度依赖声音不断：以整场连续的环境底噪（Room Tone / Ambience）与 BGM 铺底，对白/音效按 `audible_blocks` 挂载在时间轴上，支持跨镜声画错位（J-Cut / L-Cut）。
+
+### 9.2 多个分场之间（`scriptScene 1 → scriptScene 2 → ...`）：场记账本
+
+跨场连贯将**故事时间（Story Time）**与**制作顺序（Production Order）**解耦，由场记连续性账本（详见 [scene_continuity_workflow_2026-10-09.md](./scene_continuity_workflow_2026-10-09.md)）驱动：
+
+1. **场间时间关系（Time Scope & Transition Type）**
+   - **紧接连续（Continuous）**：如室内夺门而出紧接走廊奔跑，服装、湿度（`wetness`）、手持物（`holder`）、环境天色乃至出入画方向强制继承。
+   - **同日稍后（Same Day Later）**：随身衣物、持有物与未修复损伤（`integrity`）继承，瞬态站位清空，天色光影按时间推进。
+   - **隔日 / 时间跳跃（Next Day / Time Jump）**：允许按已确认剧情或设计触发换装、休整或状态变更，禁止无依据自动重置。
+   - **闪回 / 回忆（Flashback，`branch_id` 分支）**：挂起主线状态，读取回忆时间点快照；闪回结束后下一场恢复主线上一场的 `exit_state`。
+2. **随人持久化 vs 随地持久化**
+   - **随人走（Character-bound）**：衣物穿戴、湿透/破损状态、随身持有道具跨场地跟随角色延续。
+   - **随地留（Location-bound）**：留在某房间的坏门锁（`lock_function=broken`）、地面碎瓷片、关闭的台灯（`power_state=off`）绑定在该 `location` 下；角色离开去往别处时不带走，重返该地点时自动从账本召回。
+3. **场间转场钩子（Scene-to-Scene Hook）**
+   - 通过**声音先行（J-Cut）**（上一场收尾画面未完、下一场环境音或台词先入）或**视觉匹配剪辑（Match Cut）**（上一场末尾特写与下一场开篇构图/动势呼应）消除场间割裂感。
+
+## 10. 相关文档
 
 | 文档 | 用途 |
 | --- | --- |

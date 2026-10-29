@@ -24,7 +24,7 @@ import { api } from '../../services/api';
 import { PreviewableImage, useImagePreview, ZoomHint } from '../ImageLightbox';
 import { SceneVideoPlayer } from './SceneVideoPlayer';
 import { SceneAssetReferences } from './SceneAssetReferences';
-import { FormalShotActions, FormalStageStrip, storyboardStages, type FormalCapabilityGap } from './FormalShotActions';
+import { FormalShotActions, FormalStageStrip, shotMediaStage, storyboardStages, type FormalCapabilityGap } from './FormalShotActions';
 
 interface DirectorTimelineProps {
   timeline: Scene[];
@@ -92,7 +92,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
 }) => {
   const { t } = useLanguage();
   const [expandedCards, setExpandedCards] = useState<Set<number | string>>(new Set());
-  const [activeMediaTabs, setActiveMediaTabs] = useState<Record<number | string, 'storyboard' | 'keyframe' | 'video'>>({});
+  const [activeMediaTabs, setActiveMediaTabs] = useState<Record<number | string, 'keyframe' | 'video'>>({});
   
   // Single-Scene Coverage Modal State
   const [activeCoverageScene, setActiveCoverageScene] = useState<Scene | null>(null);
@@ -260,7 +260,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     const hasVideoAssets = sceneMedia.some((m) => m.media_type === 'video' || m.role === 'loop_master' || m.role === 'narrative_final' || m.role === 'raw_video');
                     const isVideoGenerating = sceneTask && (sceneTask.status === 'queued' || sceneTask.status === 'processing');
 
-                    const currentTab = activeMediaTabs[scene.id] || (hasVideoAssets || isVideoGenerating ? 'video' : 'storyboard');
+                    const currentTab = (activeMediaTabs[scene.id] === 'video' || (!activeMediaTabs[scene.id] && (hasVideoAssets || isVideoGenerating))) ? 'video' : 'keyframe';
+                    const stages = storyboardStages(scene);
+                    const shotStage = shotMediaStage(stages);
 
                     return (
                     <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl dark:shadow-md hover:border-indigo-400/50 dark:hover:border-slate-700 transition-all group animate-in fade-in zoom-in-95 duration-200">
@@ -369,34 +371,28 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                         <div className="flex bg-slate-100 dark:bg-slate-950 border-b border-slate-200/80 dark:border-slate-800 p-1 text-[10px] font-medium gap-1">
                           <button
                             type="button"
-                            onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'storyboard' }))}
-                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
-                              currentTab === 'storyboard'
-                                ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
-                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                            }`}
-                          >
-                            <ImageIcon size={11} />
-                            <span>{t('director.media_tab_storyboard', '漫画图')}</span>
-                          </button>
-
-                          <button
-                            type="button"
                             onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'keyframe' }))}
-                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
+                            className={`flex-1 py-1.5 rounded-lg text-center transition-all flex items-center justify-center gap-1.5 ${
                               currentTab === 'keyframe'
                                 ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
                                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                             }`}
                           >
                             <Crop size={11} />
-                            <span>{t('director.media_tab_keyframe', '16:9 关键帧')}</span>
+                            <span>{t('director.media_tab_shot', '分镜画面')}</span>
+                            {shotStage === 'formal' ? (
+                              <span data-testid={`shot-stage-${scene.id}`} className="px-1 py-0.2 rounded text-[8px] font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">{t('director.shot_badge_formal')}</span>
+                            ) : shotStage === 'candidate' ? (
+                              <span data-testid={`shot-stage-${scene.id}`} className="px-1 py-0.2 rounded text-[8px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">{t('director.shot_badge_candidate')}</span>
+                            ) : shotStage === 'draft' ? (
+                              <span data-testid={`shot-stage-${scene.id}`} className="px-1 py-0.2 rounded text-[8px] font-bold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">{t('director.shot_badge_draft')}</span>
+                            ) : null}
                           </button>
 
                           <button
                             type="button"
                             onClick={() => setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }))}
-                            className={`flex-1 py-1 rounded-md text-center transition-all flex items-center justify-center gap-1 ${
+                            className={`flex-1 py-1.5 rounded-lg text-center transition-all flex items-center justify-center gap-1.5 ${
                               currentTab === 'video'
                                 ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white font-bold shadow-xs'
                                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -422,58 +418,80 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             onReprocessAsset={onReprocessVideoAsset}
                             onCancelTask={onCancelVideoTask}
                           />
-                        ) : currentTab === 'keyframe' ? (
-                          <div className="bg-black">
-                            <FormalStageStrip scene={scene} />
-                            {onGenerateVideo && storyboardStages(scene).adopted?.asset_url && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }));
-                                  onGenerateVideo(scene.id);
-                                }}
-                                className="m-2 bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-full text-[10px] font-medium"
-                              >
-                                {t('director.media_tab_video', '视频')}
-                              </button>
-                            )}
-                          </div>
                         ) : (
-                          /* Storyboard Image Area */
+                          /* 16:9 Keyframe & Storyboard Shot Studio */
                           <>
-                          <div className="aspect-square bg-slate-900 relative flex items-center justify-center group/image h-64">
-                              {storyboardStages(scene).draft?.asset_url ? (
-                                  <>
-                                    <PreviewableImage
-                                      src={storyboardStages(scene).draft!.asset_url!}
-                                      alt={`Scene ${scene.id}`}
-                                      className="w-full h-full object-cover"
-                                    />
-                                    <ZoomHint className="group-hover/image:opacity-100" />
-                                  </>
-                              ) : (
-                                  <div className="text-slate-400 dark:text-slate-500 flex flex-col items-center">
-                                  {scene.asset_status === 'generating' ? (
-                                      <Loader2 className="animate-spin text-indigo-500 mb-2" size={32} />
+                            {(() => {
+                              const primaryImage = stages.adopted?.asset_url || stages.candidates[0]?.asset_url || stages.draft?.asset_url || scene.asset_url;
+                              const isGenerating = scene.asset_status === 'generating';
+                              const isFailed = scene.asset_status === 'failed';
+                              const overlay = shotStage === 'formal'
+                                ? t('director.shot_overlay_formal', { version: stages.adopted?.version || 0 })
+                                : shotStage === 'candidate'
+                                  ? t('director.shot_overlay_candidate', { version: stages.candidates[0]?.version || 0 })
+                                  : shotStage === 'draft'
+                                    ? t('director.shot_overlay_draft', { version: stages.draft?.version || 0 })
+                                    : '';
+                              return (
+                                <div className="aspect-video w-full bg-slate-950 relative flex items-center justify-center group/image overflow-hidden">
+                                  {primaryImage ? (
+                                    <>
+                                      <PreviewableImage
+                                        src={primaryImage}
+                                        alt={`Scene ${scene.id}`}
+                                        className="w-full h-full object-cover"
+                                      />
+                                      <ZoomHint className="group-hover/image:opacity-100" />
+                                      {overlay && (
+                                        <div className="absolute top-2 left-2 pointer-events-none">
+                                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold text-white backdrop-blur-sm shadow-xs flex items-center gap-1 ${
+                                            shotStage === 'formal' ? 'bg-emerald-600/90' : shotStage === 'candidate' ? 'bg-amber-600/90' : 'bg-indigo-600/90'
+                                          }`}>
+                                            {shotStage === 'formal' && <span className="w-1.5 h-1.5 rounded-full bg-white"></span>}
+                                            {overlay}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </>
                                   ) : (
-                                      <ImageIcon size={32} className="mb-2 opacity-50" />
+                                    <div className="text-slate-400 dark:text-slate-500 flex flex-col items-center">
+                                      {isGenerating ? (
+                                        <Loader2 className="animate-spin text-indigo-500 mb-2" size={28} />
+                                      ) : (
+                                        <ImageIcon size={28} className="mb-1.5 opacity-40" />
+                                      )}
+                                      <span className="text-[11px] capitalize font-medium">
+                                        {isGenerating ? t('director.status_generating') : isFailed ? t('director.status_failed') : t('director.shot_empty')}
+                                      </span>
+                                    </div>
                                   )}
-                                  <span className="text-xs capitalize font-medium">
-                                      {scene.asset_status === 'generating' ? t('director.status_generating') : scene.asset_status === 'failed' ? t('director.status_failed') : scene.asset_status || 'No Asset'}
-                                  </span>
-                                  </div>
-                              )}
-
-                              {/* Overlay: preview + regenerate */}
-                          </div>
-                          <FormalShotActions
-                            scene={scene}
-                            capabilities={formalCapabilities}
-                            draftBusy={draftBusyIds.includes(scene.id)}
-                            onDraft={() => onGenerateAsset(scene.id, { productionStage: 'draft' })}
-                            onProduction={() => onGenerateAsset(scene.id, { productionStage: 'production' })}
-                            onDecide={(version, verdict, checks, note, referenceHash) => onDecideFormal?.(scene.id, version, verdict, checks, note, referenceHash)}
-                          />
+                                </div>
+                              );
+                            })()}
+                            <FormalStageStrip scene={scene} />
+                            <FormalShotActions
+                              scene={scene}
+                              capabilities={formalCapabilities}
+                              draftBusy={draftBusyIds.includes(scene.id)}
+                              onDraft={() => onGenerateAsset(scene.id, { productionStage: 'draft' })}
+                              onProduction={() => onGenerateAsset(scene.id, { productionStage: 'production' })}
+                              onDecide={(version, verdict, checks, note, referenceHash) => onDecideFormal?.(scene.id, version, verdict, checks, note, referenceHash)}
+                            />
+                            {onGenerateVideo && stages.adopted?.asset_url && (
+                              <div className="px-2.5 pb-2 bg-slate-50/60 dark:bg-slate-900/60 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveMediaTabs(prev => ({ ...prev, [scene.id]: 'video' }));
+                                    onGenerateVideo(scene.id);
+                                  }}
+                                  className="bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1 shadow-2xs transition-all"
+                                >
+                                  <Film size={11} />
+                                  <span>{t('director.media_tab_video', '视频')} →</span>
+                                </button>
+                              </div>
+                            )}
                           </>
                         )}
 

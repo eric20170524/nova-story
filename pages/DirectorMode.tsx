@@ -36,14 +36,13 @@ import {
 } from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
-import { ContinuityPanel } from '../components/Director/ContinuityPanel';
-import { SceneProductionPanel } from '../components/Director/SceneProductionPanel';
 import { useToast } from '../ToastContext';
 import { useProjectAgentOptional } from '../contexts/ProjectAgentContext';
 import { DirectorSidebar } from '../components/Director/DirectorSidebar';
 import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorStoryboardCandidates, type DirectorScreenplay } from '../components/Director/DirectorStoryboardCandidates';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
+import { DirectorWorkbenchDeck } from '../components/Director/DirectorWorkbenchDeck';
 import {
   buildCharacterAppearanceSnippet,
   getCharacterLoraName,
@@ -1516,23 +1515,20 @@ export const DirectorMode: React.FC = () => {
         canGenerateStoryboard={canGenerateStoryboard}
         generateStoryboardTitle={generateStoryboardTitle}
         storyboardPanel={
-          <>
-          <ContinuityPanel key={screenplayReady?screenplay?.id:'no-script'} script={screenplayReady?screenplay:null} projectId={projectId} onChanged={()=>{if(selectedChapterId){loadTimeline(selectedChapterId,{silent:true});void loadScreenplay(selectedChapterId);}}}/>
-          <SceneProductionPanel key={`production-${screenplayReady?screenplay?.id:'no-script'}`} script={screenplayReady?screenplay:null} onChanged={()=>{if(selectedChapterId){loadTimeline(selectedChapterId,{silent:true});void loadScreenplay(selectedChapterId);}}}/>
-          <DirectorStoryboardCandidates
+          <DirectorWorkbenchDeck
+            key={screenplayReady ? screenplay?.id : 'no-script'}
             script={screenplayReady ? screenplay : null}
+            projectId={projectId || ''}
+            screenplay={screenplayReady ? screenplay : null}
             sceneIds={storyboardSceneIds}
             timelineReady={!loading}
-            onApplied={() => {
-              if (!selectedChapterId) return;
-              loadTimeline(selectedChapterId, { silent: true });
-              void loadScreenplay(selectedChapterId);
+            onTimelineRefresh={() => {
+              if (selectedChapterId) loadTimeline(selectedChapterId, { silent: true });
             }}
-            onScriptChanged={() => {
+            onScreenplayRefresh={() => {
               if (selectedChapterId) void loadScreenplay(selectedChapterId);
             }}
           />
-          </>
         }
         onGenerateNarration={handleGenerateNarration}
         generatingNarration={generatingNarration}

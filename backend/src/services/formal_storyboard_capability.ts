@@ -137,7 +137,7 @@ export const classifyFormalModel = (raw: unknown): { model_class: FormalModelCla
   if (/qwen[_-]?image/.test(value)) return { model_class: 'qwen_image', label: 'Qwen-Image 2.1' };
   if (value.includes('flux')) return { model_class: 'flux', label: 'FLUX' };
   if (/sd\s*1\.?5|sd15|anything-?v5/.test(value)) return { model_class: 'sd15', label: 'SD1.5' };
-  if (/juggernaut|autismmix|pony|sdxl/.test(value)) return { model_class: 'sdxl', label: 'SDXL' };
+  if (/juggernaut|autismmix|pony|sdxl|illustrious|animagine/.test(value)) return { model_class: 'sdxl', label: 'SDXL' };
   if (!value.trim()) return { model_class: 'unknown', label: 'unknown' };
   return { model_class: 'unknown', label: String(raw) };
 };
@@ -388,7 +388,53 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
       && input.runtime === 'online'
       && Array.isArray(input.objectInfo?.UNETLoader?.input?.required?.unet_name?.[0])
       && input.objectInfo.UNETLoader.input.required.unet_name[0].some((name: unknown) => /qwen[_-]?image/i.test(String(name)));
-    const referenceInstalled = id !== 'krea2_native_reference' && (weights[id].length > 0 || remoteQwenReady);
+    const remoteSdxlIpAdapterReady = id === 'sdxl_ip_adapter'
+      && input.runtime === 'online'
+      && Boolean(input.objectInfo)
+      && (
+        (Array.isArray(input.objectInfo?.IPAdapterModelLoader?.input?.required?.ipadapter_file?.[0])
+          && input.objectInfo.IPAdapterModelLoader.input.required.ipadapter_file[0].some((name: unknown) => /sdxl/i.test(String(name))))
+        || Array.isArray(input.objectInfo?.IPAdapterUnifiedLoader?.input?.required?.preset?.[0])
+      )
+      && Array.isArray(input.objectInfo?.CLIPVisionLoader?.input?.required?.clip_name?.[0])
+      && input.objectInfo.CLIPVisionLoader.input.required.clip_name[0].some((name: unknown) => /clip-vit-h-14|vit-h-14|vit.?h|clip_vision_g/i.test(String(name)));
+    const remoteSdxlOpenposeReady = id === 'sdxl_openpose'
+      && input.runtime === 'online'
+      && Array.isArray(input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0])
+      && input.objectInfo.ControlNetLoader.input.required.control_net_name[0].some((name: unknown) => /openpose|pose/i.test(String(name)) && /sdxl|xl/i.test(String(name)));
+    const remoteSdxlDepthReady = id === 'sdxl_depth'
+      && input.runtime === 'online'
+      && Array.isArray(input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0])
+      && input.objectInfo.ControlNetLoader.input.required.control_net_name[0].some((name: unknown) => /depth/i.test(String(name)) && /sdxl|xl/i.test(String(name)));
+    const remoteSdxlCannyReady = id === 'sdxl_canny'
+      && input.runtime === 'online'
+      && Array.isArray(input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0])
+      && input.objectInfo.ControlNetLoader.input.required.control_net_name[0].some((name: unknown) => /canny|lineart/i.test(String(name)) && /sdxl|xl/i.test(String(name)));
+    const remoteReady = remoteQwenReady || remoteSdxlIpAdapterReady || remoteSdxlOpenposeReady || remoteSdxlDepthReady || remoteSdxlCannyReady;
+    const referenceInstalled = id !== 'krea2_native_reference' && (weights[id].length > 0 || remoteReady);
+
+    const effectiveWeights = [...weights[id]];
+    if (effectiveWeights.length === 0 && input.runtime === 'online' && input.objectInfo) {
+      if (id === 'sdxl_ip_adapter' && remoteSdxlIpAdapterReady) {
+        const rawIpa = (input.objectInfo?.IPAdapterModelLoader?.input?.required?.ipadapter_file?.[0] || []) as string[];
+        const ipaHit = rawIpa.find((f: string) => !/faceid/i.test(f) && /sdxl/i.test(f)) || rawIpa.find((f: string) => /sdxl/i.test(f));
+        const clipHit = (input.objectInfo?.CLIPVisionLoader?.input?.required?.clip_name?.[0] || []).find((f: unknown) => /clip-vit-h-14|vit-h-14|vit.?h|clip_vision_g/i.test(String(f)));
+        if (ipaHit) effectiveWeights.push({ role: 'ipadapter', filename: String(ipaHit), relative_path: `models/ipadapter/${ipaHit}`, bytes: 0, sha256: null });
+        if (clipHit) effectiveWeights.push({ role: 'clip_vision', filename: String(clipHit), relative_path: `models/clip_vision/${clipHit}`, bytes: 0, sha256: null });
+      } else if (id === 'sdxl_openpose' && remoteSdxlOpenposeReady) {
+        const poseHit = (input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0] || []).find((f: unknown) => /openpose|pose/i.test(String(f)) && /sdxl|xl/i.test(String(f)));
+        if (poseHit) effectiveWeights.push({ role: 'openpose', filename: String(poseHit), relative_path: `models/controlnet/${poseHit}`, bytes: 0, sha256: null });
+      } else if (id === 'sdxl_depth' && remoteSdxlDepthReady) {
+        const depthHit = (input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0] || []).find((f: unknown) => /depth/i.test(String(f)) && /sdxl|xl/i.test(String(f)));
+        if (depthHit) effectiveWeights.push({ role: 'depth', filename: String(depthHit), relative_path: `models/controlnet/${depthHit}`, bytes: 0, sha256: null });
+      } else if (id === 'sdxl_canny' && remoteSdxlCannyReady) {
+        const cannyHit = (input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0] || []).find((f: unknown) => /canny|lineart/i.test(String(f)) && /sdxl|xl/i.test(String(f)));
+        if (cannyHit) effectiveWeights.push({ role: 'canny', filename: String(cannyHit), relative_path: `models/controlnet/${cannyHit}`, bytes: 0, sha256: null });
+      } else if (id === 'qwen_image_native_reference' && remoteQwenReady) {
+        const qwenHit = (input.objectInfo?.UNETLoader?.input?.required?.unet_name?.[0] || []).find((f: unknown) => /qwen[_-]?image/i.test(String(f)));
+        if (qwenHit) effectiveWeights.push({ role: 'diffusion', filename: String(qwenHit), relative_path: `models/diffusion_models/${qwenHit}`, bytes: 0, sha256: null });
+      }
+    }
     const shotAllowed = installProbe
       ? false
       : id === 'sdxl_ip_adapter' || id === 'qwen_image_native_reference'
@@ -437,7 +483,7 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
       policy_reason: installProbe ? null : id === 'sdxl_ip_adapter' ? identity.reason : id === 'sdxl_openpose' && people.length === 0 ? 'no_person' : null,
       required_nodes: required,
       missing_nodes: input.runtime === 'online' ? nodes.missing : required,
-      weights: id === 'krea2_native_reference' ? [] : weights[id],
+      weights: id === 'krea2_native_reference' ? [] : effectiveWeights,
       notes,
     };
   });

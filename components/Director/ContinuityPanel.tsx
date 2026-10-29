@@ -10,14 +10,17 @@ import type { ContinuityEntity,ContinuityChangeProposal,ContinuityOverlayProposa
 import { ContinuitySuggestionControls } from './ContinuitySuggestionControls';
 import { ContinuityTimePanel } from './ContinuityTimePanel';
 
-const control='rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs min-w-0 max-w-full';
-const button='rounded border border-slate-300 dark:border-slate-700 px-2 py-1 text-xs disabled:opacity-40';
+const control='rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2.5 py-1 text-xs min-w-0 max-w-full text-slate-800 dark:text-slate-200 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 shadow-2xs';
+const button='rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 disabled:opacity-40 transition-all shadow-2xs cursor-pointer';
 const propertyVersion=(id:string)=>id==='holding_hand'?{schema_version:2 as const,policy_version:'continuity-state-2' as const}:{schema_version:1 as const,policy_version:'continuity-state-1' as const};
 const imageUrl=(url:string)=>/^https?:/.test(url)?url:`${API_BASE_URL.replace(/\/api\/?$/,'')}${url.startsWith('/')?'':'/'}${url}`;
-type Props={script:any|null;projectId:string|number;onChanged:()=>void};
-export const ContinuityPanel:React.FC<Props>=({script,projectId,onChanged})=>{
+type Props={script:any|null;projectId:string|number;onChanged:()=>void;isOpen?:boolean;onToggleOpen?:()=>void;hideStandaloneHeader?:boolean};
+export const ContinuityPanel:React.FC<Props>=({script,projectId,onChanged,isOpen,onToggleOpen,hideStandaloneHeader=false})=>{
   const {t}=useLanguage(),{showToast}=useToast();
-  const [open,setOpen]=useState(false),[edit,setEdit]=useState(false),[view,setView]=useState<ContinuityReviewView|null>(null),[target,setTarget]=useState('');
+  const [internalOpen,setInternalOpen]=useState(false);
+  const open = isOpen !== undefined ? isOpen : internalOpen;
+  const toggle = onToggleOpen || (() => setInternalOpen(!internalOpen));
+  const [edit,setEdit]=useState(false),[view,setView]=useState<ContinuityReviewView|null>(null),[target,setTarget]=useState('');
   const [timePlan,setTimePlan]=useState<ContinuityTimePlan|null>(null);
   const [entities,setEntities]=useState<ContinuityEntity[]>([]),[entry,setEntry]=useState<EntryValue[]>([]),[changes,setChanges]=useState<ContinuityChangeProposal[]>([]),[overlays,setOverlays]=useState<ContinuityOverlayProposal[]>([]);
   const [dirty,setDirty]=useState(false),[full,setFull]=useState(false),[reason,setReason]=useState(''),[base,setBase]=useState({script:0,continuity:0}),[error,setError]=useState(''),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false);
@@ -100,8 +103,18 @@ export const ContinuityPanel:React.FC<Props>=({script,projectId,onChanged})=>{
   const recover=async(shot:NonNullable<ContinuityReviewView['shots']>[number])=>{if(!view?.snapshot)return;const moment=selectedMoment(shot);if(!moment)return;const momentId=moment.story_position.moment_id;
     setBusy(true);try{await api.refreshContinuityShot(view.script_id,{scene_id:shot.id,expected_scene_version:shot.active_version||1,expected_script_revision:view.script_revision,expected_continuity_revision:view.continuity_revision,request_key:`recovery:${crypto.randomUUID()}`,reason:t('continuity.recover'),target_scene_id:target,moment_id:momentId,phase:moment.story_position.phase,reads:shotReads[shot.id]||shot.reads});await load(target,dirtyRef.current);onChanged();showToast(t('continuity.recovered'),'success');}catch(error:any){setError(errorText(error));showToast(errorText(error),'error');}finally{setBusy(false);}};
   return <section data-testid="continuity-panel" className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0 min-w-0">
-    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2"><button data-testid="continuity-toggle" className="flex items-center gap-2 text-sm font-medium" onClick={()=>setOpen(!open)}>{open?<ChevronUp size={15}/>:<ChevronDown size={15}/>} {t('continuity.title')}</button><Link data-testid="continuity-script-link" className="text-xs text-indigo-600 dark:text-indigo-300" to={`/project/${projectId}/script`}>{t('continuity.script')}</Link></div>
-    {open&&<div className="max-h-[45vh] overflow-y-auto min-w-0 p-4 pt-0 space-y-3">
+    {!hideStandaloneHeader && (
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-slate-100 dark:border-slate-800">
+        <button data-testid="continuity-toggle" className="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer" onClick={toggle}>
+          {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          <span>{t('continuity.title')}</span>
+        </button>
+        <Link data-testid="continuity-script-link" className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1" to={`/project/${projectId}/script`}>
+          {t('continuity.script')} →
+        </Link>
+      </div>
+    )}
+    {open&&<div className="max-h-[48vh] overflow-y-auto min-w-0 p-4 space-y-3.5 custom-scrollbar">
       {!script&&<p className="text-sm">{t('continuity.no_script')}</p>}{loading&&<p className="text-xs">{t('continuity.loading')}</p>}
       {error&&<p data-testid="continuity-issue" role="alert" className="text-xs text-red-600 break-words">{error}</p>}
       {view&&<><div className="flex flex-wrap gap-2 items-center"><label className="text-xs">{t('continuity.scene')} <select data-testid="continuity-scene-select" className={control} value={target} onChange={event=>selectScene(event.target.value)}>{view.order.scenes.map((scene,index)=><option key={scene.script_scene_id} value={scene.script_scene_id}>{index+1}</option>)}</select></label>

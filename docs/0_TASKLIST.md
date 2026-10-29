@@ -16,6 +16,7 @@
 6. **Track 6**: 本机中文 TTS 音色目录与角色绑音。连通 `local-chinese-tts`，查询、筛选、试听，并在资产管理的角色上保存音色。方案见 `docs/deployment/local_chinese_tts_voice_cn.md`。指定本 Track 时从第一个 `[ ]` 开始，不改分镜、不生成章节配音。
 7. **Track 7**: 统一 16:9 分镜画布与 H3 原生 24fps 视频生产契约。生图默认 16:9 并移除 3:4/4:3；生视频默认 720p/24fps，保留 480p；统一 Shot Master 与多参考素材职责。方案见 `docs/video/分镜生图与生视频生产最佳实践_20261003.md`。
 8. **Track 8**: [构图草稿保留与正式分镜生成](#track8-production-storyboards)。按“已部署能力接入 → 首批实机验收 → 新模型及连续性增强”推进，任务 FS00–FS17。草稿继续无连续性 pin；正式候选写入未激活版本，采纳才切换活动图和 Shot Master，并沿用 CT18 六项核对。Krea2 与 SDXL 保持隔离。
+9. **Track 9**: [视听时长拆镜、场次视觉锚点与首尾帧接力管线](#track9-duration-anchor-relay)。任务 DT00–DT12，解决单镜>15s、长台词切句、单场多镜视听连贯性（环境/180°轴线）与跨镜首尾帧接力。方案见 `docs/architecture/shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md`。
 
 ### ⚠️ AI 工作流要求
 
@@ -1036,3 +1037,72 @@ Track 7 完成必须同时满足：
 | M09 | 画布与下游指针 | 正式候选和已采纳图以 16:9 全幅验收，方形裁切不算通过。候选成功不写 Shot Master，不替换视频输入。采纳后新视频读取该版本；旧视频仍指向原字节 |
 
 **每项关闭要求**：沿用“基线 → 静态检查 → 测试 → 验收矩阵”；记录 Decision & Audit、git 修订号、实际改动文件、下游调用方和剩余限制。FS00 只表示文档契约已修订。FS03 只表示两个入口和失败保留可用。FS09 是首批范围开放门槛。FS17 是全部列出范围的最终回归门槛。
+
+---
+
+<a id="track9-duration-anchor-relay"></a>
+## 📌 Track 9: 视听时长拆镜、场次视觉锚点与首尾帧接力管线
+
+> **方案事实源**：`docs/architecture/shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md`、配套独立任务文档 `docs/architecture/shot_timing_visual_anchor_first_last_frame_tasks_2026-10-29.md` 与 `docs/architecture/novel_to_script_to_storyboard_concepts.md` 第 8–9 节。  
+> **核心目标**：彻底解决视频模型 15s 上限与长镜冲突，消除长台词报错，建立场次环境锚点与 180° 轴线防跳轴机制，打通首尾双关键帧及跨镜动作接力管线。
+
+### 🎯 批次划分与推进顺序
+
+- **Batch A (DT01–DT04)**：视听时长预算与长对白自动拆解（解耦 15s 硬绑，长句分段挂载，保住 20% 配额）。
+- **Batch B (DT05–DT08)**：场次环境主图继承与 180° 空间轴线契约（原子写入素材引用，正反打互斥朝向）。
+- **Batch C (DT09–DT12)**：首尾双关键帧与视频跨镜/子切片接力（跃迁镜双静图，MultiFrame 路由与 FFmpeg 尾帧抽取）。
+
+### 📝 任务池
+
+- [x] **DT00 · 完成对抗式技术评审、规避设计与实施方案冻结。**
+  - **交付/AC**：深入排查 `assertChapterShotQuota` 配额冲突、TTS `block_id` 音频映射脱节、H3 `FL2VA` 拒绝角色参考及扩散模型坐标提示词缺陷；编写详细实施方案并完成任务分解。`docs/README.md` 索引同步。
+  - **Decision & Audit（2026-10-29）**：
+    - **决策**：对话切镜机位优先使用 `medium-action`（中景交替切镜，角色专注倾听）以保住 `insert + reaction ≤ 20%` 章节红线；`AudibleBlockSchema` 扩展包含文本跨度与时间偏移毫秒；有脸跃迁镜路由至 `minimax_h3_multiframe_official_12gb` 并锚定尾帧于 frame 119；轴线推导采用动作词加权并排查反向视线。
+    - **改动文件**：`docs/architecture/shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md`（新）、`docs/0_TASKLIST.md`、`docs/README.md`。
+    - **边界**：本任务仅交付技术方案与任务清单，未改动后端代码。下游为 DT01。
+
+#### Batch A: 视听时长预算与长对白自动拆镜
+
+- [ ] **DT01 · 引入三级时长阈值与精细化台词估算器。**
+  - **依赖/落点**：DT00；`backend/src/services/storyboard_fact_workflow.ts`。
+  - **交付/AC**：定义 `TARGET_SHOT_SECONDS=5.0`、`SOFT_MAX_SHOT_SECONDS=8.0`、`HARD_MAX_SHOT_SECONDS=15.0`。实现 `estimateAudioSeconds`，综合基础字数（3.8字/秒）、句中标点（+0.15s）、句末标点（+0.35s）及 `delivery` 情绪系数（缓慢 1.2、急促 0.85）。单测覆盖多种标点与语气组合。
+- [ ] **DT02 · 扩展 AudibleBlockSchema 支持子句切片与音轨定位。**
+  - **依赖/落点**：DT01；`backend/src/schemas/shot_contract.ts`。
+  - **交付/AC**：在 `AudibleBlockSchema` 中增加可选 `span_start`、`span_end`、`part_index`、`part_total`、`time_offset_ms`、`duration_ms`。保证旧镜头 JSON 解析兼容。提供还原纯函数，断言子句按偏移拼接与原 `block.text` 100% 逐字一致。
+- [ ] **DT03 · 重构镜头槽位分配算法，消除 >15s 报错与防配额击穿。**
+  - **依赖/落点**：DT01、DT02；`storyboard_fact_workflow.ts`（`allocateBudgets`、`assignFactSlots`、`buckets` 装配）。
+  - **交付/AC**：解除单条台词 >15s 的 hard error。单句台词 >8s 时按句末标点自动切分挂载到相邻槽位。多出的 `hold_fact_ids` 槽位，多人交互时分配为 `medium-action`（听者姿态中景），仅在整章特写配额充裕时分配为 `reaction`，道具交互分配为 `insert`。全章 `assertChapterShotQuota` 必须通过，单镜时长均 ≤ 8s。DT-AC01、DT-AC02、DT-AC03。
+- [ ] **DT04 · 支持可选的单镜长镜头切片契约（sub_clips）与 Batch A 验收。**
+  - **依赖/落点**：DT03；`backend/src/schemas/shot_contract.ts`。
+  - **交付/AC**：在 `ShotContractFieldsSchema` 增加 `sub_clips?: ShotSubClip[]`。全套 Batch A 自动化测试通过，包含短剧 120s 典型章节模拟拆镜测试。
+
+#### Batch B: 场次环境主图继承与 180° 空间轴线契约
+
+- [ ] **DT05 · 扩展地点资产关联并在采纳时自动下发环境参考。**
+  - **依赖/落点**：DT04；`backend/src/schemas/script.ts`、`storyboard_generation_service.ts`。
+  - **交付/AC**：`ScriptLocationSchema` 扩展 `library_asset_id` 与 `master_revision`。在 `applyStoryboardCandidate` 与局部采纳事务中，自动为该场所有新镜头插入 `scene_asset_reference (location)`。DT-AC04。
+- [ ] **DT06 · 在 ShotContract 中引入 screen_direction 与场内确定性轴线推导。**
+  - **依赖/落点**：DT05；`backend/src/schemas/shot_contract.ts`、`storyboard_fact_workflow.ts`。
+  - **交付/AC**：扩展 `ScreenDirectionSchema`（`subject_placement`, `facing_direction`, `camera_side`）。在组装镜头契约时，根据出场角色交互顺序推导默认站位与朝向（A 左面右，B 右面左，无跨轴动作时保持轴线同侧）。DT-AC05。
+- [ ] **DT07 · 将 screen_direction 接入 Pony 提示词与负向词编译器。**
+  - **依赖/落点**：DT06；`pony_prompt_compiler.ts`、`negative_prompt_compiler.ts`。
+  - **交付/AC**：正向词编译注入 `"positioned on left... facing right"` 等强动势构图标签；负向词编译注入反向朝向与视线抑制词。DT-AC06。
+- [ ] **DT08 · 验收 Batch B 轴线与环境锚点闭环。**
+  - **依赖/落点**：DT05–DT07；单元测试与集成测试。
+  - **交付/AC**：双人对话正反打切镜 Prompt 与负向词断言通过，无跳轴；同场多镜环境参考绑定断言通过。
+
+#### Batch C: 首尾双关键帧生成与视频跨镜/子切片接力
+
+- [ ] **DT09 · 镜头支持 last_frame_reference 尾帧静图资产绑定。**
+  - **依赖/落点**：DT08；`backend/src/schemas/video.ts`、`backend/src/routes/assets.ts`。
+  - **交付/AC**：为状态跃迁镜（`before → after`）生成首尾两帧静图，尾帧以首帧为参考注入生成，并双双通过 `validateShotMasterCharacters` 角色一致性检查。DT-AC07。
+- [ ] **DT10 · 实现视频工作流智能路由与 MultiFrame 帧位锚定。**
+  - **依赖/落点**：DT09；`backend/src/schemas/video.ts`、`video_workflow_compiler.ts`。
+  - **交付/AC**：有尾帧且有角色参考时自动路由至 `minimax_h3_multiframe_official_12gb`，尾帧自动置入 `guide_frames[0].frame_idx = 119`；纯空镜走 `fl2va`。DT-AC08、DT-AC09。
+- [ ] **DT11 · 实现跨镜/子切片尾帧抽取与接力服务。**
+  - **依赖/落点**：DT10；`backend/src/services/video/media_asset_service.ts`。
+  - **交付/AC**：实现 `relayKeyframeFromPreviousShot`，从上一镜成品视频中截取末尾清晰帧，注册为下一镜 `video_keyframe`，来源记录完整。DT-AC10。
+- [ ] **DT12 · 全流程回归与验收矩阵（DT-AC01 ~ DT-AC12）。**
+  - **依赖/落点**：DT01–DT11；仓库级回归。
+  - **交付/AC**：全量后端单测通过，`npm run typecheck` 0 错误，备份导入导出无损，生产构建通过。DT-AC11、DT-AC12。
+

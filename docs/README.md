@@ -23,7 +23,7 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 
 | 合同 | 路径 | 核心职责 |
 | --- | --- | --- |
-| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | Prompt 编译器、H3 生视频、RedCraft、小说故事创作、结构化剧本与本机 TTS 角色音色的唯一任务事实源 |
+| **全局任务全景** | [0_TASKLIST.md](./0_TASKLIST.md) | Prompt 编译器、H3 生视频、RedCraft、小说故事创作、结构化剧本、本机 TTS 角色音色与 Track 9 视听时长/首尾帧接力的唯一任务事实源 |
 | **产品范围** | [1_PRD.md](./1_PRD.md) | MVP 业务边界与产品规范 |
 | **架构红线** | [2_ARCHITECTURE.md](./2_ARCHITECTURE.md) | 技术栈红线、目标管道约束（深入分层见 `architecture/`） |
 | **UI 规则** | [3_UI_RULES.md](./3_UI_RULES.md) | i18n 规范、Tailwind、Toast、可测试性属性规则 |
@@ -79,6 +79,8 @@ Agent 改代码前先读 [`skills/vibe-coder/SKILL.md`](../skills/vibe-coder/SKI
 | [novel_to_script_to_storyboard_concepts.md](./architecture/novel_to_script_to_storyboard_concepts.md) | ✅ 现行概念说明 | 小说→提纲→分场正文→导演镜头的分层、一对多对应、页面数字含义；先读这份再看实现文档 |
 | [structured_screenplay_module_2026-09-28.md](./architecture/structured_screenplay_module_2026-09-28.md) | ✅ S0–S4 已闭环 | 故事→改编提纲→分场剧本→安全交接导演分镜；支持备份往返、级联清理、项目复制与来源过期检测 |
 | [scene_continuity_workflow_2026-10-09.md](./architecture/scene_continuity_workflow_2026-10-09.md) | 📝 Track 5 S5 评审修订方案 | 确认状态契约、九机位接口边界、保留旧图的失效、独立夹具与 9B 建议验收；人工分轮制作不等待模型；任务状态见 0_TASKLIST.md 的 CT00–CT22 |
+| [shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md](./architecture/shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md) | ✅ Track 9 现行实施方案 | 视听时长拆镜、场次视觉锚点与首尾帧接力管线；任务状态见 0_TASKLIST.md 的 DT00–DT12 |
+| [shot_timing_visual_anchor_first_last_frame_tasks_2026-10-29.md](./architecture/shot_timing_visual_anchor_first_last_frame_tasks_2026-10-29.md) | 📝 Track 9 独立任务清单 | 视听时长拆镜、场次视觉锚点与首尾帧接力 13 项原子任务细则与 DT-AC01~12 验收矩阵 |
 | [model_semantics_harness_protocol_2026-10-20.md](./architecture/model_semantics_harness_protocol_2026-10-20.md) | ✅ 已落地 | 模型出语义、Harness 管协议：原文切片、人物下标、译文、连续状态、年龄与参考图只拒绝，不改写通过 |
 
 阶段基线、验收报告及 JSON 结果统一放在 `archive/`，架构目录保留设计与实施方案。
