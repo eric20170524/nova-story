@@ -7,7 +7,7 @@ import { PreviewableImage, ZoomHint } from '../ImageLightbox';
 interface TurnaroundModalProps {
   character: Character | null;
   onClose: () => void;
-  modelType: 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image';
+  modelType: 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'moss_image';
   genType: 'turnaround' | 'portrait';
   setGenType: (type: 'turnaround' | 'portrait') => void;
   prompt: string;
@@ -87,7 +87,7 @@ export const TurnaroundModal: React.FC<TurnaroundModalProps> = ({
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-700/50 text-indigo-700 dark:text-indigo-200 text-xs font-semibold">
-                  {modelType === 'sd15' ? 'SD 1.5 Draft' : modelType === 'qwen_image' ? t('project_settings.model_qwen_image') : modelType === 'redcraft_krea2' ? 'RedCraft 3.0 (Krea2)' : 'Pony XL (SDXL)'}
+                  {modelType === 'sd15' ? 'SD 1.5 Draft' : modelType === 'moss_image' ? 'MOSS-Image' : modelType === 'qwen_image' ? t('project_settings.model_qwen_image') : modelType === 'redcraft_krea2' ? 'RedCraft 3.0 (Krea2)' : 'Pony XL (SDXL)'}
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium">
                   画风: {projectStyle}

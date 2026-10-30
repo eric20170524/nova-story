@@ -26,7 +26,7 @@ const lookup: ComfyWorkflowLookup = {
   byId: async (id) => rows.find((row) => row.id === id) || null,
   byName: async (name) => rows.find((row) => row.name === name) || null
 };
-const image = (model: 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image', workflow_id: number | null = null) => ({
+const image = (model: 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'moss_image', workflow_id: number | null = null) => ({
   image_generation: { model, workflow_id, style: 'xianxia_immortal',
     output_spec: { aspect_ratio: '16:9', resolution: 'standard', orientation_policy: 'fixed' },
     nsfw_mode: 'inherit' }
@@ -107,6 +107,28 @@ test('qwen-image 2.1 graph is its own family and is the automatic match', async 
     selectComfyWorkflow({ project_settings: image('qwen_image', 7) }, { comfyui: {} }, withQwen),
     /uses pony/
   );
+});
+
+test('moss_image graph is its own family and is the automatic match', async () => {
+  const content = fs.readFileSync(path.resolve('static/workflows/moss_image.json'), 'utf8');
+  const graph = JSON.parse(content);
+  assert.equal(graph['4'].inputs.unet_name, 'moss_image_sft_bf16.safetensors');
+  assert.equal(graph['10'].inputs.type, 'moss_image');
+  assert.equal(inferComfyWorkflowFamily({ id: 12, name: 'moss_image', content }), 'moss_image');
+
+  const mossRow = { id: 12, name: 'moss_image', content };
+  const withMoss: ComfyWorkflowLookup = {
+    byId: async (id) => id === 12 ? mossRow : lookup.byId(id),
+    byName: async (name) => name === 'moss_image' ? mossRow : lookup.byName(name)
+  };
+  const selected = await selectComfyWorkflow(
+    { project_settings: image('moss_image') },
+    { comfyui: {} },
+    withMoss
+  );
+  assert.equal(selected.row.name, 'moss_image');
+  assert.equal(selected.family, 'moss_image');
+  assert.equal(selected.source, 'model');
 });
 
 test('system selection does not override the project model', async () => {

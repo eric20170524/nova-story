@@ -65,7 +65,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const isRemote = comfy.mode === 'remote';
     let workflowFile = comfy.selected_workflow_file || (isRemote ? 'qwen_image_2_1.json' : (comfy.default_workflow || 'pony_xl_12gb.json'));
     let modelName = isRemote ? 'qwen-image-2.1' : 'pony';
-    if (query.model === 'redcraft_krea2') {
+    if (query.model === 'moss_image' || query.model === 'mossimage') {
+      modelName = 'moss_image';
+      workflowFile = 'moss_image.json';
+    } else if (query.model === 'redcraft_krea2') {
       modelName = 'redcraft_krea2';
       workflowFile = 'redcraft_krea2_12gb.json';
     } else if (query.model === 'qwen_image') {
@@ -77,6 +80,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     } else if (query.model === 'sd15') {
       modelName = 'anything-v5';
       workflowFile = 'anything_v5.json';
+    } else if (String(workflowFile).includes('moss')) {
+      modelName = 'moss_image';
     } else if (String(workflowFile).includes('krea') || String(workflowFile).includes('redcraft')) {
       modelName = 'redcraft_krea2';
     } else if (String(workflowFile).includes('qwen')) {

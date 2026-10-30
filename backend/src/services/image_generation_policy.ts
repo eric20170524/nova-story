@@ -15,7 +15,7 @@ import path from 'path';
 import { logger } from '../core/logging';
 
 /** Local Comfy model families. `flux` is legacy custom-graph only (GGUF retired 2026-08). */
-export type ImageModelFamily = 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'flux';
+export type ImageModelFamily = 'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'moss_image' | 'flux';
 
 /**
  * Normalize free-form model_type / reference_model_type strings from UI or API.
@@ -40,6 +40,9 @@ export const normalizeImageModelFamily = (raw: unknown): ImageModelFamily => {
     || /sd\s*1\.?5/.test(s)
   ) {
     return 'sd15';
+  }
+  if (/moss[_-]?image|mossimage|^moss$/i.test(s) || s.includes('moss_image') || s.includes('mossimage')) {
+    return 'moss_image';
   }
   if (/qwen[_-]?image/.test(s)) return 'qwen_image';
   return 'pony';
@@ -663,8 +666,8 @@ export const resolveStyleLora = (
   nsfwEnabled: boolean,
   input: Pick<LoraResolveInput, 'installPath' | 'styleLora' | 'allowRemoteUnverified'>
 ): string | null => {
-  // SD1.5 and Qwen-Image use different weights. Do not auto-attach Pony/SDXL LoRAs.
-  if (modelFamily === 'sd15' || modelFamily === 'qwen_image') {
+  // SD1.5, Qwen-Image, and MOSS-Image use different weights. Do not auto-attach Pony/SDXL LoRAs.
+  if (modelFamily === 'sd15' || modelFamily === 'qwen_image' || modelFamily === 'moss_image') {
     return null;
   }
 
@@ -771,8 +774,8 @@ export const resolveNsfwLora = (
   modelFamily: ImageModelFamily,
   input: Pick<LoraResolveInput, 'installPath' | 'nsfwLora' | 'allowRemoteUnverified'>
 ): string | null => {
-  // SD1.5 and Qwen-Image: skip Pony/Incase NSFW LoRAs (incompatible).
-  if (modelFamily === 'sd15' || modelFamily === 'qwen_image') {
+  // SD1.5, Qwen-Image, and MOSS-Image: skip Pony/Incase NSFW LoRAs (incompatible).
+  if (modelFamily === 'sd15' || modelFamily === 'qwen_image' || modelFamily === 'moss_image') {
     return null;
   }
 
@@ -1029,7 +1032,7 @@ export const buildPromptEnhancement = (options: {
     identityReferenceBound = null,
   } = options;
   const identityBound = identityReferenceBound === true;
-  const naturalLanguage = modelFamily === 'flux' || modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image';
+  const naturalLanguage = modelFamily === 'flux' || modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'moss_image';
   const isTurnaroundPanel = String(genType || '').toLowerCase().trim() === 'turnaround_panel';
   const isTurnaround = isTurnaroundPanel || String(genType || '').toLowerCase().trim() === 'turnaround';
   const lower = existingPrompt.toLowerCase();
@@ -1215,7 +1218,7 @@ export const buildPromptEnhancement = (options: {
         negativeParts.push('exposed breasts');
       }
     }
-  } else if (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') {
+  } else if (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'moss_image') {
     // RedCraft Krea2 uses natural language prompt booster (no Pony score/tags, native NSFW support).
     // oriental_realistic brings its own face lock. The ethereal suffix reads as a doll illustration.
     const orientalRealisticPreset = String(stylePreset || '').toLowerCase() === 'oriental_realistic';
@@ -1391,7 +1394,7 @@ export const resolveGenerationPlan = (options: {
   const styleLora =
     modelFamily === 'flux'
       ? comfy.flux_lora
-      : modelFamily === 'sd15' || modelFamily === 'qwen_image'
+      : modelFamily === 'sd15' || modelFamily === 'qwen_image' || modelFamily === 'moss_image'
         ? null
         : modelFamily === 'redcraft_krea2'
           ? comfy.redcraft_krea2_lora

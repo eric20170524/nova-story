@@ -777,6 +777,16 @@ test('normalizeImageModelFamily correctly normalizes redcraft and krea variants'
     styleLora: 'Pony_DetailV2.0.safetensors',
     allowRemoteUnverified: true
   }), null);
+  assert.equal(normalizeImageModelFamily('moss_image'), 'moss_image');
+  assert.equal(normalizeImageModelFamily('mossimage'), 'moss_image');
+  assert.equal(normalizeImageModelFamily('moss'), 'moss_image');
+  assert.equal(normalizeImageModelFamily('MOSS-Image'), 'moss_image');
+  assert.equal(normalizeImageModelFamily('moss-image-sft'), 'moss_image');
+  assert.equal(resolveStyleLora('moss_image', true, {
+    installPath: null,
+    styleLora: 'Pony_DetailV2.0.safetensors',
+    allowRemoteUnverified: true
+  }), null);
   assert.equal(normalizeImageModelFamily('RedCraft 3.0 (Krea2)'), 'redcraft_krea2');
 });
 

@@ -295,6 +295,21 @@ test('character age dimension and dual-stream portrait/turnaround support', asyn
     const refusedBody = JSON.parse(refusedRef.payload);
     assert.equal(refusedBody.ref_image_url, portraitUrl);
     assert.equal(refusedBody.turnaround_front_adapter, true);
+
+    // MOSS-Image Stage 1 is text-to-image, so turnaround prompt must preserve the East Asian facial lock
+    await db.run(
+      'UPDATE project SET settings = ? WHERE id = 1',
+      JSON.stringify({ image_generation: { style: 'oriental_realistic', model: 'moss_image' } }),
+    );
+    const mossTurn = await app.inject({
+      method: 'POST',
+      url: `/api/characters/${created.id}/build-prompt`,
+      payload: { gen_type: 'turnaround' },
+    });
+    assert.equal(mossTurn.statusCode, 200);
+    const mossBody = JSON.parse(mossTurn.payload);
+    assert.equal(mossBody.model_type, 'moss_image');
+    assert.match(mossBody.prompt, /delicate East Asian facial features|classical oriental bone structure/i);
   } finally {
     try { fs.unlinkSync(resolveStaticAssetPath('/static/generated/projects/1/characters/1/v1/portrait.png')); } catch { /* already gone */ }
     await app.close();

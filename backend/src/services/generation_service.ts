@@ -307,7 +307,7 @@ const injectLora = (
     );
     if (alreadyPresent) return;
 
-    const diffusionOnly = modelType === 'flux' || modelType === 'redcraft_krea2' || modelType === 'qwen_image';
+    const diffusionOnly = modelType === 'flux' || modelType === 'redcraft_krea2' || modelType === 'qwen_image' || modelType === 'moss_image';
     const modelLoaderId = findNodeId(workflow, (node) =>
         modelType === 'flux'
             ? node?.class_type === 'UnetLoaderGGUF'
@@ -338,7 +338,7 @@ const injectLora = (
                 model: currentModel
             },
             class_type: 'LoraLoaderModelOnly',
-            _meta: { title: modelType === 'qwen_image' ? 'NovaStory Qwen-Image LoRA' : modelType === 'redcraft_krea2' ? 'NovaStory RedCraft Krea2 LoRA' : 'NovaStory FLUX LoRA' }
+            _meta: { title: modelType === 'moss_image' ? 'NovaStory MOSS-Image LoRA' : modelType === 'qwen_image' ? 'NovaStory Qwen-Image LoRA' : modelType === 'redcraft_krea2' ? 'NovaStory RedCraft Krea2 LoRA' : 'NovaStory FLUX LoRA' }
         };
     } else {
         workflow[loraNodeId] = {
@@ -555,6 +555,11 @@ export const compileComfyWorkflow = async (
         || (node?.class_type === 'UNETLoader' && /qwen[_-]?image/i.test(String(node.inputs?.unet_name || '')))
         || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'qwen_image')
     ));
+    const isMossImage = !isRedCraftKrea2 && !isQwenImage && Boolean(findNodeId(workflow, (node) =>
+        node?.class_type === 'MOSSImageLayoutPrompt'
+        || (node?.class_type === 'UNETLoader' && /moss[_-]?image/i.test(String(node.inputs?.unet_name || '')))
+        || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'moss_image')
+    ));
     const isAnimagineXl = Boolean(findNodeId(workflow, (node) =>
         node?.class_type === 'CheckpointLoaderSimple'
         && /animagine/i.test(String(node.inputs?.ckpt_name || ''))
@@ -566,7 +571,9 @@ export const compileComfyWorkflow = async (
         )
     ));
     // Graph detection wins for FLUX/RedCraft custom graphs; otherwise honor request / SD1.5 ckpt.
-    const modelFamily: ImageModelFamily = isQwenImage
+    const modelFamily: ImageModelFamily = isMossImage
+        ? 'moss_image'
+        : isQwenImage
         ? 'qwen_image'
         : isFlux
         ? 'flux'
@@ -677,12 +684,12 @@ export const compileComfyWorkflow = async (
     const defaultSteps = Number(
         generationParams?.steps
         ?? samplerNodes[0]?.inputs?.steps
-        ?? (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : modelFamily === 'redcraft_krea2' ? 10 : 25)
+        ?? (modelFamily === 'flux' ? 24 : modelFamily === 'sd15' ? 20 : modelFamily === 'redcraft_krea2' ? 10 : modelFamily === 'moss_image' ? 20 : 25)
     );
     const defaultCfg = Number(
         generationParams?.cfg
         ?? samplerNodes[0]?.inputs?.cfg
-        ?? (modelFamily === 'flux' ? 3.5 : modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' ? 1.0 : 7)
+        ?? (modelFamily === 'flux' ? 3.5 : modelFamily === 'moss_image' ? 3.0 : modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' ? 1.0 : 7)
     );
 
     for (const sampler of samplerNodes) {
@@ -736,12 +743,12 @@ export const compileComfyWorkflow = async (
         sampler.inputs.cfg = defaultCfg;
         if (generationParams?.sampler_name) {
             sampler.inputs.sampler_name = generationParams.sampler_name;
-        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') && !sampler.inputs.sampler_name) {
+        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'moss_image') && !sampler.inputs.sampler_name) {
             sampler.inputs.sampler_name = 'euler';
         }
         if (generationParams?.scheduler) {
             sampler.inputs.scheduler = generationParams.scheduler;
-        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image') && !sampler.inputs.scheduler) {
+        } else if ((modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'moss_image') && !sampler.inputs.scheduler) {
             sampler.inputs.scheduler = 'simple';
         }
     }
@@ -903,9 +910,48 @@ export const compileComfyWorkflow = async (
         }
     }
 
+    if (isMossImage) {
+        const unetId = findNodeId(workflow, (node) => node?.class_type === 'UNETLoader');
+        const currentUnet = String((unetId && workflow[unetId]?.inputs?.unet_name) || '');
+        const resolvedUnet = pickCatalogModel(
+            effectiveUnetCatalog,
+            ['moss_image_sft_bf16.safetensors', 'moss_image_sft_int8_convrot.safetensors'],
+            /moss[_-]?image/i,
+            currentUnet || 'moss_image_sft_bf16.safetensors',
+            true
+        );
+        if (unetId && workflow[unetId]?.inputs && resolvedUnet && resolvedUnet !== currentUnet) {
+            workflow[unetId].inputs.unet_name = resolvedUnet;
+            logger.info(`Reconciled UNETLoader from ${currentUnet} to ${resolvedUnet} for MOSS-Image`);
+        }
+        const clipId = findNodeId(workflow, (node) => node?.class_type === 'CLIPLoader');
+        if (clipId && workflow[clipId]?.inputs) {
+            const currentClip = String(workflow[clipId].inputs.clip_name || '');
+            workflow[clipId].inputs.clip_name = pickCatalogModel(
+                effectiveClipCatalog,
+                ['qwen3.5_9b_bf16.safetensors', 'qwen3.5_9b_int8_convrot.safetensors'],
+                /qwen3\.?5[_-]?9b/i,
+                currentClip || 'qwen3.5_9b_bf16.safetensors',
+                true
+            );
+            workflow[clipId].inputs.type = 'moss_image';
+        }
+        const vaeLoaderId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
+        if (vaeLoaderId && workflow[vaeLoaderId]?.inputs) {
+            const currentVae = String(workflow[vaeLoaderId].inputs.vae_name || '');
+            workflow[vaeLoaderId].inputs.vae_name = pickCatalogModel(
+                effectiveVaeCatalog,
+                ['flux2-vae_small.safetensors', 'flux2-vae.safetensors', 'ae.safetensors'],
+                /flux2[_-]?vae|ae\.safetensors/i,
+                currentVae || 'flux2-vae_small.safetensors',
+                true
+            );
+        }
+    }
+
     // Tier A img2img (only when character adapter is NOT handling identity)
     const characterRefUrl = refPlan.refs.characterRefUrl;
-    const krea2FaceDetailStage2 = isRedCraftKrea2
+    const krea2FaceDetailStage2 = (isRedCraftKrea2 || isMossImage)
         && workflowData?.face_detail_stage2 === true
         && workflowData?.use_qwen_vl_ref !== true
         && Boolean(characterRefUrl);
@@ -1041,7 +1087,7 @@ export const compileComfyWorkflow = async (
                 refPlan.img2img.denoise,
                 width,
                 height,
-                isFlux || isRedCraftKrea2
+                isFlux || isRedCraftKrea2 || isMossImage
             );
         } else if (!refPlan.useCharacterAdapter) {
             logger.info(

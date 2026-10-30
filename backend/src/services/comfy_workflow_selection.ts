@@ -48,11 +48,17 @@ export const inferComfyWorkflowFamily = (row: ComfyWorkflowRow): ImageModelFamil
     || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'qwen_image')
   )) return 'qwen_image';
   if (nodes.some((node) =>
+    node?.class_type === 'MOSSImageLayoutPrompt'
+    || (node?.class_type === 'UNETLoader' && /moss[_-]?image/i.test(String(node.inputs?.unet_name || '')))
+    || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'moss_image')
+  )) return 'moss_image';
+  if (nodes.some((node) =>
     (node?.class_type === 'UNETLoader' && /redcraft|krea/i.test(String(node.inputs?.unet_name || '')))
     || (node?.class_type === 'CLIPLoader' && /redcraft|krea/i.test(String(node.inputs?.clip_name || node.inputs?.type || '')))
   )) return 'redcraft_krea2';
 
   const checkpoint = String(nodes.find((node) => node?.class_type === 'CheckpointLoaderSimple')?.inputs?.ckpt_name || '');
+  if (/moss[_-]?image/i.test(checkpoint)) return 'moss_image';
   if (/flux/i.test(checkpoint)) return 'flux';
   if (/redcraft|krea/i.test(checkpoint)) return 'redcraft_krea2';
   if (/sd\s*1\.?5|anything|counterfeit|meina|chillout|sd15/i.test(checkpoint)) return 'sd15';
@@ -85,7 +91,9 @@ export const selectComfyWorkflow = async (
       ? 'redcraft_krea2_12gb'
       : requestedFamily === 'qwen_image'
         ? 'qwen_image_2_1'
-        : 'pony_xl_12gb';
+        : requestedFamily === 'moss_image'
+          ? 'moss_image'
+          : 'pony_xl_12gb';
   const preferred = await lookup.byName(preferredName);
   if (preferred) {
     const family = inferComfyWorkflowFamily(preferred);

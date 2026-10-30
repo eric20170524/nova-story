@@ -23,16 +23,17 @@ export class OpenAIProvider implements AIProvider {
         baseUrl?: string,
         options: { isOllama?: boolean; timeoutMs?: number } = {}
     ) {
-        this.openai = new OpenAI({
-            apiKey,
-            baseURL: baseUrl,
-            timeout: options.timeoutMs ?? (options.isOllama ? 600_000 : 60_000),
-            maxRetries: options.isOllama ? 0 : 2,
-        });
         this.isOllama = options.isOllama === true;
         this.baseUrl = baseUrl || '';
         this.model = !this.isOllama && /^qwen3\.?8-27b$/i.test(model.trim()) ? 'qwen3.8-27b' : model;
         this.imageModel = 'dall-e-3';
+        const defaultTimeout = (this.isOllama || this.isRemoteLab()) ? 600_000 : 60_000;
+        this.openai = new OpenAI({
+            apiKey,
+            baseURL: baseUrl,
+            timeout: options.timeoutMs ?? defaultTimeout,
+            maxRetries: options.isOllama ? 0 : 2,
+        });
     }
 
     /** Public Gemma is served through EdgeOne, which answers 524 if a completion stays silent. */

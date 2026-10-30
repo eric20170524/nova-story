@@ -10,6 +10,7 @@ const imagePresets = [
   'pony_xl_tier_b_dual_ref_l40',
   'animagine_xl_4_l40',
   'sd15_draft_12gb',
+  'moss_image',
   'qwen_image_2_1',
   'redcraft_krea2_12gb',
 ];

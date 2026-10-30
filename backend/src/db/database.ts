@@ -479,7 +479,7 @@ const migrations: Migration[] = [
         const legacy = settings as Record<string, any>;
         const oldSpec = legacy.output_spec && typeof legacy.output_spec === 'object'
           ? legacy.output_spec : {};
-        const model = legacy.default_model_type === 'sd15' || legacy.default_model_type === 'redcraft_krea2'
+        const model = legacy.default_model_type === 'sd15' || legacy.default_model_type === 'redcraft_krea2' || legacy.default_model_type === 'qwen_image' || legacy.default_model_type === 'moss_image'
           ? legacy.default_model_type : 'pony';
         let workflowId = Number.isSafeInteger(legacy.default_workflow_id) && legacy.default_workflow_id > 0
           ? legacy.default_workflow_id : null;

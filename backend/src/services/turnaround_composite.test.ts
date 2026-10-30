@@ -368,6 +368,42 @@ test('redcraft_krea2 face_detail_stage2 keeps Krea2 Stage 1 and adds a Qwen-Imag
     },
   );
   assert.equal(Object.values(missingNodeFallback).some((n: any) => isFaceDetailStage2Node(n)), false);
+
+  // MOSS-Image turnaround panel with face_detail_stage2 keeps Stage 1 denoise=1 and gracefully falls back when Stage 2 weights are absent
+  const mossTemplate = {
+    '3': { inputs: { seed: 9, steps: 20, cfg: 3, sampler_name: 'euler', scheduler: 'simple', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] }, class_type: 'KSampler' },
+    '4': { inputs: { unet_name: 'moss_image_sft_bf16.safetensors', weight_dtype: 'default' }, class_type: 'UNETLoader' },
+    '5': { inputs: { width: 1024, height: 1024, batch_size: 1 }, class_type: 'EmptyLatentImage' },
+    '6': { inputs: { text: '', clip: ['10', 0] }, class_type: 'CLIPTextEncode' },
+    '7': { inputs: { text: '', clip: ['10', 0] }, class_type: 'CLIPTextEncode' },
+    '8': { inputs: { samples: ['3', 0], vae: ['11', 0] }, class_type: 'VAEDecode' },
+    '9': { inputs: { filename_prefix: 'NovaStory_MOSS_Image', images: ['8', 0] }, class_type: 'SaveImage' },
+    '10': { inputs: { clip_name: 'qwen3.5_9b_bf16.safetensors', type: 'moss_image', device: 'default' }, class_type: 'CLIPLoader' },
+    '11': { inputs: { vae_name: 'flux2-vae_small.safetensors' }, class_type: 'VAELoader' }
+  };
+  const mossFront = buildTurnaroundViewPrompt('female, long black hair, crimson hanfu', TURNAROUND_VIEWS[0]!, 'moss_image');
+  const mossFallback: any = await compileComfyWorkflow(
+    {
+      ...mossTemplate,
+      ...buildTurnaroundPanelWorkflowData({ model_type: 'moss_image' }, TURNAROUND_VIEWS[0]!, mossFront.prompt, mossFront.negative_prompt),
+      character_ref_url: '/static/generated/portrait.png',
+      ref_image_url: '/static/generated/portrait.png',
+      face_detail_stage2: true,
+    },
+    mossFront.prompt,
+    'standard',
+    undefined,
+    {
+      comfyui: {
+        remote_unet_names: ['moss_image_sft_bf16.safetensors'],
+        remote_clip_names: ['qwen3.5_9b_bf16.safetensors'],
+        remote_vae_names: ['flux2-vae_small.safetensors'],
+      },
+    },
+  );
+  assert.equal(mossFallback['3'].inputs.denoise, 1);
+  assert.equal(Object.values(mossFallback).some((n: any) => isFaceDetailStage2Node(n)), false);
+  assert.deepEqual(mossFallback['9'].inputs.images, ['8', 0]);
 });
 
 test('compound hair/garment descriptors and participial handheld prop stripping work cleanly on front view', () => {

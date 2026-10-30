@@ -43,7 +43,7 @@ export const CharacterManager: React.FC = () => {
 
   // Project policy for consistent style/NSFW on character gens
   const [projectStyle, setProjectStyle] = useState('xianxia_immortal');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'moss_image'>('pony');
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
   const [systemNsfw, setSystemNsfw] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -71,7 +71,7 @@ export const CharacterManager: React.FC = () => {
         const s = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
         const imageSettings = s.image_generation || {};
         if (imageSettings.style) setProjectStyle(imageSettings.style);
-        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image') {
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image' || imageSettings.model === 'moss_image') {
           setProjectModelType(imageSettings.model);
         }
         if (imageSettings.nsfw_mode === 'on' || imageSettings.nsfw_mode === 'off') {

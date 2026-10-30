@@ -77,6 +77,8 @@ test('formal assembly resolves each person, keeps version 1 pins, and ignores cl
 test('pony formal combination is recorded and other combinations stay closed', () => {
   assert.deepEqual(FORMAL_OPEN_COMBINATIONS, ['sdxl_ip_adapter']);
   assert.equal(formalRenderAllowed('sdxl_ip_adapter'), true);
+  assert.equal(formalRenderAllowed('qwen_image_native_reference'), true);
+  assert.equal(formalRenderAllowed('moss_image_native_reference'), true);
   assert.equal(formalRenderAllowed('sdxl_unverified'), false);
   assert.equal(formalRenderAllowed('krea2_native_reference'), false);
   const workflow = pony();

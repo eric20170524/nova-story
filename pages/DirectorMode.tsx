@@ -131,7 +131,7 @@ export const DirectorMode: React.FC = () => {
   const [projectCharacters, setProjectCharacters] = useState<any[]>([]);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [projectNsfwMode, setProjectNsfwMode] = useState<'inherit' | 'on' | 'off'>('inherit');
-  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image'>('pony');
+  const [projectModelType, setProjectModelType] = useState<'pony' | 'sd15' | 'redcraft_krea2' | 'qwen_image' | 'moss_image'>('pony');
   const [projectWorkflowId, setProjectWorkflowId] = useState<number | null>(null);
   const [projectVideoWorkflowId, setProjectVideoWorkflowId] = useState<VideoWorkflowId | null>(null);
   const [projectOutputSpec, setProjectOutputSpec] = useState<Required<ImageOutputSpec>>({
@@ -207,7 +207,7 @@ export const DirectorMode: React.FC = () => {
             setSelectedStyle(imageSettings.style);
           }
         }
-        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image') {
+        if (imageSettings.model === 'sd15' || imageSettings.model === 'pony' || imageSettings.model === 'redcraft_krea2' || imageSettings.model === 'qwen_image' || imageSettings.model === 'moss_image') {
           setProjectModelType(imageSettings.model);
         }
         setProjectWorkflowId(typeof imageSettings.workflow_id === 'number' ? imageSettings.workflow_id : null);

@@ -10,6 +10,7 @@ import samplesFile from '../test_fixtures/formal_storyboard/samples-v1.json';
 import {
   FORMAL_BASELINE_FAILURES,
   FORMAL_FS02_RESOLVED,
+  FORMAL_MOSS_IMAGE_WORKFLOW,
   FORMAL_REJECTED_3060_WORKFLOW,
   FORMAL_SDXL_3060_WORKFLOW,
   assertIsolatedFormalDatabase,
@@ -73,7 +74,10 @@ test('formal model classes keep SDXL checkpoints together and Krea2 apart', () =
   assert.equal(classifyFormalModel('Juggernaut-XL-v9').model_class, 'sdxl');
   assert.equal(classifyFormalModel('krea2_turbo_int8_convrot').label, 'Krea2 INT8 ConvRot');
   assert.equal(classifyFormalModel('anything-v5').model_class, 'sd15');
+  assert.equal(classifyFormalModel('moss_image_sft_bf16.safetensors').model_class, 'moss_image');
   assert.equal(formalTemplateDecision(FORMAL_SDXL_3060_WORKFLOW).role, 'sdxl_3060');
+  assert.equal(formalTemplateDecision(FORMAL_MOSS_IMAGE_WORKFLOW).role, 'moss_image');
+  assert.equal(formalTemplateDecision(FORMAL_MOSS_IMAGE_WORKFLOW).accepted, true);
   assert.equal(formalTemplateDecision(FORMAL_REJECTED_3060_WORKFLOW).accepted, false);
 });
 

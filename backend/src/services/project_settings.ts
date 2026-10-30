@@ -1,5 +1,5 @@
 /** Project-owned image generation defaults. Legacy keys are migrated once in the database. */
-export const PROJECT_IMAGE_MODELS = ['pony', 'sd15', 'redcraft_krea2', 'qwen_image'] as const;
+export const PROJECT_IMAGE_MODELS = ['pony', 'sd15', 'redcraft_krea2', 'qwen_image', 'moss_image'] as const;
 export type ProjectImageModel = typeof PROJECT_IMAGE_MODELS[number];
 
 export const isProjectImageModel = (value: unknown): value is ProjectImageModel =>

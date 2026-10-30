@@ -11,6 +11,10 @@ async function startServer() {
   const HOST = process.env.HOST || process.env.NOVASTORY_HOST || '127.0.0.1';
 
   const app = await buildApp({ logger: true });
+  app.server.requestTimeout = 30 * 60 * 1000;
+  app.server.headersTimeout = 31 * 60 * 1000;
+  app.server.keepAliveTimeout = 30 * 60 * 1000;
+  app.server.timeout = 30 * 60 * 1000;
 
   if (process.env.NODE_ENV !== 'production') {
     await app.register(FastifyMiddie);

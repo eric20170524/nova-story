@@ -262,7 +262,7 @@ export function buildTurnaroundViewPrompt(
   modelFamily: ImageModelFamily = 'pony',
   options: { identityLocked?: boolean } = {}
 ): { prompt: string; negative_prompt: string } {
-  const naturalLanguage = modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'flux';
+  const naturalLanguage = modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image' || modelFamily === 'moss_image' || modelFamily === 'flux';
   // Qwen-VL models read the portrait as image 1; its face must win over any face text.
   const vlmLocked = options.identityLocked === true
     && (modelFamily === 'redcraft_krea2' || modelFamily === 'qwen_image');
@@ -546,10 +546,10 @@ export async function generateTurnaroundComposite(
   });
   logger.info(`[Task ${input.taskId}] Generating front full-body reference: ${view.id}`);
 
-  // qwen_image reads the portrait natively in its single stage. redcraft_krea2 keeps its native Stage 1 render
-  // and gets the portrait only in the Qwen-Image 2.1 Stage 2 face refine (scheme 1B).
+  // qwen_image reads the portrait natively in its single stage. redcraft_krea2 / moss_image keep their native Stage 1 render
+  // and get the portrait only in the Qwen-Image 2.1 Stage 2 face refine (scheme 1B) when Stage 2 is installed.
   const useVlmRef = modelFamily === 'qwen_image';
-  const useKreaFaceStage2 = modelFamily === 'redcraft_krea2' && Boolean(activeAvatarUrl);
+  const useKreaFaceStage2 = (modelFamily === 'redcraft_krea2' || modelFamily === 'moss_image') && Boolean(activeAvatarUrl);
   const usePonyFrontAdapter = modelFamily === 'pony' && Boolean(tierB.characterAdapter && activeAvatarUrl);
   if (!activeAvatarUrl) {
     logger.warn(`[Task ${input.taskId}] Turnaround generation proceeding without active identity reference`);

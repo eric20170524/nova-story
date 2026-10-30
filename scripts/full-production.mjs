@@ -3,7 +3,14 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { Agent, setGlobalDispatcher } from 'undici';
 import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, shotVideoPreset, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+
+setGlobalDispatcher(new Agent({
+  headersTimeout: 60 * 60 * 1000,
+  bodyTimeout: 60 * 60 * 1000,
+  connectTimeout: 60 * 60 * 1000,
+}));
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
 import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, subtitles, assertReview } from './production-contracts.mjs';
@@ -139,7 +146,7 @@ async function request(url, method = 'GET', body) {
   const send = async () => {
     const response = await fetch(`${base}/api${url}`, {
       method, headers: { 'Content-Type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30 * 60 * 1000),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(60 * 60 * 1000),
     });
     const text = await response.text();
     let result; try { result = JSON.parse(text); } catch { throw new Error(`${url}: non-JSON response (${response.status})`); }
@@ -743,7 +750,7 @@ function formalRenderOpen(status) {
   const open = new Set(Array.isArray(status?.formal?.open_combinations) ? status.formal.open_combinations : []);
   const rows = Array.isArray(status?.formal?.capabilities) ? status.formal.capabilities : [];
   if (rows.some(row => open.has(row.id) && row.family_match !== false)) return true;
-  if (status?.formal?.model_class === 'qwen_image' && status?.formal?.template?.accepted) return true;
+  if ((status?.formal?.model_class === 'qwen_image' || status?.formal?.model_class === 'moss_image') && status?.formal?.template?.accepted) return true;
   return rows.some(row => row.family_match !== false && row.chain_ready === true && row.live_verified === true);
 }
 async function assertFormalStoryboardRender(model) {

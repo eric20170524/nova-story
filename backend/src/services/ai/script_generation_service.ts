@@ -6,7 +6,7 @@ import { LLMService } from '../llm';
 import { SettingsManager } from '../../core/settings_manager';
 import { runStageOneThinkingConception, type AIProvider } from './base';
 import { formatPrompt, getPrompt } from './prompt_registry';
-import { bindEntities, boundVisibleEntities, entityRoster, eventContentCovered, eventRelationConflict, groundedEventText, materializeScriptReferences, needsBindingReview, resolveScriptBindings, validateBinding, textHash } from '../entity_binding';
+import { bindEntities, boundVisibleEntities, entityRoster, eventContentCovered, eventRelationConflict, groundedEventText, materializeScriptReferences, needsBindingReview, outlineBindingNeedsReview, resolveScriptBindings, validateBinding, textHash } from '../entity_binding';
 import type { EntityRef } from '../../schemas/entity_binding';
 import { coversVisibleBeat, extractVisibleBeats, type VisibleBeat } from '../english_visual_prompt';
 import { ScriptService, ScriptServiceError } from '../script_service';
@@ -528,11 +528,11 @@ export class ScriptGenerationService {
         const preceding = paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n');
         let binding = bindEntities(paragraph.text, roster);
         binding.context_hash = textHash(preceding);
-        if (needsBindingReview(binding)) binding = await resolveScriptBindings(provider, binding, paragraph.text, preceding, roster);
+        if (outlineBindingNeedsReview(binding)) binding = await resolveScriptBindings(provider, binding, paragraph.text, preceding, roster);
         event.sourceBindings.push({ paragraph_id: pid, text: paragraph.text, binding });
       }
-      if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding!, event.text, event.sourceBindings.map(s => materializeScriptReferences(s.text, s.binding).text).join('\n'), roster);
-      const sourceConfirmed = event.sourceBindings.every(source => !needsBindingReview(source.binding));
+      if (outlineBindingNeedsReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding!, event.text, event.sourceBindings.map(s => materializeScriptReferences(s.text, s.binding).text).join('\n'), roster);
+      const sourceConfirmed = event.sourceBindings.every(source => !outlineBindingNeedsReview(source.binding));
       const expanded = materializeScriptReferences(event.text, event.binding!);
       const grounded = sourceConfirmed && eventContentCovered(expanded.text, event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'));
       if (!grounded && event.binding?.mentions.length) event.binding = { ...event.binding, mentions: event.binding.mentions.map(m => ({ ...m, authority: 'model_proposal', confirmed: false, candidates: roster })) };
@@ -671,19 +671,19 @@ export class ScriptGenerationService {
         validateBinding(source.binding, source.text, roster);
         const index = paragraphs.findIndex(p => p.id === source.paragraph_id);
         if (source.binding.context_hash !== textHash(paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'))) throw new ScriptGenerationError('提纲人物绑定的前文已变化，请重新核对', 409);
-        if (needsBindingReview(source.binding)) source.binding = await resolveScriptBindings(provider, source.binding, source.text, paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'), roster);
+        if (outlineBindingNeedsReview(source.binding)) source.binding = await resolveScriptBindings(provider, source.binding, source.text, paragraphs.slice(Math.max(0, index - 2), index).map(p => p.text).join('\n'), roster);
       }
-      if (event.sourceBindings.some(s => needsBindingReview(s.binding))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
+      if (event.sourceBindings.some(s => outlineBindingNeedsReview(s.binding))) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
       const sourceText = event.sourceBindings.map(source => materializeScriptReferences(source.text, source.binding).text).join('\n');
       // A summary can name 陆嘉静 where the cited lines only say 宫主. Those names
       // cannot be literal-confirmed, so keep the source sentences and drop the paraphrase.
       let grounded = groundedEventText(event.text, sourceText);
-      if (!grounded && !needsBindingReview(event.binding)) {
+      if (!grounded && !outlineBindingNeedsReview(event.binding)) {
         grounded = groundedEventText(materializeScriptReferences(event.text, event.binding).text, sourceText);
       }
       if (!grounded) {
-        if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, sourceText, roster);
-        if (!needsBindingReview(event.binding)) grounded = groundedEventText(materializeScriptReferences(event.text, event.binding).text, sourceText);
+        if (outlineBindingNeedsReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, sourceText, roster);
+        if (!outlineBindingNeedsReview(event.binding)) grounded = groundedEventText(materializeScriptReferences(event.text, event.binding).text, sourceText);
       }
       if (!grounded) throw new ScriptGenerationError(`提纲事件 ${event.id} 的改编人物关系没有可验证的原文对应，请在提纲中核对并确认`, 400);
       const explicit = grounded.text;
@@ -692,8 +692,8 @@ export class ScriptGenerationService {
       // remain in sourceBindings with their own offsets and hashes.
       event.text = explicit;
       event.binding = bindEntities(explicit, roster);
-      if (needsBindingReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, sourceText, roster);
-      if (needsBindingReview(event.binding)) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
+      if (outlineBindingNeedsReview(event.binding)) event.binding = await resolveScriptBindings(provider, event.binding, event.text, sourceText, roster);
+      if (outlineBindingNeedsReview(event.binding)) throw new ScriptGenerationError(`提纲事件 ${event.id} 的人物绑定待核对，请在提纲中核对原文与改编句后再生成剧本`, 400);
     }
 
     // Normalize visual source sentences before exact coverage checks, so replacing

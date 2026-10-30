@@ -15,6 +15,7 @@ import { shouldAllowCharacterAdapter } from './reference_generation_policy';
 export const FORMAL_SDXL_3060_WORKFLOW = 'pony_xl_12gb.json';
 export const FORMAL_KREA2_12GB_WORKFLOW = 'redcraft_krea2_12gb.json';
 export const FORMAL_QWEN_IMAGE_WORKFLOW = 'qwen_image_2_1.json';
+export const FORMAL_MOSS_IMAGE_WORKFLOW = 'moss_image.json';
 export const FORMAL_REJECTED_3060_WORKFLOW = 'pony_xl_tier_b_dual_ref_l40.json';
 
 export const FORMAL_CAPABILITY_IDS = [
@@ -28,7 +29,7 @@ export const FORMAL_CAPABILITY_IDS = [
 
 export type FormalCapabilityId = (typeof FORMAL_CAPABILITY_IDS)[number];
 
-export type FormalModelClass = 'sdxl' | 'krea2' | 'qwen_image' | 'sd15' | 'flux' | 'unknown';
+export type FormalModelClass = 'sdxl' | 'krea2' | 'qwen_image' | 'moss_image' | 'sd15' | 'flux' | 'unknown';
 
 export type FormalBlockReason =
   | 'not_installed'
@@ -135,6 +136,7 @@ export const classifyFormalModel = (raw: unknown): { model_class: FormalModelCla
     return { model_class: 'krea2', label: /int8|convrot/.test(value) ? 'Krea2 INT8 ConvRot' : 'Krea2' };
   }
   if (/qwen[_-]?image/.test(value)) return { model_class: 'qwen_image', label: 'Qwen-Image 2.1' };
+  if (/moss[_-]?image/.test(value)) return { model_class: 'moss_image', label: 'MOSS-Image' };
   if (value.includes('flux')) return { model_class: 'flux', label: 'FLUX' };
   if (/sd\s*1\.?5|sd15|anything-?v5/.test(value)) return { model_class: 'sd15', label: 'SD1.5' };
   if (/juggernaut|autismmix|pony|sdxl|illustrious|animagine/.test(value)) return { model_class: 'sdxl', label: 'SDXL' };
@@ -142,11 +144,12 @@ export const classifyFormalModel = (raw: unknown): { model_class: FormalModelCla
   return { model_class: 'unknown', label: String(raw) };
 };
 
-export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'qwen_image_2_1' | 'rejected' } => {
+export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'qwen_image_2_1' | 'moss_image' | 'rejected' } => {
   const name = path.basename(workflowFile);
   if (name === FORMAL_SDXL_3060_WORKFLOW) return { accepted: true, role: 'sdxl_3060' };
   if (name === FORMAL_KREA2_12GB_WORKFLOW) return { accepted: true, role: 'krea2_12gb' };
   if (name === FORMAL_QWEN_IMAGE_WORKFLOW) return { accepted: true, role: 'qwen_image_2_1' };
+  if (name === FORMAL_MOSS_IMAGE_WORKFLOW) return { accepted: true, role: 'moss_image' };
   return { accepted: false, role: 'rejected' };
 };
 

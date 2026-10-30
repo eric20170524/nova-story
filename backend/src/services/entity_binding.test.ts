@@ -1,7 +1,7 @@
 import '../test_setup';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, groundedEventText, materializeScriptReferences, needsBindingReview, proposeBindings, resolveScriptBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
+import { bindEntities, boundText, boundVisibleEntities, entityRoster, eventContentCovered, groundedEventText, materializeScriptReferences, needsBindingReview, outlineBindingNeedsReview, proposeBindings, resolveScriptBindings, transferTranslationProblem, validateBinding, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { auditFacts, continuityAfter, continuityForScene, continuityLiteral, evidencedContinuityStates, factSourceHash, sceneContext, sceneContextFacts, scopedWardrobeLock } from './storyboard_fact_workflow';
 import { createEmptyScriptDocument, validateScriptForConfirmation } from '../schemas/script';
 import type { AIProvider } from './ai/base';
@@ -56,6 +56,16 @@ test('剧本自动解析保留歧义复数，不接受缺项或重复结果', as
     const invalid = { async generateStructured(_prompt: string, schema: any) { return schema.parse({ bindings: rows }); } } as AIProvider;
     await assert.rejects(() => resolveScriptBindings(invalid, bindEntities(text, roster), text, '', roster), /缺项或重复/);
   }
+});
+
+test('提纲绑定校验放行“两人”等复数代词，单人未确定仍保留核对', () => {
+  const pluralBinding = bindEntities('这是两人旧事。', roster);
+  assert.equal(needsBindingReview(pluralBinding), true);
+  assert.equal(outlineBindingNeedsReview(pluralBinding), false);
+
+  const singularBinding = bindEntities('她递出蓝伞。', roster);
+  assert.equal(needsBindingReview(singularBinding), true);
+  assert.equal(outlineBindingNeedsReview(singularBinding), true);
 });
 
 test('剧本自动解析在条数一致时按顺序对齐错误索引，合法索引保持原对应', async () => {

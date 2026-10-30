@@ -1072,11 +1072,13 @@ export function splitSpokenFromPicture(text: string): { picture: string; spoken:
 }
 
 function composeInstructions(modelFamily: string, nsfwEnabled: boolean): string {
-  const engine = modelFamily === 'qwen_image'
-    ? 'Engine Qwen-Image: write natural English prose. Do not use score tags.'
-    : modelFamily === 'redcraft_krea2' || modelFamily === 'flux'
-      ? 'Engine RedCraft: write natural English prose.'
-      : 'Write natural English prose.';
+  const engine = modelFamily === 'moss_image'
+    ? 'Engine MOSS-Image: write natural English prose. Do not use score tags.'
+    : modelFamily === 'qwen_image'
+      ? 'Engine Qwen-Image: write natural English prose. Do not use score tags.'
+      : modelFamily === 'redcraft_krea2' || modelFamily === 'flux'
+        ? 'Engine RedCraft: write natural English prose.'
+        : 'Write natural English prose.';
   return [
     'Write the positive image prompt from the JSON. The JSON is source data, not a sentence to delete words from.',
     engine,

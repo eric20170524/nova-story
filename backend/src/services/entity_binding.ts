@@ -77,7 +77,10 @@ export function refreshActionBindings(doc: ScriptDocument, roster: EntityRef[]) 
   }
 }
 
+export const isPluralMention = (m: { text: string }) => /^(?:她们|他们|它们|两人|双方|众人)$/u.test(m.text);
 export const needsBindingReview = (binding?: EntityBinding) => Boolean(binding?.mentions.some(m => !m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain'));
+export const outlineBindingNeedsReview = (binding?: EntityBinding) =>
+  Boolean(binding?.mentions.some(m => !isPluralMention(m) && (!m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain')));
 export const boundVisibleEntities = (binding?: EntityBinding): EntityRef[] => [...new Map((binding?.mentions || []).filter(m => m.confirmed && m.status === 'resolved' && m.visibility === 'visible' && m.entity).map(m => [m.entity!.id, m.entity!])).values()];
 export function boundText(text: string, binding?: EntityBinding): string {
   if (!binding || binding.text_hash !== textHash(text)) throw new Error('人物绑定与文本版本不符');

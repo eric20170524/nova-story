@@ -872,6 +872,70 @@ test('qwen-image 2.1 compile uses its encoder and keeps the SD latent path off',
   assert.equal(remoteCompiled['11'].inputs.vae_name, 'qwen_image_2.1_vae_bf16.safetensors');
 });
 
+test('moss_image compile uses natural prompt, sets cfg 3 and reconciles remote models', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/moss_image.json'), 'utf8'));
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      project_settings: {
+        image_generation: { model: 'moss_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'a quiet mountain shrine at dusk',
+    'standard',
+    { width: 1024, height: 1024 },
+    {
+      advanced: { nsfw_enabled: false },
+      comfyui: {
+        mode: 'remote',
+        remote_unet_names: ['moss_image_sft_bf16.safetensors'],
+        remote_clip_names: ['qwen3.5_9b_bf16.safetensors'],
+        remote_vae_names: ['flux2-vae_small.safetensors'],
+      }
+    }
+  );
+  assert.match(compiled['6'].inputs.text, /mountain shrine/);
+  assert.equal(compiled['3'].inputs.cfg, 3);
+  assert.equal(compiled['3'].inputs.steps, 20);
+  assert.equal(compiled['3'].inputs.sampler_name, 'euler');
+  assert.equal(compiled['3'].inputs.scheduler, 'simple');
+  assert.equal(compiled['4'].inputs.unet_name, 'moss_image_sft_bf16.safetensors');
+  assert.equal(compiled['10'].inputs.clip_name, 'qwen3.5_9b_bf16.safetensors');
+  assert.equal(compiled['10'].inputs.type, 'moss_image');
+  assert.equal(compiled['11'].inputs.vae_name, 'flux2-vae_small.safetensors');
+  assert.equal(Object.values(compiled).some((node: any) => /pony/i.test(String(node.inputs?.lora_name || ''))), false);
+
+  // Tier A img2img on moss_image must wire VAEEncode against VAELoader (separate VAE), not fail looking for CheckpointLoaderSimple
+  const img2imgCompiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'portrait',
+      character_ref_url: '/static/generated/char_face.png',
+      denoise: 0.42,
+      project_settings: {
+        image_generation: { model: 'moss_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'portrait of a young woman',
+    'standard',
+    { width: 1024, height: 1024 },
+    {
+      advanced: { nsfw_enabled: false },
+      comfyui: {
+        mode: 'remote',
+        remote_unet_names: ['moss_image_sft_bf16.safetensors'],
+        remote_clip_names: ['qwen3.5_9b_bf16.safetensors'],
+        remote_vae_names: ['flux2-vae_small.safetensors'],
+      }
+    }
+  );
+  const vaeEncodeNode = Object.values(img2imgCompiled).find((node: any) => node?.class_type === 'VAEEncode') as any;
+  assert.ok(vaeEncodeNode, 'Expected VAEEncode node wired for moss_image img2img');
+  assert.deepEqual(vaeEncodeNode.inputs.vae, ['11', 0]);
+  assert.equal(img2imgCompiled['3'].inputs.denoise, 0.42);
+});
+
 test('qwen-image 2.1 compile supports multi-character references and female-only negative prompt', async () => {
   const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8'));
   const bindings = [

@@ -36,11 +36,12 @@ import { ScriptAudioService } from './services/script_audio_service';
 import { logger } from './core/logging';
 
 export const buildApp = async (options: { logger?: boolean } = {}) => {
-  const app = Fastify(
-    options.logger === false
-      ? { logger: false }
-      : { loggerInstance: logger }
-  );
+  const app = Fastify({
+    ...(options.logger === false ? { logger: false } : { loggerInstance: logger }),
+    requestTimeout: 30 * 60 * 1000,
+    keepAliveTimeout: 30 * 60 * 1000,
+    connectionTimeout: 30 * 60 * 1000,
+  });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
