@@ -512,7 +512,7 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 --- 规则与规范 ---
 1. 小说内向心理活动必须改编为可表演的外部动作 (action)、对白 (dialogue) 或画外音 (voiceover)。
 2. 严禁混入摄影机机位、景别或生成镜头英文 Prompt（视觉分镜由导演模式统一编译）。
-3. 对白的 characterName 必须是出场角色档案里的姓名，禁止凭空捏造未登场角色，也不要用昵称或职位代替姓名。没有明确说话人时不要写 dialogue，把那句改成 action。叙述不要写成对白；使用 voiceover，characterName 填“旁白”。不要把“画外音”当作角色名。
+3. 对白的 characterName 必须是出场角色档案里的姓名，禁止凭空捏造未登场角色，也不要用昵称或职位代替姓名。没有明确说话人时不要写 dialogue，把那句改成 action。叙述不要写成对白；使用 voiceover，characterName 填“旁白”。不要把“画外音”当作角色名。单条 dialogue 或 voiceover 的台词控制在 30 字（约 8 秒）以内；长独白或多句连续台词必须按完整句号拆分为连续多个有声块。
 4. props 列出本场动作中出现或实际使用的关键实物道具，给出准确名称和简短外观/用途；同一道具跨场沿用名称，不能把不同实物合并。没有道具才填空数组；不得把人物、声音或心理活动当道具。
 5. 本场必保事件的可见动作必须写进 action 文本，coveredEventIds 填写这些事件的原始 id。只改措辞、不写出事件本身，不能算覆盖。
 6. action.text 必须保留原文里看得到的服装状态、姿态和身体接触。对白和画外音不能代替这些事实，也不要把它们改写成情绪、仙力或光影。
@@ -547,7 +547,7 @@ Do NOT output an outline or suggestion. Output the FULL rewritten story content 
 
 --- 规范要求 ---
 1. 保持当前分场 ID 稳定不变。
-2. 强化外部戏剧动作与对白潜台词，去除抽象小说叙述。
+2. 强化外部戏剧动作与对白潜台词，去除抽象小说叙述；单条 dialogue 或 voiceover 台词控制在 30 字（约 8 秒）以内，长独白按完整句号拆分为连续多个有声块。
 3. 严禁混入摄影机机位或镜头参数。
 4. 若上面列出了本场必须保留的事件，改写后的正文仍要体现这些事件，不要把它们挪走或删掉。
 5. props 返回本场改写后仍出现或实际使用的关键道具，格式为 [{"name":"准确名称","description":"外观或用途"}]；沿用原稿道具名称，新增实物才新增名称，没有道具才填 []。

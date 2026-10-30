@@ -114,3 +114,32 @@ test('auto does not infer identity from girl or paw words', () => {
     'unknown'
   );
 });
+
+test('DT-AC07: compileNegativePrompt adds reverse gaze suppression tokens from screen_direction', () => {
+  const negRight = compileNegativePrompt({
+    shot_type: 'Medium Shot',
+    shot_intent: 'medium-action',
+    screen_direction: { subject_placement: 'left', facing_direction: 'right', camera_side: 'axis_a' },
+  });
+  assert.match(negRight, /\bfacing left\b/);
+  assert.match(negRight, /\blooking at viewer\b/);
+  assert.match(negRight, /\bfront-facing passport photo\b/);
+
+  const negLeft = compileNegativePrompt({
+    shot_type: 'Medium Shot',
+    shot_intent: 'reaction',
+    screen_direction: { subject_placement: 'right', facing_direction: 'left', camera_side: 'axis_a' },
+  });
+  assert.match(negLeft, /\bfacing right\b/);
+  assert.match(negLeft, /\blooking at viewer\b/);
+  assert.match(negLeft, /\bfront-facing passport photo\b/);
+
+  const negTwoShot = compileNegativePrompt({
+    shot_type: 'Wide Shot',
+    shot_intent: 'wide-action',
+    screen_direction: { subject_placement: 'two-shot-left-right', facing_direction: 'each_other', camera_side: 'axis_a' },
+  });
+  assert.match(negTwoShot, /\blooking at viewer\b/);
+  assert.match(negTwoShot, /\bfront-facing passport photo\b/);
+  assert.doesNotMatch(negTwoShot, /\bfacing left\b|\bfacing right\b/);
+});

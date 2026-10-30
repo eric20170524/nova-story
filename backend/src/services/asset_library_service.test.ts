@@ -178,3 +178,91 @@ test('asset extraction keeps canonical names and drops characters or unknown kin
   assert.equal(normalized[0]?.visual_prompt, '');
   assert.equal(normalized[2]?.visual_prompt, 'jade slip');
 });
+
+test('DT-AC11: project backup export and import losslessly preserve screen_direction, references, and character snapshots', async () => {
+  await initDb();
+  const { normalizeNovaStoryJsonProject } = await import('./import/novastory_json_model');
+  const { restoreNovaStoryJsonProject } = await import('./import/novastory_json_import');
+  const { packShotSpec } = await import('../schemas/shot_contract');
+
+  const shotSpec = packShotSpec({
+    location: '云海仙台',
+    primary_action: '陆尘转身看向青檀',
+    visible_subjects: ['陆尘'],
+    screen_direction: { subject_placement: 'left', facing_direction: 'right', camera_side: 'axis_a' },
+    shot_type: 'Medium Shot',
+  });
+
+  const exportPayload = {
+    format: 'novastory-project',
+    version: 2,
+    project: { id: 88801, title: 'DT-AC11 Backup', description: 'backup test', settings: {} },
+    screenplay: {
+      chapters: [{ id: 'ch_88801', index: 1, title: '第一章', content: '正文', summary: '', status: 'completed' }],
+      scripts: [],
+    },
+    character_center: {
+      characters: [{ id: 501, name: '陆尘', role: '主角', description: '', visual_tags: '{}', active_version: 2 }],
+    },
+    director: {
+      scenes: [{
+        id: 601,
+        chapter_id: 'ch_88801',
+        index: 1,
+        visual_prompt: 'Lu Chen positioned on left side of frame, facing right',
+        negative_prompt: 'facing left, looking at viewer',
+        duration: 8,
+        shot_type: 'Medium Shot',
+        camera_movement: 'Static',
+        camera_angle: 'Eye-level',
+        shot_spec: shotSpec,
+        asset_status: 'completed',
+        asset_url: '/static/dt11_shot.png',
+      }],
+      coverage_groups: [],
+      coverage_shots: [],
+    },
+    asset_library: {
+      assets: [{
+        id: 701,
+        kind: 'location',
+        name: '云海仙台',
+        description: '仙雾缭绕',
+        visual_prompt: 'cloud terrace',
+        image_url: '/static/terrace.png',
+        status: 'completed',
+        revision: 2,
+        source_chapter_ids: JSON.stringify(['ch_88801']),
+      }],
+      references: [{ scene_id: 601, asset_id: 701, asset_revision: 2 }],
+      image_snapshots: [{
+        scene_id: 601,
+        image_url: '/static/dt11_shot.png',
+        references_json: JSON.stringify([{ id: 701, revision: 2 }]),
+        character_versions_json: JSON.stringify([{ id: 501, version: 2 }]),
+      }],
+    },
+  };
+
+  const normalized = normalizeNovaStoryJsonProject(exportPayload, 'dt11.novastory.json');
+  const restoredProject = await restoreNovaStoryJsonProject(normalized, 'local_user');
+  assert.ok(restoredProject?.id);
+
+  const restoredChapter = await db.get('SELECT id FROM chapter WHERE project_id = ?', restoredProject.id);
+  const restoredScene = await db.get('SELECT * FROM scene WHERE chapter_id = ?', restoredChapter.id);
+  const restoredSpec = JSON.parse(restoredScene.shot_spec);
+  assert.deepEqual(restoredSpec.screen_direction, {
+    subject_placement: 'left',
+    facing_direction: 'right',
+    camera_side: 'axis_a',
+  });
+
+  const restoredRefs = await db.all('SELECT * FROM scene_asset_reference WHERE scene_id = ?', restoredScene.id);
+  assert.equal(restoredRefs.length, 1);
+  assert.equal(restoredRefs[0].asset_revision, 2);
+
+  const restoredSnap = await db.get('SELECT * FROM scene_asset_image_snapshot WHERE scene_id = ?', restoredScene.id);
+  const restoredChar = await db.get('SELECT id, active_version FROM character WHERE project_id = ?', restoredProject.id);
+  assert.equal(Number(restoredChar.active_version), 2);
+  assert.deepEqual(JSON.parse(restoredSnap.character_versions_json), [{ id: Number(restoredChar.id), version: 2 }]);
+});

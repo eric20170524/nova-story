@@ -9,8 +9,10 @@ export class LoopAnalyzer {
     probe: VideoProbeInfo;
     continuity?: LoopContinuityMeasurements;
     analysisError?: string;
+    expectedFrames?: number;
   }): VideoQAReport {
-    const { taskId, profile, probe, continuity, analysisError } = options;
+    const { taskId, profile, probe, continuity, analysisError, expectedFrames = 120 } = options;
+    const expectedDuration = expectedFrames / 24;
     const isLoop = profile === 'character_loop';
 
     const reasons: string[] = [];
@@ -25,13 +27,13 @@ export class LoopAnalyzer {
       technicalPass = false;
       reasons.push(`FPS mismatch: expected 24, got ${probe.fps}`);
     }
-    if (Math.abs(probe.duration_s - 5.0) > 0.12) {
+    if (Math.abs(probe.duration_s - expectedDuration) > 0.12) {
       technicalPass = false;
-      reasons.push(`Duration mismatch: expected 5.0s, got ${probe.duration_s.toFixed(3)}s`);
+      reasons.push(`Duration mismatch: expected ${expectedDuration.toFixed(1)}s, got ${probe.duration_s.toFixed(3)}s`);
     }
-    if (probe.frame_count !== 120) {
+    if (probe.frame_count !== expectedFrames) {
       technicalPass = false;
-      reasons.push(`Frame-count mismatch: expected 120, got ${probe.frame_count}`);
+      reasons.push(`Frame-count mismatch: expected ${expectedFrames}, got ${probe.frame_count}`);
     }
 
     const appearanceError = continuity?.appearance_error ?? 10;

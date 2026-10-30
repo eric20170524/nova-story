@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { EntityBindingSchema, EntityRefSchema } from './entity_binding';
 
-export const FACT_POLICY_VERSION = 'storyboard-facts-3.2';
+export const FACT_POLICY_VERSION = 'storyboard-facts-3.3';
 export const FACT_STATE_ATTRIBUTES = ['presence', 'wardrobe', 'holding', 'position', 'pose', 'body', 'expression', 'pending_action'] as const;
 export type FactStateAttribute = (typeof FACT_STATE_ATTRIBUTES)[number];
 export const FACT_STATE_LABELS: Record<FactStateAttribute, string> = {
@@ -31,7 +31,7 @@ export const VisualFactSchema = z.object({
 export type VisualFact = z.infer<typeof VisualFactSchema>;
 export const StoryboardFactContractSchema = z.object({
   // Read legacy records without silently promoting them to the new policy.
-  version: z.union([z.literal(2), z.literal(3)]), policy: z.enum(['storyboard-facts-2', 'storyboard-facts-3', 'storyboard-facts-3.1', FACT_POLICY_VERSION]),
+  version: z.union([z.literal(2), z.literal(3)]), policy: z.enum(['storyboard-facts-2', 'storyboard-facts-3', 'storyboard-facts-3.1', 'storyboard-facts-3.2', FACT_POLICY_VERSION]),
   source_hash: z.string().min(1), facts: z.array(VisualFactSchema),
   entities: z.array(EntityRefSchema).optional(),
   budgets: z.array(z.object({ scene_id: z.string(), minimum: z.number().int().positive(), duration: z.number().positive() })),

@@ -254,6 +254,7 @@ test('T6.3: character voice columns, saving rules, version isolation and prompt 
     assert.deepEqual(charAfterFailedPut503, charBeforeFailedPut, 'Row must be strictly unchanged when TTS is unavailable on PUT');
 
     // 10. Prompt assembly does NOT include voice_label or voice_id
+    await db.run('UPDATE character SET visual_tags = ? WHERE id = ?', JSON.stringify({ gender: 'female' }), charLu.id);
     const resPrompt = await app.inject({
       method: 'POST',
       url: `/api/characters/${charLu.id}/build-prompt`,

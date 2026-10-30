@@ -27,7 +27,8 @@ import {
   MediaAsset,
   VideoTaskState,
   VideoQAReport,
-  VideoWorkflowId
+  VideoWorkflowId,
+  VideoPreset
 } from '../../types';
 import { useLanguage } from '../../LanguageContext';
 import { useToast } from '../../ToastContext';
@@ -38,7 +39,9 @@ import { appendUploadedIdentityReference, defaultIdentityReferenceIds, resolvePr
 
 interface SceneVideoPlayerProps {
   scene: Scene;
+  previousSceneId?: number | string | null;
   projectVideoWorkflowId?: VideoWorkflowId | null;
+  videoPreset?: VideoPreset;
   mediaAssets?: MediaAsset[];
   taskState?: VideoTaskState;
   onGenerateVideo?: (options?: any) => void;
@@ -46,13 +49,14 @@ interface SceneVideoPlayerProps {
   onArchiveAsset?: (assetId: number, expectedStatus: string) => void;
   onReprocessAsset?: (assetId: number) => void;
   onCancelTask?: (taskId: string) => void;
+  onRefreshSceneMedia?: () => void;
 }
 
-const readGuideFrameIdx = (metadataJson?: string | null): number | null => {
+const readGuideFrameIdx = (metadataJson?: string | null, maxFrameIdx = 191): number | null => {
   if (!metadataJson) return null;
   try {
     const value = Number(JSON.parse(metadataJson).guide_frame_idx);
-    return Number.isInteger(value) && value >= 1 && value <= 119 ? value : null;
+    return Number.isInteger(value) && value >= 1 && value <= maxFrameIdx ? value : null;
   } catch {
     return null;
   }
@@ -196,19 +200,32 @@ const ReferenceImagePicker: React.FC<{
 
 export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   scene,
+  previousSceneId = null,
   projectVideoWorkflowId = null,
+  videoPreset,
   mediaAssets = [],
   taskState,
   onGenerateVideo,
   onPromoteAsset,
   onArchiveAsset,
   onReprocessAsset,
-  onCancelTask
+  onCancelTask,
+  onRefreshSceneMedia
 }) => {
   const { id: projectIdParam } = useParams<{ id: string }>();
   const { t } = useLanguage();
   const { showToast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  const effectivePreset: VideoPreset = React.useMemo(() => {
+    const base = videoPreset || 'standard_720p_5s';
+    if (Number(scene.duration) > 5 && base.endsWith('_5s')) {
+      return base.startsWith('preview_480p') ? 'preview_480p_8s' : 'standard_720p_8s';
+    }
+    return base;
+  }, [scene.duration, videoPreset]);
+  const maxGuideFrameIdx = effectivePreset.endsWith('_8s') ? 191 : 119;
+  const quickGuideFrames = effectivePreset.endsWith('_8s') ? [24, 48, 96, 144, 168] : [24, 36, 48, 72, 96];
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(true);
@@ -218,6 +235,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const [showReferenceManager, setShowReferenceManager] = useState(false);
   const [localReferenceAssets, setLocalReferenceAssets] = useState<MediaAsset[]>([]);
   const [uploadingRole, setUploadingRole] = useState<ReferenceUploadRole | null>(null);
+  const [relayingKeyframe, setRelayingKeyframe] = useState(false);
+  const [adoptingLastFrameId, setAdoptingLastFrameId] = useState<number | null>(null);
   const [workflowId, setWorkflowId] = useState<VideoWorkflowId>('minimax_h3_ref2va_official_12gb');
   const [workflowManuallySelected, setWorkflowManuallySelected] = useState(false);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<ImageChoiceValue | null>(null);
@@ -240,8 +259,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   }, [mediaAssets, localReferenceAssets]);
 
   const suggestedWorkflow = React.useMemo(
-    () => resolveProjectVideoWorkflow(mergedAssets, projectVideoWorkflowId),
-    [mergedAssets, projectVideoWorkflowId]
+    () => resolveProjectVideoWorkflow(mergedAssets, projectVideoWorkflowId, effectivePreset),
+    [mergedAssets, projectVideoWorkflowId, effectivePreset]
   );
 
   const videoAssets = mergedAssets.filter((asset) => asset.media_type === 'video');
@@ -388,7 +407,8 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   ]);
 
   const selectedGuideStoredIdx = readGuideFrameIdx(
-    mergedAssets.find((asset) => asset.id === selectedGuideFrameId)?.metadata_json
+    mergedAssets.find((asset) => asset.id === selectedGuideFrameId)?.metadata_json,
+    maxGuideFrameIdx
   );
   useEffect(() => {
     if (selectedGuideFrameId == null || selectedGuideStoredIdx == null) return;
@@ -400,12 +420,49 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
   const rememberGuideFrame = (assetId: number | null, frameIdx: number) => {
     if (assetId == null) return;
     const asset = mergedAssets.find((item) => item.id === assetId);
-    if (!isPersistedGuideRole(asset?.role) || readGuideFrameIdx(asset?.metadata_json) === frameIdx) return;
-    void api.setGuideFrameIndex(assetId, frameIdx).then((updated) => {
+    if (!isPersistedGuideRole(asset?.role) || readGuideFrameIdx(asset?.metadata_json, maxGuideFrameIdx) === frameIdx) return;
+    void api.setGuideFrameIndex(assetId, frameIdx, effectivePreset).then((updated) => {
       setLocalReferenceAssets((current) => [...current.filter((item) => item.id !== updated.id), updated]);
     }).catch((error: any) => {
       showToast(error?.message || '导引帧位置保存失败', 'error');
     });
+  };
+
+  const handleRelayKeyframe = async () => {
+    if (previousSceneId == null || relayingKeyframe) return;
+    setRelayingKeyframe(true);
+    try {
+      const asset = await api.relayKeyframeFromPreviousShot(scene.id, previousSceneId, true);
+      setLocalReferenceAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+      setSelectedKeyframeId(asset.id);
+      onRefreshSceneMedia?.();
+      showToast('已从上一镜头接力首帧并采纳为当前关键帧', 'success');
+    } catch (error: any) {
+      showToast(error?.message || '从上一镜头接力首帧失败', 'error');
+    } finally {
+      setRelayingKeyframe(false);
+    }
+  };
+
+  const handleAdoptLastFrame = async (assetId: number) => {
+    if (adoptingLastFrameId != null) return;
+    setAdoptingLastFrameId(assetId);
+    try {
+      const updated = await api.adoptLastFrameCandidate(assetId);
+      setLocalReferenceAssets((current) => [
+        ...current
+          .filter((item) => item.id !== updated.id)
+          .map((item) => (item.role === 'last_frame_reference' && item.status === 'ready' ? { ...item, status: 'draft' as const } : item)),
+        updated,
+      ]);
+      setSelectedLastFrameId(updated.id);
+      onRefreshSceneMedia?.();
+      showToast('已采纳尾帧候选 (status = ready)', 'success');
+    } catch (error: any) {
+      showToast(error?.message || '采纳尾帧候选失败', 'error');
+    } finally {
+      setAdoptingLastFrameId(null);
+    }
   };
 
   const handleTogglePlay = () => {
@@ -492,6 +549,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
       formData.append('project_id', String(projectId));
       formData.append('scene_id', String(sceneId));
       formData.append('role', role);
+      formData.append('preset', effectivePreset);
       if (isPersistedGuideRole(role)) formData.append('guide_frame_idx', String(guideFrameIdx));
       formData.append('file', file);
 
@@ -657,7 +715,21 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 <ImageIcon size={13} className="text-indigo-600 dark:text-indigo-400" />
                 First Frame <span className="text-rose-500">*</span>
               </span>
-              {renderUploadButton('video_keyframe', '上传', 'image/*', <Upload size={10} />)}
+              <div className="flex items-center gap-1.5">
+                {previousSceneId != null && (
+                  <button
+                    type="button"
+                    disabled={relayingKeyframe || uploadingRole != null}
+                    onClick={handleRelayKeyframe}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-medium bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 disabled:opacity-50 transition-all"
+                    title="从上一镜头的尾帧参考或成片尾帧接力作为当前首帧"
+                  >
+                    {relayingKeyframe ? <Loader2 size={10} className="animate-spin" /> : <Link2 size={10} />}
+                    <span>从上一镜接力首帧</span>
+                  </button>
+                )}
+                {renderUploadButton('video_keyframe', '上传', 'image/*', <Upload size={10} />)}
+              </div>
             </div>
             <ReferenceImagePicker
               choices={firstFrameChoices}
@@ -690,17 +762,17 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={119}
+                  max={maxGuideFrameIdx}
                   value={guideFrameIdx}
                   onChange={(e) => {
-                    const next = Math.max(1, Math.min(119, Number(e.target.value) || 60));
+                    const next = Math.max(1, Math.min(maxGuideFrameIdx, Number(e.target.value) || 60));
                     setGuideFrameIdx(next);
                     rememberGuideFrame(selectedGuideFrameId, next);
                   }}
                   className="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-800 dark:text-slate-200 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500"
                 />
                 <div className="flex gap-1">
-                  {[24, 36, 48, 72, 96].map((idx) => (
+                  {quickGuideFrames.map((idx) => (
                     <button
                       key={idx}
                       type="button"
@@ -720,13 +792,13 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 </div>
               </div>
               <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                第 {guideFrameIdx} 帧 = {(guideFrameIdx / 24).toFixed(2)} 秒（24fps）；可输入 1–119 的精确帧号。
+                第 {guideFrameIdx} 帧 = {(guideFrameIdx / 24).toFixed(2)} 秒（24fps）；可输入 1–{maxGuideFrameIdx} 的精确帧号。
               </div>
               {additionalGuides.map((guide, index) => (
                 <div key={index} className="flex items-start gap-2">
                   <div className="flex-1"><ReferenceImagePicker choices={guideImageChoices} value={guide.assetId} onChange={value => setAdditionalGuides(current => current.map((item, i) => i === index ? { ...item, assetId: typeof value === 'number' ? value : null } : item))} emptyLabel="选择额外 Guide Frame" /></div>
-                  <input type="number" min={1} max={119} value={guide.frameIdx} aria-label="Guide Frame 帧位置" onChange={event => {
-                    const next = Math.max(1, Math.min(119, Number(event.target.value) || 1));
+                  <input type="number" min={1} max={maxGuideFrameIdx} value={guide.frameIdx} aria-label="Guide Frame 帧位置" onChange={event => {
+                    const next = Math.max(1, Math.min(maxGuideFrameIdx, Number(event.target.value) || 1));
                     setAdditionalGuides(current => current.map((item, i) => i === index ? { ...item, frameIdx: next } : item));
                     rememberGuideFrame(guide.assetId, next);
                   }} className="w-16 rounded-lg border border-slate-200 bg-white px-1 py-2 text-xs dark:bg-slate-950 dark:border-slate-700" />
@@ -735,7 +807,7 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                 </div>
               ))}
               {additionalGuides.length < (selectedGuideFrameId ? 3 : 4) && (
-                <button type="button" className="text-indigo-600 text-[10px]" onClick={() => setAdditionalGuides(current => [...current, { assetId: null, frameIdx: Math.min(119, 24 * (current.length + 2)) }])}>+ 添加 Guide Frame（最多 4 张）</button>
+                <button type="button" className="text-indigo-600 text-[10px]" onClick={() => setAdditionalGuides(current => [...current, { assetId: null, frameIdx: Math.min(maxGuideFrameIdx, 24 * (current.length + 2)) }])}>+ 添加 Guide Frame（最多 4 张）</button>
               )}
             </div>
           )}
@@ -758,6 +830,27 @@ export const SceneVideoPlayer: React.FC<SceneVideoPlayerProps> = ({
                   onChange={(value) => setSelectedLastFrameId(typeof value === 'number' ? value : null)}
                   emptyLabel="不指定 Last Frame"
                 />
+                {(() => {
+                  const selectedLastAsset = explicitLastFrameAssets.find((asset) => asset.id === selectedLastFrameId)
+                    || explicitLastFrameAssets.find((asset) => asset.status !== 'ready' && asset.status !== 'rejected' && asset.status !== 'archived');
+                  if (!selectedLastAsset || selectedLastAsset.status === 'ready') return null;
+                  return (
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                        尾帧候选 #{selectedLastAsset.id} 状态为 {selectedLastAsset.status}，生成前需先采纳
+                      </span>
+                      <button
+                        type="button"
+                        disabled={adoptingLastFrameId != null}
+                        onClick={() => handleAdoptLastFrame(selectedLastAsset.id)}
+                        className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold disabled:opacity-50 transition-colors"
+                      >
+                        {adoptingLastFrameId === selectedLastAsset.id ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                        <span>采纳尾帧候选</span>
+                      </button>
+                    </div>
+                  );
+                })()}
                 {typeof selectedKeyframeId === 'number' && (
                   <button
                     type="button"

@@ -31,7 +31,7 @@ type Args = {
   sceneId: number;
   sceneVersion: number;
   profile: 'narrative_clip' | 'character_loop';
-  preset: 'preview_480p_5s' | 'standard_720p_5s';
+  preset: 'preview_480p_5s' | 'standard_720p_5s' | 'preview_480p_8s' | 'standard_720p_8s';
   keyframeAssetId: number;
   lastFrameAssetId?: number;
   characterReferenceAssetIds: number[];
@@ -86,7 +86,12 @@ const parseArgs = (): Args => {
   const profileRaw = values.get('profile') || 'character_loop';
   const profile = profileRaw === 'narrative_clip' ? 'narrative_clip' : 'character_loop';
   const presetRaw = values.get('preset') || 'preview_480p_5s';
-  const preset = presetRaw === 'standard_720p_5s' ? 'standard_720p_5s' : 'preview_480p_5s';
+  const preset: Args['preset'] =
+    presetRaw === 'standard_720p_5s'
+    || presetRaw === 'preview_480p_8s'
+    || presetRaw === 'standard_720p_8s'
+      ? presetRaw
+      : 'preview_480p_5s';
 
   return {
     baseUrl: String(values.get('base-url') || 'http://127.0.0.1:3000/api').replace(/\/$/, ''),

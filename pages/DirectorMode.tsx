@@ -1135,9 +1135,12 @@ export const DirectorMode: React.FC = () => {
     if (!scene) return;
 
     const profile = options.profile || videoProfile;
-    const preset = options.preset || videoPreset;
+    const basePreset = options.preset || videoPreset;
+    const preset: VideoPreset = !options.preset && Number(scene.duration) > 5 && basePreset.endsWith('_5s')
+      ? (basePreset.startsWith('preview_480p') ? 'preview_480p_8s' : 'standard_720p_8s')
+      : basePreset;
     const sceneAssets = mediaAssetsByScene[sceneId] || [];
-    const workflowId = options.workflowId || resolveProjectVideoWorkflow(sceneAssets, projectVideoWorkflowId).workflowId;
+    const workflowId = options.workflowId || resolveProjectVideoWorkflow(sceneAssets, projectVideoWorkflowId, preset).workflowId;
     const numericSceneId = Number(sceneId);
     const isFl2va = workflowId === 'minimax_h3_fl2va_official_12gb';
     const isRef2va = workflowId === 'minimax_h3_ref2va_official_12gb';
@@ -1151,7 +1154,7 @@ export const DirectorMode: React.FC = () => {
     let lastFrameId = options.lastFrameAssetId;
     if (lastFrameId === undefined && !isRef2va) {
       const lastFrameAsset = [...sceneAssets]
-        .filter((a) => a.role === 'last_frame_reference' && a.id)
+        .filter((a) => a.role === 'last_frame_reference' && a.status === 'ready' && a.id)
         .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
       lastFrameId = lastFrameAsset?.id;
     }
@@ -1546,6 +1549,7 @@ export const DirectorMode: React.FC = () => {
         mediaAssetsByScene={mediaAssetsByScene}
         videoTasksByScene={videoTasksByScene}
         projectVideoWorkflowId={projectVideoWorkflowId}
+        videoPreset={videoPreset}
         onGenerateVideo={handleGenerateVideo}
         onPromoteVideoAsset={handlePromoteVideoAsset}
         onArchiveVideoAsset={handleArchiveVideoAsset}

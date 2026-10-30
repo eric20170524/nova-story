@@ -20,6 +20,7 @@ export interface ProcessVideoOptions {
   metadata?: Record<string, any>;
   targetWidth?: number;
   targetHeight?: number;
+  targetFrames?: number;
 }
 
 export interface ProcessVideoResult {
@@ -49,15 +50,21 @@ export class LoopCloser {
     };
   }
 
-  private static async measureBoundary(videoPath: string, outputDirectory: string): Promise<LoopContinuityMeasurements> {
+  private static async measureBoundary(
+    videoPath: string,
+    outputDirectory: string,
+    deliveryFrames: number = DELIVERY_FRAMES
+  ): Promise<LoopContinuityMeasurements> {
     const framePattern = path.join(outputDirectory, '.qa_boundary_%02d.png');
     const framePaths = [1, 2, 3, 4].map((index) => path.join(outputDirectory, `.qa_boundary_${String(index).padStart(2, '0')}.png`));
+    const lastIdx = deliveryFrames - 1;
+    const prevIdx = deliveryFrames - 2;
 
     try {
       await execFileAsync('ffmpeg', [
         '-y',
         '-i', videoPath,
-        '-vf', 'select=eq(n\\,0)+eq(n\\,1)+eq(n\\,118)+eq(n\\,119)',
+        '-vf', `select=eq(n\\,0)+eq(n\\,1)+eq(n\\,${prevIdx})+eq(n\\,${lastIdx})`,
         '-fps_mode', 'passthrough',
         '-frames:v', '4',
         framePattern
@@ -84,18 +91,22 @@ export class LoopCloser {
     }
   }
 
-  private static async closeLoopBoundary(inputPath: string, outputPath: string): Promise<void> {
-    const bodyFrames = DELIVERY_FRAMES - LOOP_BLEND_FRAMES;
+  private static async closeLoopBoundary(
+    inputPath: string,
+    outputPath: string,
+    deliveryFrames: number = DELIVERY_FRAMES
+  ): Promise<void> {
+    const bodyFrames = deliveryFrames - LOOP_BLEND_FRAMES;
     const lastBlendFrameIndex = LOOP_BLEND_FRAMES - 1;
 
-    // Keep exactly 120 frames. The final 8 frames gradually blend the original
+    // Keep exact delivery frames (120 for 5s, 192 for 8s). The final 8 frames gradually blend the original
     // tail into a reversed copy of the first 8 frames, ending on frame 0. This
     // gives the player a near-zero-velocity K -> K boundary without shortening
     // the clip. Real seam QA runs after this transform and may still reject it.
     const filter = [
       '[0:v]split=3[bodySrc][tailSrc][headSrc]',
       `[bodySrc]trim=start_frame=0:end_frame=${bodyFrames},setpts=PTS-STARTPTS[body]`,
-      `[tailSrc]trim=start_frame=${bodyFrames}:end_frame=${DELIVERY_FRAMES},setpts=PTS-STARTPTS[tail]`,
+      `[tailSrc]trim=start_frame=${bodyFrames}:end_frame=${deliveryFrames},setpts=PTS-STARTPTS[tail]`,
       `[headSrc]trim=start_frame=0:end_frame=${LOOP_BLEND_FRAMES},reverse,setpts=PTS-STARTPTS[headrev]`,
       `[tail][headrev]blend=all_expr='A*(1-N/${lastBlendFrameIndex})+B*(N/${lastBlendFrameIndex})'[blend]`,
       '[body][blend]concat=n=2:v=1:a=0[out]'
@@ -107,7 +118,7 @@ export class LoopCloser {
       '-filter_complex', filter,
       '-map', '[out]',
       '-r', String(DELIVERY_FPS),
-      '-frames:v', String(DELIVERY_FRAMES),
+      '-frames:v', String(deliveryFrames),
       '-c:v', 'libx264',
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',
@@ -117,7 +128,8 @@ export class LoopCloser {
   }
 
   static async process(options: ProcessVideoOptions): Promise<ProcessVideoResult> {
-    const { taskId, profile, rawVideoPath, outputDirectory, runLoopCloser = true, metadata = {}, targetWidth, targetHeight } = options;
+    const { taskId, profile, rawVideoPath, outputDirectory, runLoopCloser = true, metadata = {}, targetWidth, targetHeight, targetFrames } = options;
+    const deliveryFrames = targetFrames && targetFrames > 0 ? targetFrames : DELIVERY_FRAMES;
     fs.mkdirSync(outputDirectory, { recursive: true });
 
     const finalVideoPath = path.join(outputDirectory, 'final.mp4');
@@ -132,7 +144,7 @@ export class LoopCloser {
     }
 
     // 1. Standardize to the delivery contract first. H3 may generate 124 model
-    // frames, while NovaStory delivers exactly 120 frames / 24fps / 5.0s.
+    // frames for 5s or 192 frames for 8s, while NovaStory delivers 120 or 192 frames / 24fps.
     const tempStandardized = path.join(outputDirectory, 'temp_std.mp4');
     const standardizedTarget = profile === 'character_loop' && runLoopCloser
       ? tempStandardized
@@ -140,7 +152,7 @@ export class LoopCloser {
 
     await VideoPostprocessService.standardizeVideo(rawVideoPath, standardizedTarget, {
       targetFps: DELIVERY_FPS,
-      targetFrames: DELIVERY_FRAMES,
+      targetFrames: deliveryFrames,
       targetWidth,
       targetHeight,
       preserveAudio: profile === 'narrative_clip'
@@ -148,7 +160,7 @@ export class LoopCloser {
 
     if (profile === 'character_loop' && runLoopCloser) {
       try {
-        await this.closeLoopBoundary(tempStandardized, finalVideoPath);
+        await this.closeLoopBoundary(tempStandardized, finalVideoPath, deliveryFrames);
       } catch (err) {
         // Preserve a valid delivery artifact, but do not fake a passing QA score.
         logger.warn(`Loop boundary blend failed; keeping standardized candidate for measured QA: ${err}`);
@@ -168,7 +180,7 @@ export class LoopCloser {
     let continuity: LoopContinuityMeasurements | undefined;
     let analysisError: string | undefined;
     try {
-      continuity = await this.measureBoundary(finalVideoPath, outputDirectory);
+      continuity = await this.measureBoundary(finalVideoPath, outputDirectory, deliveryFrames);
     } catch (err: any) {
       analysisError = String(err?.message || err);
       logger.warn(`Boundary continuity analysis failed for ${taskId}: ${analysisError}`);
@@ -179,7 +191,8 @@ export class LoopCloser {
       profile,
       probe,
       continuity,
-      analysisError
+      analysisError,
+      expectedFrames: deliveryFrames
     });
     fs.writeFileSync(qaPath, JSON.stringify(qaReport, null, 2), 'utf-8');
 
@@ -192,8 +205,8 @@ export class LoopCloser {
       final_video_path: finalVideoPath,
       delivery_contract: {
         fps: DELIVERY_FPS,
-        frames: DELIVERY_FRAMES,
-        duration_s: DELIVERY_FRAMES / DELIVERY_FPS,
+        frames: deliveryFrames,
+        duration_s: deliveryFrames / DELIVERY_FPS,
         loop_blend_frames: profile === 'character_loop' && runLoopCloser ? LOOP_BLEND_FRAMES : 0
       },
       probe,

@@ -42,6 +42,13 @@ export const ShotSourceReferenceSchema = z.object({
 });
 export const AudibleBlockSchema = z.object({ id: z.string(), type: z.enum(['dialogue', 'voiceover', 'sound']), text: z.string(), characterId: z.number().int().nullable().optional(), delivery: z.string().optional() });
 
+export const ScreenDirectionSchema = z.object({
+  subject_placement: z.enum(['left', 'center', 'right', 'two-shot-left-right']).optional(),
+  facing_direction: z.enum(['left', 'right', 'each_other', 'camera', 'away']).optional(),
+  camera_side: z.enum(['axis_a', 'axis_b']).default('axis_a'),
+});
+
+export type ScreenDirection = z.infer<typeof ScreenDirectionSchema>;
 export type ShotSourceReference = z.infer<typeof ShotSourceReferenceSchema>;
 
 /**
@@ -54,6 +61,7 @@ export const ShotContractFieldsSchema = z.object({
   speech_facts: z.array(z.string()).optional(),
   audible_blocks: z.array(AudibleBlockSchema).optional(),
   continuity_states: z.array(ContinuityStateSchema).optional(),
+  screen_direction: ScreenDirectionSchema.optional().nullable(),
   shot_intent: ShotIntentSchema.optional(),
   location: z.string().trim().min(2).max(240),
   primary_action: z.string().trim().min(2).max(240),
@@ -94,6 +102,7 @@ export const packShotSpec = (shot: {
   speech_facts?: string[];
   audible_blocks?: z.infer<typeof AudibleBlockSchema>[];
   continuity_states?: z.infer<typeof ContinuityStateSchema>[];
+  screen_direction?: ScreenDirection | null;
   shot_intent?: string | null;
   location?: string | null;
   primary_action?: string | null;
@@ -139,6 +148,7 @@ export const packShotSpec = (shot: {
     ...(shot.speech_facts?.length ? { speech_facts: shot.speech_facts } : {}),
     ...(shot.audible_blocks ? { audible_blocks: shot.audible_blocks } : {}),
     ...(shot.continuity_states ? { continuity_states: shot.continuity_states } : {}),
+    ...(shot.screen_direction ? { screen_direction: ScreenDirectionSchema.parse(shot.screen_direction) } : {}),
     shot_intent: shot.shot_intent || null,
     location: location || null,
     primary_action: primary_action || null,

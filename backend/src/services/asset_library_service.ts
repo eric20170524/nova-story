@@ -28,6 +28,27 @@ export class AssetLibraryError extends Error {
 
 const assetNameKey = (value: string) => value.normalize('NFKC').trim().toLowerCase().replace(/[\s\p{P}]/gu, '');
 
+export function resolveCompletedLocationAsset(
+  locationName: string | undefined | null,
+  assets: ReadonlyArray<Pick<LibraryAsset, 'id' | 'kind' | 'name' | 'revision' | 'status' | 'image_url'>>,
+): Pick<LibraryAsset, 'id' | 'revision'> | null {
+  const itemNorm = assetNameKey(String(locationName || ''));
+  if (!itemNorm) return null;
+  const completedLocations = assets.filter(
+    asset => asset.kind === 'location' && asset.status === 'completed' && Boolean(String(asset.image_url || '').trim()),
+  );
+  const exact = completedLocations.filter(asset => assetNameKey(asset.name) === itemNorm);
+  if (exact.length > 1) return null;
+  if (exact.length === 1) return exact[0]!;
+  const contained = completedLocations.filter(asset => {
+    const name = assetNameKey(asset.name);
+    return name.length >= 2 && itemNorm.includes(name);
+  });
+  const longest = contained.reduce((best, asset) => Math.max(best, assetNameKey(asset.name).length), 0);
+  const uniqueContained = contained.filter(asset => assetNameKey(asset.name).length === longest);
+  return uniqueContained.length === 1 ? uniqueContained[0]! : null;
+}
+
 export function normalizeExtractedAssets(
   rawAssets: Array<{ kind: string; name: string; description?: string; visual_prompt?: string }>,
   existing: Array<Pick<LibraryAsset, 'kind' | 'name'>>,
@@ -214,5 +235,39 @@ export class AssetLibraryService {
       for (const asset of assets) await db.run('INSERT INTO scene_asset_reference (scene_id, asset_id, asset_revision) VALUES (?, ?, ?)', sceneId, asset.id, asset.revision);
       return this.references(sceneId);
     });
+  }
+  static async autoBindLocationInTransaction(
+    projectId: number,
+    sceneId: number,
+    rawShotSpec?: string | null,
+    preloadedAssets?: ReadonlyArray<Pick<LibraryAsset, 'id' | 'kind' | 'name' | 'revision' | 'status' | 'image_url'>>,
+  ) {
+    let locationName = '';
+    if (rawShotSpec) {
+      try {
+        locationName = String(JSON.parse(rawShotSpec)?.location || '').trim();
+      } catch {
+        locationName = '';
+      }
+    }
+    if (!locationName) return null;
+    const assets = preloadedAssets ?? await db.all(
+      "SELECT id, kind, name, revision, status, image_url FROM library_asset WHERE project_id = ? AND kind = 'location' ORDER BY id",
+      projectId,
+    );
+    const matched = resolveCompletedLocationAsset(locationName, assets);
+    if (!matched) return null;
+    await db.run(
+      "DELETE FROM scene_asset_reference WHERE scene_id = ? AND asset_id IN (SELECT id FROM library_asset WHERE project_id = ? AND kind = 'location')",
+      sceneId,
+      projectId,
+    );
+    await db.run(
+      'INSERT OR REPLACE INTO scene_asset_reference (scene_id, asset_id, asset_revision) VALUES (?, ?, ?)',
+      sceneId,
+      matched.id,
+      matched.revision,
+    );
+    return matched;
   }
 }

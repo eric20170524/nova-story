@@ -65,6 +65,19 @@ export function timedSpeech(blocks, durations, minimum = 5) {
   });
   return { cues, duration: Math.ceil(Math.max(minimum, cursor) * 24) / 24 };
 }
+export function resolveAssembledShotTiming(layoutDuration, probeInfo) {
+  const rawClip = Number(probeInfo?.format?.duration);
+  const clipSeconds = Number.isFinite(rawClip) && rawClip > 0 ? rawClip : 5;
+  const speechDuration = Number.isFinite(Number(layoutDuration)) && Number(layoutDuration) > 0 ? Number(layoutDuration) : 5;
+  const duration = Math.max(speechDuration, clipSeconds);
+  const stopDuration = Math.max(0, Number((duration - clipSeconds).toFixed(6)));
+  return {
+    clipSeconds,
+    duration,
+    stopDuration,
+    frames: Math.round(duration * 24),
+  };
+}
 function timestamp(seconds) {
   const millis = Math.round(seconds * 1000);
   return `${String(Math.floor(millis / 3600000)).padStart(2, '0')}:${String(Math.floor(millis / 60000) % 60).padStart(2, '0')}:${String(Math.floor(millis / 1000) % 60).padStart(2, '0')},${String(millis % 1000).padStart(3, '0')}`;

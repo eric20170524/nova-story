@@ -2,10 +2,13 @@ import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { db } from '../db/database';
 import {
   DEFAULT_VIDEO_WORKFLOW_ID,
+  getPresetDeliveryFrames,
   VideoPreflightRequestSchema,
   VideoGenerationRequestSchema,
+  VideoPresetSchema,
   VideoReprocessRequestSchema,
   VideoWorkflowIdSchema
 } from '../schemas/video';
@@ -108,8 +111,10 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const fields = data.fields as any;
     const projectId = Number(fields.project_id?.value || 1);
     const sceneId = fields.scene_id?.value ? Number(fields.scene_id.value) : undefined;
+    const sceneVersion = fields.scene_version?.value ? Number(fields.scene_version.value) : undefined;
     const characterId = fields.character_id?.value ? Number(fields.character_id.value) : undefined;
     const role = fields.role?.value || 'character_reference';
+    const requestedStatus = fields.status?.value || 'ready';
 
     if (!(REFERENCE_UPLOAD_ROLES as readonly string[]).includes(role)) {
       return reply.status(400).send({
@@ -147,9 +152,17 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     const isGuideRole = role === 'guide_frame_reference' || role === 'composition_reference';
     const parsedGuideFrameIdx = Number(fields.guide_frame_idx?.value);
     const guideFrameIdx = isGuideRole && Number.isInteger(parsedGuideFrameIdx) ? parsedGuideFrameIdx : null;
-    if (isGuideRole && (guideFrameIdx == null || guideFrameIdx < 1 || guideFrameIdx > 119)) {
+    let uploadPreset = VideoPresetSchema.safeParse(fields.preset?.value).success
+      ? VideoPresetSchema.parse(fields.preset?.value)
+      : undefined;
+    if (!uploadPreset && sceneId != null) {
+      const sceneRow = await db.get('SELECT duration FROM scene WHERE id = ?', sceneId);
+      if (Number(sceneRow?.duration) > 5) uploadPreset = 'standard_720p_8s';
+    }
+    const maxUploadGuideFrame = getPresetDeliveryFrames(uploadPreset || 'standard_720p_5s') - 1;
+    if (isGuideRole && (guideFrameIdx == null || guideFrameIdx < 1 || guideFrameIdx > maxUploadGuideFrame)) {
       return reply.status(400).send({
-        error: 'Guide frame upload requires guide_frame_idx within delivery frames 1..119 (24fps).'
+        error: `Guide frame upload requires guide_frame_idx within delivery frames 1..${maxUploadGuideFrame} (24fps).`
       });
     }
     fs.writeFileSync(targetPath, buffer);
@@ -176,13 +189,20 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       }
     }
 
+    let resolvedSceneVersion = sceneVersion;
+    if (resolvedSceneVersion == null && sceneId != null) {
+      const sRow = await db.get('SELECT active_version FROM scene WHERE id = ?', sceneId);
+      resolvedSceneVersion = Number(sRow?.active_version || 1);
+    }
+
     const asset = await MediaAssetService.createAsset({
       project_id: projectId,
       scene_id: sceneId,
+      scene_version: resolvedSceneVersion,
       character_id: characterId,
       media_type: mediaType,
       role: role as any,
-      status: 'ready',
+      status: requestedStatus as any,
       url: `/static/generated/references/${projectId}/${safeBase}`,
       mime_type: data.mimetype,
       width,
@@ -198,7 +218,18 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
         : undefined
     });
 
-    if (role === 'video_keyframe' && sceneId != null) {
+    if (role === 'last_frame_reference' && asset.status === 'ready' && sceneId != null) {
+      await db.run(
+        `UPDATE media_asset SET status = 'draft'
+         WHERE scene_id = ? AND COALESCE(scene_version, 1) = ? AND id != ?
+           AND role = 'last_frame_reference' AND status = 'ready'`,
+        sceneId,
+        resolvedSceneVersion || 1,
+        asset.id
+      );
+    }
+
+    if ((role === 'video_keyframe' || (role === 'last_frame_reference' && asset.status === 'ready')) && sceneId != null) {
       await recordShotMasterSnapshot({ sceneId, projectId, imageUrl: asset.url });
     }
 
@@ -208,12 +239,15 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   // POST /api/videos/assets/:asset_id/guide-frame
   fastify.post('/assets/:asset_id/guide-frame', async (request, reply) => {
     const assetId = Number((request.params as { asset_id?: string }).asset_id);
-    const frameIdx = Number((request.body as { guide_frame_idx?: unknown } | null)?.guide_frame_idx);
+    const bodyObj = (request.body as { guide_frame_idx?: unknown; preset?: unknown } | null) || {};
+    const frameIdx = Number(bodyObj.guide_frame_idx);
+    const presetParse = VideoPresetSchema.safeParse(bodyObj.preset);
+    const preset = presetParse.success ? presetParse.data : undefined;
     if (!Number.isInteger(assetId) || assetId <= 0) {
       return reply.status(400).send({ error: 'Invalid asset id' });
     }
     try {
-      return await MediaAssetService.setGuideFrameIdx(assetId, frameIdx);
+      return await MediaAssetService.setGuideFrameIdx(assetId, frameIdx, preset);
     } catch (err: any) {
       const missing = /does not exist/.test(String(err?.message || err));
       return reply.status(missing ? 404 : 400).send({ error: err?.message || String(err) });
@@ -242,9 +276,16 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     if (body.role === 'guide_frame_reference' || body.role === 'composition_reference') {
       let guideFrameIdx: unknown;
       try { guideFrameIdx = JSON.parse(body.metadata_json || '{}').guide_frame_idx; } catch { guideFrameIdx = null; }
-      if (!Number.isInteger(guideFrameIdx) || Number(guideFrameIdx) < 1 || Number(guideFrameIdx) > 119) {
+      const presetParse = VideoPresetSchema.safeParse(body.preset);
+      let resolvedPreset = presetParse.success ? presetParse.data : undefined;
+      if (!resolvedPreset && body.scene_id != null) {
+        const sceneRow = await db.get('SELECT duration FROM scene WHERE id = ?', Number(body.scene_id));
+        if (Number(sceneRow?.duration) > 5) resolvedPreset = 'standard_720p_8s';
+      }
+      const maxFrame = getPresetDeliveryFrames(resolvedPreset || 'standard_720p_5s') - 1;
+      if (!Number.isInteger(guideFrameIdx) || Number(guideFrameIdx) < 1 || Number(guideFrameIdx) > maxFrame) {
         return reply.status(400).send({
-          error: 'Guide frame registration requires metadata_json.guide_frame_idx within delivery frames 1..119 (24fps).'
+          error: `Guide frame registration requires metadata_json.guide_frame_idx within delivery frames 1..${maxFrame} (24fps).`
         });
       }
     }
@@ -268,12 +309,52 @@ export const videoRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       parent_asset_id: body.parent_asset_id,
       metadata_json: body.metadata_json
     });
-    if (body.role === 'video_keyframe' && body.scene_id != null) {
+    if (body.role === 'last_frame_reference' && asset.status === 'ready' && body.scene_id != null) {
+      await db.run(
+        `UPDATE media_asset SET status = 'draft'
+         WHERE scene_id = ? AND COALESCE(scene_version, 1) = ? AND id != ?
+           AND role = 'last_frame_reference' AND status = 'ready'`,
+        Number(body.scene_id),
+        body.scene_version != null ? Number(body.scene_version) : 1,
+        asset.id
+      );
+    }
+    if ((body.role === 'video_keyframe' || (body.role === 'last_frame_reference' && asset.status === 'ready')) && body.scene_id != null) {
       await recordShotMasterSnapshot({
         sceneId: Number(body.scene_id), projectId: Number(body.project_id || 1), imageUrl: asset.url,
       });
     }
     return asset;
+  });
+
+  // POST /api/videos/assets/:asset_id/adopt-last-frame
+  fastify.post('/assets/:asset_id/adopt-last-frame', async (request, reply) => {
+    const assetId = Number((request.params as { asset_id?: string }).asset_id);
+    if (!Number.isInteger(assetId) || assetId <= 0) {
+      return reply.status(400).send({ error: 'Invalid asset id' });
+    }
+    try {
+      return await MediaAssetService.adoptLastFrameCandidate(assetId);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || String(err) });
+    }
+  });
+
+  // POST /api/videos/scenes/:scene_id/relay-keyframe
+  fastify.post('/scenes/:scene_id/relay-keyframe', async (request, reply) => {
+    const targetSceneId = Number((request.params as { scene_id?: string }).scene_id);
+    const body = (request.body as { source_scene_id?: unknown; adopt?: boolean } | null) || {};
+    const sourceSceneId = Number(body.source_scene_id);
+    if (!Number.isInteger(targetSceneId) || targetSceneId <= 0 || !Number.isInteger(sourceSceneId) || sourceSceneId <= 0) {
+      return reply.status(400).send({ error: 'Valid target scene_id and source_scene_id are required' });
+    }
+    try {
+      return await MediaAssetService.relayKeyframeFromPreviousShot(targetSceneId, sourceSceneId, {
+        adopt: body.adopt,
+      });
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || String(err) });
+    }
   });
 
   // POST /api/videos/generate

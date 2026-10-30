@@ -20,7 +20,7 @@ export const FACT_CLASSIFY_INSTRUCTION = [
 import { EntityBindingSchema } from '../schemas/entity_binding';
 import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { type CharacterLockRef } from './pony_prompt_compiler';
-import { packShotSpec } from '../schemas/shot_contract';
+import { packShotSpec, ScreenDirectionSchema, type ScreenDirection } from '../schemas/shot_contract';
 import { findChapterShotQuotaViolation } from './shot_intent_quota';
 import { containsCjk } from './english_visual_prompt';
 import { compileNegativePrompt } from './negative_prompt_compiler';
@@ -167,33 +167,71 @@ export function validateFactSources(doc: ScriptDocument, facts: VisualFact[]) {
   }
 }
 
-export const MAX_SHOT_SECONDS = 15;
+export const CLIP_SECONDS_SHORT = 5.0;
+export const SOFT_MAX_SHOT_SECONDS = 8.0;
+export const MAX_SHOT_SECONDS = 15.0;
 /** One shot per independent beat, plus one when the same beat holds mutually exclusive states. The allocator default remains 20 so a larger board still has to be accepted explicitly. */
 export const CHAPTER_SHOT_LIMIT = STORYBOARD_CANDIDATE_SHOT_LIMIT;
 /** Speech time follows the quoted line when narration was left in the same dialogue block. */
-const spokenCharacters = (block: { type: string; text: string }) => {
+const spokenText = (block: { type: string; text: string }) => {
   const compact = block.text.replace(/\s/g, '');
-  if (block.type !== 'dialogue') return compact.length;
-  const quoted = [...block.text.matchAll(/“[^”]*”/g)].map(match => match[0].replace(/\s/g, ''));
-  const quotedLength = quoted.reduce((total, part) => total + part.length, 0);
-  return quotedLength > 0 && quotedLength < compact.length ? quotedLength : compact.length;
+  if (block.type !== 'dialogue') return compact;
+  const quoted = [...block.text.matchAll(/“([^”]*)”|"([^"]*)"|「([^」]*)」/g)]
+    .map(match => (match[1] ?? match[2] ?? match[3] ?? '').replace(/\s/g, ''))
+    .filter(Boolean);
+  const joined = quoted.join('');
+  return joined.length > 0 && joined.length < compact.length ? joined : compact;
 };
-const audioSeconds = (block: { type: string; text: string }) => block.type === 'dialogue' || block.type === 'voiceover' ? Math.max(1, spokenCharacters(block) / 4) : 0;
+export const spokenCharacters = (block: { type: string; text: string }) =>
+  (spokenText(block).match(/[\p{L}\p{N}]/gu) || []).length;
+export const estimateAudioSeconds = (block: { type: string; text: string; delivery?: string }) => {
+  if (block.type !== 'dialogue' && block.type !== 'voiceover') return 0;
+  const text = spokenText(block);
+  const chars = (text.match(/[\p{L}\p{N}]/gu) || []).length;
+  const minorPauses = (text.match(/[，、；,;]/g) || []).length * 0.25;
+  const majorPauses = (text.match(/[。！？!?—]+|…+|\.{2,}/g) || []).length * 0.45;
+  const delivery = String(block.delivery || '');
+  const factor = /缓慢|低语|哽咽|沉重|停顿|喘息|沙哑|颤抖/u.test(delivery)
+    ? 1.2
+    : /急促|咆哮|厉喝|抢白|惊呼|怒吼|快语/u.test(delivery)
+      ? 0.85
+      : 1.0;
+  return Number(Math.max(1, (chars / 4 + minorPauses + majorPauses) * factor).toFixed(2));
+};
+const audioSeconds = estimateAudioSeconds;
 export function allocateBudgets(doc: ScriptDocument, facts: VisualFact[], limit = 20) {
   const budgets = doc.scenes.map(scene => {
     const visual = facts.filter(f => f.scene_id === scene.id && f.kind === 'visual');
     const beats = new Set(visual.map(f => f.beat));
-    const speechSeconds = scene.blocks.filter(b => b.type === 'dialogue' || b.type === 'voiceover')
-      .reduce((n, b) => n + audioSeconds(b), 0);
-    const longLine = scene.blocks.find(b => audioSeconds(b) > MAX_SHOT_SECONDS);
+    const speechBlocks = scene.blocks.filter(b => b.type === 'dialogue' || b.type === 'voiceover');
+    const speechSeconds = speechBlocks.reduce((n, b) => n + audioSeconds(b), 0);
+    const longLine = speechBlocks.find(b => audioSeconds(b) > MAX_SHOT_SECONDS);
     if (longLine) throw new FactWorkflowError(`声音预算冲突: ${scene.id}/${longLine.id} 单条语音超过 ${MAX_SHOT_SECONDS} 秒，请按完整语句拆分有声块`);
     if (scene.estimatedDurationSec && speechSeconds > scene.estimatedDurationSec) {
       throw new FactWorkflowError(`声音时长冲突: ${scene.id} 预计语音 ${Math.ceil(speechSeconds)} 秒，场景仅 ${scene.estimatedDurationSec} 秒`);
     }
-    const duration = Math.max(scene.estimatedDurationSec || 0, speechSeconds, beats.size * 3, 3);
     const groups = visualPlanGroups(visual);
     const stateSlots = groups.reduce((count, group) => count + buildFactSlots(group).length, 0);
-    return { scene_id: scene.id, minimum: Math.max(1, beats.size, stateSlots, Math.ceil(duration / MAX_SHOT_SECONDS)), duration };
+    let speechSlots = 0;
+    let currentBinSeconds = 0;
+    for (const block of speechBlocks) {
+      const sec = audioSeconds(block);
+      if (sec <= 0) continue;
+      if (speechSlots === 0) {
+        speechSlots = 1;
+        currentBinSeconds = sec;
+      } else if (currentBinSeconds + sec <= SOFT_MAX_SHOT_SECONDS) {
+        currentBinSeconds += sec;
+      } else {
+        speechSlots += 1;
+        currentBinSeconds = sec;
+      }
+    }
+    speechSlots = Math.max(1, speechSlots);
+    const baseMinimum = Math.max(1, beats.size, stateSlots, speechSlots);
+    const minRequiredDuration = speechSeconds + Math.max(0, baseMinimum - speechBlocks.length);
+    const duration = Math.max(scene.estimatedDurationSec || 0, minRequiredDuration, beats.size * 3, 3);
+    return { scene_id: scene.id, minimum: Math.max(baseMinimum, Math.ceil(duration / MAX_SHOT_SECONDS)), duration };
   });
   const minimum = budgets.reduce((n, b) => n + b.minimum, 0);
   if (minimum > limit) throw new FactWorkflowError(`镜头预算冲突: 最少需要 ${minimum} 镜，上限 ${limit}；${budgets.map(b => `${b.scene_id}: ${b.minimum}镜`).join('；')}。请核对独立节拍或调整时长，不能静默并镜。`);
@@ -594,6 +632,28 @@ export function visiblePropEvidence(doc: ScriptDocument, facts: VisualFact[]) {
   }));
 }
 
+export function deriveShotScreenDirection(
+  sceneBoundCharacters: string[],
+  shotVisibleSubjects: string[],
+): ScreenDirection | undefined {
+  const uniqueSceneChars = [...new Set(sceneBoundCharacters.map(n => String(n || '').trim()).filter(Boolean))];
+  if (uniqueSceneChars.length < 2) return undefined;
+  const visible = [...new Set(shotVisibleSubjects.map(n => String(n || '').trim()).filter(Boolean))];
+  const matchedIndices = visible
+    .map(name => uniqueSceneChars.indexOf(name))
+    .filter(idx => idx >= 0);
+  if (visible.length === 1 && matchedIndices.length === 1) {
+    const idx = matchedIndices[0]!;
+    return idx % 2 === 0
+      ? { subject_placement: 'left', facing_direction: 'right', camera_side: 'axis_a' }
+      : { subject_placement: 'right', facing_direction: 'left', camera_side: 'axis_a' };
+  }
+  if (matchedIndices.length >= 2) {
+    return { subject_placement: 'two-shot-left-right', facing_direction: 'each_other', camera_side: 'axis_a' };
+  }
+  return undefined;
+}
+
 /** Shared by generation, candidate editing and adoption; references are not proof of depiction. */
 export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCandidatePayload) {
   const contract = payload.fact_contract;
@@ -626,6 +686,9 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     const sceneVisual = contract.facts.filter(f => f.scene_id === scene.id && f.kind === 'visual');
     const expectedNames = [...new Set(selected.flatMap(f => boundVisibleEntities(f.binding).map(e => e.name)))].sort();
     if (hash([...(spec.visible_subjects || [])].sort()) !== hash(expectedNames)) throw new FactWorkflowError('镜头人物字段与已确认入镜绑定不符');
+    if (spec.screen_direction != null) {
+      ScreenDirectionSchema.parse(spec.screen_direction);
+    }
     if ((spec.key_props || []).some((name: string) => !doc.props.some(prop => scene.propIds.includes(prop.id) && prop.name === name) || !selected.some(f => f.text.includes(name)))) throw new FactWorkflowError('镜头道具字段缺少资产或原文证据');
     if (shot.shot_type !== spec.shot_type) throw new FactWorkflowError('景别字段与镜头契约不一致');
     if (shot.negative_prompt !== compileNegativePrompt({ ...spec, visual_prompt: shot.visual_prompt, identity_mode: 'auto' })) throw new FactWorkflowError('负面提示词与程序编译的事实约束不一致');
@@ -1176,9 +1239,10 @@ export async function runFactWorkflow(input: {
     }
     let lastAudioSlot = 0;
     // Keep lines in script order. A later line can use an earlier shot in this scene when the last pictured shot is already full.
-    for (const block of audio) {
+    for (const [audioIndex, block] of audio.entries()) {
       const sourceIndex = scene.blocks.indexOf(block);
       const seconds = audioSeconds(block);
+      const remainingAudioSeconds = audio.slice(audioIndex).reduce((n, b) => n + audioSeconds(b), 0);
       let target = -1;
       plan.forEach((shot, i) => {
         if (target >= 0 || i < lastAudioSlot) return;
@@ -1186,7 +1250,17 @@ export async function runFactWorkflow(input: {
         if (positions.length && Math.min(...positions) <= sourceIndex) target = i;
       });
       if (target < 0) target = lastAudioSlot;
-      while (target < plan.length && soundLoads[target]! + seconds > MAX_SHOT_SECONDS) target++;
+      while (
+        target < plan.length &&
+        (soundLoads[target]! + seconds > MAX_SHOT_SECONDS ||
+          (seconds > 0 &&
+            soundLoads[target]! > 0 &&
+            soundLoads[target]! + seconds > SOFT_MAX_SHOT_SECONDS &&
+            target + 1 < plan.length &&
+            remainingAudioSeconds <= (plan.length - target - 1) * MAX_SHOT_SECONDS))
+      ) {
+        target++;
+      }
       if (target >= plan.length) throw new FactWorkflowError(`有声对齐预算冲突: ${scene.id}/${block.id} 无足够镜头时长，需调整叙事节拍`);
       buckets[target]!.push(block);
       soundLoads[target]! += seconds;
@@ -1204,6 +1278,7 @@ export async function runFactWorkflow(input: {
       }
     }
     if (remaining > 0.001) throw new FactWorkflowError(`分场时长分配失败: ${scene.id}`);
+    const sceneBoundCharacters = [...new Set(sceneFacts.flatMap(f => boundVisibleEntities(f.binding).map(e => e.name)))];
     let shotState = relevantState;
     for (const [index, shot] of plan.entries()) {
       p.phase = 'translating'; p.shot_index = index + 1;
@@ -1410,7 +1485,8 @@ export async function runFactWorkflow(input: {
       const source = { type: 'script' as const, script_id: input.scriptId, script_revision: input.revision, script_scene_id: scene.id, block_ids: blockIds, ...(continuityRead ? { continuity: continuityRead.reference } : {}) };
       const keyProps = doc.props.filter(prop => scene.propIds.includes(prop.id) && selected.some(f => f.text.includes(prop.name))).map(prop => prop.name).slice(0, 2);
       const speechFacts = audioFacts[index]!.map(fact => fact.text);
-      const contractFields = { ...sceneSlots[index]!, scene_context: contextFields, location, primary_action: primaryAction, visual_facts: selected, ...(speechFacts.length ? { speech_facts: speechFacts } : {}), audible_blocks: buckets[index]!, continuity_states: inherited, visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined, key_props: keyProps, source };
+      const screenDirection = deriveShotScreenDirection(sceneBoundCharacters, names);
+      const contractFields = { ...sceneSlots[index]!, scene_context: contextFields, location, primary_action: primaryAction, visual_facts: selected, ...(speechFacts.length ? { speech_facts: speechFacts } : {}), audible_blocks: buckets[index]!, continuity_states: inherited, ...(screenDirection ? { screen_direction: screenDirection } : {}), visible_subjects: names, subject_scale: names.length ? 'medium-20-40' : undefined, key_props: keyProps, source };
       const assembled: StoryboardCandidateShot = {
         index: allShots.length + 1, script_scene_id: scene.id, fact_ids: shot.fact_ids, hold_fact_ids: heldIds, audio_fact_ids: audioFacts[index]!.map(f => f.id), primary_fact_id: shot.primary_fact_id, block_ids: blockIds,
         visual_prompt: translated.visual_prompt, shot_spec: packShotSpec(contractFields), source,

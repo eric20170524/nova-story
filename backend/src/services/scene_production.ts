@@ -10,6 +10,7 @@ import { actionBindingSource, entityRoster, needsBindingReview, boundVisibleEnti
 import { packShotSpec } from '../schemas/shot_contract';
 import { compileNegativePrompt } from './negative_prompt_compiler';
 import { ensureSceneVersionBaseline, createSceneVersion, syncActiveVersionFromScene } from './scene_versions';
+import { AssetLibraryService } from './asset_library_service';
 
 const fail = (code: string, message: string, status: 404 | 409 | 422 = 409): never => { throw new ContinuityStoreError(code, message, status); };
 const scriptSceneIdOf = (scene: { shot_spec?: string | null }) => { try { return JSON.parse(scene.shot_spec || '{}').source?.script_scene_id as string | undefined; } catch { return undefined; } };
@@ -177,6 +178,10 @@ export async function applySceneProduction(scriptId: number, changeId: string, r
     const impact = await productionImpact(scriptId, changeId, body);
     if (!body.expected_impact_hash || body.expected_impact_hash !== impact.impact_hash) return fail('CONTINUITY_REVISION_CONFLICT', 'Preview the current adoption impact first');
     const shotIds = new Array<number>(impact.payload.shots.length), retained: any[] = [];
+    const locationAssets = await db.all(
+      "SELECT id, kind, name, revision, status, image_url FROM library_asset WHERE project_id = ? AND kind = 'location' ORDER BY id",
+      impact.ledger.script.project_id,
+    );
     for (const slot of impact.plan.slots) {
       if (slot.role === 'kept') {
         const current = impact.timeline.find(scene => scene.id === slot.scene_id);
@@ -196,6 +201,12 @@ export async function applySceneProduction(scriptId: number, changeId: string, r
       await db.run('UPDATE scene SET "index"=?,shot_spec=?,visual_prompt=?,audio_prompt=?,dialogue=?,narration=?,duration=?,shot_type=?,camera_movement=?,camera_angle=?,negative_prompt=?,asset_url=NULL,asset_status=\'idle\',task_id=NULL WHERE id=?', slot.index, shot.shot_spec, shot.visual_prompt, shot.audio_prompt, shot.dialogue, shot.narration, shot.duration, shot.shot_type, shot.camera_movement, shot.camera_angle, shot.negative_prompt, sceneId);
       shotIds[slot.shot_index] = sceneId;
       await ensureSceneVersionBaseline(sceneId);
+      await AssetLibraryService.autoBindLocationInTransaction(
+        impact.ledger.script.project_id,
+        sceneId,
+        shot.shot_spec,
+        locationAssets,
+      );
       const ref = shot.source.continuity;
       await bindContinuityShotInTransaction(sceneId, { script_id: scriptId, script_scene_id: body.target_scene_id, moment_id: ref.story_position.moment_id, phase: ref.story_position.phase, reads: ref.reference.reads });
       await syncActiveVersionFromScene(sceneId);

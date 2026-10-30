@@ -16,20 +16,22 @@ export function assertChapterClipReady(probeResult, label, options = {}) {
   if (!probeResult || typeof probeResult !== 'object') throw new Error(`${label} has no media probe`);
   const streams = Array.isArray(probeResult.streams) ? probeResult.streams : [];
   const video = streams.find(stream => stream.codec_type === 'video');
+  const duration = Number(probeResult.format?.duration);
+  const rawFrames = Number(video?.nb_read_frames || video?.nb_frames);
+  const inferredSourceDuration = (rawFrames === 192 || (Number.isFinite(duration) && Math.abs(duration - 8) <= 0.25)) ? 8 : 5;
+  const expectedDuration = options.durationSeconds ?? inferredSourceDuration;
   const problems = [];
   if (!video) problems.push('missing video stream');
   else {
     const width = Number(video.width);
     const height = Number(video.height);
     const fps = frameRate(video);
-    const frames = Number(video.nb_read_frames || video.nb_frames);
+    const frames = rawFrames;
     if (width !== 1280 || height !== 720) problems.push(`resolution ${width}x${height}, expected 1280x720`);
     if (!Number.isFinite(fps) || Math.abs(fps - 24) > 0.05) problems.push(`fps ${Number.isFinite(fps) ? fps : 'unknown'}, expected 24`);
-    const expectedFrames = Math.round((options.durationSeconds ?? 5) * 24);
+    const expectedFrames = Math.round(expectedDuration * 24);
     if (!Number.isInteger(frames) || frames !== expectedFrames) problems.push(`frames ${Number.isFinite(frames) ? frames : 'unknown'}, expected ${expectedFrames}`);
   }
-  const duration = Number(probeResult.format?.duration);
-  const expectedDuration = options.durationSeconds ?? 5;
   if (!Number.isFinite(duration) || Math.abs(duration - expectedDuration) > 0.2) problems.push(`duration ${Number.isFinite(duration) ? duration : 'unknown'}, expected ${expectedDuration}s`);
   if (options.requireAudio && !streams.some(stream => stream.codec_type === 'audio')) problems.push('missing audio stream');
   if (problems.length) throw new Error(`${label} failed the delivery contract: ${problems.join('; ')}`);

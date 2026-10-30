@@ -3,10 +3,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, shotVideoPreset, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
-import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, subtitles, assertReview } from './production-contracts.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, subtitles, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -880,9 +880,9 @@ async function videoPreflight(selected = null) {
   for (const shot of await selectedShots(selected)) {
     const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
     const primary = resolveShotCharacter(shot, known);
-    const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride, await projectVideoDefault());
+    const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
     const references = primary ? selectIdentityReferenceIds(media.assets || [], primary.id, await identityPlatesForShot(shot, primary)) : [];
-    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, run_loop_closer: false };
+    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, run_loop_closer: false };
     let check = await request('/videos/preflight', 'POST', body);
     if (!check.ready && continuityBlockerNeedsBind(check.blockers)) {
       const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
@@ -919,9 +919,9 @@ async function videos(selected = null) {
     const refs = (available.assets || []).filter(a => a.role === 'character_reference' && a.character_id != null && a.status === 'ready');
     const primary = resolveShotCharacter(shot, known);
     const selectedRefs = primary ? selectIdentityReferenceIds(refs, primary.id, await identityPlatesForShot(shot, primary)) : [];
-    const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault());
+    const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
     if (primary && !selectedRefs.length && strategy.workflow_id !== 'minimax_h3_fl2va_official_12gb') throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
-    const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false };
+    const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false };
     let flight = await request('/videos/preflight', 'POST', parameters);
     if (!flight.ready && continuityBlockerNeedsBind(flight.blockers)) {
       const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
@@ -1044,10 +1044,10 @@ async function chapterSnapshot(chapter, includeVideos = false) {
       const final = media.assets.filter(asset => asset.role === 'narrative_final' && asset.status === 'ready').at(-1);
       if (!final) throw new Error(`Shot ${shot.id}: final video has not been accepted`);
       const provenance = videoProvenance(shot, media.assets, known);
-      const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault());
+      const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
       const primary = resolveShotCharacter(shot, known);
       const refs = primary ? selectIdentityReferenceIds(media.assets, primary.id, await identityPlatesForShot(shot, primary)) : [];
-      const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: 'standard_720p_5s', character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, run_loop_closer: false });
+      const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, run_loop_closer: false });
       if (!flight.ready || !flight.input_signature || provenance.input_signature !== flight.input_signature || !provenance.source_current || !provenance.identity_current) throw new Error(`Shot ${shot.id}: final video inputs changed; regenerate and review`);
       const file = localMedia(final.url); assertChapterClipReady(probe(file), `Shot ${shot.id}`); decode(file);
       if (!final.sha256 || final.sha256 !== fileHash(file)) throw new Error(`Shot ${shot.id}: final video bytes changed since QA`);
@@ -1229,6 +1229,7 @@ async function assemble(selected = null, options = {}) {
     const speech = await audioForChapter(chapter);
     const chapterClips = [];
     const chapterCues = [], speechFiles = [];
+    const assembledDurations = {};
     let chapterOffset = 0;
     for (const shot of chapterShots) {
       const available = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
@@ -1246,7 +1247,8 @@ async function assemble(selected = null, options = {}) {
       const hasAudio = info.streams.some(s => s.codec_type === 'audio');
       if (shot.audio_prompt?.trim() && !hasAudio) throw new Error(`Shot ${shot.id}: script requires sound effects but the accepted source has no audio; regenerate and review its sound before assembly`);
       const layout = speech[shot.id];
-      const duration = layout.duration;
+      const { duration, stopDuration, frames: targetFrames } = resolveAssembledShotTiming(layout.duration, info);
+      assembledDurations[shot.id] = duration;
       const inputs = layout.files.flatMap(file => ['-i', localMedia(file.url)]);
       const filters = layout.files.map((file, index) => `[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(layout.cues[index].start * 1000)}|${Math.round(layout.cues[index].start * 1000)}[speech${index}]`);
       const tracks = layout.files.map((_, index) => `[speech${index}]`);
@@ -1256,8 +1258,8 @@ async function assemble(selected = null, options = {}) {
       if (tracks.length) filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
       else filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`);
       command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', filters.join(';'),
-        '-map', '0:v:0', '-map', '[audio]', '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=${Math.max(0, duration - 5)}`,
-        '-r', '24', '-frames:v', String(Math.round(duration * 24)), '-t', String(duration), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', output]);
+        '-map', '0:v:0', '-map', '[audio]', '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=${stopDuration}`,
+        '-r', '24', '-frames:v', String(targetFrames), '-t', String(duration), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', output]);
       assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`, { requireAudio: true, durationSeconds: duration });
       decode(output);
       chapterCues.push(...layout.cues.map(cue => ({ ...cue, start: cue.start + chapterOffset, end: cue.end + chapterOffset })));
@@ -1272,7 +1274,7 @@ async function assemble(selected = null, options = {}) {
     command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, ...(chapterCues.length ? ['-i', subtitleFile] : []), '-map', '0:v:0', '-map', '0:a:0', ...(chapterCues.length ? ['-map', '1:0', '-c:s', 'mov_text', '-metadata:s:s:0', 'language=zho'] : []), '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', final]);
     assertChapterClipReady(probe(final), `Chapter ${chapter.index}`, { requireAudio: true, durationSeconds: chapterOffset }); decode(final);
     if (fingerprint(await chapterSnapshot(chapter, true)) !== fingerprint(sourceSnapshot)) throw new Error(`Chapter ${chapter.index}: sources changed during assembly`);
-    write(`videos/chapter-${chapter.index}.manifest.json`, { schema_version: 1, source_fingerprint: fingerprint(sourceSnapshot), file: final, sha256: fileHash(final), subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), speech_files: speechFiles, cues: chapterCues, duration: chapterOffset, shot_durations: chapterShots.map(shot => ({ scene_id: shot.id, duration: speech[shot.id].duration })), created_at: new Date().toISOString() });
+    write(`videos/chapter-${chapter.index}.manifest.json`, { schema_version: 1, source_fingerprint: fingerprint(sourceSnapshot), file: final, sha256: fileHash(final), subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), speech_files: speechFiles, cues: chapterCues, duration: chapterOffset, shot_durations: chapterShots.map(shot => ({ scene_id: shot.id, duration: assembledDurations[shot.id] ?? speech[shot.id].duration })), created_at: new Date().toISOString() });
     fullCues.push(...chapterCues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset }))); fullOffset += chapterOffset;
     chapterFiles.push(final);
   }

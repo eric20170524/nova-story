@@ -9,9 +9,12 @@ import { createEmptyScriptDocument, StoryboardCandidatePayloadSchema, type Scrip
 import { SettingsManager } from '../../core/settings_manager';
 import { LLMService } from '../llm';
 import type { AIProvider } from './base';
-import { CHAPTER_SHOT_LIMIT, anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, directionPlace, directionPlaceProblem, directionPlaceSettled, evidencedContinuityStates, groupAdjacentClauseFragments, groupShotCounts, hash, promptContainsTranslation, verbatimActionSplit, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, visualPlanGroups, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { CHAPTER_SHOT_LIMIT, CLIP_SECONDS_SHORT, SOFT_MAX_SHOT_SECONDS, MAX_SHOT_SECONDS, spokenCharacters, estimateAudioSeconds, deriveShotScreenDirection, anchorSpans, allocateBudgets, assignFactSlots, auditFacts, continuityEvidenceRepair, directionPlace, directionPlaceProblem, directionPlaceSettled, evidencedContinuityStates, groupAdjacentClauseFragments, groupShotCounts, hash, promptContainsTranslation, verbatimActionSplit, validatePlan, validateFactSources, continuityAfter, serialWorkflow, stabilizeFactBeats, visualPlanGroups, runFactWorkflow, type WorkflowProgress } from '../storyboard_fact_workflow';
+import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
 import { compileNegativePrompt } from '../negative_prompt_compiler';
 import { sanitizeVisualPrompt } from '../visual_prompt_sanitizer';
+import { assertChapterShotQuota } from '../shot_intent_quota';
+import { getPrompt } from './prompt_registry';
 
 function document(sceneCount = 1, actions = 1): ScriptDocument {
   const doc = createEmptyScriptDocument('可追溯分镜');
@@ -52,7 +55,7 @@ function providerFixture() {
   return { provider, calls, failScene: (s: string) => { fail = s; }, reject: (value: boolean) => { reject = value; } };
 }
 async function confirmed(doc: ScriptDocument, characters: string[] = []) {
-  await db.exec('DELETE FROM generation_task; DELETE FROM coverage_shot; DELETE FROM coverage_group; DELETE FROM scene_version; DELETE FROM scene; DELETE FROM script_change; DELETE FROM chapter_script; DELETE FROM chapter; DELETE FROM character; DELETE FROM project;');
+  await db.exec('DELETE FROM generation_task; DELETE FROM coverage_shot; DELETE FROM coverage_group; DELETE FROM scene_asset_reference; DELETE FROM library_asset; DELETE FROM scene_version; DELETE FROM scene; DELETE FROM script_change; DELETE FROM chapter_script; DELETE FROM chapter; DELETE FROM character; DELETE FROM project;');
   const project = await db.run("INSERT INTO project(title, settings) VALUES('通用验收','{}')");
   const chapterId = `chapter_${randomUUID()}`;
   await db.run('INSERT INTO chapter(id,project_id,title,content,"index") VALUES(?,?,?,?,1)', chapterId, project.lastID, '验收章', '独立来源文本');
@@ -192,6 +195,19 @@ test('来源与预算不依赖场号、作品词典和同义措辞', async t => 
     const facts = anchorSpans(scene.id, scene.blocks[0]!.id, scene.blocks[0]!.text, { spans: [{ text: scene.blocks[0]!.text, beat: 0, kind: 'visual', states: [] }] });
     const budget = allocateBudgets(doc, facts);
     assert.ok(budget[0]!.minimum <= 20);
+    assert.equal(CLIP_SECONDS_SHORT, 5.0);
+    assert.equal(SOFT_MAX_SHOT_SECONDS, 8.0);
+    assert.equal(MAX_SHOT_SECONDS, 15.0);
+    assert.equal(FACT_POLICY_VERSION, 'storyboard-facts-3.3');
+    assert.equal(spokenCharacters({ type: 'dialogue', text: `“短句。”${'陆嘉静凑到耳边。'.repeat(8)}` }), 2);
+    assert.equal(
+      estimateAudioSeconds({ type: 'dialogue', text: '“合欢香……该燃了。”' }),
+      estimateAudioSeconds({ type: 'dialogue', text: '“合欢香…该燃了。”' }),
+    );
+    const normal = estimateAudioSeconds({ type: 'dialogue', text: '“这句对白一共十二个字。”' });
+    const slow = estimateAudioSeconds({ type: 'dialogue', text: '“这句对白一共十二个字。”', delivery: '缓慢低语' });
+    const fast = estimateAudioSeconds({ type: 'dialogue', text: '“这句对白一共十二个字。”', delivery: '急促惊呼' });
+    assert.ok(slow > normal && normal > fast);
     scene.blocks[scene.blocks.length - 1]!.text = `“${'这句对白本身就已经长到放不进一个镜头。'.repeat(4)}”`;
     assert.throws(() => allocateBudgets(doc, facts), /声音预算冲突/);
   });
@@ -621,10 +637,140 @@ test('逐场生成、持久化恢复与采纳闭环', async t => {
     const f = await confirmed(doc); const m = providerFixture();
     const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider: m.provider });
     const shots = JSON.parse(candidate.after_json).shots;
-    assert.equal(shots.length, 2);
+    assert.equal(shots.length, 3);
     assert.ok(shots.every((shot: any) => shot.duration <= 15));
     assert.equal(shots.flatMap((shot: any) => JSON.parse(shot.shot_spec).audible_blocks.map((block: any) => block.id)).join(','), 'd1,d2,d3');
     assert.equal((await db.get('SELECT COUNT(*) AS n FROM scene')).n, 0);
+  });
+  await t.test('DT-AC03: 多块<=8s长分场(18s)扩充为3镜，单块12s分场由单镜包络不崩，且120s章节<=35镜通过配额', async () => {
+    assert.match(getPrompt('script_scene_gen'), /30 字（约 8 秒）以内/);
+    assert.match(getPrompt('script_scene_rewrite'), /30 字（约 8 秒）以内/);
+
+    // 1. 多个 <=8s 对白块的长分场（3 块 x 6s = 18s）自动扩充为 3 镜（每镜 6s）
+    const multiDoc = document();
+    multiDoc.scenes[0]!.blocks = [
+      { id: 'action_0', type: 'action' as const, text: '第1场的第1盏红灯亮起。' },
+      { id: 'd1', type: 'voiceover' as const, characterId: null, text: '甲'.repeat(24) },
+      { id: 'd2', type: 'voiceover' as const, characterId: null, text: '乙'.repeat(24) },
+      { id: 'd3', type: 'voiceover' as const, characterId: null, text: '丙'.repeat(24) },
+    ];
+    const fMulti = await confirmed(multiDoc);
+    const mMulti = providerFixture();
+    const multiCandidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...fMulti.params, provider: mMulti.provider });
+    const multiShots = JSON.parse(multiCandidate.after_json).shots;
+    assert.equal(multiShots.length, 3);
+    assert.deepEqual(multiShots.map((s: any) => s.duration), [6, 6, 6]);
+    assert.deepEqual(multiShots.map((s: any) => JSON.parse(s.shot_spec).audible_blocks.map((b: any) => b.id)), [['d1'], ['d2'], ['d3']]);
+
+    // 1b. 4 × 6s 不可拆对白块按 8s 顺序装箱分配 4 个槽位（避免 sum/8 = 3 槽导致尾镜 12s 超载）
+    const fourSixDoc = document();
+    fourSixDoc.scenes[0]!.estimatedDurationSec = 24;
+    fourSixDoc.scenes[0]!.blocks = [
+      { id: 'action_0', type: 'action' as const, text: '第1场的第1盏红灯亮起。' },
+      { id: 'd4_1', type: 'voiceover' as const, characterId: null, text: '甲'.repeat(24) },
+      { id: 'd4_2', type: 'voiceover' as const, characterId: null, text: '乙'.repeat(24) },
+      { id: 'd4_3', type: 'voiceover' as const, characterId: null, text: '丙'.repeat(24) },
+      { id: 'd4_4', type: 'voiceover' as const, characterId: null, text: '戊'.repeat(24) },
+    ];
+    const fFourSix = await confirmed(fourSixDoc);
+    const mFourSix = providerFixture();
+    const fourSixCandidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...fFourSix.params, provider: mFourSix.provider });
+    const fourSixShots = JSON.parse(fourSixCandidate.after_json).shots;
+    assert.equal(fourSixShots.length, 4);
+    assert.deepEqual(fourSixShots.map((s: any) => s.duration), [6, 6, 6, 6]);
+    assert.deepEqual(fourSixShots.map((s: any) => JSON.parse(s.shot_spec).audible_blocks.map((b: any) => b.id)), [['d4_1'], ['d4_2'], ['d4_3'], ['d4_4']]);
+
+    // 2. 单个 12s 对白块的分场由单镜包络 12s，不抛 L1197 有声对齐时长冲突，不产生无声伴随镜
+    const singleDoc = document();
+    singleDoc.scenes[0]!.blocks = [
+      { id: 'action_0', type: 'action' as const, text: '第1场的第1盏红灯亮起。' },
+      { id: 'd_long', type: 'voiceover' as const, characterId: null, text: '丁'.repeat(48) },
+    ];
+    const fSingle = await confirmed(singleDoc);
+    const mSingle = providerFixture();
+    const singleCandidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...fSingle.params, provider: mSingle.provider });
+    const singleShots = JSON.parse(singleCandidate.after_json).shots;
+    assert.equal(singleShots.length, 1);
+    assert.equal(singleShots[0].duration, 12);
+
+    // 3. 120s 章节（6 场 x 20s，每场含 3 个对白块约 18s）总镜数 <= 35 且 100% 通过 assertChapterShotQuota
+    const chapter120Doc = document(6, 2);
+    for (const [idx, sc] of chapter120Doc.scenes.entries()) {
+      sc.estimatedDurationSec = 20;
+      sc.blocks = [
+        sc.blocks[0]!,
+        { id: `d_${idx}_1`, type: 'voiceover' as const, characterId: null, text: '甲'.repeat(24) },
+        { id: `d_${idx}_2`, type: 'voiceover' as const, characterId: null, text: '乙'.repeat(24) },
+        { id: `d_${idx}_3`, type: 'voiceover' as const, characterId: null, text: '丙'.repeat(24) },
+      ];
+    }
+    const f120 = await confirmed(chapter120Doc);
+    const m120 = providerFixture();
+    const c120 = await StoryboardGenerationService.generateStoryboardCandidate({ ...f120.params, provider: m120.provider });
+    const shots120 = JSON.parse(c120.after_json).shots;
+    assert.ok(shots120.length >= 18 && shots120.length <= CHAPTER_SHOT_LIMIT);
+    const quotaResult = assertChapterShotQuota(
+      shots120.map((s: any) => {
+        const spec = JSON.parse(s.shot_spec);
+        return { shot_type: s.shot_type, shot_intent: spec.shot_intent, visual_prompt: s.visual_prompt };
+      }),
+      { hasKeyProps: false },
+    );
+    assert.equal(quotaResult.ok, true);
+  });
+  await t.test('DT-AC05: 分镜采纳按名唯一匹配已完成的环境资产自动写入 scene_asset_reference（不修改 ScriptLocationSchema）', async () => {
+    const doc = document(1, 2);
+    const f = await confirmed(doc);
+    await db.run(
+      "INSERT INTO library_asset (id, project_id, kind, name, revision, status, image_url, description, visual_prompt) VALUES (701, ?, 'location', '无人港口', 3, 'completed', '/static/harbor.png', '无人港口', 'empty harbor')",
+      f.script.projectId,
+    );
+    const m = providerFixture();
+    const candidate = await StoryboardGenerationService.generateStoryboardCandidate({ ...f.params, provider: m.provider });
+    const applied = await StoryboardGenerationService.applyStoryboardCandidate({
+      scriptId: f.params.scriptId,
+      changeId: candidate.id,
+      expectedRevision: f.params.expectedRevision,
+      expectedCandidateRevision: candidate.candidate_revision,
+    });
+    assert.equal(applied.scene_ids.length, 2);
+    for (const sceneId of applied.scene_ids) {
+      const refs = await db.all(
+        'SELECT asset_id, asset_revision FROM scene_asset_reference WHERE scene_id = ?',
+        sceneId,
+      );
+      assert.deepEqual(refs, [{ asset_id: 701, asset_revision: 3 }]);
+    }
+    await db.run('DELETE FROM scene_asset_reference WHERE asset_id = 701');
+    await db.run('DELETE FROM library_asset WHERE id = 701');
+  });
+  await t.test('DT-AC06: 双人对话分场（已确认绑定角色 A 与角色 B）生成 180° 轴线 screen_direction 契约', async () => {
+    assert.deepEqual(deriveShotScreenDirection(['陆尘', '青檀'], ['陆尘']), {
+      subject_placement: 'left',
+      facing_direction: 'right',
+      camera_side: 'axis_a',
+    });
+    assert.deepEqual(deriveShotScreenDirection(['陆尘', '青檀'], ['青檀']), {
+      subject_placement: 'right',
+      facing_direction: 'left',
+      camera_side: 'axis_a',
+    });
+    assert.deepEqual(deriveShotScreenDirection(['陆尘', '青檀'], ['陆尘', '青檀']), {
+      subject_placement: 'two-shot-left-right',
+      facing_direction: 'each_other',
+      camera_side: 'axis_a',
+    });
+    assert.deepEqual(deriveShotScreenDirection(['陆尘', '青檀', '苏慕雨'], ['苏慕雨']), {
+      subject_placement: 'left',
+      facing_direction: 'right',
+      camera_side: 'axis_a',
+    });
+    assert.deepEqual(deriveShotScreenDirection(['陆尘', '青檀', '苏慕雨'], ['青檀', '苏慕雨']), {
+      subject_placement: 'two-shot-left-right',
+      facing_direction: 'each_other',
+      camera_side: 'axis_a',
+    });
+    assert.equal(deriveShotScreenDirection(['陆尘'], ['陆尘']), undefined);
   });
   await t.test('声音事实保留原文；时长保持镜沿用完整前画面', async () => {
     const doc = document(); doc.scenes[0]!.estimatedDurationSec = 31;

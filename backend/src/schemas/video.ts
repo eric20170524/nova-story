@@ -3,8 +3,17 @@ import { z } from 'zod';
 export const VideoProfileSchema = z.enum(['narrative_clip', 'character_loop']);
 export type VideoProfile = z.infer<typeof VideoProfileSchema>;
 
-export const VideoPresetSchema = z.enum(['preview_480p_5s', 'standard_720p_5s']);
+export const VideoPresetSchema = z.enum([
+  'preview_480p_5s',
+  'standard_720p_5s',
+  'preview_480p_8s',
+  'standard_720p_8s'
+]);
 export type VideoPreset = z.infer<typeof VideoPresetSchema>;
+
+export function getPresetDeliveryFrames(preset: VideoPreset): number {
+  return preset.endsWith('_8s') ? 192 : 120;
+}
 
 export const VideoWorkflowIdSchema = z.enum([
   'grok_imagine_browser',
@@ -98,10 +107,10 @@ const VideoRequestBaseSchema = z.object({
   motion_reference_asset_id: z.number().int().positive().optional(),
   last_frame_asset_id: z.number().int().positive().optional(),
   guide_frame_asset_id: z.number().int().positive().optional(),
-  guide_frame_idx: z.number().int().min(1).max(119).optional(),
+  guide_frame_idx: z.number().int().min(1).max(191).optional(),
   guide_frames: z.array(z.object({
     asset_id: z.number().int().positive(),
-    frame_idx: z.number().int().min(1).max(119),
+    frame_idx: z.number().int().min(1).max(191),
   })).max(4).optional(),
   prompt_override: z.string().optional(),
   preset: VideoPresetSchema.default('standard_720p_5s'),
@@ -110,6 +119,14 @@ const VideoRequestBaseSchema = z.object({
 });
 
 const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: z.RefinementCtx) => {
+  const maxFrameIdx = getPresetDeliveryFrames(data.preset) - 1;
+  if (data.guide_frame_idx != null && data.guide_frame_idx > maxFrameIdx) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['guide_frame_idx'],
+      message: `guide_frame_idx must be within 1..${maxFrameIdx} for preset ${data.preset}.`,
+    });
+  }
   if (data.subject_references?.length) {
     if (data.subject_references.length > 1) {
       ctx.addIssue({ code: 'custom', path: ['subject_references'], message: 'Multi-subject identity is not supported by the current H3 workflows; mixed characters remain blocked.' });
@@ -131,6 +148,15 @@ const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: 
     if (new Set(frameIndices).size !== frameIndices.length) {
       ctx.addIssue({ code: 'custom', path: ['guide_frames'], message: 'guide_frames frame_idx values must be unique.' });
     }
+    data.guide_frames.forEach((guide, idx) => {
+      if (guide.frame_idx > maxFrameIdx) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['guide_frames', idx, 'frame_idx'],
+          message: `guide_frames frame_idx must be within 1..${maxFrameIdx} for preset ${data.preset}.`,
+        });
+      }
+    });
   }
   if (data.workflow_id === 'grok_imagine_browser') return;
   const isFl2va = data.workflow_id === 'minimax_h3_fl2va_official_12gb';

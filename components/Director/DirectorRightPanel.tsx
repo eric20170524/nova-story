@@ -237,6 +237,28 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
                          >
                            720P 标准画质
                          </button>
+                         <button
+                           type="button"
+                           onClick={() => setVideoPreset?.('preview_480p_8s')}
+                           className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border text-center transition-all ${
+                             videoPreset === 'preview_480p_8s'
+                               ? 'bg-indigo-600 border-indigo-500 text-white shadow-xs'
+                               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                           }`}
+                         >
+                           480P 8秒预览
+                         </button>
+                         <button
+                           type="button"
+                           onClick={() => setVideoPreset?.('standard_720p_8s')}
+                           className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border text-center transition-all ${
+                             videoPreset === 'standard_720p_8s'
+                               ? 'bg-indigo-600 border-indigo-500 text-white shadow-xs'
+                               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                           }`}
+                         >
+                           720P 8秒标准
+                         </button>
                        </div>
                      </div>
 

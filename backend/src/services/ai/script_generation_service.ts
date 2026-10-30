@@ -825,7 +825,7 @@ export class ScriptGenerationService {
             const stepOneScenePrompt = scenePrompt.replace(/---\s*输出格式规范\s*---[\s\S]*$/u, '').trim();
             sceneConception = await runStageOneThinkingConception(
               provider,
-              `${stepOneScenePrompt}\n\n--- 输出要求 ---\n请以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover）的连贯编排（控制在 300 字以内，不要输出 JSON），确保原样保留必保事件与可见画面细节。`,
+              `${stepOneScenePrompt}\n\n--- 输出要求 ---\n请以自由文字形式构思本场戏的空间环境、人物动线、潜台词博弈、关键道具以及每个表演块（action/dialogue/voiceover，单条对白或画外音控制在 30 字即约 8 秒以内，长独白按完整句号拆为连续多个有声块）的连贯编排（控制在 300 字以内，不要输出 JSON），确保原样保留必保事件与可见画面细节。`,
               '你是一位专业短剧导演与分场编剧，擅长把小说段落拆解为高张力的视觉动作与戏剧对白大纲。请快速思考（思考过程不超过 200 字），直接给出简明构思大纲。',
               { stream: true, temperature: 0.6, maxTokens: 1024 }
             );

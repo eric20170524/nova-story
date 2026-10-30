@@ -11,6 +11,7 @@ import type {
   VideoCapabilities,
   VideoPreflightResponse,
   VideoGenerationRequest,
+  VideoPreset,
   VideoTaskState,
   MediaAsset,
   PublicTtsVoice,
@@ -553,10 +554,24 @@ class ApiService {
     this.request<MediaAsset>(`/videos/assets/${assetId}/archive`, { method: 'POST', body: { expected_status: expectedStatus } });
   reprocessVideoAsset = (assetId: number, runLoopCloser = true) =>
     this.request<any>(`/videos/assets/${assetId}/reprocess`, { method: 'POST', body: { run_loop_closer: runLoopCloser } });
-  setGuideFrameIndex = (assetId: number, guideFrameIdx: number) =>
+  setGuideFrameIndex = (assetId: number, guideFrameIdx: number, preset?: VideoPreset) =>
     this.request<MediaAsset>(`/videos/assets/${assetId}/guide-frame`, {
       method: 'POST',
-      body: { guide_frame_idx: guideFrameIdx }
+      body: { guide_frame_idx: guideFrameIdx, ...(preset ? { preset } : {}) }
+    });
+  adoptLastFrameCandidate = (assetId: number) =>
+    this.request<MediaAsset>(`/videos/assets/${assetId}/adopt-last-frame`, {
+      method: 'POST',
+      body: {}
+    });
+  relayKeyframeFromPreviousShot = (
+    targetSceneId: number | string,
+    sourceSceneId: number | string,
+    adopt = true
+  ) =>
+    this.request<MediaAsset>(`/videos/scenes/${targetSceneId}/relay-keyframe`, {
+      method: 'POST',
+      body: { source_scene_id: Number(sourceSceneId), adopt }
     });
   uploadVideoReference = async (formData: FormData): Promise<MediaAsset> => {
     const token = localStorage.getItem('access_token');

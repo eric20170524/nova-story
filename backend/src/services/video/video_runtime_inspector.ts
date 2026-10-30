@@ -47,7 +47,7 @@ export class VideoRuntimeInspector {
         gpu_available: false,
         gpu_name: null,
         vram_free_bytes: null,
-        supported_presets: ['preview_480p_5s', 'standard_720p_5s'],
+        supported_presets: ['preview_480p_5s', 'standard_720p_5s', 'preview_480p_8s', 'standard_720p_8s'],
         supported_profiles: ['narrative_clip', 'character_loop'],
         missing_components: missing,
       };

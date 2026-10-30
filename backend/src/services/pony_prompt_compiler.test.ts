@@ -202,3 +202,47 @@ test('visible clothing and actions survive human establish, wide and medium cont
     assert.match(visual_prompt, /black hair/);
   }
 });
+
+test('DT-AC07: compilePonyPrompt injects 180-degree screen_direction phrasing', () => {
+  const charA = compilePonyPrompt(
+    {
+      shot_intent: 'medium-action',
+      location: 'courtyard',
+      primary_action: 'speaks calmly',
+      visible_subjects: ['Lin'],
+      subject_scale: 'medium-20-40',
+      screen_direction: { subject_placement: 'left', facing_direction: 'right', camera_side: 'axis_a' },
+    },
+    [{ name: 'Lin', lock: 'adult woman, black hair' }],
+  );
+  assert.match(charA.visual_prompt, /positioned on left side of frame, facing right, looking to the right/);
+
+  const charB = compilePonyPrompt(
+    {
+      shot_intent: 'reaction',
+      location: 'courtyard',
+      primary_action: 'listens quietly',
+      visible_subjects: ['Qing'],
+      subject_scale: 'medium-20-40',
+      screen_direction: { subject_placement: 'right', facing_direction: 'left', camera_side: 'axis_a' },
+    },
+    [{ name: 'Qing', lock: 'adult woman, white robe' }],
+  );
+  assert.match(charB.visual_prompt, /positioned on right side of frame, facing left, looking to the left/);
+
+  const twoShot = compilePonyPrompt(
+    {
+      shot_intent: 'wide-action',
+      location: 'courtyard',
+      primary_action: 'stand across each other',
+      visible_subjects: ['Lin', 'Qing'],
+      subject_scale: 'medium-20-40',
+      screen_direction: { subject_placement: 'two-shot-left-right', facing_direction: 'each_other', camera_side: 'axis_a' },
+    },
+    [
+      { name: 'Lin', lock: 'adult woman, black hair' },
+      { name: 'Qing', lock: 'adult woman, white robe' },
+    ],
+  );
+  assert.match(twoShot.visual_prompt, /two characters facing each other across the frame, profile\/three-quarter view/);
+});

@@ -48,7 +48,8 @@ export async function collectContinuityBaseline() {
         case 'state': output = { states: main.legacy_mock!.states[input.facts[0].text] || [] }; break;
         case 'plan': output = { primary_by_slot: Object.fromEntries(input.slots.map((row: any) => [row.id, row.fact_ids[0] || null])) }; break;
         case 'translate': output = { translations: input.facts.map((row: any) => {
-          const english = main.legacy_mock!.translations[row.text];
+          const english = main.legacy_mock!.translations[row.text]
+            || main.legacy_mock!.translations[String(row.text || '').replace(' 手持：', ' 持物：')];
           if (!english) throw new Error(`CT01 mock translation missing: ${row.text}`);
           return { id: row.id, english };
         }) }; break;

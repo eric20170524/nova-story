@@ -21,7 +21,13 @@ export async function exportAssetLibrary(projectId: number) {
 }
 
 /** Caller owns the project-copy/import transaction. IDs never cross project boundaries. */
-export async function restoreAssetLibrary(raw: unknown, projectId: number, chapters: Map<string, string>, scenes: Map<string, number>) {
+export async function restoreAssetLibrary(
+  raw: unknown,
+  projectId: number,
+  chapters: Map<string, string>,
+  scenes: Map<string, number>,
+  characters?: Map<number, number>,
+) {
   if (raw == null) return new Map<number, number>();
   const bundle = AssetBundleSchema.parse(raw);
   const assetIds = new Map<number, number>();
@@ -43,9 +49,42 @@ export async function restoreAssetLibrary(raw: unknown, projectId: number, chapt
     const sceneId = scenes.get(String(snap.scene_id));
     if (!sceneId) throw new Error('Dangling image snapshot in backup');
     const refs = z.array(z.object({ id: z.number().int(), revision: z.number().int().positive() })).parse(JSON.parse(snap.references_json));
-    // Character IDs are remapped by project import; old version evidence cannot be reused.
+    let remappedCharVersions: string | null = null;
+    if (characters && snap.character_versions_json) {
+      try {
+        const parsedChars = z.array(z.object({ id: z.number().int(), version: z.number().int().positive() })).parse(JSON.parse(snap.character_versions_json));
+        if (parsedChars.every(item => characters.has(item.id))) {
+          const mappedItems: Array<{ id: number; version: number }> = [];
+          for (const item of parsedChars) {
+            const newCharId = characters.get(item.id)!;
+            mappedItems.push({ id: newCharId, version: item.version });
+            if (item.version > 1) {
+              const charRow = await db.get('SELECT active_version, description, visual_tags FROM character WHERE id = ?', newCharId);
+              if (charRow && Number(charRow.active_version || 1) < item.version) {
+                await db.run('UPDATE character SET active_version = ? WHERE id = ?', item.version, newCharId);
+                const hasCharVerTable = await db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_version'");
+                if (hasCharVerTable) {
+                  await db.run(
+                    `INSERT OR IGNORE INTO character_version (character_id, version, label, description, visual_tags)
+                     VALUES (?, ?, ?, ?, ?)`,
+                    newCharId,
+                    item.version,
+                    `v${item.version}`,
+                    charRow.description ?? null,
+                    charRow.visual_tags ?? '{}'
+                  );
+                }
+              }
+            }
+          }
+          remappedCharVersions = JSON.stringify(mappedItems);
+        }
+      } catch {
+        remappedCharVersions = null;
+      }
+    }
     await db.run('INSERT INTO scene_asset_image_snapshot (scene_id, image_url, references_json, character_versions_json) VALUES (?, ?, ?, ?)', sceneId, snap.image_url,
-      JSON.stringify(refs.map(ref => ({ ...ref, id: assetIds.get(ref.id) ?? -1 }))), null);
+      JSON.stringify(refs.map(ref => ({ ...ref, id: assetIds.get(ref.id) ?? -1 }))), remappedCharVersions);
   }
   return assetIds;
 }

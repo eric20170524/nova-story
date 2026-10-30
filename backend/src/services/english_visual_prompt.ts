@@ -19,7 +19,9 @@ import {
   type CharacterLockRef,
   type CompilePonyPromptResult,
   type PonyContract,
+  formatScreenDirectionClause,
 } from './pony_prompt_compiler';
+import { type ScreenDirection } from '../schemas/shot_contract';
 import { flattenVisualTagMap } from './reference_generation_policy';
 import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
 import { continuityVisualFact, charactersWithConfirmedWardrobe, type ContinuityVisualState } from './continuity_visual_state';
@@ -643,6 +645,7 @@ export type ShotImageMaterials = {
   camera_movement?: string;
   continuity_states?: unknown[];
   scene_context?: unknown;
+  screen_direction?: ScreenDirection | null;
   must_not?: unknown[];
 };
 
@@ -997,6 +1000,7 @@ export function shotImageMaterialsFromSpec(
     camera_movement: String(options.cameraMovement || source.camera_movement || '').trim(),
     continuity_states: states,
     scene_context: source.scene_context || null,
+    ...(source.screen_direction ? { screen_direction: source.screen_direction as ScreenDirection } : {}),
     must_not: [
       ...(Array.isArray(source.must_not) ? source.must_not : []),
       ...extraMustNot,
@@ -1136,6 +1140,7 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
     camera_movement: materials.camera_movement || '',
     continuity_states: materials.continuity_states || [],
     scene_context: materials.scene_context || null,
+    ...(materials.screen_direction ? { screen_direction: materials.screen_direction } : {}),
     must_not: materials.must_not || [],
   });
   const source = [
@@ -1182,8 +1187,12 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
     && !/^oriental realistic style\b/i.test(withAtmosphere.trim())
     ? `${ORIENTAL_REALISTIC_FACE_LOCK}. ${withAtmosphere}`
     : withAtmosphere;
-  if (containsCjk(withFaceLock)) throw new Error('English visual prompt still contains Chinese characters');
-  return withFaceLock;
+  const directionClause = visiblePerson(materials) ? formatScreenDirectionClause(materials.screen_direction) : '';
+  const withDirection = directionClause && !withFaceLock.toLowerCase().includes(directionClause.toLowerCase())
+    ? `${withFaceLock.replace(/\.?\s*$/, '')}. ${directionClause}.`
+    : withFaceLock;
+  if (containsCjk(withDirection)) throw new Error('English visual prompt still contains Chinese characters');
+  return withDirection;
 }
 
 function resolveContractIntent(contract: PonyContract): ShotIntent {

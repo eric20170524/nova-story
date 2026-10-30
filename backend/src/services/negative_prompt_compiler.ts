@@ -5,6 +5,7 @@
  */
 
 import { type ShotIntent } from './shot_intent_quota';
+import { type ScreenDirection } from '../schemas/shot_contract';
 
 export type IdentityMode = 'nonhuman' | 'human' | 'mixed' | 'unknown' | 'auto';
 
@@ -14,6 +15,7 @@ export type NegativeCompileInput = {
   visual_prompt?: string | null;
   location?: string | null;
   key_props?: string[] | string | null;
+  screen_direction?: ScreenDirection | null;
   /** Optional character visual-lock text used only for identity inference. */
   character_lock?: string | null;
   /**
@@ -113,6 +115,16 @@ export const compileNegativePrompt = (input: NegativeCompileInput): string => {
   }
 
   if (intent) parts.push(...SHOT_INVERSE[intent]);
+
+  const facing = input.screen_direction?.facing_direction;
+  if (facing === 'right') {
+    parts.push('facing left');
+  } else if (facing === 'left') {
+    parts.push('facing right');
+  }
+  if (facing && facing !== 'camera') {
+    parts.push('looking at viewer', 'front-facing passport photo');
+  }
 
   parts.push(...GLOBAL_QUALITY_NEGATIVE);
 

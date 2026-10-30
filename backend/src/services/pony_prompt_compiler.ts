@@ -6,6 +6,7 @@
 
 import { mapShotTypeToIntent, type ShotIntent } from './shot_intent_quota';
 import { sanitizeVisualPrompt } from './visual_prompt_sanitizer';
+import { type ScreenDirection } from '../schemas/shot_contract';
 
 export type PonyContract = {
   shot_intent?: string | null;
@@ -17,10 +18,36 @@ export type PonyContract = {
   visible_subjects?: string[] | null;
   key_props?: string[] | null;
   subject_scale?: string | null;
+  screen_direction?: ScreenDirection | null;
   must_not?: string[] | null;
   visual_facts?: unknown;
   continuity_states?: unknown;
 };
+
+export function formatScreenDirectionClause(screenDirection?: ScreenDirection | null): string {
+  if (!screenDirection) return '';
+  const { subject_placement, facing_direction } = screenDirection;
+  if (subject_placement === 'left' && facing_direction === 'right') {
+    return 'positioned on left side of frame, facing right, looking to the right';
+  }
+  if (subject_placement === 'right' && facing_direction === 'left') {
+    return 'positioned on right side of frame, facing left, looking to the left';
+  }
+  if (subject_placement === 'two-shot-left-right' && facing_direction === 'each_other') {
+    return 'two characters facing each other across the frame, profile/three-quarter view';
+  }
+  const parts: string[] = [];
+  if (subject_placement === 'left') parts.push('positioned on left side of frame');
+  else if (subject_placement === 'right') parts.push('positioned on right side of frame');
+  else if (subject_placement === 'center') parts.push('positioned in center of frame');
+  else if (subject_placement === 'two-shot-left-right') parts.push('two characters positioned on left and right sides of frame');
+  if (facing_direction === 'right') parts.push('facing right, looking to the right');
+  else if (facing_direction === 'left') parts.push('facing left, looking to the left');
+  else if (facing_direction === 'each_other') parts.push('facing each other across the frame, profile/three-quarter view');
+  else if (facing_direction === 'camera') parts.push('facing camera');
+  else if (facing_direction === 'away') parts.push('facing away from camera');
+  return parts.join(', ');
+}
 
 export type CharacterLockRef = {
   name?: string | null;
@@ -220,6 +247,8 @@ export const compilePonyPrompt = (
     } else if (scale === 'dominant') {
       parts.push('subject dominant in frame');
     }
+    const directionClause = formatScreenDirectionClause(contract.screen_direction);
+    if (directionClause) parts.push(directionClause);
   } else if (normalizePart(String(contract.primary_subject || '')).toLowerCase() === 'paw-only') {
     parts.push('paw only, no full body');
   }

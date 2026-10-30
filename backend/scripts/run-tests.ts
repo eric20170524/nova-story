@@ -37,8 +37,11 @@ const CORE_TESTS = [
   'src/services/ai/storyboard_generation_service.test.ts',
   'src/services/entity_binding.test.ts',
   'src/routes/character_age_and_turnaround.test.ts',
+  'src/services/asset_library_service.test.ts',
+  'src/services/scene_production.test.ts',
   'src/services/video/video_spec_compiler.test.ts',
   'src/services/video/video_workflow_compiler.test.ts',
+  'src/services/video/video_storyboard_keyframe.test.ts',
 ];
 
 const collectTests = async (directory: string): Promise<string[]> => {

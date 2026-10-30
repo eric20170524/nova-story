@@ -309,10 +309,10 @@ B 另测所有 B 项及 E01–E12；C 验 C12/C14/C15 浏览器闭环；D 按扩
 | 阶段 | 核心任务 | 关键产出与连贯性门禁 |
 | --- | --- | --- |
 | **Step 1：剧本与场记账本定盘**<br/>（Script & Continuity Pass） | 确认分场正文（`scriptScene`），按故事顺序回放生成每场的 `entry_state → changes (before/during/after moments) → exit_state` | 锁死每场的人物在场、衣物、持有物、损伤及场地遗留状态；标清跨场时间关系（紧接连续 / 同日稍后 / 隔日 / 闪回分支）。 |
-| **Step 2：音轨先行与拆镜定长**<br/>（Audio Spine & Timing Pass） | 先生成或估算每段对白（TTS）、旁白与动作节拍的真实时长，以音频时间轴为脊柱反推分镜拆解 | **黄金拆镜准则**：<br/>• 单镜目标时长控制在 **3~8s** 甜点区（不超过视频模型 15s 物理上限）；<br/>• 遇到 >12s 的长对白/长动作，优先用 **正反打 / 反应镜（Reaction） / 道具特写（Insert）** 切分画面并共享连续音轨（J-Cut / L-Cut）；<br/>• 确需 >15s 不切机位长镜头的，在此步显式拆分为多个物理子切片（`Sub-clip A: 0~10s` + `Sub-clip B: 10~20s`）。 |
-| **Step 3：场次视觉定样**<br/>（Scene Lookdev Pass） | 为每场戏生成/选定 **场次环境主参考图（Location Master Plate）** 与 **角色当场定妆图（Character Variant）** | 同一场戏（`scriptScene`）下的所有镜头绑定同一套环境光影、色温与角色造型版本，禁止在单镜 Prompt 中各自盲抽环境。 |
-| **Step 4：分镜关键帧静图锁定**<br/>（Keyframe Storyboard Pass） | 按每个镜头的 `moment` 状态编译英文 Prompt（[`compilePonyPrompt`](../../backend/src/services/pony_prompt_compiler.ts)），结合场次与角色参考图生成**首帧静图**（以及状态跃迁镜/超长接力镜的**尾帧静图**） | **核心成本与质量门禁**：在静图阶段完成连续性核对（衣物状态、持物手别、180° 轴线与视线方向）。静图不符直接局部重绘（Inpaint）或重抽，**绝不把错误静图送入视频生成管线**。 |
-| **Step 5：I2V / 首尾帧视频生成与装配**<br/>（Video Clip & Assembly Pass） | • 普通短镜（3~8s）：`首帧静图 + 运镜/动作词` → I2V<br/>• 状态跃迁镜（如拔剑/碎杯）：`Before 首帧图 + After 尾帧图` → 首尾帧控制视频<br/>• >15s 长镜头：多段首尾帧关键帧夹逼（`Keyframe A→B→C`）或尾帧抽帧高清修复续拍 | 视频模型只负责「让已确认合规的静帧动起来」，不承担「发明画面主体与状态」的职责；最终将多镜视频切片与整场连续音轨（对白 + 环境底噪 Ambience + 音效）在时间线上对齐合成。 |
+| **Step 2：音轨先行与拆镜定长**<br/>（Audio Spine & Timing Pass） | 先生成或估算每段对白（TTS）、旁白与动作节拍的真实时长，以音频时间轴为脊柱反推分镜拆解 | **黄金拆镜准则**：<br/>• H3 视频生成采用 **5.0s（120帧）与 8.0s（192帧，零裁剪）** 双档，分镜规划软上限为 `8.0s`（单块语音预算硬上限 `15.0s`）；<br/>• 严守「1 个有声块（`block_id`）归属 1 个镜头」：多句长对白在剧本生成时按完整句号拆分为多个 `<= 30` 字的有声块，分镜时按 8s 软上限分配到相邻机位；单块 8~15s 语音由单镜包络并在装配时用 `tpad` 冻结尾帧补齐（跨镜单块 J/L-Cut 留作远期演进）；<br/>• 跨镜连续长动作统一以 **8.0s 整段镜头** 接力，不引入镜头内嵌 `sub_clips`。 |
+| **Step 3：场次视觉定样**<br/>（Scene Lookdev Pass） | 为每场戏生成/选定 **场次环境主参考图（Location Master Plate）** 与 **角色当场定妆图（Character Variant）** | 同一场戏（`scriptScene`）下的所有镜头按归一化地点名唯一匹配并绑定同一套 `library_asset(kind='location')` 与角色造型版本（不改写 `ScriptLocationSchema`），禁止无约束盲抽。 |
+| **Step 4：分镜关键帧静图锁定**<br/>（Keyframe Storyboard Pass） | 按每个镜头的 `moment` 状态与已确认绑定人物的 `screen_direction` 编译运行时英文提示词（[`english_visual_prompt.ts`](../../backend/src/services/english_visual_prompt.ts) / [`negative_prompt_compiler.ts`](../../backend/src/services/negative_prompt_compiler.ts)），生成**首帧静图**及状态跃迁镜的**尾帧静图** | **核心成本与质量门禁**：在静图阶段完成连续性六项核对（衣物、损伤、人数、持物、门窗、空间与 180° 轴线）并写入角色版本快照。静图不符直接重抽，**绝不把未采纳静图送入视频生成管线**。 |
+| **Step 5：I2V / 首尾帧视频生成与装配**<br/>（Video Clip & Assembly Pass） | • 普通镜头（5s / 8s 双档）：`首帧静图 + 人物参考` → Ref2VA<br/>• 有人物状态跃迁镜：`首帧 + 尾帧 (frame 119/191) + 人物参考` → Multi-Frame<br/>• 纯空镜状态跃迁：`首帧 + 尾帧` → FL2VA<br/>• 跨镜接力：复用静态尾帧或精确抽取 `delivery_frames - 1` 末帧（链长 ≤ 2） | 视频模型只负责「让已确认合规的静帧动起来」；装配器取 `finalDuration = Math.max(layout.duration, clipSeconds)` 混音合成，既不截断 8s 视频尾帧，又能对超 8s 语音自动冻结尾帧对齐。 |
 
 ## 对照现有架构的演进与落地建议
 
@@ -321,17 +321,17 @@ B 另测所有 B 项及 E01–E12；C 验 C12/C14/C15 浏览器闭环；D 按扩
 当前代码库已具备支撑上述五步 SOP 的核心数据底座：
 - **四层事实源与一对多回指**：[`ShotSourceReferenceSchema`](../../backend/src/schemas/shot_contract.ts) 已支持 `1 scriptScene → N scene (shots)`，并精确回指 `script_scene_id`、`block_ids` 与 `continuity.story_position`。
 - **场内三态时刻与时间分支**：[`ContinuityStoryPositionSchema`](../../backend/src/schemas/continuity.ts) 已定义 `phase: 'before' | 'during' | 'after'` 与 `time_scope: { day_id, branch_id }`。
-- **同刻多机位扩展**：[`coverage.ts`](../../backend/src/routes/coverage.ts) 已支持在不推进剧情状态的前提下，为同一 `moment` 生成多机位候选并加入时间线，天然适配「长段落切分正反打/特写/反应镜」。
+- **同刻多机位扩展**：[`coverage.ts`](../../backend/src/routes/coverage.ts) 已支持在不推进剧情状态的前提下，为同一 `moment` 生成多机位候选并加入时间线。
 
-面向「突破 15s 视频模型限制」与「强化多镜/多场视听连贯性」的下一步落地，建议按以下三个增量方向推进：
+面向 Track 9 的三个增量落地批次（DT01–DT12）已冻结如下：
 
-1. **分镜规划器增加「时长预算与 >15s 自动拆镜/切片策略」**
-   - 根据剧本 `block` 的台词字数（如按语速估算秒数）与动作复杂度计算预估时长。
-   - 当单段戏或对白预估时长超过阈值（如 >10–12s）时：
-     - **默认策略（Coverage 切镜）**：自动拆解为主镜头 + 反应镜/细节特写组合，多个镜头通过 `audible_blocks` 共享或分段挂载同一连续对白，保持单镜时长在 3–8s 内；
-     - **长镜头策略（Sub-clip 接力）**：若显式指定为长镜头，则在镜头契约下生成有序子切片规格（`sub_clips`），标记首尾帧接力模式（`keyframe_bridge` 或 `last_frame_relay`）。
-2. **镜头契约（`shot_spec`）扩充视听轴线与首尾帧锚点字段**
-   - **画面轴线与朝向（`screen_direction`）**：在 [`ShotContractFieldsSchema`](../../backend/src/schemas/shot_contract.ts) 中增加可选的站位与视线朝向约束（如 `subject_placement: 'left' | 'center' | 'right'`、`gaze_direction: 'left' | 'right' | 'camera'`），在同一 `scriptScene` 的对话/对峙镜头间校验 180° 轴线一致性。
-   - **首尾双关键帧绑定（`start_frame` / `end_frame`）**：支持为 `before → after` 状态跃迁镜头或 >15s 接力子切片同时绑定首帧与尾帧静态资产版本，供下游 I2V 首尾帧工作流消费。
-3. **场次级环境主锚点（Scene Location Master）自动继承**
-   - 在分场（`scriptScene`）或剧本 `locations` 层支持绑定经确认的「场次环境主参考图」与统一光影描述（`scene_context`），使同一 `script_scene_id` 下的所有分镜在出图与 I2V 阶段自动挂载相同的环境视觉锚点，消除同场切镜时的背景跳变。
+1. **Batch A（DT01–DT04）：双端视频路由修复、5s/8s 双档时长模型与防冲突拆镜**
+   - 双端修复 `recommendVideoWorkflow` 与 `chooseShotVideoStrategy`（有尾帧且有人物参考走 `minimax_h3_multiframe_official_12gb` + `last_frame_asset_id`）。
+   - 剧本生成约束单块对白 `<= 30` 字（约 8s）；分镜器在多块/多节拍时按 `8.0s` 软上限扩充槽位，单块 `> 8.0s` 由单镜包络（杜绝 L1197 算术崩溃与静音空镜），全章严守 35% / 20% / 65% 景别配额。
+   - 新增 H3 `8.0s`（192 帧）预设，并在装配器以 `Math.max(layout.duration, clipSeconds)` 防止 8s 视频被短语音截断。
+2. **Batch B（DT05–DT08）：场次环境按名自动绑定与 180° 轴线运行时编译**
+   - 采纳分镜时按归一化地点名唯一匹配已完成生图的 `library_asset(kind='location')` 并写入 `scene_asset_reference`（不改 `ScriptLocationSchema`，不污染剧本哈希）。
+   - 在 [`ShotContractFieldsSchema`](../../backend/src/schemas/shot_contract.ts) 中新增 `screen_direction`（`subject_placement`、`facing_direction`、`camera_side`），基于已确认绑定人物推导正反打互斥朝向（双人镜用 `each_other`），接入 `english_visual_prompt.ts` 与 `negative_prompt_compiler.ts`。
+3. **Batch C（DT09–DT12）：首尾双关键帧候选门禁与 8s 整段末帧接力**
+   - 状态跃迁镜尾帧（`last_frame_reference`）走候选采纳并写入 `scene_asset_image_snapshot`，首尾双帧均通过 `validateShotMasterCharacters` 校验，动态锚定 `frame 119`（5s 档）或 `frame 191`（8s 档）。
+   - 跨镜接力优先复用已采纳静态尾帧，或用 `select=eq(n\,delivery_frames-1)` 精确抽取末帧（限制接力链长 `<= 2`）。

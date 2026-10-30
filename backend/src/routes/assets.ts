@@ -19,6 +19,7 @@ import { prepareProductionImage, copyProductionImagePin } from '../services/scen
 import { requireCurrentContinuityShot } from '../services/continuity_shot_gate';
 import { ContinuityStoreError } from '../services/continuity_store';
 import { beginDraftImage, beginFormalImage, decideFormalCandidate } from '../services/formal_storyboard_request';
+import { MediaAssetService } from '../services/video/media_asset_service';
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
 
@@ -193,6 +194,27 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
       }
       throw error;
     }
+  });
+
+  app.post('/last-frame-decision/:scene_id', async (request, reply) => {
+    const params = z.object({ scene_id: z.coerce.number().int().positive() }).parse(request.params);
+    const body = z.object({
+      asset_id: z.coerce.number().int().positive(),
+      verdict: z.enum(['accepted', 'rejected']).default('accepted'),
+      character_ids: z.array(z.coerce.number().int().positive()).optional(),
+    }).parse(request.body || {});
+    const asset = await MediaAssetService.getAssetById(body.asset_id);
+    if (!asset || Number(asset.scene_id) !== params.scene_id) {
+      return reply.status(404).send({ detail: 'Last-frame candidate asset not found for this scene' });
+    }
+    if (body.verdict === 'rejected') {
+      await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'rejected', body.asset_id);
+      return { verdict: 'rejected', asset: await MediaAssetService.getAssetById(body.asset_id) };
+    }
+    const adopted = await MediaAssetService.adoptLastFrameCandidate(body.asset_id, {
+      characterIds: body.character_ids,
+    });
+    return { verdict: 'accepted', asset: adopted };
   });
 
   app.get('/status/:task_id', async (request, reply) => {

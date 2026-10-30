@@ -190,28 +190,37 @@ export function readProjectVideoWorkflow(settings) {
   return PROJECT_VIDEO_WORKFLOW_IDS.has(raw) ? raw : null;
 }
 
-export function chooseShotVideoStrategy(assets, override = null, projectDefault = null) {
+export function shotVideoPreset(shot) {
+  return Number(shot?.duration) > 5 ? 'standard_720p_8s' : 'standard_720p_5s';
+}
+
+export function chooseShotVideoStrategy(assets, override = null, projectDefault = null, preset = 'standard_720p_5s') {
   const available = assets.filter(asset => asset.status === 'ready');
   const latest = role => available.filter(asset => asset.role === role).sort((a, b) => Number(b.id) - Number(a.id))[0];
   const guide = latest('guide_frame_reference') || latest('composition_reference');
   const last = latest('last_frame_reference');
+  const character = latest('character_reference');
   const structural = guide
     ? 'minimax_h3_multiframe_official_12gb'
-    : last ? 'minimax_h3_fl2va_official_12gb' : null;
+    : last
+      ? (character ? 'minimax_h3_multiframe_official_12gb' : 'minimax_h3_fl2va_official_12gb')
+      : null;
   const fallback = PROJECT_VIDEO_WORKFLOW_IDS.has(projectDefault) ? projectDefault : 'minimax_h3_ref2va_official_12gb';
   const selected = override || structural || fallback;
+  const maxFrameIdx = String(preset || '').endsWith('_8s') ? 191 : 119;
   let guideFrameIdx;
   if (selected === 'minimax_h3_multiframe_official_12gb' && guide) {
     let proposed;
     try { proposed = JSON.parse(guide.metadata_json || '{}').guide_frame_idx; } catch {}
-    if (!Number.isInteger(proposed) || proposed < 1 || proposed > 119) {
-      throw new Error(`Guide frame asset ${guide.id} requires metadata_json.guide_frame_idx within delivery frames 1..119 (24fps).`);
+    if (!Number.isInteger(proposed) || proposed < 1 || proposed > maxFrameIdx) {
+      throw new Error(`Guide frame asset ${guide.id} requires metadata_json.guide_frame_idx within delivery frames 1..${maxFrameIdx} (24fps).`);
     }
     guideFrameIdx = proposed;
   }
   return {
     workflow_id: selected,
     reason: override ? 'Explicit workflow override' : guide ? 'Guide frame requires Official Multi-Frame'
+      : last && character ? 'Last-frame boundary with character reference requires Official Multi-Frame'
       : last ? 'Last-frame boundary requires Official FL2VA'
       : projectDefault && selected === projectDefault && projectDefault !== 'minimax_h3_ref2va_official_12gb'
         ? 'Project default video workflow'

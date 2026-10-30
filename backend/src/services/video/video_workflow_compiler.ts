@@ -105,20 +105,22 @@ export class VideoWorkflowCompiler {
     const slots = manifest.slots;
     const { spec, stagedFiles } = inputs;
     const contract = spec.output_contract;
+    const deliveryFrames = spec.preset.endsWith('_8s') || contract.frames === 192 ? 192 : 120;
+    const maxFrameIdx = deliveryFrames - 1;
     const guideFrames = inputs.guideFrames || [];
     if (guideFrames.length && workflowId !== 'minimax_h3_multiframe_official_12gb') {
       throw new Error('guide_frames requires the Official Multi-Frame workflow.');
     }
     if (guideFrames.length > 4 || new Set(guideFrames.map(guide => guide.frameIdx)).size !== guideFrames.length
-        || guideFrames.some(guide => !Number.isInteger(guide.frameIdx) || guide.frameIdx < 1 || guide.frameIdx >= 120 || !guide.filename)) {
-      throw new Error('guide_frames must contain 1–4 distinct frame indices within delivery frames 1..119.');
+        || guideFrames.some(guide => !Number.isInteger(guide.frameIdx) || guide.frameIdx < 1 || guide.frameIdx > maxFrameIdx || !guide.filename)) {
+      throw new Error(`guide_frames must contain 1–4 distinct frame indices within delivery frames 1..${maxFrameIdx}.`);
     }
     if (workflowId.startsWith('minimax_h3_')) {
-      if (contract.fps !== 24 || contract.frames !== 124
+      if (contract.fps !== 24 || (contract.frames !== 124 && contract.frames !== 192)
           || manifest.default_params?.fps !== 24
-          || manifest.default_params?.frames !== 124
-          || manifest.default_params?.delivery_frames !== 120) {
-        throw new Error('H3 workflow requires native 24fps, 124 model frames and 120 delivery frames.');
+          || (manifest.default_params?.frames !== 124 && manifest.default_params?.frames !== 192)
+          || (manifest.default_params?.delivery_frames !== 120 && manifest.default_params?.delivery_frames !== 192)) {
+        throw new Error('H3 workflow requires native 24fps, 124 or 192 model frames and 120 or 192 delivery frames.');
       }
       for (const [nodeId, node] of Object.entries(workflow) as Array<[string, any]>) {
         if (node?.class_type === 'CreateVideo' && node.inputs?.fps !== 24) {
@@ -165,12 +167,12 @@ export class VideoWorkflowCompiler {
       } else if (stagedFiles.guideFrameFilename) {
         targetIdx = Math.round((contract.frames || 124) / 2);
       } else if (stagedFiles.lastFrameFilename) {
-        targetIdx = 119;
+        targetIdx = maxFrameIdx;
       } else {
-        targetIdx = 60;
+        targetIdx = Math.floor(deliveryFrames / 2);
       }
-      if (targetIdx < 1 || targetIdx >= 120) {
-        throw new Error(`Guide frame index must be within delivery frames 1..119; received ${targetIdx}.`);
+      if (targetIdx < 1 || targetIdx > maxFrameIdx) {
+        throw new Error(`Guide frame index must be within delivery frames 1..${maxFrameIdx}; received ${targetIdx}.`);
       }
       workflow[slots.guide_frame_idx.node].inputs[slots.guide_frame_idx.input] = targetIdx;
     }
@@ -205,7 +207,7 @@ export class VideoWorkflowCompiler {
         if (stagedFiles.lastFrameFilename && workflow['23']) {
           workflow['23'].inputs.positive = guideFrames.length || stagedFiles.guideFrameFilename
             ? [finalGuideNode, 0] : ['10', 0];
-          workflow['23'].inputs.frame_idx = 119;
+          workflow['23'].inputs.frame_idx = maxFrameIdx;
           if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = ['23', 0];
         } else {
           if (workflow['14']?.inputs) workflow['14'].inputs['conditioning'] = [finalGuideNode, 0];
@@ -261,7 +263,7 @@ export class VideoWorkflowCompiler {
     // changing established output behavior.
     let steps: number;
     if (workflowId === 'minimax_h3_hongchao_a2a_12gb') {
-      steps = spec.preset === 'preview_480p_5s' ? 6 : 10;
+      steps = spec.preset.startsWith('preview_480p_') ? 6 : 10;
     } else {
       const manifestSteps = Number(manifest.default_params?.steps);
       const envSteps = Number(process.env.NOVASTORY_H3_STEPS);
@@ -287,7 +289,7 @@ export class VideoWorkflowCompiler {
         width: contract.width,
         height: contract.height,
         frames: contract.frames,
-        delivery_frames: 120,
+        delivery_frames: deliveryFrames,
         fps: contract.fps,
         steps,
         seed,

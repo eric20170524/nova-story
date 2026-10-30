@@ -359,6 +359,37 @@ test('last-frame-only Multi-Frame uses the delivered end frame without a phantom
   assert.deepEqual(compiled.workflow['14'].inputs.conditioning, ['23', 0]);
 });
 
+test('8s Multi-Frame compiles to 192 model frames, 192 delivery frames, and anchors last_frame at index 191', async () => {
+  const spec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 53,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      last_frame_asset_id: 33,
+      preset: 'standard_720p_8s',
+      run_loop_closer: false,
+    },
+    scene: { id: 53 },
+    character: { name: 'Lu Xueqi' },
+  });
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: {
+      firstFrameFilename: 'first.png',
+      characterRefFilenames: ['char.png'],
+      lastFrameFilename: 'last.png',
+    },
+  });
+  assert.equal(compiled.appliedParams.frames, 192);
+  assert.equal(compiled.appliedParams.delivery_frames, 192);
+  assert.equal(compiled.workflow['10'].inputs.length, 192);
+  assert.equal(compiled.workflow['23'].inputs.frame_idx, 191);
+  assert.deepEqual(compiled.workflow['14'].inputs.conditioning, ['23', 0]);
+});
+
 test('VideoWorkflowCompiler validates official Multi-Frame against Comfy object_info', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_multiframe_official_12gb');
   const classTypes = new Set(Object.values(bundle.workflow).map((node: any) => node.class_type));

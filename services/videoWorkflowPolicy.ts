@@ -1,4 +1,4 @@
-import type { MediaAsset, VideoWorkflowId } from '../types';
+import type { MediaAsset, VideoWorkflowId, VideoPreset } from '../types';
 
 export const PROJECT_VIDEO_WORKFLOW_IDS = [
   'grok_imagine_browser',
@@ -24,6 +24,9 @@ export const recommendVideoWorkflow = (assets: MediaAsset[]): { workflowId: Vide
     return { workflowId: 'minimax_h3_multiframe_official_12gb', reason: '导引帧指定片段内的关键动作位置，使用 Official Multi-Frame。' };
   }
   if (has('last_frame_reference')) {
+    if (has('character_reference')) {
+      return { workflowId: 'minimax_h3_multiframe_official_12gb', reason: '尾帧边界与人物身份参考同时存在，使用 Official Multi-Frame。' };
+    }
     return { workflowId: 'minimax_h3_fl2va_official_12gb', reason: '尾帧需要固定起止边界，使用 Official FL2VA。' };
   }
   return {
@@ -41,6 +44,7 @@ export const recommendVideoWorkflow = (assets: MediaAsset[]): { workflowId: Vide
 export const resolveProjectVideoWorkflow = (
   assets: MediaAsset[],
   projectDefault: VideoWorkflowId | null | undefined,
+  _preset?: VideoPreset,
 ): { workflowId: VideoWorkflowId; reason: string } => {
   const recommended = recommendVideoWorkflow(assets);
   const structural = recommended.workflowId === 'minimax_h3_fl2va_official_12gb'

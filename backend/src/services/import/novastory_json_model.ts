@@ -18,6 +18,7 @@ export interface NovaStoryJsonImportCharacter {
   role: string | null;
   description: string | null;
   visualTags: string;
+  activeVersion?: number;
   voiceId?: string | null;
   voiceLabel?: string | null;
 }
@@ -370,12 +371,14 @@ export const normalizeNovaStoryJsonProject = (
       continue;
     }
 
+    const rawActiveVersion = optionalRevision(raw.active_version, raw.activeVersion);
     characters.push({
       sourceId: optionalId(raw.id),
       name: raw.name.trim().slice(0, 255),
       role: optionalText(raw.role),
       description: optionalText(raw.description),
       visualTags: jsonText(raw.visual_tags, '{}') || '{}',
+      ...(rawActiveVersion != null && rawActiveVersion >= 1 ? { activeVersion: Math.trunc(rawActiveVersion) } : {}),
       voiceId: optionalText(raw.voice_id),
       voiceLabel: optionalText(raw.voice_label),
     });

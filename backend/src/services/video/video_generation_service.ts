@@ -229,7 +229,7 @@ export class VideoGenerationService {
       gpu_available: vramStatus.level !== 'unknown',
       gpu_name: vramStatus.gpu_name,
       vram_free_bytes: vramStatus.free_bytes,
-      supported_presets: ['preview_480p_5s', 'standard_720p_5s'],
+      supported_presets: ['preview_480p_5s', 'standard_720p_5s', 'preview_480p_8s', 'standard_720p_8s'],
       supported_profiles: ['narrative_clip', 'character_loop'],
       missing_components: missingComponents
     };
@@ -362,6 +362,7 @@ export class VideoGenerationService {
       }
     }
 
+    let resolvedLastFrameAsset: MediaAsset | null = null;
     if (request.last_frame_asset_id) {
       const lastFrameAsset = await MediaAssetService.getAssetById(request.last_frame_asset_id);
       if (!lastFrameAsset) {
@@ -369,11 +370,42 @@ export class VideoGenerationService {
       } else if (lastFrameAsset.media_type !== 'image') {
         blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} must be an image.`);
       } else {
+        resolvedLastFrameAsset = lastFrameAsset;
+        if (lastFrameAsset.status !== 'ready') {
+          blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} is not ready (status: ${lastFrameAsset.status}); adopt the candidate first.`);
+        }
         if (projectId && lastFrameAsset.project_id !== projectId) {
           blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} belongs to a different project.`);
         }
         if (lastFrameAsset.scene_id != null && Number(lastFrameAsset.scene_id) !== Number(request.scene_id)) {
           blockers.push(`Last-frame asset ID ${request.last_frame_asset_id} belongs to a different scene.`);
+        }
+        let lfWidth = Number(lastFrameAsset.width || 0);
+        let lfHeight = Number(lastFrameAsset.height || 0);
+        if ((!lfWidth || !lfHeight) && lastFrameAsset.url.startsWith('/static/')) {
+          try {
+            const file = MediaAssetService.resolveSafePath(lastFrameAsset.url);
+            if (fs.existsSync(file)) {
+              const metadata = await sharp(file).metadata();
+              lfWidth = Number(metadata.width || 0);
+              lfHeight = Number(metadata.height || 0);
+            }
+          } catch { /* Missing source is reported by the staging gate. */ }
+        }
+        if (lfWidth > 0 && lfHeight > 0 && Math.abs(lfWidth / lfHeight - 16 / 9) > 0.005) {
+          blockers.push(`Last-frame asset must be 16:9; asset ${lastFrameAsset.id} is ${lfWidth}×${lfHeight}.`);
+        }
+        if (scene && lastFrameAsset.role === 'last_frame_reference') {
+          const references = await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+            JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ? ORDER BY a.id`, scene.id);
+          const lfSnapshot = lastFrameAsset.url
+            ? await db.get('SELECT references_json FROM scene_asset_image_snapshot WHERE scene_id = ? AND image_url = ?', scene.id, lastFrameAsset.url)
+            : null;
+          const currentRefs = references.map(ref => ({ id: ref.id, revision: ref.asset_revision }));
+          const previousRefs = lfSnapshot ? JSON.parse(lfSnapshot.references_json).sort((a: any, b: any) => a.id - b.id) : [];
+          if (JSON.stringify(currentRefs) !== JSON.stringify(previousRefs)) {
+            blockers.push('Last-frame asset does not reflect the selected location/prop assets; regenerate or re-adopt it before video generation.');
+          }
         }
       }
     }
@@ -452,12 +484,22 @@ export class VideoGenerationService {
     if (scene && projectId && keyframeAsset?.url) {
       const requiredCharacterIds = await getShotVisibleCharacterIds(Number(scene.id), projectId);
       if (identityValidation.character_id != null) requiredCharacterIds.push(identityValidation.character_id);
+      const uniqueRequiredIds = [...new Set(requiredCharacterIds)];
       blockers.push(...await validateShotMasterCharacters({
         sceneId: Number(scene.id),
         projectId,
         imageUrl: keyframeAsset.url,
-        requiredCharacterIds: [...new Set(requiredCharacterIds)],
+        requiredCharacterIds: uniqueRequiredIds,
       }));
+      if (resolvedLastFrameAsset?.url && resolvedLastFrameAsset.role === 'last_frame_reference') {
+        const lastFrameBlockers = await validateShotMasterCharacters({
+          sceneId: Number(scene.id),
+          projectId,
+          imageUrl: resolvedLastFrameAsset.url,
+          requiredCharacterIds: uniqueRequiredIds,
+        });
+        blockers.push(...lastFrameBlockers.map(msg => msg.replace(/Shot Master/g, 'Last-frame Shot Master')));
+      }
     }
 
     const character = projectId
@@ -603,6 +645,9 @@ export class VideoGenerationService {
       const spec = await this.preparedSpec(taskId, request);
       const keyframe = await MediaAssetService.getAssetById(request.keyframe_asset_id);
       if (!keyframe) throw new Error('Grok video task has no keyframe');
+      const presetDims = resolvePresetDimensions(request.preset);
+      const targetDeliveryFrames = presetDims.delivery_frames;
+      const targetDurationSeconds = targetDeliveryFrames >= 192 ? 8 : 5;
       const references = await Promise.all(request.character_reference_asset_ids.map(id => MediaAssetService.getAssetById(id)));
       fs.mkdirSync(queue, { recursive: true });
       if (!fs.existsSync(requestPath)) fs.writeFileSync(requestPath, JSON.stringify({
@@ -620,8 +665,8 @@ export class VideoGenerationService {
         })),
         prompt: spec.positive_prompt,
         negative_prompt: spec.negative_prompt,
-        duration_seconds: 5,
-        delivery_contract: { duration_seconds: 5, fps: 24, frame_count: 120 },
+        duration_seconds: targetDurationSeconds,
+        delivery_contract: { duration_seconds: targetDurationSeconds, fps: 24, frame_count: targetDeliveryFrames },
         requested_at: new Date().toISOString(),
       }, null, 2), { flag: 'wx' });
       await db.run("UPDATE generation_task SET stage = 'generating', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
@@ -640,15 +685,15 @@ export class VideoGenerationService {
           const rawPath = path.join(taskDir, 'raw.mp4');
           fs.copyFileSync(videoPath, rawPath);
           const sourceDurationSeconds = (await VideoPostprocessService.probeVideo(rawPath)).duration_s;
-          const durationDecision = classifyGrokSourceDuration(sourceDurationSeconds);
+          const durationDecision = classifyGrokSourceDuration(sourceDurationSeconds, targetDurationSeconds);
           if (durationDecision.action === 'reject') throw new Error(durationDecision.reason);
           await db.run("UPDATE generation_task SET stage = 'postprocessing', updated_at = ? WHERE task_id = ? AND status = 'processing'", new Date().toISOString(), taskId);
           await this.resumePostprocessFromRaw(taskId, request, projectId, rawPath, taskDir, {
             provider: 'grok_imagine_browser',
             browser_result_url: result.source_url || null,
-            requested_duration_seconds: 5,
+            requested_duration_seconds: targetDurationSeconds,
             source_duration_seconds: sourceDurationSeconds,
-            delivery_duration_seconds: 5,
+            delivery_duration_seconds: targetDurationSeconds,
             ...(durationDecision.action === 'review' ? { duration_review: durationDecision.reason } : {}),
           });
           return;
@@ -759,6 +804,7 @@ export class VideoGenerationService {
   }
 
   static async reprocessAsset(assetId: number, runLoopCloser = true) {
+    const sourceAsset = await MediaAssetService.getAssetById(assetId);
     const rawAsset = await MediaAssetService.resolveRawVideoForReprocess(assetId);
     if (!rawAsset.id || rawAsset.scene_id == null) {
       throw new Error(`Raw video asset ${rawAsset.id ?? assetId} is missing scene lineage`);
@@ -768,6 +814,123 @@ export class VideoGenerationService {
     if (!fs.existsSync(rawVideoPath)) {
       throw new Error(`Raw video file does not exist: ${rawVideoPath}`);
     }
+
+    const parseJsonSafe = (raw?: string | null): Record<string, any> => {
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        return {};
+      }
+    };
+
+    const sourceMeta = parseJsonSafe(sourceAsset?.metadata_json);
+    const rawMeta = parseJsonSafe(rawAsset.metadata_json);
+    let siblingMeta: Record<string, any> = {};
+    if (sourceAsset?.id === rawAsset.id && rawAsset.id) {
+      const siblingRow = await db.get(
+        `SELECT width, height, frame_count, duration_ms, metadata_json FROM media_asset
+         WHERE parent_asset_id = ? AND role IN ('narrative_final', 'loop_master')
+         ORDER BY id DESC LIMIT 1`,
+        rawAsset.id
+      );
+      if (siblingRow) {
+        siblingMeta = {
+          ...parseJsonSafe(siblingRow.metadata_json),
+          _width: siblingRow.width,
+          _height: siblingRow.height,
+          _frame_count: siblingRow.frame_count,
+          _duration_ms: siblingRow.duration_ms,
+        };
+      }
+    }
+
+    const taskIdCandidate = sourceMeta.task_id || rawMeta.task_id || siblingMeta.task_id;
+    let taskRequest: Record<string, any> = {};
+    if (taskIdCandidate) {
+      const taskRow = await db.get('SELECT request_json FROM generation_task WHERE task_id = ?', String(taskIdCandidate));
+      taskRequest = parseJsonSafe(taskRow?.request_json);
+    }
+
+    let manifestMeta: Record<string, any> = {};
+    const rawManifestPath = path.join(path.dirname(rawVideoPath), 'manifest.json');
+    if (fs.existsSync(rawManifestPath)) {
+      try {
+        manifestMeta = JSON.parse(fs.readFileSync(rawManifestPath, 'utf8')) || {};
+      } catch { /* ignore */ }
+    }
+
+    const candidatePreset = sourceMeta.request?.preset
+      || rawMeta.request?.preset
+      || siblingMeta.request?.preset
+      || taskRequest.preset
+      || manifestMeta.metadata?.request?.preset;
+    const presetDims = typeof candidatePreset === 'string'
+      && ['preview_480p_5s', 'standard_720p_5s', 'preview_480p_8s', 'standard_720p_8s'].includes(candidatePreset)
+      ? resolvePresetDimensions(candidatePreset as any)
+      : null;
+
+    let rawProbeFrames = 0;
+    let rawProbeWidth = 0;
+    let rawProbeHeight = 0;
+    try {
+      const probed = await VideoPostprocessService.probeVideo(rawVideoPath);
+      rawProbeFrames = Number(probed.frame_count || 0);
+      rawProbeWidth = Number(probed.width || 0);
+      rawProbeHeight = Number(probed.height || 0);
+    } catch { /* fallback to asset metadata */ }
+
+    const explicitDeliveryFrames = Number(
+      sourceMeta.compiled_params?.delivery_frames
+      || sourceMeta.delivery_frames
+      || rawMeta.compiled_params?.delivery_frames
+      || rawMeta.delivery_frames
+      || siblingMeta.compiled_params?.delivery_frames
+      || siblingMeta.delivery_frames
+      || presetDims?.delivery_frames
+      || manifestMeta.qa_report?.frame_count
+      || 0
+    );
+    const fallbackFrameCount = Number(
+      sourceAsset?.frame_count
+      || siblingMeta._frame_count
+      || rawAsset.frame_count
+      || rawProbeFrames
+      || 0
+    );
+    const fallbackDurationMs = Number(
+      sourceAsset?.duration_ms
+      || siblingMeta._duration_ms
+      || rawAsset.duration_ms
+      || 0
+    );
+    const targetFrames = explicitDeliveryFrames >= 192 || fallbackFrameCount >= 180 || fallbackDurationMs >= 7000
+      ? 192
+      : 120;
+
+    const targetWidth = Number(
+      sourceMeta.compiled_params?.width
+      || rawMeta.compiled_params?.width
+      || siblingMeta.compiled_params?.width
+      || presetDims?.width
+      || (sourceAsset?.id !== rawAsset.id ? sourceAsset?.width : 0)
+      || siblingMeta._width
+      || rawAsset.width
+      || rawProbeWidth
+      || 1280
+    );
+    const targetHeight = Number(
+      sourceMeta.compiled_params?.height
+      || rawMeta.compiled_params?.height
+      || siblingMeta.compiled_params?.height
+      || presetDims?.height
+      || (sourceAsset?.id !== rawAsset.id ? sourceAsset?.height : 0)
+      || siblingMeta._height
+      || rawAsset.height
+      || rawProbeHeight
+      || 720
+    );
 
     const artifactId = `reprocess_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const outputDirectory = path.join(
@@ -784,10 +947,14 @@ export class VideoGenerationService {
       rawVideoPath,
       outputDirectory,
       runLoopCloser,
+      targetWidth,
+      targetHeight,
+      targetFrames,
       metadata: {
         reprocess: true,
         source_asset_id: assetId,
-        raw_asset_id: rawAsset.id
+        raw_asset_id: rawAsset.id,
+        ...(manifestMeta.metadata?.request ? { request: manifestMeta.metadata.request } : taskRequest.preset ? { request: taskRequest } : {}),
       }
     });
 
@@ -801,7 +968,13 @@ export class VideoGenerationService {
       processRes,
       metadata: {
         reprocessed_from_asset_id: assetId,
-        reprocess_id: artifactId
+        reprocess_id: artifactId,
+        delivery_frames: targetFrames,
+        compiled_params: {
+          width: targetWidth,
+          height: targetHeight,
+          delivery_frames: targetFrames,
+        },
       }
     });
 
@@ -1136,6 +1309,7 @@ export class VideoGenerationService {
         runLoopCloser: request.run_loop_closer,
         targetWidth: spec.output_contract.width,
         targetHeight: spec.output_contract.height,
+        targetFrames: compiledWorkflow.appliedParams.delivery_frames,
         metadata: {
           spec,
           request,
@@ -1369,14 +1543,16 @@ export class VideoGenerationService {
       });
     }
 
+    const presetDims = resolvePresetDimensions(request.preset);
     const processRes = await LoopCloser.process({
       taskId,
       profile: request.profile,
       rawVideoPath,
       outputDirectory: taskAssetDir,
       runLoopCloser: request.run_loop_closer,
-      targetWidth: resolvePresetDimensions(request.preset).width,
-      targetHeight: resolvePresetDimensions(request.preset).height,
+      targetWidth: presetDims.width,
+      targetHeight: presetDims.height,
+      targetFrames: presetDims.delivery_frames,
       metadata: { ...provenance, request }
     });
     const durationReview = typeof provenance.duration_review === 'string' ? provenance.duration_review : '';

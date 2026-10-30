@@ -909,3 +909,23 @@ test('a narrative silence or pause survives when picture depicts stillness or co
     'Lu Jiajing sits upright in a composed posture, her fingertips resting on her sleeve, remaining completely still.',
   );
 });
+
+test('DT-AC07: composeShotImagePrompt and shotImageMaterialsFromSpec preserve and append 180-degree screen_direction', async () => {
+  setVisualPromptTranslatorForTests(async () => 'Lu Chen stands in the courtyard.');
+  const materials = shotImageMaterialsFromSpec(
+    {
+      location: '庭院',
+      primary_action: '陆尘站在庭院中',
+      visible_subjects: ['陆尘'],
+      screen_direction: { subject_placement: 'left', facing_direction: 'right', camera_side: 'axis_a' },
+    },
+    [{ name: '陆尘', visual_tags: { hair: 'black hair' } }],
+  );
+  assert.deepEqual(materials.screen_direction, {
+    subject_placement: 'left',
+    facing_direction: 'right',
+    camera_side: 'axis_a',
+  });
+  const prompt = await composeShotImagePrompt(materials);
+  assert.match(prompt, /positioned on left side of frame, facing right, looking to the right/);
+});

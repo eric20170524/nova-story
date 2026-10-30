@@ -13,7 +13,11 @@ import { StoryboardGenerationService } from './ai/storyboard_generation_service'
 import { requireCurrentContinuityShot } from './continuity_shot_gate';
 import { ensureSceneVersionBaseline } from './scene_versions';
 
-beforeEach(async () => { await db.run("DELETE FROM generation_task WHERE task_id='active'"); await db.run('DELETE FROM project WHERE id=10'); });
+beforeEach(async () => {
+  await db.run("DELETE FROM generation_task WHERE task_id='active'");
+  await db.run('DELETE FROM scene_asset_reference WHERE asset_id IN (SELECT id FROM library_asset WHERE project_id=10)');
+  await db.run('DELETE FROM project WHERE id=10');
+});
 async function seed() {
   const fixture = confirmedContinuityFixture('F06', 'upstream-revision'), doc = createEmptyScriptDocument('CT15/16');
   doc.locations = [{ id: 'room', name: '房间', description: '' }];
@@ -50,9 +54,11 @@ test('CT15 rounds preserve source/state gates while a skeleton explicitly retain
 });
 test('CT16 local adoption retains replaced image/version, every other scene and audio, and replays exact idempotent result', async () => {
   const f = await seed(), other = await db.all('SELECT * FROM scene WHERE id<>101 ORDER BY id');
+  await db.run("INSERT INTO library_asset(id,project_id,kind,name,revision,status,image_url,description,visual_prompt) VALUES(801,10,'location','房间',2,'completed','/room.png','房间','room')");
   const candidate = await createSceneProductionCandidate(30, f.draft), preview = await previewSceneProductionApply(30, candidate.id, f.apply);
   const body = { ...f.apply, expected_impact_hash: preview.impact_hash }, result = await applySceneProduction(30, candidate.id, body);
   assert.deepEqual(result.scene_ids, [101]); assert.equal(result.timeline_revision, 1);
+  assert.deepEqual(await db.all('SELECT asset_id, asset_revision FROM scene_asset_reference WHERE scene_id=101'), [{ asset_id: 801, asset_revision: 2 }]);
   assert.deepEqual(await db.all('SELECT * FROM scene WHERE id<>101 ORDER BY id'), other);
   assert.equal((await db.get('SELECT asset_url FROM scene_version WHERE scene_id=101 AND version=1')).asset_url, '/old.svg');
   assert.equal((await db.get('SELECT audio_prompt FROM scene_version WHERE scene_id=101 AND version=1')).audio_prompt, 'old rain');

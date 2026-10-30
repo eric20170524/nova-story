@@ -93,6 +93,12 @@ test('MediaAssetService can stage a reference through the remote Comfy HTTP inpu
   const originalFetch = global.fetch;
   const originalTransport = process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT;
   process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT = 'http';
+  const { SettingsManager } = await import('../../core/settings_manager');
+  const originalLoadSettings = SettingsManager.loadSettings;
+  SettingsManager.loadSettings = (() => ({
+    ...originalLoadSettings.call(SettingsManager),
+    comfyui: { mode: 'local', base_url: 'http://127.0.0.1:8188', enabled: true }
+  })) as typeof SettingsManager.loadSettings;
 
   let uploadedFilename = '';
   global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
@@ -128,6 +134,7 @@ test('MediaAssetService can stage a reference through the remote Comfy HTTP inpu
     assert.equal(staged.stagedFilename, `novastory/${uploadedFilename}`);
     assert.equal(fs.existsSync(staged.stagedPath), true);
   } finally {
+    SettingsManager.loadSettings = originalLoadSettings;
     global.fetch = originalFetch;
     if (originalTransport == null) delete process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT;
     else process.env.NOVASTORY_COMFY_REFERENCE_TRANSPORT = originalTransport;

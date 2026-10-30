@@ -35,7 +35,7 @@ export const restoreNovaStoryJsonProject = async (
   const availableTables = new Set(
     (
       await Promise.all(
-        ['character', 'scene', 'coverage_group', 'coverage_shot', 'chapter_script', 'script_change', 'scene_version', 'glossary'].map(async (name) => ({
+        ['character', 'character_version', 'scene', 'coverage_group', 'coverage_shot', 'chapter_script', 'script_change', 'scene_version', 'glossary'].map(async (name) => ({
           name,
           exists: await tableExists(name),
         }))
@@ -114,22 +114,51 @@ export const restoreNovaStoryJsonProject = async (
 
     const characterIdMap = new Map<number, number>();
     if (availableTables.has('character')) {
+      const charCols = await db.all('PRAGMA table_info(character)');
+      const hasActiveVersion = charCols.some((col: any) => col.name === 'active_version');
       for (const character of importProject.characters) {
-        const charRes = await db.run(
-          `INSERT INTO character
-            (project_id, name, role, description, visual_tags, voice_id, voice_label)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          projectId,
-          character.name,
-          character.role ?? null,
-          character.description ?? null,
-          withoutCharacterModel(character.visualTags),
-          character.voiceId ?? null,
-          character.voiceLabel ?? null
-        );
+        const cleanedTags = withoutCharacterModel(character.visualTags);
+        const activeVersion = character.activeVersion && character.activeVersion >= 1 ? character.activeVersion : 1;
+        const charRes = hasActiveVersion
+          ? await db.run(
+              `INSERT INTO character
+                (project_id, name, role, description, visual_tags, active_version, voice_id, voice_label)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              projectId,
+              character.name,
+              character.role ?? null,
+              character.description ?? null,
+              cleanedTags,
+              activeVersion,
+              character.voiceId ?? null,
+              character.voiceLabel ?? null
+            )
+          : await db.run(
+              `INSERT INTO character
+                (project_id, name, role, description, visual_tags, voice_id, voice_label)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              projectId,
+              character.name,
+              character.role ?? null,
+              character.description ?? null,
+              cleanedTags,
+              character.voiceId ?? null,
+              character.voiceLabel ?? null
+            );
         const newCharId = charRes.lastID;
         if (character.sourceId !== undefined && newCharId !== undefined) {
           characterIdMap.set(Number(character.sourceId), Number(newCharId));
+        }
+        if (availableTables.has('character_version') && newCharId !== undefined) {
+          await db.run(
+            `INSERT OR IGNORE INTO character_version (character_id, version, label, description, visual_tags)
+             VALUES (?, ?, ?, ?, ?)`,
+            Number(newCharId),
+            activeVersion,
+            `v${activeVersion}`,
+            character.description ?? null,
+            cleanedTags
+          );
         }
       }
     }
@@ -335,7 +364,7 @@ export const restoreNovaStoryJsonProject = async (
 
     const destinationScripts = await db.all(`SELECT cs.id FROM chapter_script cs JOIN chapter c ON c.id = cs.chapter_id WHERE c.project_id = ?`, projectId);
     await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, destinationScripts.map((script: any) => script.id));
-    const continuityAssets = await restoreAssetLibrary(importProject.assetLibrary, projectId, chapterIdMap, sceneIdMap);
+    const continuityAssets = await restoreAssetLibrary(importProject.assetLibrary, projectId, chapterIdMap, sceneIdMap, characterIdMap);
     await restoreContinuity(importProject.continuity, projectId, { scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap, assets: continuityAssets });
     await db.exec('COMMIT');
     return await db.get('SELECT * FROM project WHERE id = ?', projectId);

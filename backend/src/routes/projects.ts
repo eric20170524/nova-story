@@ -633,7 +633,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await remapCopiedScriptChanges({ scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap }, [...scriptIdMap.values()]);
-      const continuityAssets = await restoreAssetLibrary(await exportAssetLibrary(id), newProjectId, chapterIdMap, sceneIdMap);
+      const continuityAssets = await restoreAssetLibrary(await exportAssetLibrary(id), newProjectId, chapterIdMap, sceneIdMap, characterIdMap);
       await restoreContinuity(await exportContinuity(id), newProjectId, { scripts: scriptIdMap, characters: characterIdMap, chapters: chapterIdMap, scenes: sceneIdMap, assets: continuityAssets });
       await db.exec('COMMIT');
       return reply.status(201).send({

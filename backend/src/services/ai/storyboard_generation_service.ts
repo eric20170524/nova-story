@@ -725,6 +725,10 @@ export class StoryboardGenerationService {
       }
 
       const insertedSceneIds: number[] = [];
+      const locationAssets = await db.all(
+        "SELECT id, kind, name, revision, status, image_url FROM library_asset WHERE project_id = ? AND kind = 'location' ORDER BY id",
+        lockedScript.projectId,
+      );
 
       for (let i = 0; i < payload.shots.length; i++) {
         const shot = payload.shots[i]!;
@@ -756,6 +760,12 @@ export class StoryboardGenerationService {
 
         // Create scene_version baseline
         await ensureSceneVersionBaseline(newSceneId);
+        await AssetLibraryService.autoBindLocationInTransaction(
+          lockedScript.projectId,
+          newSceneId,
+          shot.shot_spec,
+          locationAssets,
+        );
         if (params.archiveContinuity && hasConfirmedContinuity && shot.script_scene_id) {
           let spec: any = {};
           try { spec = shot.shot_spec ? JSON.parse(shot.shot_spec) : {}; } catch { spec = {}; }

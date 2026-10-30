@@ -171,7 +171,7 @@ export type StoryboardMode = 'narrative' | 'nine_shot_coverage';
 export type AssetMode = 'single_image' | 'contact_sheet_3x3' | 'video_clip';
 
 export type VideoProfile = 'narrative_clip' | 'character_loop';
-export type VideoPreset = 'preview_480p_5s' | 'standard_720p_5s';
+export type VideoPreset = 'preview_480p_5s' | 'standard_720p_5s' | 'preview_480p_8s' | 'standard_720p_8s';
 export type VideoWorkflowId =
   | 'grok_imagine_browser'
   | 'minimax_h3_hongchao_a2a_12gb'

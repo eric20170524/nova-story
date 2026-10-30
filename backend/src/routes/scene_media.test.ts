@@ -44,7 +44,7 @@ test('GET /api/scenes/:id/media exposes Character Center refs without copying as
       characterId,
       projectId,
       'Route Hero',
-      JSON.stringify({ assets: { face_url: url } })
+      JSON.stringify({ assets: { avatar_url: url, face_url: url } })
     );
 
     const response = await app.inject({

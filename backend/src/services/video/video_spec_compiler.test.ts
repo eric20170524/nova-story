@@ -98,6 +98,31 @@ test('alignH3FrameCount follows the MiniMax H3 17k+5 frame grid', async () => {
   assert.equal(alignH3FrameCount(120), 124);
   assert.equal(alignH3FrameCount(121), 124);
   assert.equal(alignH3FrameCount(124), 124);
+  assert.equal(alignH3FrameCount(192), 192);
+});
+
+test('8s preset compiles to 192 model and delivery frames and anchors last-frame at 191', async () => {
+  const spec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 2,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      last_frame_asset_id: 11,
+      preset: 'standard_720p_8s',
+      run_loop_closer: false,
+    },
+    scene: { id: 2 },
+    character: { name: 'Lu Xueqi' },
+  });
+  assert.equal(spec.output_contract.width, 1280);
+  assert.equal(spec.output_contract.height, 720);
+  assert.equal(spec.output_contract.frames, 192);
+  assert.equal(spec.output_contract.fps, 24);
+  assert.match(spec.positive_prompt, /frame 191 \(7\.96s at 24fps\)/);
+  assert.doesNotMatch(spec.positive_prompt, /frame 119/);
 });
 
 test('VideoSpecCompiler compiles experimental Hybrid character_loop with H3 tags', async () => {

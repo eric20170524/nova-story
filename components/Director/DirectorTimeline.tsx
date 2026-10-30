@@ -16,7 +16,7 @@ import {
   Crop,
   Video
 } from 'lucide-react';
-import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec, VideoWorkflowId } from '../../types';
+import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec, VideoWorkflowId, VideoPreset } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
@@ -51,6 +51,7 @@ interface DirectorTimelineProps {
   mediaAssetsByScene?: Record<number | string, MediaAsset[]>;
   videoTasksByScene?: Record<number | string, VideoTaskState>;
   projectVideoWorkflowId?: VideoWorkflowId | null;
+  videoPreset?: VideoPreset;
   onGenerateVideo?: (sceneId: number | string, options?: any) => void;
   onPromoteVideoAsset?: (assetId: number) => void;
   onArchiveVideoAsset?: (assetId: number, expectedStatus: string) => void;
@@ -84,6 +85,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   mediaAssetsByScene = {},
   videoTasksByScene = {},
   projectVideoWorkflowId = null,
+  videoPreset,
   onGenerateVideo,
   onPromoteVideoAsset,
   onArchiveVideoAsset,
@@ -409,7 +411,9 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                         {currentTab === 'video' ? (
                           <SceneVideoPlayer
                             scene={scene}
+                            previousSceneId={idx > 0 ? timeline[idx - 1]?.id : null}
                             projectVideoWorkflowId={projectVideoWorkflowId}
+                            videoPreset={videoPreset}
                             mediaAssets={sceneMedia}
                             taskState={sceneTask}
                             onGenerateVideo={(opts) => onGenerateVideo?.(scene.id, opts)}
@@ -417,6 +421,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                             onArchiveAsset={onArchiveVideoAsset}
                             onReprocessAsset={onReprocessVideoAsset}
                             onCancelTask={onCancelVideoTask}
+                            onRefreshSceneMedia={() => onRefreshTimeline?.()}
                           />
                         ) : (
                           /* 16:9 Keyframe & Storyboard Shot Studio */

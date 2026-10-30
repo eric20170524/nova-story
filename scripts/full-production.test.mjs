@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+import { resolveAssetBindings, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, shotVideoPreset, resolveVisibleShotCharacters, resolveVisibleShotCast, resolveTimedOutCodexJobId, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+import { resolveAssembledShotTiming } from './production-contracts.mjs';
+import { assertChapterClipReady } from './video-delivery-contract.mjs';
 
 test('pinned face and body plates beat a newer portrait with no slot', () => {
   const refs = [
@@ -75,20 +77,57 @@ test('batch video strategy chooses official workflows from scene references', ()
   const boundary = chooseShotVideoStrategy([ready(11, 'last_frame_reference')]);
   assert.equal(boundary.workflow_id, 'minimax_h3_fl2va_official_12gb');
   assert.equal(boundary.last_frame_asset_id, 11);
+  const boundaryWithCharacter = chooseShotVideoStrategy([ready(11, 'last_frame_reference'), ready(15, 'character_reference')]);
+  assert.equal(boundaryWithCharacter.workflow_id, 'minimax_h3_multiframe_official_12gb');
+  assert.equal(boundaryWithCharacter.last_frame_asset_id, 11);
+  assert.equal(boundaryWithCharacter.guide_frames, undefined);
+  const boundaryWithDraftCharacter = chooseShotVideoStrategy([ready(11, 'last_frame_reference'), { ...ready(15, 'character_reference'), status: 'draft' }]);
+  assert.equal(boundaryWithDraftCharacter.workflow_id, 'minimax_h3_fl2va_official_12gb');
+  assert.equal(boundaryWithDraftCharacter.last_frame_asset_id, 11);
   const complex = chooseShotVideoStrategy([ready(11, 'last_frame_reference'), ready(12, 'guide_frame_reference', '{"guide_frame_idx":72}')]);
   assert.equal(complex.workflow_id, 'minimax_h3_multiframe_official_12gb');
   assert.deepEqual(complex.guide_frames, [{ asset_id: 12, frame_idx: 72 }]);
   assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference')]), /requires metadata_json.guide_frame_idx/);
   assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference', '{"guide_frame_idx":120}')]), /within delivery frames 1..119/);
+  const complex8s = chooseShotVideoStrategy([ready(13, 'guide_frame_reference', '{"guide_frame_idx":150}')], null, null, shotVideoPreset({ duration: 8 }));
+  assert.equal(complex8s.workflow_id, 'minimax_h3_multiframe_official_12gb');
+  assert.deepEqual(complex8s.guide_frames, [{ asset_id: 13, frame_idx: 150 }]);
+  assert.throws(() => chooseShotVideoStrategy([ready(13, 'guide_frame_reference', '{"guide_frame_idx":192}')], null, null, shotVideoPreset({ duration: 8 })), /within delivery frames 1..191/);
   assert.equal(chooseShotVideoStrategy([{ ...ready(13, 'guide_frame_reference'), status: 'draft' }]).workflow_id, 'minimax_h3_ref2va_official_12gb');
   assert.equal(chooseShotVideoStrategy([ready(12, 'guide_frame_reference')], 'minimax_h3_ref2va_official_12gb').workflow_id, 'minimax_h3_ref2va_official_12gb');
   assert.equal(chooseShotVideoStrategy([], null, 'grok_imagine_browser').workflow_id, 'grok_imagine_browser');
   assert.equal(chooseShotVideoStrategy([ready(11, 'last_frame_reference')], null, 'grok_imagine_browser').workflow_id, 'minimax_h3_fl2va_official_12gb');
+  assert.equal(chooseShotVideoStrategy([ready(11, 'last_frame_reference'), ready(15, 'character_reference')], null, 'grok_imagine_browser').workflow_id, 'minimax_h3_multiframe_official_12gb');
 });
 
 test('only a timed-out Codex image job is eligible for exact system recovery', () => {
   assert.equal(resolveTimedOutCodexJobId('Codex image job 83f738da-e10f-4183-81a1-5e719caf9af7 timed out; request preserved'), '83f738da-e10f-4183-81a1-5e719caf9af7');
   assert.equal(resolveTimedOutCodexJobId('Image provider denied request'), null);
+});
+
+test('8s video clips are never truncated by shorter speech durations and freeze tail only when speech exceeds clip duration', () => {
+  assert.equal(shotVideoPreset({ duration: 5 }), 'standard_720p_5s');
+  assert.equal(shotVideoPreset({ duration: 8 }), 'standard_720p_8s');
+
+  // 8s source clip + 6s speech -> keep full 8.0s clip without truncation (stopDuration = 0)
+  const shorterSpeech = resolveAssembledShotTiming(6.0, { format: { duration: '8.000000' } });
+  assert.equal(shorterSpeech.clipSeconds, 8.0);
+  assert.equal(shorterSpeech.duration, 8.0);
+  assert.equal(shorterSpeech.stopDuration, 0);
+  assert.equal(shorterSpeech.frames, 192);
+
+  // 8s source clip + 11s speech -> freeze tail for 3.0s to match 11.0s audio
+  const longerSpeech = resolveAssembledShotTiming(11.0, { format: { duration: '8.000000' } });
+  assert.equal(longerSpeech.clipSeconds, 8.0);
+  assert.equal(longerSpeech.duration, 11.0);
+  assert.equal(longerSpeech.stopDuration, 3.0);
+  assert.equal(longerSpeech.frames, 264);
+
+  // assertChapterClipReady accepts both 5s (120 frames) and 8s (192 frames) raw source clips
+  assert.doesNotThrow(() => assertChapterClipReady({
+    streams: [{ codec_type: 'video', width: 1280, height: 720, r_frame_rate: '24/1', nb_read_frames: '192' }],
+    format: { duration: '8.000000' },
+  }, 'Shot 8s'));
 });
 
 async function fixture(handler) {
@@ -322,20 +361,29 @@ test('partial location matches never start keyframe generation or silently omit 
 
 test('the focus character selects its own portrait references regardless of cast database order', async () => {
   let selected;
+  let generatedBody;
   const f = await fixture((url, method, body) => {
     if (url.startsWith('/api/chapters/')) return { body: [{ id: 'ch-1' }] };
     if (url === '/api/timeline/ch-1') return { body: { timeline: [{ id: 51, chapter_id: 'ch-1', active_version: 1, shot_spec: { primary_subject: '阿风', visible_subjects: ['阿宁', '阿风'] } }] } };
     if (url.includes('/media?')) return { body: { assets: [
       { id: 81, character_id: 1, role: 'character_reference', status: 'ready' },
       { id: 82, character_id: 2, role: 'character_reference', status: 'ready' },
+      { id: 99, role: 'last_frame_reference', status: 'ready' },
     ] } };
     if (url.startsWith('/api/characters/')) return { body: [{ id: 1, name: '阿宁' }, { id: 2, name: '阿风' }] };
     if (url === '/api/videos/preflight') return { body: { ready: true, blockers: [] } };
-    if (url === '/api/videos/generate') { selected = body.character_reference_asset_ids; return { body: { task_id: 'focus-task' } }; }
+    if (url === '/api/videos/generate') { selected = body.character_reference_asset_ids; generatedBody = body; return { body: { task_id: 'focus-task' } }; }
     if (url === '/api/videos/tasks/focus-task') return { body: { status: 'completed', stage: 'completed' } };
     return { status: 500, body: { error: `unexpected endpoint ${url}` } };
   });
-  try { const result = await f.run('videos'); assert.equal(result.code, 1); assert.match(result.output, /visual review/); assert.deepEqual(selected, [82]); }
+  try {
+    const result = await f.run('videos');
+    assert.equal(result.code, 1);
+    assert.match(result.output, /visual review/);
+    assert.deepEqual(selected, [82]);
+    assert.equal(generatedBody?.workflow_id, 'minimax_h3_multiframe_official_12gb');
+    assert.equal(generatedBody?.last_frame_asset_id, 99);
+  }
   finally { await f.close(); }
 });
 

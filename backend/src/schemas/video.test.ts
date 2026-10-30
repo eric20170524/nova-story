@@ -215,3 +215,34 @@ test('MediaAssetSchema accepts explicit last-frame reference assets', () => {
   assert.equal(asset.role, 'last_frame_reference');
   assert.equal(asset.media_type, 'image');
 });
+
+test('DT-AC09: Multi-Frame workflow supports guide_frame_idx up to 191 on 8s presets and enforces 119 on 5s presets', () => {
+  const valid8s = VideoGenerationRequestSchema.parse({
+    scene_id: 1,
+    workflow_id: 'minimax_h3_multiframe_official_12gb',
+    keyframe_asset_id: 10,
+    preset: 'standard_720p_8s',
+    guide_frames: [{ asset_id: 201, frame_idx: 191 }],
+  });
+  assert.equal(valid8s.guide_frames?.[0]?.frame_idx, 191);
+
+  assert.throws(() =>
+    VideoGenerationRequestSchema.parse({
+      scene_id: 1,
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10,
+      preset: 'standard_720p_8s',
+      guide_frames: [{ asset_id: 201, frame_idx: 192 }],
+    }),
+  );
+
+  assert.throws(() =>
+    VideoGenerationRequestSchema.parse({
+      scene_id: 1,
+      workflow_id: 'minimax_h3_multiframe_official_12gb',
+      keyframe_asset_id: 10,
+      preset: 'standard_720p_5s',
+      guide_frames: [{ asset_id: 201, frame_idx: 150 }],
+    }),
+  );
+});

@@ -182,6 +182,7 @@ const prepareCompiledScenes = (
       shot_intent: storedIntent,
       location: contract.location,
       key_props: contract.key_props,
+      screen_direction: (contract as any).screen_direction,
       identity_mode: 'auto',
     });
     const uniqueness_key = contract.uniqueness_key || null;
@@ -193,6 +194,7 @@ const prepareCompiledScenes = (
       visible_subjects,
       key_props: contract.key_props,
       subject_scale: contract.subject_scale,
+      screen_direction: (contract as any).screen_direction,
       uniqueness_key,
       must_not: contract.must_not,
       shot_type: contract.shot_type,
@@ -287,6 +289,7 @@ export const regenerateSceneVisualPromptsForChapter = async (chapterId: string) 
         visible_subjects: Array.isArray(spec.visible_subjects) ? spec.visible_subjects : [],
         key_props: Array.isArray(spec.key_props) ? spec.key_props : [],
         subject_scale: spec.subject_scale,
+        screen_direction: spec.screen_direction,
         uniqueness_key: spec.uniqueness_key,
         must_not: Array.isArray(spec.must_not) ? spec.must_not : [],
       };

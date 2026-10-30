@@ -139,24 +139,22 @@ flowchart TB
 | --- | --- | --- | --- |
 | 实拍通条 | Master Take | 30s – 180s+ | 实拍现场演员一条演完不断，用于保表演连贯；进入剪辑台后会被切碎 |
 | 成片剪辑镜头 | Editorial Shot / `scene` | 电影 3–6s；短剧/漫剧 1.5–4s | 观众在成片里看到的不切机位画面；AI 视频单段超过 6–8s 极易出现物理崩坏、人脸漂移与节奏拖沓 |
-| AI 物理生成切片 | Generation Sub-clip | 模型上限 5–15s | 视频模型单次推理的物理时间窗口 |
+| AI 物理生成切片 | Generation Clip | H3 5.0s（120帧）与 8.0s（192帧）双档 | H3 模型按 $17k+5$ 帧数对齐，5s（124→120帧）用于短镜，8s（192帧，$192 \bmod 17 = 5$ 零裁剪）作为主时长档；分镜预算单块硬上限为 15s |
 
-当剧本中某段独白、连续动作或镜头设计确实超过 15s 时，采用以下两种解法：
+当剧本中某段戏的对白或连续动作超过 8s 时，现行工程架构（详见 [shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md](./shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md)）与远期演进区分如下：
 
-1. **解法 A（90% 场景首选：导演机位切分 + J/L-Cut 声画分离）**
-   - **核心做法**：**声音不断，画面切机位**。例如一段 20s 的对白或动作，底层铺设一条完整连续的 20s 配音音轨，但画面拆分为多个 3–6s 的分镜组合：
-     - `0~6s`：说话者中景（Medium Shot）
-     - `6~9s`：切听话者眼神反应（Reaction Shot，说话者声音继续延续，即 **L-Cut**）
-     - `9~13s`：切手中道具或动作细节特写（Insert Shot，可复用九机位 `coverage` 机制）
-     - `13~20s`：切回说话者近景推镜头（Close-Up Push-in，情绪递进）
-   - **优势**：既天然规避 15s 模型物理上限与长视频画面崩坏，又符合专业短剧/影视的高密度视听节奏。
+1. **解法 A（90% 场景首选：剧本生成按句分块 + 多镜正反打切分）**
+   - **现行生产契约（单块单镜）**：当前装配器（`scripts/full-production.mjs`）与覆盖门禁（`validateScriptCoverage`）严格执行「1 个有声块（`block_id`）归属 1 个镜头」。因此，长对白在**剧本生成阶段**即按完整句号拆分为多个 `<= 30` 字（约 8s）的连续 `dialogue` 块，由分镜器按 `8.0s` 软上限将不同有声块分配到相邻的正反打/反应/特写镜头上；若单个不可拆分有声块在 `8s ~ 15s` 之间，则由单镜包络整块语音，生成 8s 视频后由装配器 `tpad=stop_mode=clone` 冻结尾帧对齐实测语音（单条 `AudibleBlock` 跨镜子句切片与 J/L-Cut 声画错位留作远期多轨时间线演进方向）：
+     - `镜头 1 (0~6s)`：说话者中景（挂载 `dialogue block 1`）
+     - `镜头 2 (6~10s)`：双人/听者同场互动或道具细节（挂载 `dialogue block 2` 或承接下一动作块）
+     - `镜头 3 (10~16s)`：切回说话者近景（挂载 `dialogue block 3`）
+   - **优势**：既严守单块单镜与 TTS 实测时长装配不变量，又符合短剧高密度视听节奏。
 
-2. **解法 B（10% 场景刚需：真·长镜头 / 一镜到底 >15s —— 子切片首尾帧接力 Sub-clip Chaining）**
+2. **解法 B（10% 场景刚需：跨镜动作接力 —— 8s 整段首尾帧夹逼与末帧抽取）**
 
-   解法 B 仍是设计规范。`sub_clips`、`keyframe_bridge`、`last_frame_relay` 还没有进入 [`ShotContractFieldsSchema`](../../backend/src/schemas/shot_contract.ts)。解法 A 的正反打、反应镜和特写可以走现有 [`coverage.ts`](../../backend/src/routes/coverage.ts)。落地顺序见 [scene_continuity_workflow_2026-10-09.md](./scene_continuity_workflow_2026-10-09.md) 的「对照现有架构的演进与落地建议」。
-   - **核心做法**：当叙事必须保持不切机位的连续长镜头（如 25s 一路推镜或边走边说）时，在同一个逻辑分镜（`scene`）下拆分为多个物理子切片（如 `Sub-clip 1: 0~10s`、`Sub-clip 2: 10~20s`、`Sub-clip 3: 20~25s`）：
-     - **首尾关键帧夹逼（Keyframe Bridge，推荐）**：先在生图阶段生成 `0s 关键帧图 A`、`10s 关键帧图 B`、`20s 关键帧图 C`（确保静图角色与空间一致），再分段用视频模型的 **First-Last Frame（首尾帧控制）** 生成 `A→B` 与 `B→C`，锁死长镜头轨迹与终点，消除累积漂移。
-     - **尾帧抽帧续拍（Last-Frame Relay）**：由 `图 A` 生成首段 10s 视频后，抽取末尾清晰未崩坏帧（必要时做轻度图生图高清修复去伪影）作为下一段 10s 视频的首帧继续接力生成。
+   现行落地不引入镜头内嵌 `sub_clips`，而是以 **8.0s（192 帧）整段镜头** 为接力单元（详见 [shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md](./shot_timing_visual_anchor_first_last_frame_spec_2026-10-29.md)）：
+   - **首尾关键帧夹逼（Keyframe Bridge，优先）**：为状态跃迁镜生成 `Before 首帧图` 与 `After 尾帧图`（`last_frame_reference`），有角色时路由至 `minimax_h3_multiframe_official_12gb`（5s 档锚定 `frame 119`，8s 档锚定 `frame 191`），无角色空镜走 `fl2va`；下一镜可直接复用上一镜已采纳的静态尾帧作为首帧（零 VAE 代际衰减）。
+   - **视频末帧抽取续拍（Last-Frame Relay）**：当上一镜仅有已完成视频（`narrative_final`）时，精确抽取 `delivery_frames - 1` 帧（119 或 191）作为下一镜候选首帧，限制连续抽帧接力链长 `<= 2` 次。
 
 ## 9. 三层连贯性保障机制（单镜内 → 单场多镜 → 跨场）
 

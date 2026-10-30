@@ -65,11 +65,13 @@ export const alignH3FrameCount = (requestedFrames: number): number => {
 
 export const resolvePresetDimensions = (preset: VideoPreset) => {
   const fps = 24;
-  const modelFrames = alignH3FrameCount(5 * fps);
-  if (preset === 'standard_720p_5s') {
-    return { width: 1280, height: 720, frames: modelFrames, fps };
+  const durationSec = preset.endsWith('_8s') ? 8 : 5;
+  const delivery_frames = durationSec * fps;
+  const modelFrames = alignH3FrameCount(delivery_frames);
+  if (preset.startsWith('standard_720p_')) {
+    return { width: 1280, height: 720, frames: modelFrames, delivery_frames, fps };
   }
-  return { width: 864, height: 480, frames: modelFrames, fps };
+  return { width: 864, height: 480, frames: modelFrames, delivery_frames, fps };
 };
 
 const compileReferenceInstruction = (request: VideoGenerationRequest, charName: string): string[] => {
@@ -123,7 +125,10 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
     );
   }
   if (isMultiframe && request.last_frame_asset_id) {
-    instructions.push('Anchor the last-frame reference at delivery frame 119 (4.96s at 24fps).');
+    const { delivery_frames, fps } = resolvePresetDimensions(request.preset);
+    const lastFrameIdx = delivery_frames - 1;
+    const endSeconds = (lastFrameIdx / fps).toFixed(2);
+    instructions.push(`Anchor the last-frame reference at delivery frame ${lastFrameIdx} (${endSeconds}s at ${fps}fps).`);
   }
 
   return instructions;
