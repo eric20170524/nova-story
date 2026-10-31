@@ -15,3 +15,5 @@ export const EntityBindingSchema = z.object({
 });
 export type EntityRef = z.infer<typeof EntityRefSchema>;
 export type EntityBinding = z.infer<typeof EntityBindingSchema>;
+
+export const isPluralMention = (m: { text: string }) => /^(?:她们|他们|它们|两人|双方|众人)$/u.test(m.text);

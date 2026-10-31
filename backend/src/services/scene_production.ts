@@ -6,7 +6,7 @@ import { ContinuityReadSchema, type ContinuityRead } from '../schemas/continuity
 import { loadContinuityLedger, currentContinuitySnapshot, bindContinuityShotInTransaction, continuitySourceFingerprint, ContinuityStoreError } from './continuity_store';
 import { continuityHash, readContinuityMoment } from './continuity_replay';
 import { continuityVisualStates } from './continuity_visual_state';
-import { actionBindingSource, entityRoster, needsBindingReview, boundVisibleEntities, validateBinding } from './entity_binding';
+import { actionBindingSource, entityRoster, needsBindingReview, outlineBindingNeedsReview, boundVisibleEntities, validateBinding } from './entity_binding';
 import { packShotSpec } from '../schemas/shot_contract';
 import { compileNegativePrompt } from './negative_prompt_compiler';
 import { ensureSceneVersionBaseline, createSceneVersion, syncActiveVersionFromScene } from './scene_versions';
@@ -78,7 +78,7 @@ async function assembleProduction(scriptId: number, raw: unknown): Promise<{ bod
       if (block.text.length > 240) return fail('CONTINUITY_REVIEW_REQUIRED', 'Split this complete action into screenplay blocks before making a still');
       const binding = block.binding || actionBindingSource(doc, target.id, block.id, roster).automatic;
       validateBinding(binding, block.text, roster);
-      if (needsBindingReview(binding)) return fail('CONTINUITY_REVIEW_REQUIRED', 'Review the people in this action before production');
+      if (outlineBindingNeedsReview(binding)) return fail('CONTINUITY_REVIEW_REQUIRED', 'Review the people in this action before production');
       return { id: `production:${block.id}`, scene_id: target.id, block_id: block.id, start: 0, end: block.text.length, text: block.text, kind: 'visual' as const, beat: index, states: [], binding };
     });
     const audible = blocks.filter(block => block.type !== 'action');

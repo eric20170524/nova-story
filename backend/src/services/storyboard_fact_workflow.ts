@@ -18,7 +18,7 @@ export const FACT_CLASSIFY_INSTRUCTION = [
   'uncertain = cannot decide. An empty scene is visual. Return items with id and kind only.',
 ].join(' ');
 import { EntityBindingSchema } from '../schemas/entity_binding';
-import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
+import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, outlineBindingNeedsReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { type CharacterLockRef } from './pony_prompt_compiler';
 import { packShotSpec, ScreenDirectionSchema, type ScreenDirection } from '../schemas/shot_contract';
 import { findChapterShotQuotaViolation } from './shot_intent_quota';
@@ -514,7 +514,7 @@ export function directionPlace(text: string): string | null {
 /** A single toward-place clause is already checked. The model audit must not reject that same clause again. */
 export function directionPlaceSettled(text: string, english: string): boolean {
   if (!directionPlace(text) || directionPlaceProblem(text, english)) return false;
-  return /^(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+)?(?:walks?|walking|comes?|coming|heads?|heading)\s+towards?\s+(?:the\s+direction\s+of\s+)?(?:the\s+)?[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}\.?$/i.test(english.trim());
+  return /^(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+)?(?:walks?|walking|comes?|coming|heads?|heading)\s+(?:towards?|in\s+the\s+direction\s+of)\s+(?:the\s+direction\s+of\s+)?(?:the\s+)?[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}\.?,?$/i.test(english.trim());
 }
 
 /** Reject a split place name or a person invented from 朝 before the model audit spends the only repair on a vague failure. */
@@ -522,7 +522,7 @@ export function directionPlaceProblem(text: string, english: string): string | n
   const place = directionPlace(text);
   if (!place) return null;
   const reasons: string[] = [];
-  if (!/\b(?:toward|towards)\b/i.test(english)) reasons.push('须用 toward 表示朝向');
+  if (!/\b(?:toward|towards|in\s+the\s+direction\s+of)\b/i.test(english)) reasons.push('须用 toward 或 in the direction of 表示朝向');
   if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+(?:walks|comes|goes|heads)\b/.test(english.trim())) reasons.push('不能把朝和地名拆成新人名');
   if (place.includes('宫')) {
     if (!/\b(?:palace|hall|court|gong)\b/i.test(english)) reasons.push('宫要保留为 palace、hall、court 或 gong');
@@ -557,7 +557,17 @@ export function simpleActionOrMarkerSettled(text: string, english: string): bool
   if (/^(?:低头|低着头|垂首|垂眸|垂下眼(?:眸|睑))$/u.test(clean) && /\b(?:lowered?|lowering|looking\s+down|gaze\s+down|head\s+down|downcast|head\s+lowered)\b/i.test(eng)) return true;
   if (/^(?:抬头|抬起头|仰头|微微仰头)$/u.test(clean) && /\b(?:raised?|raising|tilt(?:ed|ing)?\s+up|looking\s+up|head\s+up|tilts?\s+(?:the\s+)?head)\b/i.test(eng)) return true;
   if (/^(?:转身|转过身)$/u.test(clean) && /\bturn(?:ed?|ing|s)\s*(?:around|back|away)?\b/i.test(eng)) return true;
-  if (/^(?:轻颤|微颤|颤抖(?:着)?)$/u.test(clean) && /\b(?:trembl(?:e|ed|ing|es)|shak(?:e|ing|es|en)|quiver(?:ed|ing|s)?)\b/i.test(eng)) return true;
+  if (/^(?:轻颤|微颤|颤抖(?:着)?|身体一颤)$/u.test(clean) && /\b(?:trembl(?:e|ed|ing|es)|shak(?:e|ing|es|en)|quiver(?:ed|ing|s)?)\b/i.test(eng)) return true;
+  if (/^(?:本正|本在|原本正?|正)?\s*(?:咬着?唇|抿着?唇|咬着下唇)?\s*(?:自我抚慰|抚慰自己)?$/u.test(clean) && /\b(?:bit(?:e|ing|es|s)?|lips?|sooth(?:e|ing|es)?)\b/i.test(eng)) return true;
+  if (/^(?:[\p{Script=Han}]{2,4}\s*)?(?:仍|依然)?(?:端|挺)着(?:[\p{Script=Han}]{1,6}的)?(?:脊背|身躯|身子|腰背)$/u.test(clean) && /\b(?:back|spine|posture|straight|upright|holds?)\b/i.test(eng)) return true;
+  if (/^(?:软软地?|无力地?|软软)?\s*(?:倒|靠|倒在|软倒在|靠在|伏在)\s*(?:[\p{Script=Han}]{1,6}的?身上|两人身上|床榻上|榻上|怀里|胸膛上)$/u.test(clean) && /\b(?:collaps(?:e|ed|ing|es)?|fall(?:s|ing|en)?|fell|lean(?:ed|ing|s)?|rest(?:ed|ing|s)?|sink(?:s|ing)?|sank)\b/i.test(eng)) return true;
+  if (/^(?:唇边|嘴角)?(?:带着|挂着|浮现)?(?:哭过后的|淡淡的|一丝)?(?:笑意?|微笑|笑)$/u.test(clean) && /\b(?:smil(?:e|ed|es|ing)|laugh(?:ed|ing|s)?)\b/i.test(eng)) return true;
+  if (/^(?:三人|两人|双方)?\s*(?:相拥而卧|相拥而眠|相拥|相依)$/u.test(clean) && /\b(?:embrac(?:e|ed|ing|es)?|hug(?:ged|ging|s)?|l(?:ie|ying)\s+together)\b/i.test(eng)) return true;
+  if (/^(?:[\p{Script=Han}]{2,4}\s*)?(?:枕在|靠在|倚在)(?:[\p{Script=Han}]{1,6}的?)?(?:臂弯里?|胸膛上?|怀中?|怀里?)$/u.test(clean) && /\b(?:pillow(?:ed|ing|s)?|rest(?:ed|ing|s)?|lean(?:ed|ing|s)?|arms?|chest)\b/i.test(eng)) return true;
+  if (/^呼吸渐渐均匀$/u.test(clean) && /\bbreath(?:ing)?\b.*\b(?:even|steady|calm)\b/i.test(eng)) return true;
+  if (/^鼻尖几乎碰上(?:[\p{Script=Han}]{1,6}的)?(?:颧骨|脸颊|面庞|鼻尖)$/u.test(clean) && /\bnos(?:e|es)\b.*\b(?:touch(?:es|ed|ing)?|meet(?:s|ing)?|cheek|cheekbone)\b/i.test(eng)) return true;
+  if (/^(?:[\p{Script=Han}]{2,4}的)?手指还?(?:无意识)?(?:缠着|绕着)(?:[\p{Script=Han}]{1,6}的)?(?:长发|发丝)$/u.test(clean) && /\bfingers?\b.*\b(?:entangl(?:e|ed|ing|es)?|twirl(?:ed|ing|s)?|tangle|wrap|hair)\b/i.test(eng)) return true;
+  if (/^(?:嘴角|唇角)(?:微微)?(?:上扬|勾起|翘起)$/u.test(clean) && /\b(?:corner\s+of\s+the\s+mouth|lips?)\b.*\b(?:curv(?:e|ed|ing|es)?|turn(?:ed|ing)?\s+up|upward|smil(?:e|ed|es|ing))\b/i.test(eng)) return true;
 
   return false;
 }
@@ -584,6 +594,12 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (fact.id === 'location' && glossary[fact.text] && new RegExp(`\\b${glossary[fact.text].replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english)) {
       return;
     }
+    if (fact.id === 'location_description' && english.trim() && !containsCjk(english)) {
+      return;
+    }
+    if (fact.id.startsWith('state_') && english.trim() && !containsCjk(english)) {
+      return;
+    }
     if (directionPlaceSettled(fact.text, english)) return;
     if (simpleActionOrMarkerSettled(fact.text, english)) return;
   }
@@ -591,7 +607,7 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
   let result: z.infer<typeof schema>;
   try {
     result = await provider.generateStructured(JSON.stringify({ task: 'audit', facts, source: facts.map(f => f.text).join('\n'), english, context }), schema,
-      'Compare Chinese source facts and an English translation. Return faithful=true ONLY when English preserves ALL source facts, identity, number, agent/patient, color, left/right, negation, clothing, pose, contact, objects and location, and adds no unsupported person, action, color or object. In Chinese, subjects and possessives of body parts or actions are often elided; resolving an elided subject or possessor from context.visible_names is faithful and expected, not an unsupported addition. Technical formatting, discourse markers (e.g. "最终" -> "Finally"), single-predicate action clauses or gestures without explicit subjects (e.g. "点了点头" -> "Nodded." or "nodded", "沉默了片刻" -> "silent for a moment", "闭上眼睛" -> "closed eyes", etc.) are faithful translations and must return faithful=true. Camera/style tags and numeric emphasis weights are technical formatting, not scene facts. Appearance locks in context are permitted only for context.visible_names and must never contradict source facts for the same attribute or garment. Names use context.glossary. Continuous state facts (e.g. "[Entity] 手持：[Item]" or "[Entity] 姿势：[Pose]" or "衣着：[Item]") describe continuous attributes, and translating them into descriptive English (such as "[Entity] holds [Item]", "[Entity] posture: [Pose]", or "[Entity] wears [Item]") is faithful. Common translations of props/objects (such as "神镜" translated as "Divine Mirror" or "divine mirror") are direct faithful translations. Sensory, atmosphere, environmental, or decorative descriptions (such as incense, fragrance, smoke, light, shadows, curtains) translated descriptively (e.g. "合欢香" translated as "Huanhe incense" or "incense", "助情" as "aiding affection", "地毯式" as "carpet-like") are faithful translations and must return faithful=true. In Chinese narrative, contiguous clauses within a compound sentence (such as "与...交织在一起", "像是一幅...") may incorporate or refer to neighboring clauses or imagery from the same action/shot; such co-referential or descriptive continuity is faithful and must return faithful=true. Do not produce explanations or quotations.', { temperature: 0.1, maxTokens: 64 });
+      'Compare Chinese source facts and an English translation. Return faithful=true ONLY when English preserves ALL source facts, identity, number, agent/patient, color, left/right, negation, clothing, pose, contact, objects and location, and adds no unsupported person, action, color or object. In Chinese, subjects and possessives of body parts or actions are often elided; resolving an elided subject or possessor from context.visible_names is faithful and expected, not an unsupported addition. Technical formatting, discourse markers (e.g. "最终" -> "Finally"), single-predicate action clauses or gestures without explicit subjects (e.g. "点了点头" -> "Nodded." or "nodded", "沉默了片刻" -> "silent for a moment", "闭上眼睛" -> "closed eyes", etc.) are faithful translations and must return faithful=true. Camera/style tags and numeric emphasis weights are technical formatting, not scene facts. Appearance locks in context are permitted only for context.visible_names and must never contradict source facts for the same attribute or garment. Names use context.glossary. Continuous state facts (e.g. "[Entity] 手持：[Item]" or "[Entity] 姿势：[Pose]" or "衣着：[Item]") describe continuous attributes, and translating them into descriptive English (such as "[Entity] holds [Item]", "[Entity] posture: [Pose]", or "[Entity] wears [Item]") is faithful. Common translations of props/objects (such as "神镜" translated as "Divine Mirror" or "divine mirror") are direct faithful translations. Sensory, atmosphere, environmental, or decorative descriptions (such as incense, fragrance, smoke, light, shadows, curtains) translated descriptively (e.g. "合欢香" translated as "Huanhe incense" or "incense", "助情" as "aiding affection", "地毯式" as "carpet-like") are faithful translations and must return faithful=true. Metaphorical, demeanor, or posture expressions describing dignity or poise (e.g. "端着宫主的脊背" translated as "holds the Palace Master\'s back" or "maintains posture") describe the character\'s own demeanor/posture, not an extra character, and must return faithful=true. Adverbial, temporal, or continuous action markers (e.g. "本正" -> "Originally" or "originally was") or elided actions/reactions without subjects (e.g. "咬着唇自我抚慰" -> "biting the lip to self-soothe") describe character actions/states in context and must return faithful=true. In Chinese narrative, contiguous clauses within a compound sentence (such as "与...交织在一起", "像是一幅...") may incorporate or refer to neighboring clauses or imagery from the same action/shot; such co-referential or descriptive continuity is faithful and must return faithful=true. Do not produce explanations or quotations.', { temperature: 0.1, maxTokens: 64 });
   } catch (error) {
     if (error instanceof z.ZodError) throw new FactWorkflowError('审核格式错误: 事实核对结果不完整或含未知 ID', 502);
     throw error;
@@ -665,7 +681,7 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     validateBinding(fact.binding, fact.text, contract.entities || []);
     const { automatic } = actionBindingSource(doc, fact.scene_id, fact.block_id, contract.entities || [], fact.start, fact.end);
     if (fact.binding.context_hash !== automatic.context_hash) throw new FactWorkflowError('人物绑定前文版本已变化，请重新核对');
-    if (needsBindingReview(fact.binding)) throw new FactWorkflowError('人物绑定待核对，不能形成可采纳候选');
+    if (outlineBindingNeedsReview(fact.binding)) throw new FactWorkflowError('人物绑定待核对，不能形成可采纳候选');
   }
   if (contract.facts.some(f => f.kind === 'mixed' || f.kind === 'uncertain')) throw new FactWorkflowError('存在待核对事实，不能形成可采纳候选');
   if (hash(allocateBudgets(doc, contract.facts, CHAPTER_SHOT_LIMIT)) !== hash(contract.budgets)) throw new FactWorkflowError('镜头预算被修改');
@@ -1033,11 +1049,11 @@ export async function runFactWorkflow(input: {
         const supplied = block.binding.mentions.filter(m => m.start >= fact.start && m.end <= fact.end).map(m => ({ ...m, start: m.start - fact.start, end: m.end - fact.start }));
         if (supplied.length) fact.binding.mentions = supplied;
       }
-      if (needsBindingReview(fact.binding)) fact.binding = await request(`binding:${fact.id}`, () => proposeBindings(provider, fact.binding!, fact.text, context, roster, { location: doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId, ...sceneContext(doc, scene) }));
+      if (outlineBindingNeedsReview(fact.binding)) fact.binding = await request(`binding:${fact.id}`, () => proposeBindings(provider, fact.binding!, fact.text, context, roster, { location: doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId, ...sceneContext(doc, scene) }));
       await persist();
     }
   }
-  const pendingBindings = facts.filter(f => f.kind === 'visual' && needsBindingReview(f.binding));
+  const pendingBindings = facts.filter(f => f.kind === 'visual' && outlineBindingNeedsReview(f.binding));
   if (pendingBindings.length) { p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`人物绑定待核对: ${pendingBindings.map(f => `${f.scene_id}/${f.id}: ${f.text}`).join('；')}`); }
   p.state_checks ||= {};
   for (const scene of input.continuity_scope ? [] : doc.scenes) {
@@ -1366,6 +1382,8 @@ export async function runFactWorkflow(input: {
             if (fact.id === 'location' && input.glossary[fact.text] && !row.english.toLowerCase().includes(input.glossary[fact.text]!.toLowerCase())) {
               row.english = input.glossary[fact.text]!;
             }
+            row.english = row.english.replace(/\b(?:Ben\s+Zheng|Beng\s+Zheng|Honsei)\b/gi, 'Originally');
+            row.english = row.english.replace(/\b(?:her|his|their)\s+(head|arms?|body|chest|waist|back|face|eyes?|hands?|shoulders?|posture|fingers?|chin|lips?|skin|clothes|robe|collar|spine|forehead|cheeks?|breath|gaze)\b/gi, (_m, p1) => `the ${p1}`);
             if (containsCjk(row.english)) problems.push(`${fact.id} 仍含中文「${row.english}」`);
             const missingTerms = bodyOwnerTerms(fact.text, input.glossary).filter(term => !row.english.toLowerCase().includes(term.toLowerCase()));
             if (missingTerms.length) throw new FactWorkflowError(`译文待核对: ${fact.id} 身体部位归属须原样写出 ${missingTerms.join(', ')}`, 502);

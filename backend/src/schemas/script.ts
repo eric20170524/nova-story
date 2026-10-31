@@ -2,7 +2,7 @@ import { z } from 'zod';
 import crypto from 'node:crypto';
 import { ShotSourceReferenceSchema, type ShotSourceReference } from './shot_contract';
 import { StoryboardFactContractSchema } from './storyboard_facts';
-import { EntityBindingSchema } from './entity_binding';
+import { EntityBindingSchema, isPluralMention } from './entity_binding';
 
 /**
  * ScriptDocument Schema & Types
@@ -411,16 +411,19 @@ export function validateScriptForConfirmation(
   errors: string[];
 } {
   const errors: string[] = [];
+  const mentionNeedsReview = (m: { text: string; confirmed?: boolean; status?: string; visibility?: string }) =>
+    !isPluralMention(m) && (!m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain');
+
   for (const event of doc.outline.mustKeepEvents) {
     if (event.binding && event.binding.text_hash !== crypto.createHash('sha256').update(event.text).digest('hex')) errors.push(`提纲人物绑定与文本版本不符: ${event.id}`);
-    if (!options?.allowPendingBindings && [event.binding, ...(event.sourceBindings || []).map(s => s.binding)].some(binding => binding?.mentions.some(m => !m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain'))) errors.push(`提纲人物绑定待核对: ${event.id}`);
+    if (!options?.allowPendingBindings && [event.binding, ...(event.sourceBindings || []).map(s => s.binding)].some(binding => binding?.mentions.some(mentionNeedsReview))) errors.push(`提纲人物绑定待核对: ${event.id}`);
   }
   for (const scene of doc.scenes) for (const block of scene.blocks) {
     if (block.type === 'action' && block.binding && block.binding.text_hash !== crypto.createHash('sha256').update(block.text).digest('hex')) errors.push(`人物绑定与文本版本不符: ${scene.id}/${block.id}`);
   }
   if (!options?.allowPendingBindings) {
     for (const scene of doc.scenes) for (const block of scene.blocks) {
-      if (block.type === 'action' && block.binding?.mentions.some(m => !m.confirmed || m.status !== 'resolved' || m.visibility === 'uncertain')) errors.push(`人物绑定待核对: ${scene.id}/${block.id}`);
+      if (block.type === 'action' && block.binding?.mentions.some(mentionNeedsReview)) errors.push(`人物绑定待核对: ${scene.id}/${block.id}`);
     }
   }
 

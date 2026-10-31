@@ -149,6 +149,28 @@ export class AssetLibraryService {
       const result = await LLMService.generateStructuredWithRetry(promptFor(canonical), schema);
       if (!result) throw new AssetLibraryError('Model returned no assets', 502);
       const accepted = normalizeExtractedAssets(schema.parse(result).assets, existingAssets, characters.map((character) => character.name));
+      const scriptRow = await db.get('SELECT document_json FROM chapter_script WHERE chapter_id = ? AND status = "confirmed"', chapterId);
+      if (scriptRow?.document_json) {
+        try {
+          const parsedDoc = typeof scriptRow.document_json === 'string' ? JSON.parse(scriptRow.document_json) : scriptRow.document_json;
+          const locs = (parsedDoc.locations || []).map((l: any) => ({ kind: 'location' as const, name: String(l.name || '').trim(), description: String(l.description || '').trim() }));
+          const props = (parsedDoc.props || []).map((p: any) => ({ kind: 'prop' as const, name: String(p.name || '').trim(), description: String(p.description || '').trim() }));
+          for (const entity of [...locs, ...props]) {
+            if (!entity.name) continue;
+            if (!accepted.some(item => item.kind === entity.kind && assetNameKey(item.name) === assetNameKey(entity.name))) {
+              const existingMatch = existingAssets.find(item => item.kind === entity.kind && assetNameKey(item.name) === assetNameKey(entity.name));
+              accepted.push({
+                kind: entity.kind,
+                name: existingMatch?.name || entity.name,
+                description: existingMatch ? '' : (entity.description || ''),
+                visual_prompt: existingMatch ? '' : (entity.kind === 'location'
+                  ? `${entity.description || entity.name}, empty scenery, environment concept art, unoccupied location, no characters`
+                  : `${entity.description || entity.name}, one physical object, centered product photograph, front view, simple backdrop, no characters`),
+              });
+            }
+          }
+        } catch {}
+      }
       if (!accepted.length) throw new AssetLibraryError('Model returned no location or prop assets', 502);
       return accepted;
     }, { configuredProvider: true }), options);

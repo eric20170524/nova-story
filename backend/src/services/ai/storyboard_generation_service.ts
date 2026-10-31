@@ -34,7 +34,7 @@ import { ensureSceneVersionBaseline, syncActiveVersionFromScene } from '../scene
 import { AssetLibraryService } from '../asset_library_service';
 import { CHAPTER_SHOT_LIMIT, auditFacts, auditHash, hasAudit, saveAudit, hash, runFactWorkflow, serialWorkflow, shotEvidenceIds, shotSoundText, continuityLiteral, visiblePropEvidence, validateFactPayload, validateFactSources, anchorSpans, stabilizeFactBeats, ExtractionSchema, stateCheckKey, type WorkflowProgress } from '../storyboard_fact_workflow';
 import { FACT_POLICY_VERSION } from '../../schemas/storyboard_facts';
-import { actionBindingSource, boundText, entityRoster, needsBindingReview, textHash, validateBinding } from '../entity_binding';
+import { actionBindingSource, boundText, entityRoster, needsBindingReview, outlineBindingNeedsReview, textHash, validateBinding } from '../entity_binding';
 import { sceneContextFacts, scopedWardrobeLock } from '../storyboard_fact_workflow';
 import { continuitySourceFingerprint, bindContinuityShotInTransaction } from '../continuity_store';
 import { continuitySceneDocument, prepareContinuityWorkflowScope } from '../continuity_workflow_scope';
@@ -287,7 +287,7 @@ export class StoryboardGenerationService {
       const old = original.find(o => o.id === fact.id);
       const key = stateCheckKey(fact);
       const statesReviewed = old && (hash(old.states) !== hash(fact.states) || progress.state_review_pending?.includes(old.id));
-      if (!needsBindingReview(fact.binding) && (progress.state_checks?.[key] || statesReviewed)) checks[key] = true;
+      if (!outlineBindingNeedsReview(fact.binding) && (progress.state_checks?.[key] || statesReviewed)) checks[key] = true;
     }
     progress.state_checks = checks;
     progress.state_review_pending = (progress.state_review_pending || []).filter(id => !facts.some(f => f.id === id && checks[stateCheckKey(f)]));

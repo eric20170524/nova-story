@@ -206,6 +206,7 @@ test('DT-AC08: last_frame_reference candidate adoption writes snapshot and prefl
     await db.run('UPDATE media_asset SET width = 1280, height = 720 WHERE id = ?', adopted.id);
 
     // 8s scene duration allows setGuideFrameIdx(150) even when preset is omitted
+    await db.run('UPDATE scene SET duration = 8 WHERE id = ?', sceneId);
     const guide8s = await MediaAssetService.createAsset({
       project_id: projectId, scene_id: sceneId, scene_version: 1,
       media_type: 'image', role: 'guide_frame_reference', status: 'ready', url: '/static/dt08-guide.png',

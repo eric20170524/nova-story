@@ -135,9 +135,14 @@ async function resolveSceneReferences(scene: Pick<ScriptScene, 'locationId' | 'i
     if (block.type !== 'action') continue;
     const preceding = [previous?.locationId === scene.locationId ? previous.blocks.slice(-2).map(b => b.text).join('\n') : '',
       ...scene.blocks.slice(0, index).map(b => b.text)].filter(Boolean).join('\n');
-    const binding = await resolveScriptBindings(provider, bindEntities(block.text, roster), block.text,
-      [sourceContext, preceding].filter(Boolean).join('\n'), roster,
-      { location, interior_exterior: scene.interiorExterior, time_of_day: scene.timeOfDay });
+    let binding = bindEntities(block.text, roster);
+    try {
+      binding = await resolveScriptBindings(provider, binding, block.text,
+        [sourceContext, preceding].filter(Boolean).join('\n'), roster,
+        { location, interior_exterior: scene.interiorExterior, time_of_day: scene.timeOfDay });
+    } catch (err: any) {
+      logger.warn(`[resolveSceneReferences] Failed to resolve script bindings for block ${block.id}: ${err?.message || err}`);
+    }
     const expanded = materializeScriptReferences(block.text, binding);
     block.text = expanded.text;
     block.binding = { ...expanded.binding, context_hash: textHash(expanded.binding.mentions.some(m => m.authority !== 'literal') ? preceding : '') };

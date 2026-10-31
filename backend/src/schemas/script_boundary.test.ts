@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import crypto from 'node:crypto';
 
 process.env.DATABASE_URL = ':memory:';
 
@@ -96,6 +97,43 @@ test('S0 - Contract: ScriptDocument Schema validation, confirmation rules, and s
   const confirmCheck = validateScriptForConfirmation(parseResult.data);
   assert.equal(confirmCheck.valid, true, 'Valid structured document must pass confirmation check');
   assert.equal(confirmCheck.errors.length, 0);
+
+  // Plural mentions like "两人" in action blocks should not block confirmation
+  const pluralDoc = JSON.parse(JSON.stringify(fullDoc));
+  pluralDoc.scenes[0].blocks.push({
+    id: 'b_plural',
+    type: 'action',
+    text: '两人坐在榻边。',
+    binding: {
+      version: 1,
+      text_hash: crypto.createHash('sha256').update('两人坐在榻边。').digest('hex'),
+      context_hash: crypto.createHash('sha256').update('').digest('hex'),
+      mentions: [{
+        text: '两人', start: 0, end: 2, status: 'ambiguous', entity: null, candidates: [], authority: 'model_proposal', confirmed: false, visibility: 'visible'
+      }]
+    }
+  });
+  const pluralCheck = validateScriptForConfirmation(pluralDoc);
+  assert.equal(pluralCheck.valid, true, 'Plural ambiguous mentions must not block confirmation');
+
+  // But unconfirmed singular pronoun should block confirmation
+  const singularDoc = JSON.parse(JSON.stringify(fullDoc));
+  singularDoc.scenes[0].blocks.push({
+    id: 'b_singular',
+    type: 'action',
+    text: '她坐在榻边。',
+    binding: {
+      version: 1,
+      text_hash: crypto.createHash('sha256').update('她坐在榻边。').digest('hex'),
+      context_hash: crypto.createHash('sha256').update('').digest('hex'),
+      mentions: [{
+        text: '她', start: 0, end: 1, status: 'ambiguous', entity: null, candidates: [], authority: 'model_proposal', confirmed: false, visibility: 'uncertain'
+      }]
+    }
+  });
+  const singularCheck = validateScriptForConfirmation(singularDoc);
+  assert.equal(singularCheck.valid, false, 'Unconfirmed singular pronoun must block confirmation');
+  assert.ok(singularCheck.errors.some((e: string) => e.includes('人物绑定待核对')));
 
   // 3. Validation failure: Scene with only sound blocks
   const soundOnlyDoc = JSON.parse(JSON.stringify(fullDoc));
