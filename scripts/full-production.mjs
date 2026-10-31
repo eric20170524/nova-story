@@ -156,7 +156,7 @@ async function request(url, method = 'GET', body) {
     }
     return result;
   };
-  const canRetry = method === 'GET' || Boolean(body?.request_key);
+  const canRetry = method === 'GET' || Boolean(body?.request_key) || url === '/videos/preflight' || url.endsWith('/preflight');
   if (!canRetry) return send();
   let lastError;
   const maxAttempts = method === 'GET' ? 6 : 60;
