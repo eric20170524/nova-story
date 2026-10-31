@@ -453,3 +453,78 @@ test('pony face_detail_stage2 keeps its own denoise through compile and sizes th
   assert.equal(missingClip.available, false);
   assert.ok(missingClip.missing.some((m) => m.includes('CLIP-ViT-H-14')));
 });
+
+test('location reference uses a non-face IP-Adapter and skips FaceID weights', () => {
+  const semantic = 'ip-adapter-plus_sdxl_vit-h.safetensors';
+  const face = 'ip-adapter-plus-face_sdxl_vit-h.safetensors';
+  const faceIdFile = 'ip-adapter-faceid-plusv2_sdxl.bin';
+  const withSemantic = {
+    ...mockFullCapability(),
+    models: { ...mockFullCapability().models, ipadapter: face, locationIpadapter: semantic },
+  };
+  const workflow = ponyWorkflow();
+  const wired = injectTierBAdapters(workflow, {
+    characterImageFilename: 'face.png',
+    locationImageFilename: 'palace.png',
+    capability: withSemantic,
+  });
+  assert.equal(wired.characterWired, true);
+  assert.equal(wired.locationWired, true);
+  const loaders = Object.values(workflow)
+    .filter((node: any) => node.class_type === 'IPAdapterModelLoader')
+    .map((node: any) => node.inputs.ipadapter_file);
+  assert.ok(loaders.includes(face));
+  assert.ok(loaders.includes(semantic));
+  assert.equal(loaders.includes(faceIdFile), false);
+  assert.ok(wired.notes.some((note) => note.includes(`model=${semantic}`)));
+
+  const faceOnly = ponyWorkflow();
+  const skipped = injectTierBAdapters(faceOnly, {
+    locationImageFilename: 'palace.png',
+    capability: mockFullCapability(),
+  });
+  assert.equal(skipped.locationWired, false);
+  assert.ok(skipped.notes.some((note) => note.includes('no non-face SDXL IP-Adapter weight')));
+  assert.equal(Object.values(faceOnly).some((node: any) => node.class_type === 'IPAdapterModelLoader'), false);
+
+  const faceIdCap = {
+    ...mockFullCapability(),
+    faceId: { available: true, ipadapter: faceIdFile, lora: 'ip-adapter-faceid-plusv2_sdxl_lora.safetensors', missing: [] },
+    models: { ...mockFullCapability().models, ipadapter: faceIdFile, locationIpadapter: null },
+  };
+  const faceIdWorkflow = ponyWorkflow();
+  const faceIdWired = injectTierBAdapters(faceIdWorkflow, {
+    characterImageFilename: 'face.png',
+    locationImageFilename: 'palace.png',
+    preferFaceId: true,
+    capability: faceIdCap,
+  });
+  assert.equal(faceIdWired.characterWired, true);
+  assert.equal(faceIdWired.locationWired, false);
+  assert.ok(Object.values(faceIdWorkflow).some((node: any) => node.class_type === 'IPAdapterFaceID'));
+  assert.equal(
+    Object.values(faceIdWorkflow).some((node: any) => node.inputs?.ipadapter_file === faceIdFile),
+    false,
+  );
+
+  const discoveredRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-tierb-loc-'));
+  try {
+    fs.mkdirSync(path.join(discoveredRoot, 'models', 'ipadapter'), { recursive: true });
+    fs.writeFileSync(path.join(discoveredRoot, 'models', 'ipadapter', face), '');
+    fs.writeFileSync(path.join(discoveredRoot, 'models', 'ipadapter', semantic), '');
+    fs.writeFileSync(path.join(discoveredRoot, 'models', 'ipadapter', faceIdFile), '');
+    const models = discoverTierBModels(discoveredRoot);
+    assert.equal(models.locationIpadapter, semantic);
+    assert.notEqual(models.locationIpadapter, face);
+    assert.notEqual(models.locationIpadapter, faceIdFile);
+  } finally {
+    fs.rmSync(discoveredRoot, { recursive: true, force: true });
+  }
+
+  const choices = modelChoicesFromObjectInfo({
+    IPAdapterModelLoader: { input: { required: { ipadapter_file: [[face, semantic, faceIdFile]] } } },
+    CLIPVisionLoader: { input: { required: { clip_name: [['CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors']] } } },
+  });
+  assert.equal(choices.locationIpadapter, semantic);
+  assert.notEqual(choices.ipadapter, semantic);
+});

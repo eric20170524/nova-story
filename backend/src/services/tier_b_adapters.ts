@@ -20,6 +20,8 @@ export type CharacterAdapterKind = 'ip_adapter' | 'ip_adapter_unified' | 'none';
 
 export interface TierBModelFiles {
   ipadapter: string | null;
+  /** Global semantic IP-Adapter for scenery. FaceID and plus-face weights are never valid here. */
+  locationIpadapter?: string | null;
   clipVision: string | null;
   controlnet: string | null;
   compositionKind: CompositionControlKind;
@@ -58,8 +60,10 @@ export interface TierBCapability extends AdapterAvailability {
 export interface TierBInjectOptions {
   characterImageFilename?: string | null;
   compositionImageFilename?: string | null;
+  locationImageFilename?: string | null;
   characterWeight?: number;
   compositionStrength?: number;
+  locationWeight?: number;
   /** Use FaceID Plus V2 for identity when the install has it; otherwise plain IP-Adapter is used. */
   preferFaceId?: boolean;
   faceIdWeight?: number;
@@ -114,6 +118,22 @@ const pickByPatterns = (files: string[], patterns: RegExp[]): string | null => {
     if (hit) return hit;
   }
   return files[0] || null;
+};
+
+const FACE_IPADAPTER_RE = /faceid|plus[-_]?face|face[-_]?plus/i;
+
+export const isFaceIpAdapterWeight = (file: string | null | undefined): boolean =>
+  Boolean(file && FACE_IPADAPTER_RE.test(file));
+
+const pickSemanticLocationAdapter = (files: string[]): string | null => {
+  const semantic = files.filter((file) => !isFaceIpAdapterWeight(file));
+  return pickByPatterns(semantic, [
+    /ip-adapter-plus.*sdxl/i,
+    /ip_adapter_plus.*sdxl/i,
+    /plus.*sdxl/i,
+    /ip-adapter.*sdxl/i,
+    /sdxl/i,
+  ]);
 };
 
 const customNodeDirs = (installPath: string): string[] => {
@@ -256,7 +276,7 @@ export const discoverTierBModels = (
     }
   }
 
-  return { ipadapter, clipVision, controlnet, compositionKind };
+  return { ipadapter, locationIpadapter: pickSemanticLocationAdapter(ipadapterFiles), clipVision, controlnet, compositionKind };
 };
 
 const choiceList = (objectInfo: Record<string, any> | null, node: string, field: string): string[] => {
@@ -324,7 +344,7 @@ export const modelChoicesFromObjectInfo = (objectInfo: Record<string, any> | nul
   const canny = controlnetFiles.find((file) => /canny|lineart/i.test(file) && /sdxl|xl/i.test(file));
   const controlnet = openpose || depth || canny || null;
   const compositionKind: CompositionControlKind = openpose ? 'openpose' : depth ? 'depth' : canny ? 'canny' : 'none';
-  return { ipadapter, clipVision, controlnet, compositionKind };
+  return { ipadapter, locationIpadapter: pickSemanticLocationAdapter(ipadapterFiles), clipVision, controlnet, compositionKind };
 };
 
 /**
@@ -368,6 +388,7 @@ export const probeTierBCapability = (
   const objectInfo = options.objectInfo || null;
   const remoteModels = modelChoicesFromObjectInfo(objectInfo);
   if (!models.ipadapter && remoteModels.ipadapter) models.ipadapter = remoteModels.ipadapter;
+  if (!models.locationIpadapter && remoteModels.locationIpadapter) models.locationIpadapter = remoteModels.locationIpadapter;
   if (!models.clipVision && remoteModels.clipVision) models.clipVision = remoteModels.clipVision;
   if (!models.controlnet && remoteModels.controlnet) {
     models.controlnet = remoteModels.controlnet;
@@ -542,15 +563,16 @@ const getSamplerNodes = (workflow: any) =>
 export const injectTierBAdapters = (
   workflow: any,
   options: TierBInjectOptions
-): { characterWired: boolean; compositionWired: boolean; faceDetailWired?: boolean; notes: string[] } => {
+): { characterWired: boolean; compositionWired: boolean; locationWired?: boolean; faceDetailWired?: boolean; notes: string[] } => {
   const notes: string[] = [];
   let characterWired = false;
   let compositionWired = false;
+  let locationWired = false;
   let faceDetailWired = false;
 
   if (options.isFlux) {
     notes.push('Tier B SDXL adapters skipped for FLUX workflow');
-    return { characterWired, compositionWired, faceDetailWired, notes };
+    return { characterWired, compositionWired, locationWired, faceDetailWired, notes };
   }
 
   const cap = options.capability;
@@ -559,6 +581,9 @@ export const injectTierBAdapters = (
     : null;
   const compFile = options.compositionImageFilename
     ? path.basename(options.compositionImageFilename)
+    : null;
+  const locFile = options.locationImageFilename
+    ? path.basename(options.locationImageFilename)
     : null;
 
   const initialSamplers = getSamplerNodes(workflow);
@@ -598,6 +623,33 @@ export const injectTierBAdapters = (
       notes.push(`Character adapter inject failed: ${e}`);
       logger.warn(`Character adapter inject failed: ${e}`);
     }
+  }
+
+  // ── Scene Location Reference: global semantic IP-Adapter only. FaceID / plus-face weights
+  // describe a person and fail or repaint the scenery when pointed at an empty plate.
+  const locAdapter = !isFaceIpAdapterWeight(cap.models.locationIpadapter) && cap.models.locationIpadapter
+    ? cap.models.locationIpadapter
+    : (!isFaceIpAdapterWeight(cap.models.ipadapter) ? cap.models.ipadapter : null);
+  if (locFile && locAdapter && cap.hasIpAdapterNodes) {
+    try {
+      const locKind: CharacterAdapterKind = cap.characterKind === 'ip_adapter_unified' ? 'ip_adapter_unified' : 'ip_adapter';
+      locationWired = injectIpAdapter(workflow, {
+        imageFilename: locFile,
+        kind: locKind,
+        ipadapterFile: locAdapter,
+        clipVisionFile: cap.models.clipVision,
+        weight: clamp(options.locationWeight ?? 0.4, 0.05, 1.5),
+        titlePrefix: 'NovaStory Location Ref (IP-Adapter)',
+      });
+      if (locationWired) {
+        notes.push(`Location IP-Adapter wired image=${locFile} weight=${options.locationWeight ?? 0.4} model=${locAdapter}`);
+      }
+    } catch (e) {
+      notes.push(`Location adapter inject failed: ${e}`);
+      logger.warn(`Location adapter inject failed: ${e}`);
+    }
+  } else if (locFile) {
+    notes.push('Location IP-Adapter skipped: no non-face SDXL IP-Adapter weight');
   }
 
   // ── Composition: ControlNet ────────────────────────────────────────
@@ -647,7 +699,7 @@ export const injectTierBAdapters = (
     }
   }
 
-  return { characterWired, compositionWired, faceDetailWired, notes };
+  return { characterWired, compositionWired, locationWired, faceDetailWired, notes };
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -712,6 +764,7 @@ const injectIpAdapter = (
     ipadapterFile: string;
     clipVisionFile: string | null;
     weight: number;
+    titlePrefix?: string;
   }
 ): boolean => {
   const samplers = getSamplerNodes(workflow);
@@ -728,7 +781,7 @@ const injectIpAdapter = (
   workflow[loadId] = {
     inputs: { image: opts.imageFilename },
     class_type: 'LoadImage',
-    _meta: { title: 'NovaStory Character Ref (IP-Adapter)' }
+    _meta: { title: opts.titlePrefix || 'NovaStory Character Ref (IP-Adapter)' }
   };
 
   let patchedModelLink: [string, number];

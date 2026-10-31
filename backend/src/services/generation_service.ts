@@ -59,7 +59,8 @@ import { persistFormalCandidateResult, retainUnverifiedPrompt } from './formal_s
 import { formalRenderAllowed } from './formal_storyboard_plan';
 import { requireProductionReferencePin, persistProductionImageResult, type ProductionReferencePin } from './scene_production_media';
 import { isSyntheticCharacterSceneId, shouldPersistSceneAsset, syntheticCharacterId } from './synthetic_scene_id';
-import { resolveSceneIdentityPlate, buildQwenMultiReferencePrefix } from './character_reference_plates';
+import { resolveSceneIdentityPlate, resolveLocationRefFromWorkflow, buildQwenMultiReferencePrefix, alignQwenReferenceBindings } from './character_reference_plates';
+import { AssetLibraryService } from './asset_library_service';
 import {
     createProgressPublisher,
     runVramHandoffForImageGen,
@@ -147,6 +148,86 @@ const parseSceneShotSpec = (raw: unknown): Record<string, unknown> | null => {
     } catch {
         return null;
     }
+};
+
+const normalizeLocationKey = (value: unknown): string =>
+    String(value || '').normalize('NFKC').trim().toLowerCase().replace(/[\s\p{P}]/gu, '');
+
+const isWideEstablishingShot = (shotType?: string | null) =>
+    /\b(wide|establishing|long shot|extreme long)\b|(?:远景|大远景|建立|空镜)/i.test(String(shotType || ''));
+
+/** Characters are wired first. The location plate, if any, is the last Picture slot. */
+export const orderedQwenReferenceUrls = (workflowData: any): string[] => {
+    const refs = resolveReferenceUrls(workflowData);
+    const explicit = Array.isArray(workflowData?.character_ref_urls)
+        ? workflowData.character_ref_urls.map((url: unknown) => String(url || '').trim()).filter(Boolean)
+        : [];
+    const base = explicit.length > 0 ? explicit : refs.characterRefUrls;
+    const location = refs.locationRefUrl || '';
+    return Array.from(new Set([
+        ...base.filter((url: string) => url && url !== location),
+        ...(location ? [location] : []),
+    ]));
+};
+
+/**
+ * When a scene has no dedicated library_asset location plate yet, later shots in
+ * the same scene (matching script_scene_id or location name) reuse an already
+ * completed sibling shot's image as the scene environment reference.
+ */
+export const resolveSameSceneSiblingReference = (
+    currentSceneId: number,
+    currentShotSpec: unknown,
+    chapterScenes: Array<{
+        id: number;
+        index?: number | null;
+        shot_type?: string | null;
+        asset_status?: string | null;
+        asset_url?: string | null;
+        shot_spec?: unknown;
+    }>
+): { scene_id: number; name: string; image_url: string } | null => {
+    const spec = parseSceneShotSpec(currentShotSpec);
+    const targetScriptSceneId = String((spec?.source as any)?.script_scene_id || '').trim();
+    const targetLocation = String(spec?.location || '').trim();
+    const targetLocNorm = normalizeLocationKey(targetLocation);
+    if (!targetScriptSceneId && !targetLocNorm) return null;
+
+    const candidates = (chapterScenes || []).filter((row) => {
+        if (Number(row?.id) === Number(currentSceneId)) return false;
+        if (row?.asset_status !== 'completed') return false;
+        const url = String(row?.asset_url || '').trim();
+        if (!url) return false;
+        const rowSpec = parseSceneShotSpec(row?.shot_spec);
+        const subjects = rowSpec?.visible_subjects;
+        if (!Array.isArray(subjects) || subjects.some((name) => String(name || '').trim())) return false;
+        const shotType = String(row?.shot_type || rowSpec?.shot_type || '');
+        if (!isWideEstablishingShot(shotType)) return false;
+        const rowScriptSceneId = String((rowSpec?.source as any)?.script_scene_id || '').trim();
+        const rowLocNorm = normalizeLocationKey(rowSpec?.location);
+        if (targetScriptSceneId || rowScriptSceneId) {
+            return Boolean(targetScriptSceneId && rowScriptSceneId && rowScriptSceneId === targetScriptSceneId);
+        }
+        return Boolean(targetLocNorm && rowLocNorm && rowLocNorm === targetLocNorm);
+    });
+
+    if (candidates.length === 0) return null;
+
+    const isWideEstablishing = isWideEstablishingShot;
+
+    candidates.sort((a, b) => {
+        const aWide = isWideEstablishing(a.shot_type) ? 0 : 1;
+        const bWide = isWideEstablishing(b.shot_type) ? 0 : 1;
+        if (aWide !== bWide) return aWide - bWide;
+        return (Number(a.index || 0) - Number(b.index || 0)) || (Number(a.id) - Number(b.id));
+    });
+
+    const chosen = candidates[0]!;
+    return {
+        scene_id: Number(chosen.id),
+        name: targetLocation || 'Scene Location',
+        image_url: String(chosen.asset_url).trim(),
+    };
 };
 
 /** Location plus a visible action. Portraits and library plates do not qualify. */
@@ -698,12 +779,19 @@ export const compileComfyWorkflow = async (
 
         if (positiveId && workflow[positiveId]?.class_type === 'TextEncodeQwenImage21' && workflow[positiveId].inputs) {
             let promptText = promptComposed ? subjectSafePrompt : effectivePrompt;
-            const bindings = Array.isArray(workflowData?.character_ref_bindings) ? workflowData.character_ref_bindings : [];
-            if (bindings.length > 0 && !promptText.includes('<Picture 1>')) {
-                const prefix = buildQwenMultiReferencePrefix(bindings, workflowData?.glossary || {});
-                if (prefix) {
-                    promptText = `${prefix} ${promptText}`;
-                }
+            const rawBindings = Array.isArray(workflowData?.character_ref_bindings)
+                ? [...workflowData.character_ref_bindings]
+                : [];
+            const locRef = resolveLocationRefFromWorkflow(workflowData);
+            const alignedBindings = alignQwenReferenceBindings(
+                rawBindings,
+                orderedQwenReferenceUrls(workflowData),
+                locRef,
+            );
+            const missingBindings = alignedBindings.filter((binding) => !promptText.includes(`<Picture ${binding.slot}>`));
+            if (missingBindings.length > 0) {
+                const prefix = buildQwenMultiReferencePrefix(missingBindings, workflowData?.glossary || {});
+                if (prefix) promptText = `${prefix} ${promptText}`;
             }
             workflow[positiveId].inputs.prompt = promptText;
             workflow[positiveId].inputs.negative_prompt = negativePrompt;
@@ -840,8 +928,15 @@ export const compileComfyWorkflow = async (
         logger.info(`[ref-policy ${refPlan.tier}] ${note}`);
     }
 
-    // Tier B: inject IP-Adapter + ControlNet when planned
-    if (refPlan.useCharacterAdapter || refPlan.useCompositionControl) {
+    const locationRefUrl = refPlan.refs.locationRefUrl || null;
+    const canInjectLocationAdapter = Boolean(
+        modelFamily === 'pony'
+        && locationRefUrl
+        && ((capability as TierBCapability)?.models?.ipadapter || capability.characterAdapter)
+    );
+
+    // Tier B: inject IP-Adapter + ControlNet when planned (or when scene location ref is available on Pony/SDXL)
+    if (refPlan.useCharacterAdapter || refPlan.useCompositionControl || canInjectLocationAdapter) {
         const fullCap = capability as TierBCapability;
         // Ensure we have model paths for inject (probe result)
         const injectCap: TierBCapability = fullCap.models
@@ -863,7 +958,7 @@ export const compileComfyWorkflow = async (
                 ? 'ip_adapter_unified'
                 : refPlan.useCharacterAdapter
                     ? 'ip_adapter'
-                    : 'none';
+                    : (fullCap.characterKind || 'none');
         injectCap.compositionKind = refPlan.compositionControlType;
         if (remoteNodeNames && injectCap.hasFaceDetailStage2Nodes === undefined) {
             injectCap.hasFaceDetailStage2Nodes = FACE_DETAIL_STAGE2_COMMON_NODES.every((n) => remoteNodeNames.has(n));
@@ -879,6 +974,10 @@ export const compileComfyWorkflow = async (
             ?? tierBCfg.composition_strength
             ?? 0.55
         );
+        const locWeight = Number(
+            workflowData?.location_adapter_weight
+            ?? 0.4
+        );
 
         const wired = injectTierBAdapters(workflow, {
             characterImageFilename: refPlan.refs.characterRefUrl
@@ -887,8 +986,12 @@ export const compileComfyWorkflow = async (
             compositionImageFilename: refPlan.refs.compositionRefUrl
                 ? path.basename(String(refPlan.refs.compositionRefUrl))
                 : null,
+            locationImageFilename: locationRefUrl
+                ? path.basename(String(locationRefUrl))
+                : null,
             characterWeight: charWeight,
             compositionStrength: compStrength,
+            locationWeight: locWeight,
             preferFaceId: workflowData?.prefer_faceid_adapter === true,
             faceIdWeight: Number.isFinite(Number(workflowData?.faceid_weight))
                 ? Number(workflowData.faceid_weight)
@@ -951,11 +1054,13 @@ export const compileComfyWorkflow = async (
 
     // Tier A img2img (only when character adapter is NOT handling identity)
     const characterRefUrl = refPlan.refs.characterRefUrl;
+    const kreaNativeEncoder = isRedCraftKrea2 && Boolean(findNodeId(workflow, (node) => node?.class_type === 'TextEncodeQwenImage21'));
     const krea2FaceDetailStage2 = (isRedCraftKrea2 || isMossImage)
         && workflowData?.face_detail_stage2 === true
         && workflowData?.use_qwen_vl_ref !== true
+        && !kreaNativeEncoder
         && Boolean(characterRefUrl);
-    if (isQwenImage || (isRedCraftKrea2 && workflowData?.use_qwen_vl_ref === true && characterRefUrl)) {
+    if (isQwenImage || (isRedCraftKrea2 && (workflowData?.use_qwen_vl_ref === true || kreaNativeEncoder) && (characterRefUrl || locationRefUrl))) {
         // RedCraft Krea2 keeps its native backbone here; only the Stage 2 face refinement uses Qwen-Image 2.1.
         // Pure Qwen-Image graphs reconcile precision variants against the live remote/local catalog.
         if (isQwenImage) {
@@ -1002,7 +1107,7 @@ export const compileComfyWorkflow = async (
         // Qwen-Image 2.1 reads a reference through TextEncodeQwenImage21 (native reference_latents + image_slots).
         // VAEEncode into the sampler is a 4-channel SD latent and does not match this model.
         let encoderId = findNodeId(workflow, (node) => node?.class_type === 'TextEncodeQwenImage21');
-        if (!encoderId && isRedCraftKrea2 && characterRefUrl) {
+        if (!encoderId && isRedCraftKrea2 && (characterRefUrl || locationRefUrl)) {
             const sampler = samplerNodes[0];
             const posId = Array.isArray(sampler?.inputs?.positive) ? String(sampler.inputs.positive[0]) : null;
             const negId = Array.isArray(sampler?.inputs?.negative) ? String(sampler.inputs.negative[0]) : null;
@@ -1034,9 +1139,7 @@ export const compileComfyWorkflow = async (
                 encoderId = posId;
             }
         }
-        const characterRefUrls = Array.isArray(workflowData?.character_ref_urls) && workflowData.character_ref_urls.length > 0
-            ? workflowData.character_ref_urls
-            : (refPlan.refs.characterRefUrls?.length ? refPlan.refs.characterRefUrls : (characterRefUrl ? [characterRefUrl] : []));
+        const characterRefUrls = orderedQwenReferenceUrls(workflowData);
 
         if (encoderId && characterRefUrls.length > 0) {
             for (let idx = 0; idx < Math.min(characterRefUrls.length, 16); idx++) {
@@ -1060,7 +1163,7 @@ export const compileComfyWorkflow = async (
                     workflow[loadId].inputs.image = referenceFilename;
                 }
                 workflow[encoderId].inputs[`image_${slotIndex}`] = [loadId, 0];
-                logger.info(`Wired Qwen-VL character reference ${referenceFilename} as image_${slotIndex}`);
+                logger.info(`Wired Qwen-VL reference ${referenceFilename} as image_${slotIndex}`);
             }
             const vaeId = findNodeId(workflow, (node) => node?.class_type === 'VAELoader');
             if (vaeId) workflow[encoderId].inputs.vae = [vaeId, 0];
@@ -1420,8 +1523,18 @@ export class GenerationService {
                         if (chapterRow?.project_id) {
                             sceneProjectId = Number(chapterRow.project_id);
                         }
-                        const assetRefs = productionPin ? productionPin.references.filter(ref => ref.kind === 'asset').map(ref => ({ id: ref.id, revision: ref.version, asset_revision: ref.version, project_id: sceneProjectId, status: 'completed', image_url: ref.image_url, name: ref.name, kind: ref.asset_kind, visual_prompt: '' })) : await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+                        let assetRefs = productionPin ? productionPin.references.filter(ref => ref.kind === 'asset').map(ref => ({ id: ref.id, revision: ref.version, asset_revision: ref.version, project_id: sceneProjectId, status: 'completed', image_url: ref.image_url, name: ref.name, english_name: '', kind: ref.asset_kind, visual_prompt: '' })) : await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
                             JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ?`, sceneId);
+                        if (!productionPin && sceneProjectId != null && !assetRefs.some((ref: any) => ref?.kind === 'location')) {
+                            const rawSpec = typeof sceneRow.shot_spec === 'string'
+                                ? sceneRow.shot_spec
+                                : (sceneRow.shot_spec ? JSON.stringify(sceneRow.shot_spec) : null);
+                            const autoBound = await AssetLibraryService.autoBindLocationInTransaction(sceneProjectId, sceneId, rawSpec);
+                            if (autoBound) {
+                                assetRefs = await db.all(`SELECT a.*, r.asset_revision FROM scene_asset_reference r
+                                    JOIN library_asset a ON a.id = r.asset_id WHERE r.scene_id = ?`, sceneId);
+                            }
+                        }
                         for (const ref of assetRefs) {
                             if (ref.project_id !== sceneProjectId || ref.revision !== ref.asset_revision
                                 || ref.status !== 'completed' || !ref.image_url) {
@@ -1436,10 +1549,50 @@ export class GenerationService {
                                     ...assetRefs.map(ref => assetPromptForShot(String(ref.visual_prompt || ''), effectiveWorkflowData.shot_spec || {}, shotPrompt))].filter(Boolean).join(', ');
                             }
                             effectiveWorkflowData.asset_references = assetRefs.map(ref => ({
-                                id: ref.id, revision: ref.revision, kind: ref.kind, image_url: ref.image_url,
+                                id: ref.id,
+                                revision: ref.revision,
+                                kind: ref.kind,
+                                name: ref.name,
+                                english_name: ref.english_name || '',
+                                image_url: ref.image_url,
                             }));
-                            // Location concept art is not a pose, depth, or edge map.
-                            // Feeding it to OpenPose ControlNet produced a solid black frame.
+                            const boundLocation = assetRefs.find((ref: any) => ref?.kind === 'location' && ref?.image_url);
+                            if (boundLocation?.image_url) {
+                                effectiveWorkflowData.location_ref_url = boundLocation.image_url;
+                            }
+                        }
+                        // Same-scene sibling shot fallback: when no dedicated library_asset location plate is bound,
+                        // reuse an already completed shot from the same scene in this chapter.
+                        if (!productionPin && !effectiveWorkflowData.location_ref_url && sceneRow.chapter_id) {
+                            const chapterScenes = await db.all(
+                                'SELECT id, "index", shot_type, asset_status, asset_url, shot_spec FROM scene WHERE chapter_id = ? AND id <> ? AND asset_status = \'completed\' AND asset_url IS NOT NULL',
+                                sceneRow.chapter_id,
+                                sceneId
+                            );
+                            const siblingRef = resolveSameSceneSiblingReference(
+                                sceneId,
+                                effectiveWorkflowData.shot_spec || sceneRow.shot_spec,
+                                chapterScenes
+                            );
+                            if (siblingRef) {
+                                effectiveWorkflowData.location_ref_url = siblingRef.image_url;
+                                const existingAssetRefs = Array.isArray(effectiveWorkflowData.asset_references)
+                                    ? effectiveWorkflowData.asset_references
+                                    : [];
+                                effectiveWorkflowData.asset_references = [
+                                    ...existingAssetRefs,
+                                    {
+                                        id: null,
+                                        revision: 1,
+                                        kind: 'location',
+                                        name: siblingRef.name,
+                                        english_name: '',
+                                        image_url: siblingRef.image_url,
+                                        source_scene_id: siblingRef.scene_id,
+                                    },
+                                ];
+                                logger.info(`[Task ${taskId}] Using sibling shot ${siblingRef.scene_id} (${siblingRef.image_url}) as same-scene location reference for scene ${sceneId}`);
+                            }
                         }
                     }
                 } else if (workflowData?.library_asset_id) {
@@ -1722,7 +1875,7 @@ export class GenerationService {
                 if (sceneProjectId != null && !['portrait', 'turnaround', 'turnaround_panel'].includes(String(effectiveWorkflowData?.gen_type || 'scene').toLowerCase())) {
                     if (!effectiveWorkflowData?.character_ref_bindings?.length) {
                         const plateCharacters = await db.all(
-                            'SELECT id, name, visual_tags FROM character WHERE project_id = ?',
+                            'SELECT id, name, english_name, visual_tags FROM character WHERE project_id = ?',
                             sceneProjectId
                         );
                         effectiveWorkflowData = resolveSceneIdentityPlate(effectiveWorkflowData, plateCharacters);

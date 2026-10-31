@@ -14,6 +14,8 @@ import { shouldAllowCharacterAdapter } from './reference_generation_policy';
 
 export const FORMAL_SDXL_3060_WORKFLOW = 'pony_xl_12gb.json';
 export const FORMAL_KREA2_12GB_WORKFLOW = 'redcraft_krea2_12gb.json';
+export const FORMAL_KREA2_NATIVE_REF_WORKFLOW = 'redcraft_krea2_native_ref_12gb.json';
+export const FORMAL_KREA2_IMG2IMG_WORKFLOW = 'redcraft_krea2_img2img_12gb.json';
 export const FORMAL_QWEN_IMAGE_WORKFLOW = 'qwen_image_2_1.json';
 export const FORMAL_MOSS_IMAGE_WORKFLOW = 'moss_image.json';
 export const FORMAL_REJECTED_3060_WORKFLOW = 'pony_xl_tier_b_dual_ref_l40.json';
@@ -123,7 +125,7 @@ const capabilityNodes = (id: FormalCapabilityId): string[] => {
   if (id === 'sdxl_openpose') return [...CONTROL_NODES, ...OPENPOSE_PREPROCESSORS];
   if (id === 'sdxl_depth') return [...CONTROL_NODES, ...DEPTH_PREPROCESSORS];
   if (id === 'sdxl_canny') return [...CONTROL_NODES, ...CANNY_PREPROCESSORS];
-  if (id === 'qwen_image_native_reference') return ['LoadImage', 'TextEncodeQwenImage21'];
+  if (id === 'qwen_image_native_reference' || id === 'krea2_native_reference') return ['LoadImage', 'TextEncodeQwenImage21'];
   return [];
 };
 
@@ -144,10 +146,12 @@ export const classifyFormalModel = (raw: unknown): { model_class: FormalModelCla
   return { model_class: 'unknown', label: String(raw) };
 };
 
-export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'qwen_image_2_1' | 'moss_image' | 'rejected' } => {
+export const formalTemplateDecision = (workflowFile: string): { accepted: boolean; role: 'sdxl_3060' | 'krea2_12gb' | 'krea2_native_ref' | 'krea2_img2img' | 'qwen_image_2_1' | 'moss_image' | 'rejected' } => {
   const name = path.basename(workflowFile);
   if (name === FORMAL_SDXL_3060_WORKFLOW) return { accepted: true, role: 'sdxl_3060' };
   if (name === FORMAL_KREA2_12GB_WORKFLOW) return { accepted: true, role: 'krea2_12gb' };
+  if (name === FORMAL_KREA2_NATIVE_REF_WORKFLOW) return { accepted: true, role: 'krea2_native_ref' };
+  if (name === FORMAL_KREA2_IMG2IMG_WORKFLOW) return { accepted: true, role: 'krea2_img2img' };
   if (name === FORMAL_QWEN_IMAGE_WORKFLOW) return { accepted: true, role: 'qwen_image_2_1' };
   if (name === FORMAL_MOSS_IMAGE_WORKFLOW) return { accepted: true, role: 'moss_image' };
   return { accepted: false, role: 'rejected' };
@@ -276,12 +280,17 @@ export const inspectFormalWiring = (
   const qwenEncode = Object.entries(workflow).find(([, node]) => node?.class_type === 'TextEncodeQwenImage21');
   if (qwenEncode) {
     const inputs = qwenEncode[1].inputs || {};
-    result.qwen_image_native_reference = Boolean(
+    const wired = Boolean(
       reaches(workflow, asLink(inputs.image_1), ['LoadImage'])
       && reaches(workflow, asLink(inputs.clip), ['CLIPLoader'])
       && reaches(workflow, asLink(inputs.vae), ['VAELoader'])
       && samplerUses(workflow, qwenEncode[0], 'positive')
     );
+    const kreaGraph = Object.values(workflow).some((node: any) =>
+      /krea|redcraft/i.test(String(node?.inputs?.unet_name || node?.inputs?.type || node?.inputs?.clip_name || ''))
+    );
+    if (kreaGraph) result.krea2_native_reference = wired;
+    else result.qwen_image_native_reference = wired;
   }
   const advanced = Object.entries(workflow).find(([, node]) => node?.class_type === 'IPAdapterAdvanced');
   if (advanced) {
@@ -384,7 +393,7 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
     const familyMatch = model.model_class === familyOf(id);
     const templateOk = template.accepted && (
       (familyOf(id) === 'sdxl' && template.role === 'sdxl_3060')
-      || (familyOf(id) === 'krea2' && template.role === 'krea2_12gb')
+      || (familyOf(id) === 'krea2' && (template.role === 'krea2_12gb' || template.role === 'krea2_native_ref' || template.role === 'krea2_img2img'))
       || (familyOf(id) === 'qwen_image' && template.role === 'qwen_image_2_1')
     );
     const remoteQwenReady = id === 'qwen_image_native_reference'
@@ -414,7 +423,13 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
       && Array.isArray(input.objectInfo?.ControlNetLoader?.input?.required?.control_net_name?.[0])
       && input.objectInfo.ControlNetLoader.input.required.control_net_name[0].some((name: unknown) => /canny|lineart/i.test(String(name)) && /sdxl|xl/i.test(String(name)));
     const remoteReady = remoteQwenReady || remoteSdxlIpAdapterReady || remoteSdxlOpenposeReady || remoteSdxlDepthReady || remoteSdxlCannyReady;
-    const referenceInstalled = id !== 'krea2_native_reference' && (weights[id].length > 0 || remoteReady);
+    const remoteKreaReady = id === 'krea2_native_reference'
+      && input.runtime === 'online'
+      && Array.isArray(input.objectInfo?.UNETLoader?.input?.required?.unet_name?.[0])
+      && input.objectInfo.UNETLoader.input.required.unet_name[0].some((name: unknown) => /krea|redcraft/i.test(String(name)));
+    const referenceInstalled = id === 'krea2_native_reference'
+      ? weights[id].length > 0 || remoteKreaReady
+      : weights[id].length > 0 || remoteReady;
 
     const effectiveWeights = [...weights[id]];
     if (effectiveWeights.length === 0 && input.runtime === 'online' && input.objectInfo) {
@@ -449,7 +464,8 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
     const hasReference = id === 'sdxl_ip_adapter' || id === 'qwen_image_native_reference'
       ? Boolean(input.shot.character_ref_url)
       : input.shot.pose_source != null;
-    const nodesLoaded = id === 'krea2_native_reference' ? false : input.runtime === 'online' && nodes.loaded;
+    const nodesLoaded = input.runtime === 'online' && nodes.loaded
+      && (id !== 'krea2_native_reference' || template.role === 'krea2_native_ref');
     const wired = templateOk && wiring[id];
     const liveVerified = (input.liveVerifiedIds || []).includes(id);
     const reason = primaryReason({
@@ -465,9 +481,12 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
     });
     const chainReady = familyMatch && templateOk && referenceInstalled && nodesLoaded && shotAllowed && hasReference && wired;
     const notes: string[] = [];
-    if (id === 'krea2_native_reference') {
+    if (id === 'krea2_native_reference' && template.role === 'krea2_12gb') {
       notes.push('redcraft_krea2_12gb.json has no reference conditioning node');
       if (weights[id].length > 0) notes.push(`base diffusion weight is present and is not a reference install: ${weights[id][0]!.filename}`);
+    }
+    if (id === 'krea2_native_reference' && template.role === 'krea2_img2img') {
+      notes.push('redcraft_krea2_img2img_12gb.json encodes an init image with VAEEncode and does not lock identity plates');
     }
     if (!template.accepted) notes.push(`${path.basename(input.workflowFile)} is not a 3060 formal template`);
     if (installProbe) notes.push('install probe does not judge a shot');
@@ -486,7 +505,7 @@ export const assessFormalShot = (input: FormalAssessmentInput): FormalCapability
       policy_reason: installProbe ? null : id === 'sdxl_ip_adapter' ? identity.reason : id === 'sdxl_openpose' && people.length === 0 ? 'no_person' : null,
       required_nodes: required,
       missing_nodes: input.runtime === 'online' ? nodes.missing : required,
-      weights: id === 'krea2_native_reference' ? [] : effectiveWeights,
+      weights: effectiveWeights,
       notes,
     };
   });

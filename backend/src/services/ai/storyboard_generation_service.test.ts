@@ -1002,6 +1002,46 @@ test('英文代词留在待核对译文里，不会改成姓名所有格', async
   });
 });
 
+test('物主代词留在待核对译文里，不会被改写成 the hand', async () => {
+  const doc = document();
+  doc.scenes[0]!.blocks[0]!.text = '林岚举起手。';
+  const progress: WorkflowProgress = { input_hash: 'pronoun-hand', phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [] };
+  const m = providerFixture();
+  const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
+    const input = JSON.parse(prompt);
+    if (input.task === 'translate') {
+      return schema.parse({ translations: input.facts.map((fact: any) => ({ id: fact.id, english: String(fact.text).includes('举起手') ? 'Lin Lan raises her hand.' : 'An empty harbor.' })) });
+    }
+    return m.provider.generateStructured(prompt, schema, system, options);
+  } };
+  await assert.rejects(() => runFactWorkflow({ doc, scriptId: 92, revision: 1, provider, model: 'mock', characters: [{ id: 1, name: '林岚' }], glossary: { 林岚: 'Lin Lan' }, locks: [], instructions: '', progress, persist: async () => {} }), (error: any) => {
+    assert.match(String(error?.message), /her hand/);
+    assert.doesNotMatch(String(error?.message), /the hand/);
+    return true;
+  });
+});
+
+test('未消解的两人指代停在待核对，不能当成空镜进入翻译', async () => {
+  const doc = document();
+  doc.scenes[0]!.blocks[0]!.text = '两人相视而坐。';
+  const progress: WorkflowProgress = { input_hash: 'plural-review', phase: 'queued', extracted: {}, plans: {}, shots: {}, metrics: [] };
+  const m = providerFixture();
+  const provider: AIProvider = { ...m.provider, async generateStructured(prompt, schema, system, options) {
+    const input = JSON.parse(prompt);
+    if (input.task === 'entity_binding') {
+      return schema.parse({ bindings: input.mentions.map((mention: any) => ({ index: mention.index, entity_id: null, status: 'ambiguous' })) });
+    }
+    return m.provider.generateStructured(prompt, schema, system, options);
+  } };
+  await assert.rejects(() => runFactWorkflow({ doc, scriptId: 93, revision: 1, provider, model: 'mock', characters: [{ id: 1, name: '林岚' }, { id: 2, name: '陈月' }], glossary: { 林岚: 'Lin Lan', 陈月: 'Chen Yue' }, locks: [], instructions: '', progress, persist: async () => {} }), /人物绑定待核对/);
+  assert.equal(progress.phase, 'needs_review');
+  assert.deepEqual(progress.shots, {});
+  const fact = progress.facts!.find((row) => row.text.includes('两人'));
+  assert.ok(fact);
+  assert.equal(fact!.binding!.mentions.some((mention) => mention.text === '两人' && mention.confirmed === false && mention.entity == null), true);
+  assert.equal(m.calls.some((call) => call.task === 'translate'), false);
+});
+
 test('多人离场带前文建议仍停在待核对，不调用翻译也不把候选都画出来', async () => {
   const doc = document(2);
   doc.scenes[0]!.blocks = [{ id: 'before', type: 'action', text: '林岚离开，陈月留在房间。' }];

@@ -18,7 +18,7 @@ export const FACT_CLASSIFY_INSTRUCTION = [
   'uncertain = cannot decide. An empty scene is visual. Return items with id and kind only.',
 ].join(' ');
 import { EntityBindingSchema } from '../schemas/entity_binding';
-import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, outlineBindingNeedsReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
+import { actionBindingSource, boundVisibleEntities, boundText, entityRoster, needsBindingReview, proposeBindings, textHash, validateBinding, transferTranslationProblem, transferRelations, englishReferenceProblem, bodyOwnerTerms } from './entity_binding';
 import { type CharacterLockRef } from './pony_prompt_compiler';
 import { packShotSpec, ScreenDirectionSchema, type ScreenDirection } from '../schemas/shot_contract';
 import { findChapterShotQuotaViolation } from './shot_intent_quota';
@@ -594,12 +594,6 @@ export async function auditFacts(provider: AIProvider, facts: Array<{ id: string
     if (fact.id === 'location' && glossary[fact.text] && new RegExp(`\\b${glossary[fact.text].replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i').test(english)) {
       return;
     }
-    if (fact.id === 'location_description' && english.trim() && !containsCjk(english)) {
-      return;
-    }
-    if (fact.id.startsWith('state_') && english.trim() && !containsCjk(english)) {
-      return;
-    }
     if (directionPlaceSettled(fact.text, english)) return;
     if (simpleActionOrMarkerSettled(fact.text, english)) return;
   }
@@ -681,7 +675,7 @@ export function validateFactPayload(doc: ScriptDocument, payload: StoryboardCand
     validateBinding(fact.binding, fact.text, contract.entities || []);
     const { automatic } = actionBindingSource(doc, fact.scene_id, fact.block_id, contract.entities || [], fact.start, fact.end);
     if (fact.binding.context_hash !== automatic.context_hash) throw new FactWorkflowError('人物绑定前文版本已变化，请重新核对');
-    if (outlineBindingNeedsReview(fact.binding)) throw new FactWorkflowError('人物绑定待核对，不能形成可采纳候选');
+    if (needsBindingReview(fact.binding)) throw new FactWorkflowError('人物绑定待核对，不能形成可采纳候选');
   }
   if (contract.facts.some(f => f.kind === 'mixed' || f.kind === 'uncertain')) throw new FactWorkflowError('存在待核对事实，不能形成可采纳候选');
   if (hash(allocateBudgets(doc, contract.facts, CHAPTER_SHOT_LIMIT)) !== hash(contract.budgets)) throw new FactWorkflowError('镜头预算被修改');
@@ -1049,11 +1043,11 @@ export async function runFactWorkflow(input: {
         const supplied = block.binding.mentions.filter(m => m.start >= fact.start && m.end <= fact.end).map(m => ({ ...m, start: m.start - fact.start, end: m.end - fact.start }));
         if (supplied.length) fact.binding.mentions = supplied;
       }
-      if (outlineBindingNeedsReview(fact.binding)) fact.binding = await request(`binding:${fact.id}`, () => proposeBindings(provider, fact.binding!, fact.text, context, roster, { location: doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId, ...sceneContext(doc, scene) }));
+      if (needsBindingReview(fact.binding)) fact.binding = await request(`binding:${fact.id}`, () => proposeBindings(provider, fact.binding!, fact.text, context, roster, { location: doc.locations.find(l => l.id === scene.locationId)?.name || scene.locationId, ...sceneContext(doc, scene) }));
       await persist();
     }
   }
-  const pendingBindings = facts.filter(f => f.kind === 'visual' && outlineBindingNeedsReview(f.binding));
+  const pendingBindings = facts.filter(f => f.kind === 'visual' && needsBindingReview(f.binding));
   if (pendingBindings.length) { p.phase = 'needs_review'; await persist(); throw new FactWorkflowError(`人物绑定待核对: ${pendingBindings.map(f => `${f.scene_id}/${f.id}: ${f.text}`).join('；')}`); }
   p.state_checks ||= {};
   for (const scene of input.continuity_scope ? [] : doc.scenes) {
@@ -1383,7 +1377,6 @@ export async function runFactWorkflow(input: {
               row.english = input.glossary[fact.text]!;
             }
             row.english = row.english.replace(/\b(?:Ben\s+Zheng|Beng\s+Zheng|Honsei)\b/gi, 'Originally');
-            row.english = row.english.replace(/\b(?:her|his|their)\s+(head|arms?|body|chest|waist|back|face|eyes?|hands?|shoulders?|posture|fingers?|chin|lips?|skin|clothes|robe|collar|spine|forehead|cheeks?|breath|gaze)\b/gi, (_m, p1) => `the ${p1}`);
             if (containsCjk(row.english)) problems.push(`${fact.id} 仍含中文「${row.english}」`);
             const missingTerms = bodyOwnerTerms(fact.text, input.glossary).filter(term => !row.english.toLowerCase().includes(term.toLowerCase()));
             if (missingTerms.length) throw new FactWorkflowError(`译文待核对: ${fact.id} 身体部位归属须原样写出 ${missingTerms.join(', ')}`, 502);

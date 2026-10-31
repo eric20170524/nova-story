@@ -10,6 +10,8 @@ import samplesFile from '../test_fixtures/formal_storyboard/samples-v1.json';
 import {
   FORMAL_BASELINE_FAILURES,
   FORMAL_FS02_RESOLVED,
+  FORMAL_KREA2_IMG2IMG_WORKFLOW,
+  FORMAL_KREA2_NATIVE_REF_WORKFLOW,
   FORMAL_MOSS_IMAGE_WORKFLOW,
   FORMAL_REJECTED_3060_WORKFLOW,
   FORMAL_SDXL_3060_WORKFLOW,
@@ -79,6 +81,10 @@ test('formal model classes keep SDXL checkpoints together and Krea2 apart', () =
   assert.equal(formalTemplateDecision(FORMAL_MOSS_IMAGE_WORKFLOW).role, 'moss_image');
   assert.equal(formalTemplateDecision(FORMAL_MOSS_IMAGE_WORKFLOW).accepted, true);
   assert.equal(formalTemplateDecision(FORMAL_REJECTED_3060_WORKFLOW).accepted, false);
+  assert.equal(formalTemplateDecision(FORMAL_KREA2_NATIVE_REF_WORKFLOW).accepted, true);
+  assert.equal(formalTemplateDecision(FORMAL_KREA2_NATIVE_REF_WORKFLOW).role, 'krea2_native_ref');
+  assert.equal(formalTemplateDecision(FORMAL_KREA2_IMG2IMG_WORKFLOW).accepted, true);
+  assert.equal(formalTemplateDecision(FORMAL_KREA2_IMG2IMG_WORKFLOW).role, 'krea2_img2img');
 });
 
 test('frozen samples keep 9995, 9996, and the same-scene camera pair', () => {
@@ -202,6 +208,38 @@ test('frozen shots report policy, missing reference, family, and template separa
     assert.equal(kreaNative.installed, false);
     assert.equal(kreaNative.nodes_loaded, false);
     assert.equal(kreaNative.reason, 'not_installed');
+    assert.ok(kreaNative.notes.some((note) => note.includes('redcraft_krea2_12gb.json has no reference conditioning node')));
+
+    const kreaNodes = {
+      ...fullNodes(),
+      TextEncodeQwenImage21: {},
+      UNETLoader: { input: { required: { unet_name: [['krea2_raw_bf16.safetensors']] } } },
+    };
+    const kreaTwelveWithEncoder = byId(sample('fs-closeup'), {
+      modelName: 'krea2_turbo_int8_convrot.safetensors',
+      workflowFile: 'redcraft_krea2_12gb.json',
+      objectInfo: kreaNodes,
+    }).find((row) => row.id === 'krea2_native_reference')!;
+    assert.equal(kreaTwelveWithEncoder.installed, true);
+    assert.equal(kreaTwelveWithEncoder.nodes_loaded, false);
+    assert.equal(kreaTwelveWithEncoder.reason, 'not_installed');
+    const kreaNativeTemplate = byId(sample('fs-closeup'), {
+      modelName: 'krea2_turbo_int8_convrot.safetensors',
+      workflowFile: 'redcraft_krea2_native_ref_12gb.json',
+      objectInfo: kreaNodes,
+    }).find((row) => row.id === 'krea2_native_reference')!;
+    assert.equal(kreaNativeTemplate.installed, true);
+    assert.equal(kreaNativeTemplate.nodes_loaded, true);
+    assert.equal(kreaNativeTemplate.shot_allowed, false);
+    assert.equal(kreaNativeTemplate.chain_ready, false);
+    assert.equal(kreaNativeTemplate.reason, 'policy_skipped');
+    const kreaImg2img = byId(sample('fs-closeup'), {
+      modelName: 'krea2_turbo_int8_convrot.safetensors',
+      workflowFile: 'redcraft_krea2_img2img_12gb.json',
+    }).find((row) => row.id === 'krea2_native_reference')!;
+    assert.equal(kreaImg2img.family_match, true);
+    assert.equal(kreaImg2img.reason, 'not_installed');
+    assert.ok(kreaImg2img.notes.some((note) => note.includes('VAEEncode')));
 
     const l40 = identity(byId(sample('fs-closeup'), {
       workflowFile: FORMAL_REJECTED_3060_WORKFLOW,

@@ -742,7 +742,7 @@ function extractEntityPoseFromText(text: string, entity: string): string | null 
   if (!text || !entity) return null;
   const entityIdx = text.indexOf(entity);
   if (entityIdx === -1) return null;
-  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 20);
+  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 80);
   const standMatch = windowText.match(/立于|立在|屹立|矗立|站立|站着|站起|起身|挺立/);
   if (standMatch) return standMatch[0];
   const sitMatch = windowText.match(/端坐|盘坐|静坐|坐在|坐于|坐着|落座/);
@@ -1153,7 +1153,7 @@ export async function composeShotImagePrompt(materials: ShotImageMaterials, opti
     const system = repair ? `${baseSystem}${repair}` : baseSystem;
     const paragraph = cleanModelEnglish(testTranslator
       ? await testTranslator(user, system)
-      : (await LLMService.getLocalProvider().generateStructured(user, ShotPromptSchema, system, { temperature: 0.2, maxTokens: 1200 })).prompt);
+      : (await LLMService.getLocalProvider().generateStructured(user, ShotPromptSchema, system, { temperature: 0.2, maxTokens: 4096 })).prompt);
     if (!paragraph) throw new Error('English visual prompt translation was empty');
     return paragraph;
   };

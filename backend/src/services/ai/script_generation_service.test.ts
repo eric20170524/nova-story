@@ -1249,6 +1249,44 @@ test('Track 5 S2: ScriptGenerationService & Limited Agent Integration', async (t
     const parsedDoc: ScriptDocument = JSON.parse(fullCand.after_json);
     assert.equal(parsedDoc.scenes.length, 1);
   });
+
+  await t.test('人物绑定解析失败时中止，不写入未消解剧本候选', async () => {
+    const fix = await createFixture('林轩离开。苏沐雪留在房间。');
+    const script = await ScriptService.createOrGetScript(fix.chapterId);
+    const provider = createMockProvider({
+      onOutline: () => ({
+        logline: '留在房间',
+        mustKeepEvents: [{ id: 'e1', text: '林轩离开。苏沐雪留在房间。', sourceParagraphIds: ['p_1'] }],
+        beats: [{ id: 'b1', purpose: '留在房间', eventIds: ['e1'] }],
+        endingHook: '门响',
+      }),
+      onScene: () => ({
+        location: { name: '正厅' },
+        blocks: [{ type: 'action', text: '林轩离开。苏沐雪留在房间。她转身。' }],
+      }),
+      onResolution: () => { throw new Error('resolution timeout'); },
+    });
+    await assert.rejects(
+      () => ScriptGenerationService.generateFullScriptCandidate({
+        scriptId: script.id,
+        expectedRevision: 1,
+        requestKey: 'binding_fail_closed',
+        provider,
+      }),
+      (error: any) => {
+        assert.ok(error instanceof ScriptGenerationError);
+        assert.equal(error.statusCode, 502);
+        assert.match(String(error.message), /人物绑定解析失败/);
+        return true;
+      },
+    );
+    const saved = await db.get(
+      'SELECT id FROM script_change WHERE script_id = ? AND request_key = ?',
+      script.id,
+      'binding_fail_closed',
+    );
+    assert.equal(saved, undefined);
+  });
 });
 
 test('dialogue does not count as coverage for a visible beat', () => {

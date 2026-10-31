@@ -27,6 +27,8 @@ export interface ResolvedReferenceUrls {
   characterRefUrls: string[];
   /** Explicit composition / pose / layout image (Tier B) */
   compositionRefUrl: string | null;
+  /** Scene / location environment reference image */
+  locationRefUrl?: string | null;
   /** Raw legacy single slot (ref_image_url | init_image_url) */
   legacyRefUrl: string | null;
   /** Unique URLs that must be copied into ComfyUI/input */
@@ -106,10 +108,24 @@ export const resolveReferenceUrls = (workflowData: any): ResolvedReferenceUrls =
     ? workflowData.character_ref_urls.map(nonEmptyUrl).filter((u: unknown): u is string => Boolean(u))
     : [];
 
+  const assetLocationUrl = Array.isArray(workflowData?.asset_references)
+    ? nonEmptyUrl(
+        workflowData.asset_references.find(
+          (ref: any) => ref?.kind === 'location' && nonEmptyUrl(ref?.image_url)
+        )?.image_url
+      )
+    : null;
+
+  const locationRefUrl =
+    nonEmptyUrl(workflowData?.location_ref_url)
+    || nonEmptyUrl(workflowData?.scene_ref_url)
+    || assetLocationUrl
+    || null;
+
   const characterRefUrl =
     nonEmptyUrl(workflowData?.character_ref_url)
     || nonEmptyUrl(workflowData?.character_reference_url)
-    || multiCharacterUrls[0]
+    || multiCharacterUrls.find((u: string) => u !== locationRefUrl)
     || legacyRefUrl;
 
   const characterRefUrls = Array.from(
@@ -126,10 +142,10 @@ export const resolveReferenceUrls = (workflowData: any): ResolvedReferenceUrls =
     || null;
 
   const urlsToCopy = Array.from(
-    new Set([...characterRefUrls, compositionRefUrl].filter(Boolean) as string[])
+    new Set([...characterRefUrls, compositionRefUrl, locationRefUrl].filter(Boolean) as string[])
   );
 
-  return { characterRefUrl, characterRefUrls, compositionRefUrl, legacyRefUrl, urlsToCopy };
+  return { characterRefUrl, characterRefUrls, compositionRefUrl, locationRefUrl, legacyRefUrl, urlsToCopy };
 };
 
 const readRecord = (value: unknown): Record<string, any> | null => {

@@ -185,15 +185,38 @@ test('qwen_image resolves multiple character identity plates in wide multi-perso
   assert.equal(emptyResolved.character_ref_bindings, undefined);
   assert.equal(emptyResolved.character_ref_urls, undefined);
 
-  // Legacy Pony/SDXL keeps single-person / non-wide restriction
+  // Legacy Pony/SDXL keeps single-person / non-wide restriction, while preserving location_ref_url when bound
   const ponyWide = {
     gen_type: 'scene',
     model_type: 'pony',
     shot_type: 'Wide Shot',
-    shot_spec: { visible_subjects: ['陆嘉静', '南宫雪'] }
+    shot_spec: { visible_subjects: ['陆嘉静', '南宫雪'] },
+    asset_references: [{ id: 501, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' }],
   };
   assert.equal(isQwenImageWorkflow(ponyWide), false);
   const ponyResolved = resolveSceneIdentityPlate(ponyWide, [char1, char2]);
   assert.equal(ponyResolved.identity_plate, 'none');
   assert.equal(ponyResolved.character_ref_urls, undefined);
+  assert.equal(ponyResolved.location_ref_url, '/static/generated/qingmu_palace.png');
+
+  // Qwen-Image 2.1 appends the bound scene location plate after character plates (and as slot 1 on empty shots)
+  const qwenWithLocation = resolveSceneIdentityPlate({
+    ...wideShot,
+    asset_references: [{ id: 501, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' }],
+  }, [char1, char2]);
+  assert.equal(qwenWithLocation.character_ref_urls.length, 3);
+  assert.equal(qwenWithLocation.character_ref_urls[2], '/static/generated/qingmu_palace.png');
+  assert.equal(qwenWithLocation.location_ref_url, '/static/generated/qingmu_palace.png');
+  assert.equal(qwenWithLocation.character_ref_bindings[2].plate, 'location');
+  const locPrefix = buildQwenMultiReferencePrefix(qwenWithLocation.character_ref_bindings);
+  assert.match(locPrefix, /<Picture 3> \(image 3\) is the scene environment reference \(Qingmu Palace\)/);
+  assert.equal(/[\u4e00-\u9fa5]/.test(locPrefix), false);
+
+  const emptyWithLocation = resolveSceneIdentityPlate({
+    ...emptyShot,
+    asset_references: [{ id: 501, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' }],
+  }, [char1, char2]);
+  assert.equal(emptyWithLocation.identity_plate, 'location');
+  assert.equal(emptyWithLocation.character_ref_url, undefined);
+  assert.deepEqual(emptyWithLocation.character_ref_urls, ['/static/generated/qingmu_palace.png']);
 });

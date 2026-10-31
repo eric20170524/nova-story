@@ -13,7 +13,7 @@ import { LLMService } from '../llm';
 import { InferenceCache, isNodeTest, textModelFingerprint } from '../inference_cache';
 import { withLocalTextInference } from '../local_text_inference';
 
-export const VIDEO_PROMPT_RULE_VERSION = `video-motion-v4:${FIDELITY_RULE_VERSION}`;
+export const VIDEO_PROMPT_RULE_VERSION = `video-motion-v5:${FIDELITY_RULE_VERSION}`;
 const motionCache = new InferenceCache<string>('video-motion');
 
 export interface CompileVideoSpecOptions {
@@ -157,6 +157,7 @@ export interface VideoMotionMaterials {
   shot_intent?: string;
   subject_scale?: string;
   style?: unknown;
+  speech_facts?: string[];
 }
 
 type VideoMotionTranslator = (materials: VideoMotionMaterials) => Promise<string>;
@@ -179,9 +180,36 @@ export async function echoVideoMotion(materials: VideoMotionMaterials): Promise<
 
 const VideoMotionSchema = z.object({ prompt: z.string().min(1) }).strict();
 
+const speechKey = (value: string) => value.normalize('NFKC').replace(/[\s，,。.!！?？:：;；“”"‘’'「」『』]+/gu, '');
+
+export function isSpeechFact(fact: string, speechFacts?: readonly string[]): boolean {
+  const trimmed = String(fact || '').trim();
+  if (!trimmed) return false;
+  if (speechFacts?.some(sf => {
+    const s = String(sf || '').trim();
+    if (!s) return false;
+    if (trimmed === s) return true;
+    const factKey = speechKey(trimmed);
+    const speech = speechKey(s);
+    return Boolean(factKey) && factKey === speech;
+  })) {
+    return true;
+  }
+  if (/^[“"「『]/.test(trimmed)) return true;
+  if (/[：:][\s\n]*[“"「『]/.test(trimmed)) return true;
+  if (/^(?:[^\s，。：:]+)?(?:低声|轻声|冷冷|漠然|颤声)?(?:说|道|问|叹|斥|喝|喊|答|语|言)[：:]/u.test(trimmed)) return true;
+  return false;
+}
+
 /** The still already names the place. A second location label must not contradict that picture. */
-export function motionFidelitySource(facts: readonly string[], location: string, still: string, appearanceLines: readonly string[]): string {
-  const parts = [...facts];
+export function motionFidelitySource(
+  facts: readonly string[],
+  location: string,
+  still: string,
+  appearanceLines: readonly string[],
+  speechFacts?: readonly string[],
+): string {
+  const parts = facts.filter(f => !isSpeechFact(f, speechFacts));
   if (!still.trim() && location.trim()) parts.push(location.trim());
   parts.push(...appearanceLines);
   return parts.filter(Boolean).join('，');
@@ -230,7 +258,13 @@ async function composeVideoMotion(materials: VideoMotionMaterials, translator?: 
       if ((field === 'clothing' || field === 'accessories') && (hasShotWardrobe || (stillLower && !val.toLowerCase().split(/[,\s_()]+/).filter(w => w.length >= 4).some(w => stillLower.includes(w))))) return '';
       return `${person.name}的${label}：${val}`;
     }));
-    const source = motionFidelitySource(effectiveMaterials.visible_facts, effectiveMaterials.location, effectiveMaterials.still_paragraph, appearanceLines);
+    const source = motionFidelitySource(
+      effectiveMaterials.visible_facts,
+      effectiveMaterials.location,
+      effectiveMaterials.still_paragraph,
+      appearanceLines,
+      effectiveMaterials.speech_facts,
+    );
     try {
       await assertEnglishFidelity(source, paragraph);
     } catch (firstError) {
@@ -308,7 +342,7 @@ function extractEntityPoseFromFact(text: string, entity: string): string | null 
   if (!text || !entity) return null;
   const entityIdx = text.indexOf(entity);
   if (entityIdx === -1) return null;
-  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 20);
+  const windowText = text.slice(entityIdx + entity.length, entityIdx + entity.length + 80);
   const standMatch = windowText.match(/立于|立在|屹立|矗立|站立|站着|站起|起身|挺立/);
   if (standMatch) return standMatch[0];
   const sitMatch = windowText.match(/端坐|盘坐|静坐|坐在|坐于|坐着|落座/);
@@ -391,6 +425,7 @@ export const VideoSpecCompiler = {
       Array.isArray(spec.continuity_states) ? spec.continuity_states : [],
       factTexts
     );
+    const speechFacts = Array.isArray(spec.speech_facts) ? spec.speech_facts.map(String).filter(Boolean) : [];
     const materials: VideoMotionMaterials = {
       visible_facts: visibleFacts(spec, primaryAction),
       appearance,
@@ -405,6 +440,7 @@ export const VideoSpecCompiler = {
       shot_intent: String(spec.shot_intent || ''),
       subject_scale: String(spec.subject_scale || ''),
       style: options.style || null,
+      speech_facts: speechFacts,
     };
     const compose = () => composeVideoMotion(materials, translator);
     const motion = await motionCache.run({ materials, model: textModelFingerprint() }, VIDEO_PROMPT_RULE_VERSION,

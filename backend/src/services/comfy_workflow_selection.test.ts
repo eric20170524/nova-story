@@ -131,6 +131,63 @@ test('moss_image graph is its own family and is the automatic match', async () =
   assert.equal(selected.source, 'model');
 });
 
+test('redcraft krea2 routes native plates, img2img, and text-to-image from raw reference fields', async () => {
+  const names = ['redcraft_krea2_12gb', 'redcraft_krea2_native_ref_12gb', 'redcraft_krea2_img2img_12gb'];
+  const kreaRows: ComfyWorkflowRow[] = names.map((name, index) => ({
+    id: 20 + index,
+    name,
+    content: fs.readFileSync(path.resolve(`static/workflows/${name}.json`), 'utf8'),
+  }));
+  const kreaLookup: ComfyWorkflowLookup = {
+    byId: async (id) => kreaRows.find((row) => row.id === id) || lookup.byId(id),
+    byName: async (name) => kreaRows.find((row) => row.name === name) || lookup.byName(name),
+  };
+  const native = await selectComfyWorkflow(
+    { project_settings: image('redcraft_krea2'), character_ref_url: '/static/generated/face.png' },
+    { comfyui: {} },
+    kreaLookup,
+  );
+  assert.equal(native.row.name, 'redcraft_krea2_native_ref_12gb');
+  assert.equal(native.family, 'redcraft_krea2');
+  const locationOnly = await selectComfyWorkflow(
+    { project_settings: image('redcraft_krea2'), location_ref_url: '/static/generated/hall.png' },
+    { comfyui: {} },
+    kreaLookup,
+  );
+  assert.equal(locationOnly.row.name, 'redcraft_krea2_native_ref_12gb');
+  const img2img = await selectComfyWorkflow(
+    { project_settings: image('redcraft_krea2'), ref_image_url: '/static/generated/init.png' },
+    { comfyui: {} },
+    kreaLookup,
+  );
+  assert.equal(img2img.row.name, 'redcraft_krea2_img2img_12gb');
+  const textOnly = await selectComfyWorkflow(
+    { project_settings: image('redcraft_krea2') },
+    { comfyui: {} },
+    kreaLookup,
+  );
+  assert.equal(textOnly.row.name, 'redcraft_krea2_12gb');
+  const projectWins = await selectComfyWorkflow(
+    { project_settings: image('redcraft_krea2', 20), character_ref_url: '/static/generated/face.png' },
+    { comfyui: {} },
+    kreaLookup,
+  );
+  assert.equal(projectWins.row.name, 'redcraft_krea2_12gb');
+  assert.equal(projectWins.source, 'project');
+  const txtOnlyLookup: ComfyWorkflowLookup = {
+    byId: kreaLookup.byId,
+    byName: async (name) => name === 'redcraft_krea2_12gb' ? kreaRows[0]! : null,
+  };
+  await assert.rejects(
+    selectComfyWorkflow(
+      { project_settings: image('redcraft_krea2'), character_ref_url: '/static/generated/face.png' },
+      { comfyui: {} },
+      txtOnlyLookup,
+    ),
+    /No ComfyUI workflow is configured/,
+  );
+});
+
 test('system selection does not override the project model', async () => {
   const selected = await selectComfyWorkflow(
     { project_settings: image('pony') },

@@ -252,3 +252,15 @@ test('英文代词保留错误证据，不分男女；姓名 Qing He 不被误�
   assert.ok(englishReferenceProblem('They leave.', { 贺: 'He' }));
   assert.deepEqual(bodyOwnerTerms('林岚用右手把蓝伞递给陈月。', { 林岚: 'Lin Lan', 陈月: 'Chen Yue' }), ["Lin Lan's right hand"]);
 });
+
+test('地点描述和承接状态不能跳过忠实度审计，内外景和词典地点仍可直接通过', async () => {
+  let calls = 0;
+  const rejecting = { async generateStructured(_prompt: string, schema: any) { calls += 1; return schema.parse({ faithful: false }); } } as AIProvider;
+  await assert.rejects(() => auditFacts(rejecting, [{ id: 'location_description', text: '衣衫完好' }], 'torn clothes, naked'), /译文待核对/);
+  await assert.rejects(() => auditFacts(rejecting, [{ id: 'state_0', text: '衣衫完好' }], 'torn clothes, naked'), /译文待核对/);
+  assert.equal(calls, 2);
+  const boom = { async generateStructured() { throw new Error('audit should not run'); } } as unknown as AIProvider;
+  await auditFacts(boom, [{ id: 'interior_exterior', text: '室内' }], 'Indoors.');
+  await auditFacts(boom, [{ id: 'time_of_day', text: '夜间' }], 'Night.');
+  await auditFacts(boom, [{ id: 'location', text: '清暮宫' }], 'Qingmu Palace.', { glossary: { 清暮宫: 'Qingmu Palace' } });
+});

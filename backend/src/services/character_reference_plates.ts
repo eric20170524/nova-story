@@ -4,7 +4,7 @@
  * panel. The stitched three-view sheet and a corner face crop are not references.
  */
 
-export type IdentityPlate = 'face' | 'body' | 'multi' | 'none';
+export type IdentityPlate = 'face' | 'body' | 'location' | 'multi' | 'none';
 
 export interface CharacterPlateSource {
   id?: number | null;
@@ -20,12 +20,42 @@ export interface CharacterRefBinding {
   english_name?: string;
   gender?: string;
   image_url: string;
-  plate: 'face' | 'body';
+  plate: 'face' | 'body' | 'location';
+  kind?: 'character' | 'location';
 }
 
 export interface CharacterPlates {
   face: string | null;
   body: string | null;
+}
+
+/** Picture N follows the image slot that ComfyUI actually receives. */
+export function alignQwenReferenceBindings(
+  bindings: CharacterRefBinding[],
+  imageUrls: readonly string[],
+  location?: { name?: string; english_name?: string; image_url: string } | null,
+): CharacterRefBinding[] {
+  const byUrl = new Map<string, CharacterRefBinding>();
+  for (const binding of bindings || []) {
+    const url = String(binding?.image_url || '').trim();
+    if (url && !byUrl.has(url)) byUrl.set(url, binding);
+  }
+  return imageUrls.map((rawUrl, index) => {
+    const url = String(rawUrl || '').trim();
+    const slot = index + 1;
+    const existing = byUrl.get(url);
+    if (existing) return { ...existing, slot, image_url: url };
+    const isLocation = Boolean(location && location.image_url === url);
+    return {
+      slot,
+      character_id: null,
+      name: isLocation ? String(location?.name || 'Scene Location') : `Character ${slot}`,
+      english_name: isLocation ? String(location?.english_name || '') : '',
+      image_url: url,
+      plate: isLocation ? 'location' : 'face',
+      kind: isLocation ? 'location' : 'character',
+    };
+  });
 }
 
 export const buildQwenMultiReferencePrefix = (
@@ -34,6 +64,11 @@ export const buildQwenMultiReferencePrefix = (
 ): string => {
   if (!Array.isArray(bindings) || bindings.length === 0) return '';
   const clauses = bindings.map((b) => {
+    if (b.plate === 'location' || b.kind === 'location') {
+      const rawLoc = b.english_name || glossary[b.name] || b.name || '';
+      const cleanLoc = rawLoc && !/[\u3400-\u9fff]/.test(rawLoc) ? ` (${rawLoc})` : '';
+      return `<Picture ${b.slot}> (image ${b.slot}) is the scene environment reference${cleanLoc}; preserve the architectural layout, spatial structure, environment materials, color palette, and lighting atmosphere from this picture.`;
+    }
     const rawName = b.english_name || glossary[b.name] || b.name;
     const displayName = /[\u4e00-\u9fa5]/.test(rawName) ? `Character ${b.slot}` : rawName;
     const isFemale = String(b.gender || '').toLowerCase() === 'female';
@@ -174,6 +209,31 @@ const plateCharacter = (workflow: any, characters: CharacterPlateSource[]): Char
   return characters.find((character) => text(character.name) === names[0]) || null;
 };
 
+export const resolveLocationRefFromWorkflow = (
+  workflow: any
+): { id: number | null; name: string; english_name: string; image_url: string } | null => {
+  const assets = Array.isArray(workflow?.asset_references) ? workflow.asset_references : [];
+  const locAsset = assets.find((ref: any) => ref?.kind === 'location' && text(ref?.image_url));
+  if (locAsset) {
+    return {
+      id: locAsset.id != null ? Number(locAsset.id) : null,
+      name: text(locAsset.name || workflow?.shot_spec?.location || 'Scene Location'),
+      english_name: text(locAsset.english_name),
+      image_url: text(locAsset.image_url),
+    };
+  }
+  const explicitUrl = text(workflow?.location_ref_url || workflow?.scene_ref_url);
+  if (explicitUrl) {
+    return {
+      id: null,
+      name: text(workflow?.shot_spec?.location || 'Scene Location'),
+      english_name: '',
+      image_url: explicitUrl,
+    };
+  }
+  return null;
+};
+
 /**
  * Replace a client character image with the plate this shot is allowed to use.
  * A stitched turnaround sheet never becomes the reference.
@@ -186,6 +246,8 @@ export const resolveSceneIdentityPlate = (
   if (genType === 'portrait' || genType === 'turnaround' || genType === 'turnaround_panel') {
     return workflow;
   }
+
+  const locRef = resolveLocationRefFromWorkflow(workflow);
 
   // Qwen-Image 2.1 native multi-image reference branch
   if (isQwenImageWorkflow(workflow)) {
@@ -218,19 +280,34 @@ export const resolveSceneIdentityPlate = (
         gender: text(design.gender),
         image_url: chosenUrl,
         plate: chosenPlate,
+        kind: 'character',
+      });
+    }
+
+    if (locRef && !bindings.some((b) => b.image_url === locRef.image_url)) {
+      bindings.push({
+        slot: bindings.length + 1,
+        character_id: null,
+        name: locRef.name,
+        english_name: locRef.english_name,
+        image_url: locRef.image_url,
+        plate: 'location',
+        kind: 'location',
       });
     }
 
     if (bindings.length > 0) {
       const urls = bindings.map((b) => b.image_url);
+      const charUrls = bindings.filter((b) => b.plate !== 'location').map((b) => b.image_url);
       return {
         ...workflow,
-        character_ref_url: urls[0],
-        ref_image_url: urls[0],
+        character_ref_url: charUrls[0],
+        ref_image_url: charUrls[0],
+        ...(locRef ? { location_ref_url: locRef.image_url } : {}),
         character_ref_urls: urls,
         character_ref_bindings: bindings,
         identity_plate: bindings.length === 1 ? bindings[0]!.plate : 'multi',
-        force_no_character_adapter: false,
+        force_no_character_adapter: charUrls.length === 0,
         denoise: 1,
       };
     }
@@ -252,6 +329,7 @@ export const resolveSceneIdentityPlate = (
       ...workflow,
       character_ref_url: undefined,
       ref_image_url: undefined,
+      ...(locRef ? { location_ref_url: locRef.image_url } : {}),
       character_ref_urls: undefined,
       identity_plate: 'none',
       force_no_character_adapter: true,
@@ -266,6 +344,7 @@ export const resolveSceneIdentityPlate = (
       ...workflow,
       character_ref_url: undefined,
       ref_image_url: undefined,
+      ...(locRef ? { location_ref_url: locRef.image_url } : {}),
       character_ref_urls: undefined,
       identity_plate: 'none',
       force_no_character_adapter: true,
@@ -276,6 +355,7 @@ export const resolveSceneIdentityPlate = (
     ...workflow,
     character_ref_url: url,
     ref_image_url: url,
+    ...(locRef ? { location_ref_url: locRef.image_url } : {}),
     character_ref_urls: [url],
     identity_plate: plate,
     force_no_character_adapter: false,

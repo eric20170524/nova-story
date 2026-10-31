@@ -141,7 +141,7 @@ async function resolveSceneReferences(scene: Pick<ScriptScene, 'locationId' | 'i
         [sourceContext, preceding].filter(Boolean).join('\n'), roster,
         { location, interior_exterior: scene.interiorExterior, time_of_day: scene.timeOfDay });
     } catch (err: any) {
-      logger.warn(`[resolveSceneReferences] Failed to resolve script bindings for block ${block.id}: ${err?.message || err}`);
+      throw new ScriptGenerationError(`人物绑定解析失败，不能把未消解指代写入剧本: ${err?.message || err}`, 502);
     }
     const expanded = materializeScriptReferences(block.text, binding);
     block.text = expanded.text;

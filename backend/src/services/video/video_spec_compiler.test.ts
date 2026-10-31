@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { factStateLabel } from '../../schemas/storyboard_facts';
-import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, continuityPromptLines, motionFidelitySource, setVideoMotionTranslatorForTests, visibleFacts, type VideoMotionMaterials } from './video_spec_compiler';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, continuityPromptLines, filterConflictingContinuityStates, isSpeechFact, motionFidelitySource, setVideoMotionTranslatorForTests, visibleFacts, type VideoMotionMaterials } from './video_spec_compiler';
 
 test('stored attributes render with the shared label and do not invent another category', () => {
   assert.equal(factStateLabel('expression'), '表情');
@@ -317,3 +317,50 @@ test('a narrative action stays in the motion paragraph and a loop does not repla
     assert.doesNotMatch(spec.positive_prompt, /裴雨涵却已经彻底放开|Mouth remains gently closed|strictly consistent|Subtle natural cloth|Short idle/);
     assert.doesNotMatch(spec.negative_prompt, /mouth opening/);
 });
+
+test('motionFidelitySource excludes speech facts so separate speech tracks are not audited as visual movement', () => {
+  const facts = [
+    '镜面映出陆嘉静瞬间失守的瞳色',
+    '却只低声道：',
+    '“又开始了。',
+    '声音冷',
+    '尾音却带着一丝连陆嘉静都厌恶的热意。',
+    '侧殿门响。',
+  ];
+  const speechFacts = [
+    '却只低声道：',
+    '“又开始了。',
+    '声音冷',
+    '尾音却带着一丝连陆嘉静都厌恶的热意。',
+    '侧殿门响。',
+  ];
+  const source = motionFidelitySource(facts, '清暮宫·主殿', 'still', [], speechFacts);
+  assert.equal(source, '镜面映出陆嘉静瞬间失守的瞳色');
+});
+
+test('isSpeechFact matches speech by equality, not by a short action sitting inside a longer line', () => {
+  assert.equal(isSpeechFact('林月转身', ['林月转身之后低声说道：门开了。']), false);
+  assert.equal(isSpeechFact('侧殿门响', ['侧殿门响。']), true);
+  assert.equal(isSpeechFact('侧殿门响。', ['侧殿门响']), true);
+  assert.equal(
+    motionFidelitySource(['林月转身'], '侧殿', 'still', [], ['林月转身之后低声说道：门开了。']),
+    '林月转身',
+  );
+  assert.equal(
+    motionFidelitySource(['镜面映出陆嘉静', '侧殿门响'], '清暮宫·主殿', 'still', [], ['侧殿门响。']),
+    '镜面映出陆嘉静',
+  );
+});
+
+test('filterConflictingContinuityStates overrides sitting pose when standing is separated by long descriptive text', () => {
+  const facts = [
+    '陆嘉静身着月白仙裙，',
+    '长发如瀑，',
+    '眉眼清冷如霜雪，',
+    '立于春潮之门前的花海边缘。',
+  ];
+  const states = [{ entity: '陆嘉静', attribute: 'pose', value: '坐在', fact_id: 'f_prev' }];
+  const filtered = filterConflictingContinuityStates(states, facts);
+  assert.equal(filtered.length, 0);
+});
+

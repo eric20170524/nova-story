@@ -43,6 +43,10 @@ export const inferComfyWorkflowFamily = (row: ComfyWorkflowRow): ImageModelFamil
     || (node?.class_type === 'DualCLIPLoader' && String(node.inputs?.type || '') === 'flux')
   )) return 'flux';
   if (nodes.some((node) =>
+    (node?.class_type === 'UNETLoader' && /redcraft|krea/i.test(String(node.inputs?.unet_name || '')))
+    || (node?.class_type === 'CLIPLoader' && /redcraft|krea/i.test(String(node.inputs?.clip_name || node.inputs?.type || '')))
+  )) return 'redcraft_krea2';
+  if (nodes.some((node) =>
     node?.class_type === 'TextEncodeQwenImage21'
     || (node?.class_type === 'UNETLoader' && /qwen[_-]?image/i.test(String(node.inputs?.unet_name || '')))
     || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'qwen_image')
@@ -52,10 +56,6 @@ export const inferComfyWorkflowFamily = (row: ComfyWorkflowRow): ImageModelFamil
     || (node?.class_type === 'UNETLoader' && /moss[_-]?image/i.test(String(node.inputs?.unet_name || '')))
     || (node?.class_type === 'CLIPLoader' && String(node.inputs?.type || '') === 'moss_image')
   )) return 'moss_image';
-  if (nodes.some((node) =>
-    (node?.class_type === 'UNETLoader' && /redcraft|krea/i.test(String(node.inputs?.unet_name || '')))
-    || (node?.class_type === 'CLIPLoader' && /redcraft|krea/i.test(String(node.inputs?.clip_name || node.inputs?.type || '')))
-  )) return 'redcraft_krea2';
 
   const checkpoint = String(nodes.find((node) => node?.class_type === 'CheckpointLoaderSimple')?.inputs?.ckpt_name || '');
   if (/moss[_-]?image/i.test(checkpoint)) return 'moss_image';
@@ -63,6 +63,22 @@ export const inferComfyWorkflowFamily = (row: ComfyWorkflowRow): ImageModelFamil
   if (/redcraft|krea/i.test(checkpoint)) return 'redcraft_krea2';
   if (/sd\s*1\.?5|anything|counterfeit|meina|chillout|sd15/i.test(checkpoint)) return 'sd15';
   return normalizeImageModelFamily(row.name);
+};
+
+/** Character or location plates use the native reference graph. An init image without those plates uses img2img. */
+export const redcraftWorkflowName = (workflowData: any): string => {
+  const characterUrls = Array.isArray(workflowData?.character_ref_urls)
+    ? workflowData.character_ref_urls.map((url: unknown) => String(url || '').trim()).filter(Boolean)
+    : [];
+  const hasCharacter = Boolean(
+    String(workflowData?.character_ref_url || workflowData?.character_reference_url || '').trim()
+    || characterUrls.length
+  );
+  const hasLocation = Boolean(String(workflowData?.location_ref_url || workflowData?.scene_ref_url || '').trim())
+    || (Array.isArray(workflowData?.asset_references) && workflowData.asset_references.some((ref: any) => ref?.kind === 'location' && String(ref?.image_url || '').trim()));
+  if (hasCharacter || hasLocation) return 'redcraft_krea2_native_ref_12gb';
+  if (String(workflowData?.ref_image_url || workflowData?.init_image_url || '').trim()) return 'redcraft_krea2_img2img_12gb';
+  return 'redcraft_krea2_12gb';
 };
 
 /** A selected project workflow wins over a generic model-family workflow when compatible. */
@@ -88,7 +104,7 @@ export const selectComfyWorkflow = async (
   const preferredName = requestedFamily === 'sd15'
     ? 'sd15_draft_12gb'
     : requestedFamily === 'redcraft_krea2'
-      ? 'redcraft_krea2_12gb'
+      ? redcraftWorkflowName(workflowData)
       : requestedFamily === 'qwen_image'
         ? 'qwen_image_2_1'
         : requestedFamily === 'moss_image'

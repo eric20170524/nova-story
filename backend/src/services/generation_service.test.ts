@@ -1049,3 +1049,243 @@ test('decodes real Gemini inline image responses instead of returning a placehol
     globalThis.fetch = previousFetch;
   }
 });
+
+test('resolveSameSceneSiblingReference selects completed sibling shot from the same scene and prefers wide shots', async () => {
+  const { resolveSameSceneSiblingReference } = await import('./generation_service');
+  const currentSpec = {
+    location: '清暮宫大殿',
+    source: { script_scene_id: 'scene_1' },
+  };
+  const sibling = resolveSameSceneSiblingReference(103, currentSpec, [
+    {
+      id: 101,
+      index: 1,
+      shot_type: 'Close-Up',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_101_close.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', visible_subjects: ['林月'], source: { script_scene_id: 'scene_1' } }),
+    },
+    {
+      id: 102,
+      index: 2,
+      shot_type: 'Wide Shot',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_102_wide.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', visible_subjects: [], source: { script_scene_id: 'scene_1' } }),
+    },
+    {
+      id: 104,
+      index: 0,
+      shot_type: 'Establishing Shot',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_104_other_scene.png',
+      shot_spec: JSON.stringify({ location: '山门石阶', visible_subjects: [], source: { script_scene_id: 'scene_2' } }),
+    },
+  ]);
+  assert.ok(sibling);
+  assert.equal(sibling.scene_id, 102);
+  assert.equal(sibling.image_url, '/static/generated/shot_102_wide.png');
+});
+
+test('compileComfyWorkflow wires bound location reference into Qwen-Image 2.1 image slot and prompt prefix', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8'));
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      shot_type: 'Medium Shot',
+      prompt_composed: true,
+      character_ref_urls: ['/static/generated/portrait_20.png'],
+      character_ref_bindings: [
+        { slot: 1, character_id: 20, name: '陆嘉静', english_name: 'Lu Jiajing', gender: 'female', image_url: '/static/generated/portrait_20.png', plate: 'face' as const },
+      ],
+      asset_references: [
+        { id: 701, revision: 1, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' },
+      ],
+      location_ref_url: '/static/generated/qingmu_palace.png',
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'Lu Jiajing stands inside Qingmu Palace.',
+    'standard',
+    { width: 1280, height: 720 },
+    {
+      advanced: { nsfw_enabled: false },
+      comfyui: { mode: 'remote' }
+    }
+  );
+
+  assert.ok(compiled['6'].inputs.image_1, 'Expected character image_1 on TextEncodeQwenImage21');
+  assert.ok(compiled['6'].inputs.image_2, 'Expected location image_2 on TextEncodeQwenImage21');
+  const load1 = String(compiled['6'].inputs.image_1[0]);
+  const load2 = String(compiled['6'].inputs.image_2[0]);
+  assert.equal(compiled[load1].inputs.image, 'portrait_20.png');
+  assert.equal(compiled[load2].inputs.image, 'qingmu_palace.png');
+  assert.match(compiled['6'].inputs.prompt, /<Picture 1> \(image 1\) is the identity reference for Lu Jiajing/);
+  assert.match(compiled['6'].inputs.prompt, /<Picture 2> \(image 2\) is the scene environment reference \(Qingmu Palace\)/);
+});
+
+test('resolveSameSceneSiblingReference refuses people, close-ups, and a one-sided script scene id', async () => {
+  const { resolveSameSceneSiblingReference } = await import('./generation_service');
+  const currentSpec = {
+    location: '清暮宫大殿',
+    source: { script_scene_id: 'scene_1' },
+  };
+  const populatedWide = resolveSameSceneSiblingReference(103, currentSpec, [
+    {
+      id: 201,
+      index: 1,
+      shot_type: 'Wide Shot',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_201_people.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', visible_subjects: ['林月', '陈月'], source: { script_scene_id: 'scene_1' } }),
+    },
+  ]);
+  assert.equal(populatedWide, null);
+
+  const closeOnly = resolveSameSceneSiblingReference(103, currentSpec, [
+    {
+      id: 202,
+      index: 1,
+      shot_type: 'Close-Up',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_202_close.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', visible_subjects: [], source: { script_scene_id: 'scene_1' } }),
+    },
+  ]);
+  assert.equal(closeOnly, null);
+
+  const missingSubjects = resolveSameSceneSiblingReference(103, currentSpec, [
+    {
+      id: 203,
+      index: 1,
+      shot_type: 'Wide Shot',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_203_unknown.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', source: { script_scene_id: 'scene_1' } }),
+    },
+  ]);
+  assert.equal(missingSubjects, null);
+
+  const oneSided = resolveSameSceneSiblingReference(103, currentSpec, [
+    {
+      id: 204,
+      index: 1,
+      shot_type: 'Establishing Shot',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_204_name_only.png',
+      shot_spec: JSON.stringify({ location: '清暮宫大殿', visible_subjects: [] }),
+    },
+  ]);
+  assert.equal(oneSided, null);
+
+  const byLocationName = resolveSameSceneSiblingReference(103, { location: '清暮宫大殿' }, [
+    {
+      id: 205,
+      index: 1,
+      shot_type: '远景',
+      asset_status: 'completed',
+      asset_url: '/static/generated/shot_205_empty.png',
+      shot_spec: JSON.stringify({ location: '清暮宫 大殿', visible_subjects: [] }),
+    },
+  ]);
+  assert.equal(byLocationName?.scene_id, 205);
+  assert.equal(byLocationName?.image_url, '/static/generated/shot_205_empty.png');
+});
+
+test('Qwen Picture slots follow image order when bindings omit the location plate', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/qwen_image_2_1.json'), 'utf8'));
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      shot_type: 'Medium Shot',
+      prompt_composed: true,
+      character_ref_urls: ['/static/generated/portrait_20.png'],
+      asset_references: [
+        { id: 701, revision: 1, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' },
+      ],
+      location_ref_url: '/static/generated/qingmu_palace.png',
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    'Lu Jiajing stands inside the hall.',
+    'standard',
+    { width: 1280, height: 720 },
+    { advanced: { nsfw_enabled: false }, comfyui: { mode: 'remote' } }
+  );
+  const load1 = String(compiled['6'].inputs.image_1[0]);
+  const load2 = String(compiled['6'].inputs.image_2[0]);
+  assert.equal(compiled[load1].inputs.image, 'portrait_20.png');
+  assert.equal(compiled[load2].inputs.image, 'qingmu_palace.png');
+  assert.match(compiled['6'].inputs.prompt, /<Picture 1> \(image 1\) is the identity reference/);
+  assert.match(compiled['6'].inputs.prompt, /<Picture 2> \(image 2\) is the scene environment reference \(Qingmu Palace\)/);
+
+  const alreadyBound = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      shot_type: 'Medium Shot',
+      prompt_composed: true,
+      character_ref_urls: ['/static/generated/portrait_20.png'],
+      character_ref_bindings: [
+        { slot: 9, character_id: 20, name: '陆嘉静', english_name: 'Lu Jiajing', gender: 'female', image_url: '/static/generated/portrait_20.png', plate: 'face' as const },
+      ],
+      location_ref_url: '/static/generated/qingmu_palace.png',
+      asset_references: [
+        { id: 701, revision: 1, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' },
+      ],
+      project_settings: {
+        image_generation: { model: 'qwen_image', style: 'xianxia_immortal', nsfw_mode: 'off' }
+      }
+    },
+    '<Picture 1> (image 1) is the identity reference for Lu Jiajing. Lu Jiajing stands inside the hall.',
+    'standard',
+    { width: 1280, height: 720 },
+    { advanced: { nsfw_enabled: false }, comfyui: { mode: 'remote' } }
+  );
+  const prompt = String(alreadyBound['6'].inputs.prompt);
+  assert.equal((prompt.match(/<Picture 1>/g) || []).length, 1);
+  assert.match(prompt, /<Picture 2> \(image 2\) is the scene environment reference \(Qingmu Palace\)/);
+  const boundLoad1 = String(alreadyBound['6'].inputs.image_1[0]);
+  const boundLoad2 = String(alreadyBound['6'].inputs.image_2[0]);
+  assert.equal(alreadyBound[boundLoad1].inputs.image, 'portrait_20.png');
+  assert.equal(alreadyBound[boundLoad2].inputs.image, 'qingmu_palace.png');
+});
+
+test('RedCraft Krea2 native reference graph wires plates without use_qwen_vl_ref', async () => {
+  const graph = JSON.parse(fs.readFileSync(path.resolve('static/workflows/redcraft_krea2_native_ref_12gb.json'), 'utf8'));
+  const compiled = await compileComfyWorkflow(
+    {
+      ...graph,
+      gen_type: 'scene',
+      shot_type: 'Medium Shot',
+      prompt_composed: true,
+      face_detail_stage2: true,
+      character_ref_url: '/static/generated/portrait_20.png',
+      location_ref_url: '/static/generated/qingmu_palace.png',
+      asset_references: [
+        { id: 701, revision: 1, kind: 'location', name: '清暮宫', english_name: 'Qingmu Palace', image_url: '/static/generated/qingmu_palace.png' },
+      ],
+      project_settings: {
+        image_generation: { model: 'redcraft_krea2', style: 'oriental_realistic', nsfw_mode: 'off' }
+      }
+    },
+    'Lu Jiajing stands inside Qingmu Palace.',
+    'standard',
+    { width: 1280, height: 720 },
+    { advanced: { nsfw_enabled: false }, comfyui: { mode: 'remote' } }
+  );
+  const encoder = Object.values(compiled).find((node: any) => node?.class_type === 'TextEncodeQwenImage21') as any;
+  assert.ok(encoder?.inputs?.image_1);
+  assert.ok(encoder?.inputs?.image_2);
+  const image1 = compiled[String(encoder.inputs.image_1[0])];
+  const image2 = compiled[String(encoder.inputs.image_2[0])];
+  assert.equal(image1.inputs.image, 'portrait_20.png');
+  assert.equal(image2.inputs.image, 'qingmu_palace.png');
+  assert.match(String(encoder.inputs.prompt), /<Picture 1> \(image 1\) is the identity reference/);
+  assert.match(String(encoder.inputs.prompt), /<Picture 2> \(image 2\) is the scene environment reference \(Qingmu Palace\)/);
+  assert.equal(Object.values(compiled).some((node: any) => node?.class_type === 'CreateShapeMask'), false);
+});
