@@ -354,3 +354,14 @@ body {
 .dark .CodeMirror-line::selection, .dark .CodeMirror-line > span::selection, .dark .CodeMirror-line > span > span::selection {
     background-color: #312e81 !important;
 }
+
+dialog:modal {
+    overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+    overflow: hidden;
+    overscroll-behavior: contain;
+    background-color: rgba(9, 13, 22, 0.72);
+    backdrop-filter: blur(8px);
+}

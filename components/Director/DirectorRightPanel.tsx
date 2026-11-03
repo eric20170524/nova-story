@@ -10,9 +10,10 @@ import {
   ShieldCheck,
   Cpu,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
-import { Scene, AssetMode, ImageOutputSpec, VideoProfile, VideoPreset, VideoCapabilities } from '../../types';
+import { Scene, AssetMode, ImageOutputSpec, VideoProfile, VideoPreset, VideoCapabilities, ChapterVideoStatus } from '../../types';
 import { formatVisualStyleLabel, getVisualStyles, styleLoraRecipeLocaleKey, type VisualStyleDef } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { api } from '../../services/api';
@@ -49,6 +50,10 @@ interface DirectorRightPanelProps {
   onBatchGenerateVideo?: () => void;
   isBatchGeneratingVideo?: boolean;
   onStopBatchGenerateVideo?: () => void;
+  chapterVideoStatus?: ChapterVideoStatus | null;
+  onOpenChapterVideoModal?: () => void;
+  onAssembleChapterVideo?: () => void;
+  isAssemblingChapterVideo?: boolean;
 }
 
 export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
@@ -79,7 +84,11 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
   setVideoMotionPrompt,
   onBatchGenerateVideo,
   isBatchGeneratingVideo = false,
-  onStopBatchGenerateVideo
+  onStopBatchGenerateVideo,
+  chapterVideoStatus,
+  onOpenChapterVideoModal,
+  onAssembleChapterVideo,
+  isAssemblingChapterVideo = false,
 }) => {
   const { t } = useLanguage();
   const [visualStyles, setVisualStyles] = useState<VisualStyleDef[]>(() => getVisualStyles());
@@ -138,6 +147,87 @@ export const DirectorRightPanel: React.FC<DirectorRightPanelProps> = ({
 
          {/* Panel Content */}
          <div className="flex-1 overflow-y-auto p-4 gap-6 flex flex-col custom-scrollbar min-h-0">
+            {/* Chapter Full Video Preview & Stage Assemble Card */}
+            {onOpenChapterVideoModal && (
+              <div className="rounded-2xl border border-indigo-200/80 dark:border-indigo-900/60 bg-gradient-to-br from-indigo-50/90 via-white to-emerald-50/40 dark:from-indigo-950/40 dark:via-slate-900 dark:to-emerald-950/20 p-3.5 space-y-2.5 shadow-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold tracking-wide text-xs text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                    <Film size={14} />
+                    <span>章节完整成片 (Stage Assemble)</span>
+                  </span>
+                  {chapterVideoStatus?.assembled?.available ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                      <CheckCircle2 size={11} />
+                      已合流
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                      {chapterVideoStatus?.shots_summary?.ready_video_shots ?? 0}/
+                      {chapterVideoStatus?.shots_summary?.total_shots ?? timeline.length} 镜已验收
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {chapterVideoStatus?.assembled?.available
+                    ? `整章成片已合成封装（含 TTS 语音对白与中文字幕，总长 ${
+                        chapterVideoStatus.assembled.duration
+                          ? `${Math.floor(Number(chapterVideoStatus.assembled.duration) / 60)}分${Math.round(Number(chapterVideoStatus.assembled.duration) % 60)}秒`
+                          : '--'
+                      }）。`
+                    : '全部分镜视频验收齐备后自动合流封装包含 TTS 语音对白与中文字幕的整章成片。'}
+                </p>
+
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={onOpenChapterVideoModal}
+                    data-testid="right-panel-open-chapter-video-btn"
+                    className={`w-full py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs ${
+                      chapterVideoStatus?.assembled?.available
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    }`}
+                  >
+                    <PlayCircle size={15} />
+                    <span>
+                      {chapterVideoStatus?.assembled?.available
+                        ? '预览播放本章整章成片'
+                        : '打开章节视频预览 / 连播'}
+                    </span>
+                  </button>
+
+                  {onAssembleChapterVideo && (
+                    <button
+                      type="button"
+                      onClick={onAssembleChapterVideo}
+                      disabled={
+                        isAssemblingChapterVideo ||
+                        !chapterVideoStatus?.shots_summary?.all_ready
+                      }
+                      className="w-full py-1.5 px-3 rounded-xl text-[11px] font-semibold border border-indigo-300 dark:border-indigo-800/80 bg-white/80 dark:bg-slate-900/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 disabled:opacity-50 flex items-center justify-center gap-1.5 transition-all"
+                    >
+                      {isAssemblingChapterVideo ? (
+                        <>
+                          <Loader2 size={12} className="animate-spin" />
+                          <span>正在合流封装整章成片...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={12} />
+                          <span>
+                            {chapterVideoStatus?.assembled?.available
+                              ? '重新合成整章成片'
+                              : '立即合成整章成片'}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Render Controls */}
             <div className="space-y-4">
                <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">

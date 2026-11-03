@@ -13,7 +13,7 @@ setGlobalDispatcher(new Agent({
 }));
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
-import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, subtitles, assertReview } from './production-contracts.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, subtitles, webvtt, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -978,8 +978,74 @@ async function videos(selected = null) {
     }
   }
   if (pendingReview.length) throw new Error(`Generated videos need visual review and promotion before assembly (shots: ${pendingReview.join(', ')}); resume after reviewing in Director`);
+  if (stage === 'videos' && autoApprove) {
+    for (const chapter of selected || await chapters()) {
+      await requireImageReview(chapter);
+      await assemble([chapter], { fullFilm: false });
+      await requireChapterReview(chapter);
+    }
+  }
 }
 const staticRoot = path.resolve(root, process.env.NOVASTORY_STATIC_DIR || 'backend/static');
+function publishChapterVideoToStatic(chapter, manifest) {
+  try {
+    const chapterStaticDir = path.join(staticRoot, 'generated', 'projects', String(projectId), 'chapters');
+    fs.mkdirSync(chapterStaticDir, { recursive: true });
+    const baseUrl = `/static/generated/projects/${projectId}/chapters`;
+    const videoFilename = `chapter-${chapter.index}.mp4`;
+    const srtFilename = `chapter-${chapter.index}.srt`;
+    const vttFilename = `chapter-${chapter.index}.vtt`;
+    const manifestFilename = `chapter-${chapter.index}.manifest.json`;
+    const byIdFilename = `chapter-${chapter.id}.json`;
+    if (manifest?.file && fs.existsSync(manifest.file)) {
+      fs.copyFileSync(manifest.file, path.join(chapterStaticDir, videoFilename));
+    }
+    if (manifest?.subtitle_file && fs.existsSync(manifest.subtitle_file)) {
+      fs.copyFileSync(manifest.subtitle_file, path.join(chapterStaticDir, srtFilename));
+    }
+    const vttContent = webvtt(manifest?.cues || []);
+    fs.writeFileSync(path.join(chapterStaticDir, vttFilename), vttContent);
+    const videoDirectory = path.join(directory, 'videos');
+    const previewCandidates = [
+      { file: `chapter-${chapter.index}-preview-subtitled.mp4`, label: '阶段带字幕预览片' },
+      { file: `chapter-${chapter.index}-first-10shots-preview.mp4`, label: '前10镜合成预览片' },
+    ];
+    let previewInfo = { available: false, url: null, label: null };
+    for (const cand of previewCandidates) {
+      const srcPath = path.join(videoDirectory, cand.file);
+      if (fs.existsSync(srcPath)) {
+        fs.copyFileSync(srcPath, path.join(chapterStaticDir, cand.file));
+        previewInfo = { available: true, url: `${baseUrl}/${cand.file}`, label: cand.label };
+        break;
+      }
+    }
+    const webPayload = {
+      project_id: projectId,
+      chapter_id: String(chapter.id),
+      chapter_index: chapter.index,
+      chapter_title: chapter.title || `第${chapter.index}章`,
+      assembled: {
+        available: Boolean(manifest?.file && fs.existsSync(manifest.file)),
+        url: `${baseUrl}/${videoFilename}`,
+        subtitle_url: `${baseUrl}/${srtFilename}`,
+        vtt_url: `${baseUrl}/${vttFilename}`,
+        duration: manifest?.duration ?? null,
+        sha256: manifest?.sha256 ?? null,
+        subtitle_sha256: manifest?.subtitle_sha256 ?? null,
+        created_at: manifest?.created_at ?? null,
+        cues: manifest?.cues || [],
+        shot_durations: manifest?.shot_durations || [],
+      },
+      preview: previewInfo,
+      review: state.reviews?.chapters?.[chapter.id] || null,
+      updated_at: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(chapterStaticDir, manifestFilename), JSON.stringify({ ...manifest, web: webPayload }, null, 2));
+    fs.writeFileSync(path.join(chapterStaticDir, byIdFilename), JSON.stringify(webPayload, null, 2));
+  } catch (err) {
+    console.warn(`[publishChapterVideoToStatic] Non-fatal warning for chapter ${chapter.index}:`, err.message);
+  }
+}
 function localMedia(url) {
   if (!String(url).startsWith('/static/')) throw new Error(`Expected a system-local media URL: ${url}`);
   const file = path.resolve(staticRoot, url.slice('/static/'.length));
@@ -1100,6 +1166,7 @@ async function requireImageReview(chapter) {
     state.reviews.images ||= {};
     state.reviews.images[chapter.id] = { status: 'approved', reviewer: 'auto_operator', reviewed_at: new Date().toISOString(), fingerprint: digest, note: 'Auto-approved by operator instruction' };
     save();
+    write('production-reviews.json', state.reviews);
   }
   assertReview(state.reviews?.images?.[chapter.id], snapshot, `Chapter ${chapter.index} images`);
 }
@@ -1129,8 +1196,10 @@ async function requireChapterReview(chapter) {
     state.reviews.chapters ||= {};
     state.reviews.chapters[chapter.id] = { status: 'approved', reviewer: 'auto_operator', reviewed_at: new Date().toISOString(), fingerprint: digest, note: 'Auto-approved by operator instruction' };
     save();
+    write('production-reviews.json', state.reviews);
   }
   assertReview(state.reviews?.chapters?.[chapter.id], snapshot, `Chapter ${chapter.index} chapter_ready`);
+  publishChapterVideoToStatic(chapter, snapshot.delivery);
 }
 async function assertPriorChaptersReady(chapter, scope = null, requireChapter = true) {
   for (const prior of (scope || await chapters()).filter(item => item.index < chapter.index)) {
@@ -1214,6 +1283,7 @@ async function assemble(selected = null, options = {}) {
         const snapshot = await chapterDeliverySnapshot(chapter);
         const manifest = snapshot.delivery;
         assertChapterClipReady(probe(final), `Chapter ${chapter.index}`, { requireAudio: true, durationSeconds: manifest.duration }); decode(final);
+        publishChapterVideoToStatic(chapter, manifest);
         chapterFiles.push(final);
         fullCues.push(...manifest.cues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset })));
         fullOffset += manifest.duration;
@@ -1281,12 +1351,18 @@ async function assemble(selected = null, options = {}) {
     command('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', list, ...(chapterCues.length ? ['-i', subtitleFile] : []), '-map', '0:v:0', '-map', '0:a:0', ...(chapterCues.length ? ['-map', '1:0', '-c:s', 'mov_text', '-metadata:s:s:0', 'language=zho'] : []), '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart', final]);
     assertChapterClipReady(probe(final), `Chapter ${chapter.index}`, { requireAudio: true, durationSeconds: chapterOffset }); decode(final);
     if (fingerprint(await chapterSnapshot(chapter, true)) !== fingerprint(sourceSnapshot)) throw new Error(`Chapter ${chapter.index}: sources changed during assembly`);
-    write(`videos/chapter-${chapter.index}.manifest.json`, { schema_version: 1, source_fingerprint: fingerprint(sourceSnapshot), file: final, sha256: fileHash(final), subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), speech_files: speechFiles, cues: chapterCues, duration: chapterOffset, shot_durations: chapterShots.map(shot => ({ scene_id: shot.id, duration: assembledDurations[shot.id] ?? speech[shot.id].duration })), created_at: new Date().toISOString() });
+    const manifestObj = { schema_version: 1, source_fingerprint: fingerprint(sourceSnapshot), file: final, sha256: fileHash(final), subtitle_file: subtitleFile, subtitle_sha256: fileHash(subtitleFile), speech_files: speechFiles, cues: chapterCues, duration: chapterOffset, shot_durations: chapterShots.map(shot => ({ scene_id: shot.id, duration: assembledDurations[shot.id] ?? speech[shot.id].duration })), created_at: new Date().toISOString() };
+    write(`videos/chapter-${chapter.index}.manifest.json`, manifestObj);
+    publishChapterVideoToStatic(chapter, manifestObj);
     fullCues.push(...chapterCues.map(cue => ({ ...cue, start: cue.start + fullOffset, end: cue.end + fullOffset }))); fullOffset += chapterOffset;
     chapterFiles.push(final);
   }
   if (!fullFilm) {
-    for (const chapter of scope) reviewPreview(chapter, 'review-chapter', await chapterDeliverySnapshot(chapter));
+    for (const chapter of scope) {
+      const snap = await chapterDeliverySnapshot(chapter);
+      reviewPreview(chapter, 'review-chapter', snap);
+      publishChapterVideoToStatic(chapter, snap.delivery);
+    }
     return chapterFiles;
   }
   for (const chapter of scope) { await requireImageReview(chapter); await requireChapterReview(chapter); }
@@ -1455,7 +1531,15 @@ try {
     if (selected && !selected.length) throw new Error('Selected chapter is outside this production scope');
     if (!['review-continuity', 'review-task-order', 'verify', 'assets', 'images', 'videos'].includes(stage)) await requireContinuityReview();
     if (['assets', 'images', 'videos'].includes(stage)) await runChapterProductionStage(handlers[stage], selected);
-    else if (stage === 'assemble' && selected) await assemble(selected, { fullFilm: false });
+    else if (stage === 'assemble' && selected) {
+      if (autoApprove) {
+        for (const chapter of selected) await requireImageReview(chapter);
+      }
+      await assemble(selected, { fullFilm: false });
+      if (autoApprove) {
+        for (const chapter of selected) await requireChapterReview(chapter);
+      }
+    }
     else await handlers[stage](selected);
   }
 } catch (error) { failure = error; console.error(error.message); process.exitCode = 1; }

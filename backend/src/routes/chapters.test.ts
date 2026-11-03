@@ -101,6 +101,32 @@ test('Chapter creation enforces strict finalization order and impact finalizes c
     assert.equal(res2Success.statusCode, 201);
     const body2 = JSON.parse(res2Success.body);
     assert.equal(body2.status, 'draft');
+
+    // 5. Chapter video status endpoint returns assembled/playlist metadata
+    const sceneRes = await db.run(
+      `INSERT INTO scene (chapter_id, "index", visual_prompt, audio_prompt, dialogue, narration, duration, asset_status, asset_url, active_version)
+       VALUES (?, 1, '云海玉阶', '', '嘉静，你还好吗？', '', 8, 'completed', '/static/frame-1.png', 1)`,
+      'ch-order-1'
+    );
+    const sceneId = Number(sceneRes.lastID);
+    await db.run(
+      `INSERT INTO media_asset (project_id, scene_id, scene_version, media_type, role, status, url, duration_ms)
+       VALUES (?, ?, 1, 'video', 'narrative_final', 'ready', '/static/shot-1.mp4', 8000)`,
+      projectId,
+      sceneId
+    );
+    const videoRes = await app.inject({
+      method: 'GET',
+      url: '/api/chapters/ch-order-1/video',
+    });
+    assert.equal(videoRes.statusCode, 200);
+    const videoBody = JSON.parse(videoRes.body);
+    assert.equal(videoBody.chapter_id, 'ch-order-1');
+    assert.equal(videoBody.shots_summary.total_shots, 1);
+    assert.equal(videoBody.shots_summary.ready_video_shots, 1);
+    assert.equal(videoBody.shots_summary.all_ready, true);
+    assert.equal(videoBody.shot_playlist.length, 1);
+    assert.equal(videoBody.shot_playlist[0].video_url, '/static/shot-1.mp4');
   } finally {
     LLMService.generateStructuredWithRetry = origGen;
   }

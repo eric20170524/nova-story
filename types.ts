@@ -441,3 +441,69 @@ export interface GeneratePayload {
   output_spec?: ImageOutputSpec;
   generation_params?: GenerationParams;
 }
+
+export interface ChapterSubtitleCue {
+  block_id: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface ChapterShotTiming {
+  scene_id: number;
+  duration: number;
+}
+
+export interface ChapterPlaylistShot {
+  scene_id: number;
+  shot_number: number;
+  duration: number;
+  start_time: number;
+  end_time: number;
+  video_url: string | null;
+  video_role: MediaAssetRole | null;
+  video_status: string | null;
+  poster_url: string | null;
+  dialogue: string;
+  narration: string;
+  visual_prompt: string;
+}
+
+export interface ChapterVideoStatus {
+  project_id: number;
+  chapter_id: string;
+  chapter_index: number;
+  chapter_title: string;
+  assembled: {
+    available: boolean;
+    url: string | null;
+    subtitle_url: string | null;
+    vtt_url: string | null;
+    duration: number | null;
+    sha256?: string | null;
+    subtitle_sha256?: string | null;
+    created_at: string | null;
+    cues: ChapterSubtitleCue[];
+    shot_durations: ChapterShotTiming[];
+  };
+  preview: {
+    available: boolean;
+    url: string | null;
+    label: string | null;
+  };
+  review?: {
+    status: string;
+    reviewer?: string;
+    reviewed_at?: string;
+    fingerprint?: string;
+    note?: string;
+  } | null;
+  shots_summary: {
+    total_shots: number;
+    ready_video_shots: number;
+    any_video_shots: number;
+    all_ready: boolean;
+  };
+  shot_playlist: ChapterPlaylistShot[];
+  updated_at?: string;
+}

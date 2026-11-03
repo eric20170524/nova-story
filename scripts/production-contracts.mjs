@@ -82,6 +82,10 @@ function timestamp(seconds) {
   const millis = Math.round(seconds * 1000);
   return `${String(Math.floor(millis / 3600000)).padStart(2, '0')}:${String(Math.floor(millis / 60000) % 60).padStart(2, '0')}:${String(Math.floor(millis / 1000) % 60).padStart(2, '0')},${String(millis % 1000).padStart(3, '0')}`;
 }
+function vttTimestamp(seconds) {
+  const millis = Math.round(seconds * 1000);
+  return `${String(Math.floor(millis / 3600000)).padStart(2, '0')}:${String(Math.floor(millis / 60000) % 60).padStart(2, '0')}:${String(Math.floor(millis / 1000) % 60).padStart(2, '0')}.${String(millis % 1000).padStart(3, '0')}`;
+}
 export function subtitles(cues) {
   let number = 0;
   return cues.flatMap(cue => {
@@ -97,6 +101,24 @@ export function subtitles(cues) {
     }
     return pages;
   }).join('\n');
+}
+export function webvtt(cues) {
+  let number = 0;
+  const blocks = (cues || []).flatMap(cue => {
+    const characters = [...String(cue.text || '').replace(/\r?\n/g, ' ')];
+    if (!characters.length) return [];
+    const pages = [];
+    for (let offset = 0; offset < characters.length; offset += 36) {
+      const end = Math.min(offset + 36, characters.length);
+      const text = characters.slice(offset, end);
+      const lines = text.length > 18 ? `${text.slice(0, 18).join('')}\n${text.slice(18).join('')}` : text.join('');
+      const startTime = cue.start + (cue.end - cue.start) * offset / characters.length;
+      const endTime = cue.start + (cue.end - cue.start) * end / characters.length;
+      pages.push(`${++number}\n${vttTimestamp(startTime)} --> ${vttTimestamp(endTime)}\n${lines}`);
+    }
+    return pages;
+  });
+  return `WEBVTT\n\n${blocks.join('\n\n')}\n`;
 }
 export function assertReview(record, snapshot, label) {
   if (!record || record.status !== 'approved' || !record.reviewer?.trim() || !record.reviewed_at || record.fingerprint !== fingerprint(snapshot)) throw new Error(`${label}: human approval is missing or its sources changed; review the current preview and record approval`);

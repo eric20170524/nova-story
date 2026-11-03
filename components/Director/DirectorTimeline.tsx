@@ -14,9 +14,11 @@ import {
   ArrowRight,
   Sparkles,
   Crop,
-  Video
+  Video,
+  Play,
+  Clapperboard
 } from 'lucide-react';
-import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec, VideoWorkflowId, VideoPreset } from '../../types';
+import { Scene, CoverageGroup, CoverageShot, MediaAsset, VideoTaskState, ImageOutputSpec, VideoWorkflowId, VideoPreset, ChapterVideoStatus } from '../../types';
 import { SHOT_TYPES, CAMERA_MOVEMENTS, CAMERA_ANGLES } from '../../constants';
 import { useLanguage } from '../../LanguageContext';
 import { SceneCardSkeleton } from '../Skeleton';
@@ -58,6 +60,8 @@ interface DirectorTimelineProps {
   onReprocessVideoAsset?: (assetId: number) => void;
   onCancelVideoTask?: (taskId: string) => void;
   chapterScript?: { id: number; revision: number; status: string } | null;
+  chapterVideoStatus?: ChapterVideoStatus | null;
+  onOpenChapterVideoModal?: () => void;
 }
 
 export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
@@ -65,6 +69,8 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
   loading,
   selectedChapterId,
   chapterScript,
+  chapterVideoStatus,
+  onOpenChapterVideoModal,
   onGenerateStoryboard,
   generatingStoryboard,
   canGenerateStoryboard,
@@ -199,6 +205,40 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
          </div>
          
          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            {selectedChapterId && onOpenChapterVideoModal && (
+              <button
+                type="button"
+                onClick={onOpenChapterVideoModal}
+                data-testid="open-chapter-video-modal-btn"
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm ${
+                  chapterVideoStatus?.assembled?.available
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20'
+                }`}
+                title="预览播放当前章节完整合成视频（含 TTS 对白与中文字幕）或分镜连续连播"
+              >
+                {chapterVideoStatus?.assembled?.available ? (
+                  <Play size={14} className="fill-current" />
+                ) : (
+                  <Clapperboard size={14} />
+                )}
+                <span>
+                  {chapterVideoStatus?.assembled?.available
+                    ? '预览本章完整成片'
+                    : '章节视频预览'}
+                </span>
+                {chapterVideoStatus?.assembled?.available && chapterVideoStatus?.assembled?.duration ? (
+                  <span className="hidden md:inline-block px-1.5 py-0.5 rounded-md bg-white/20 text-[11px] font-mono">
+                    {Math.floor(Number(chapterVideoStatus.assembled.duration) / 60)}:
+                    {String(Math.floor(Number(chapterVideoStatus.assembled.duration) % 60)).padStart(2, '0')}
+                  </span>
+                ) : chapterVideoStatus?.shots_summary?.total_shots ? (
+                  <span className="hidden md:inline-block px-1.5 py-0.5 rounded-md bg-white/20 text-[11px] font-mono">
+                    {chapterVideoStatus.shots_summary.ready_video_shots}/{chapterVideoStatus.shots_summary.total_shots}
+                  </span>
+                ) : null}
+              </button>
+            )}
             {timeline.length > 0 && (
               <button
                 type="button"
@@ -267,7 +307,7 @@ export const DirectorTimeline: React.FC<DirectorTimelineProps> = ({
                     const shotStage = shotMediaStage(stages);
 
                     return (
-                    <div key={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl dark:shadow-md hover:border-indigo-400/50 dark:hover:border-slate-700 transition-all group animate-in fade-in zoom-in-95 duration-200">
+                    <div key={scene.id} data-scene-card-id={scene.id} className="w-full sm:w-80 flex-shrink-0 flex flex-col bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl dark:shadow-md hover:border-indigo-400/50 dark:hover:border-slate-700 transition-all group animate-in fade-in zoom-in-95 duration-200">
                         <SceneAssetReferences sceneId={Number(scene.id)} />
                         {/* Header */}
                         <div className="p-3 bg-slate-50/80 dark:bg-[#131c2e]/80 border-b border-slate-200/80 dark:border-slate-800/80 flex justify-between items-center gap-2">

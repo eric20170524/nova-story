@@ -32,7 +32,8 @@ import {
   VideoWorkflowId,
   MediaAsset,
   VideoTaskState,
-  VideoGenerationRequest
+  VideoGenerationRequest,
+  ChapterVideoStatus
 } from '../types';
 import { API_BASE_URL, findVisualStyle, getVisualStyles, STANDARD_VISUAL_STYLES } from '../constants';
 import { useLanguage } from '../LanguageContext';
@@ -43,6 +44,7 @@ import { DirectorTimeline } from '../components/Director/DirectorTimeline';
 import { DirectorStoryboardCandidates, type DirectorScreenplay } from '../components/Director/DirectorStoryboardCandidates';
 import { DirectorRightPanel } from '../components/Director/DirectorRightPanel';
 import { DirectorWorkbenchDeck } from '../components/Director/DirectorWorkbenchDeck';
+import { ChapterVideoPlayerModal } from '../components/Director/ChapterVideoPlayerModal';
 import {
   buildCharacterAppearanceSnippet,
   getCharacterLoraName,
@@ -123,6 +125,11 @@ export const DirectorMode: React.FC = () => {
   const [videoPreset, setVideoPreset] = useState<VideoPreset>('standard_720p_5s');
   const [runLoopCloser, setRunLoopCloser] = useState<boolean>(true);
   const [videoMotionPrompt, setVideoMotionPrompt] = useState<string>('');
+  const [chapterVideoStatus, setChapterVideoStatus] = useState<ChapterVideoStatus | null>(null);
+  const [showChapterVideoModal, setShowChapterVideoModal] = useState<boolean>(false);
+  const [loadingChapterVideo, setLoadingChapterVideo] = useState<boolean>(false);
+  const [assemblingChapterVideo, setAssemblingChapterVideo] = useState<boolean>(false);
+  const [assembleChapterError, setAssembleChapterError] = useState<string | null>(null);
   const stopBatchVideoRef = React.useRef<boolean>(false);
   const activeVideoEvtSourcesRef = React.useRef<Map<string, EventSource>>(new Map());
   const activeBatchVideoTaskIdRef = React.useRef<string | null>(null);
@@ -1390,6 +1397,32 @@ export const DirectorMode: React.FC = () => {
             : t('director.batch_complete', 'Batch video generation complete'),
           wasStopped ? 'warning' : 'success'
         );
+        if (!wasStopped) {
+          try {
+            const latestStatus = await api.getChapterVideo(chapterId, {
+              projectId: Number(projectId) || 1,
+              chapterIndex: chapters.find((chapter) => chapter.id === chapterId)?.index || 1,
+              chapterTitle: chapters.find((chapter) => chapter.id === chapterId)?.title || undefined,
+              timeline: scenes,
+              mediaAssetsByScene: mediaAssetsByScene as Record<number, MediaAsset[]>,
+            });
+            setChapterVideoStatus(latestStatus);
+            if (latestStatus.shots_summary?.all_ready && !latestStatus.assembled?.available) {
+              setAssemblingChapterVideo(true);
+              try {
+                const assembledStatus = await api.assembleChapterVideo(chapterId);
+                setChapterVideoStatus(assembledStatus);
+                showToast('全部分镜已就绪，已自动合成封装本章整章成片！', 'success');
+              } catch {
+                // ignore auto-assemble failure in batch hook
+              } finally {
+                setAssemblingChapterVideo(false);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
       }
     );
     if (!started) {
@@ -1468,6 +1501,59 @@ export const DirectorMode: React.FC = () => {
     }
   };
 
+  const activeChapterObj = chapters.find((c) => c.id === selectedChapterId) || null;
+
+  const loadChapterVideoStatus = React.useCallback(async () => {
+    if (!selectedChapterId || !projectId) {
+      setChapterVideoStatus(null);
+      return;
+    }
+    setLoadingChapterVideo(true);
+    try {
+      const status = await api.getChapterVideo(selectedChapterId, {
+        projectId: Number(projectId),
+        chapterIndex: activeChapterObj?.index || 1,
+        chapterTitle: activeChapterObj?.title || undefined,
+        timeline,
+        mediaAssetsByScene: mediaAssetsByScene as Record<number, MediaAsset[]>,
+      });
+      setChapterVideoStatus(status);
+    } catch (err) {
+      console.warn('Failed to load chapter video status:', err);
+    } finally {
+      setLoadingChapterVideo(false);
+    }
+  }, [selectedChapterId, projectId, activeChapterObj?.index, activeChapterObj?.title, timeline, mediaAssetsByScene]);
+
+  useEffect(() => {
+    void loadChapterVideoStatus();
+  }, [loadChapterVideoStatus]);
+
+  const handleAssembleChapterVideo = async () => {
+    if (!selectedChapterId) return;
+    setAssemblingChapterVideo(true);
+    setAssembleChapterError(null);
+    try {
+      const status = await api.assembleChapterVideo(selectedChapterId);
+      setChapterVideoStatus(status);
+      showToast('本章整章成片已合流封装完成（含 TTS 对白与中文字幕）！', 'success');
+    } catch (err: any) {
+      const msg = err?.message || '合成整章成片失败';
+      setAssembleChapterError(msg);
+      showToast(msg, 'error');
+      await loadChapterVideoStatus();
+    } finally {
+      setAssemblingChapterVideo(false);
+    }
+  };
+
+  const handleJumpToSceneFromModal = (sceneId: number) => {
+    const cardEl = document.querySelector(`[data-scene-card-id="${sceneId}"]`);
+    if (cardEl && typeof cardEl.scrollIntoView === 'function') {
+      cardEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }
+  };
+
   const screenplayReady = Boolean(selectedChapterId) && screenplayChapterId === selectedChapterId;
   const canGenerateStoryboard = Boolean(
     screenplayReady &&
@@ -1506,6 +1592,8 @@ export const DirectorMode: React.FC = () => {
         chapters={chapters}
         selectedChapterId={selectedChapterId}
         onSelectChapter={setSelectedChapterId}
+        chapterVideoStatus={chapterVideoStatus}
+        onOpenChapterVideoModal={() => setShowChapterVideoModal(true)}
       />
 
       <DirectorTimeline
@@ -1513,6 +1601,8 @@ export const DirectorMode: React.FC = () => {
         loading={loading}
         selectedChapterId={selectedChapterId}
         chapterScript={chapterScript}
+        chapterVideoStatus={chapterVideoStatus}
+        onOpenChapterVideoModal={() => setShowChapterVideoModal(true)}
         onGenerateStoryboard={handleGenerateStoryboard}
         generatingStoryboard={generatingStoryboard}
         canGenerateStoryboard={canGenerateStoryboard}
@@ -1591,6 +1681,24 @@ export const DirectorMode: React.FC = () => {
         onBatchGenerateVideo={handleBatchGenerateVideo}
         isBatchGeneratingVideo={isBatchGeneratingVideo}
         onStopBatchGenerateVideo={handleStopBatchGenerateVideo}
+        chapterVideoStatus={chapterVideoStatus}
+        onOpenChapterVideoModal={() => setShowChapterVideoModal(true)}
+        onAssembleChapterVideo={handleAssembleChapterVideo}
+        isAssemblingChapterVideo={assemblingChapterVideo}
+      />
+
+      <ChapterVideoPlayerModal
+        isOpen={showChapterVideoModal}
+        onClose={() => setShowChapterVideoModal(false)}
+        chapterTitle={activeChapterObj?.title || ''}
+        chapterIndex={activeChapterObj?.index || 1}
+        videoStatus={chapterVideoStatus}
+        isLoading={loadingChapterVideo}
+        isAssembling={assemblingChapterVideo}
+        assembleError={assembleChapterError}
+        onAssemble={handleAssembleChapterVideo}
+        onRefresh={() => void loadChapterVideoStatus()}
+        onJumpToScene={handleJumpToSceneFromModal}
       />
     </div>
   );

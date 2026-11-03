@@ -15,7 +15,9 @@ import type {
   VideoTaskState,
   MediaAsset,
   PublicTtsVoice,
-  TtsStatusResult
+  TtsStatusResult,
+  ChapterVideoStatus,
+  Scene
 } from '../types';
 import { ApiError } from './api_error';
 import { unsupportedMockResponse } from './mock_fallback';
@@ -875,6 +877,145 @@ class ApiService {
     }>(`/scripts/${scriptId}/storyboard-candidates/${changeId}/apply`, {
       method: 'POST',
       body: payload,
+    });
+
+  getChapterVideo = async (
+    chapterId: string,
+    fallbackContext?: {
+      projectId: number;
+      chapterIndex: number;
+      chapterTitle?: string;
+      timeline?: Scene[];
+      mediaAssetsByScene?: Record<number, MediaAsset[]>;
+    }
+  ): Promise<ChapterVideoStatus> => {
+    try {
+      return await this.request<ChapterVideoStatus>(`/chapters/${encodeURIComponent(chapterId)}/video`);
+    } catch (err) {
+      if (!fallbackContext) throw err;
+      const { projectId, chapterIndex, chapterTitle, timeline = [], mediaAssetsByScene = {} } = fallbackContext;
+      const baseUrl = `/static/generated/projects/${projectId}/chapters`;
+      let staticData: any = null;
+      try {
+        const res = await fetch(`${baseUrl}/chapter-${encodeURIComponent(chapterId)}.json?t=${Date.now()}`);
+        if (res.ok) staticData = await res.json();
+      } catch {
+        // ignore
+      }
+      if (!staticData && chapterIndex > 0) {
+        try {
+          const res = await fetch(`${baseUrl}/chapter-${chapterIndex}.manifest.json?t=${Date.now()}`);
+          if (res.ok) {
+            const raw = await res.json();
+            staticData = raw?.web || {
+              assembled: {
+                available: true,
+                url: `${baseUrl}/chapter-${chapterIndex}.mp4`,
+                subtitle_url: `${baseUrl}/chapter-${chapterIndex}.srt`,
+                vtt_url: `${baseUrl}/chapter-${chapterIndex}.vtt`,
+                duration: raw?.duration ?? null,
+                sha256: raw?.sha256 ?? null,
+                subtitle_sha256: raw?.subtitle_sha256 ?? null,
+                created_at: raw?.created_at ?? null,
+                cues: raw?.cues || [],
+                shot_durations: raw?.shot_durations || [],
+              },
+            };
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const shotDurationMap = new Map<number, number>();
+      for (const item of staticData?.assembled?.shot_durations || []) {
+        if (item && Number.isFinite(Number(item.scene_id)) && Number.isFinite(Number(item.duration))) {
+          shotDurationMap.set(Number(item.scene_id), Number(item.duration));
+        }
+      }
+
+      let readyVideoShots = 0;
+      let anyVideoShots = 0;
+      let cursorTime = 0;
+      const shotPlaylist = timeline.map((scene, idx) => {
+        const sid = Number(scene.id);
+        const assets = mediaAssetsByScene[sid] || [];
+        const readyFinal = assets.filter((a) => a.role === 'narrative_final' && a.status === 'ready').at(-1);
+        const anyFinal =
+          readyFinal ||
+          assets.filter((a) => a.role === 'narrative_final' && a.status !== 'archived' && a.status !== 'rejected').at(-1) ||
+          assets.filter((a) => a.role === 'loop_master' && a.status !== 'archived' && a.status !== 'rejected').at(-1) ||
+          assets.filter((a) => a.role === 'raw_video' && a.status !== 'archived' && a.status !== 'rejected').at(-1) ||
+          null;
+        const posterAsset = assets.filter((a) => a.role === 'poster').at(-1);
+        if (readyFinal) readyVideoShots += 1;
+        if (anyFinal) anyVideoShots += 1;
+        const durationFromAsset =
+          anyFinal?.duration_ms && Number(anyFinal.duration_ms) > 0
+            ? Number(anyFinal.duration_ms) / 1000
+            : null;
+        const shotDuration =
+          shotDurationMap.get(sid) ??
+          durationFromAsset ??
+          (Number(scene.duration) > 0 ? Number(scene.duration) : 5);
+        const startTime = Number(cursorTime.toFixed(3));
+        const endTime = Number((cursorTime + shotDuration).toFixed(3));
+        cursorTime = endTime;
+        return {
+          scene_id: sid,
+          shot_number: idx + 1,
+          duration: shotDuration,
+          start_time: startTime,
+          end_time: endTime,
+          video_url: anyFinal?.url || null,
+          video_role: anyFinal?.role || null,
+          video_status: anyFinal?.status || null,
+          poster_url: posterAsset?.url || scene.asset_url || null,
+          dialogue: scene.dialogue || '',
+          narration: scene.narration || '',
+          visual_prompt: scene.visual_prompt || '',
+        };
+      });
+
+      return {
+        project_id: projectId,
+        chapter_id: chapterId,
+        chapter_index: chapterIndex,
+        chapter_title: staticData?.chapter_title || chapterTitle || `第${chapterIndex}章`,
+        assembled: staticData?.assembled || {
+          available: false,
+          url: null,
+          subtitle_url: null,
+          vtt_url: null,
+          duration: null,
+          created_at: null,
+          cues: [],
+          shot_durations: [],
+        },
+        preview: staticData?.preview || {
+          available: false,
+          url: null,
+          label: null,
+        },
+        review: staticData?.review || null,
+        shots_summary: staticData?.shots_summary?.total_shots
+          ? staticData.shots_summary
+          : {
+              total_shots: timeline.length,
+              ready_video_shots: readyVideoShots,
+              any_video_shots: anyVideoShots,
+              all_ready: timeline.length > 0 && readyVideoShots === timeline.length,
+            },
+        shot_playlist: staticData?.shot_playlist?.length ? staticData.shot_playlist : shotPlaylist,
+        updated_at: staticData?.updated_at || new Date().toISOString(),
+      };
+    }
+  };
+
+  assembleChapterVideo = (chapterId: string) =>
+    this.request<ChapterVideoStatus>(`/chapters/${encodeURIComponent(chapterId)}/video/assemble`, {
+      method: 'POST',
+      body: {},
     });
 }
 
