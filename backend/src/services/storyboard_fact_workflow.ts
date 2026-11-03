@@ -1253,9 +1253,27 @@ export async function runFactWorkflow(input: {
       const sourceIndex = scene.blocks.indexOf(block);
       const seconds = audioSeconds(block);
       const remainingAudioSeconds = audio.slice(audioIndex).reduce((n, b) => n + audioSeconds(b), 0);
+      let remainingBins = 0;
+      let currentBinLoad = 0;
+      for (const remBlock of audio.slice(audioIndex)) {
+        const remSec = audioSeconds(remBlock);
+        if (remainingBins === 0) {
+          remainingBins = 1;
+          currentBinLoad = remSec;
+        } else if (
+          currentBinLoad + remSec > MAX_SHOT_SECONDS ||
+          (currentBinLoad > 0 && remSec > 0 && currentBinLoad + remSec > SOFT_MAX_SHOT_SECONDS)
+        ) {
+          remainingBins++;
+          currentBinLoad = remSec;
+        } else {
+          currentBinLoad += remSec;
+        }
+      }
+      const maxStartSlot = Math.max(lastAudioSlot, plan.length - Math.max(1, remainingBins));
       let target = -1;
       plan.forEach((shot, i) => {
-        if (target >= 0 || i < lastAudioSlot) return;
+        if (i < lastAudioSlot || i > maxStartSlot) return;
         const positions = sceneFacts.filter(f => shot.fact_ids.includes(f.id)).map(f => scene.blocks.findIndex(b => b.id === f.block_id));
         if (positions.length && Math.min(...positions) <= sourceIndex) target = i;
       });

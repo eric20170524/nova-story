@@ -1136,3 +1136,30 @@ test('Scheme C: 分镜 plan 阶段先执行 enableThinking=true 导演构思，�
   StoryboardGenerationService.validatePayload(payload, f.script);
 });
 
+test('有声块对齐到其紧邻的前置动作镜头，而非全部堆积在同场首镜', async () => {
+  const doc = document(1);
+  doc.scenes[0]!.blocks = [
+    { id: 'b_1_1', type: 'action', text: '第1场的第1盏红灯亮起。' },
+    { id: 'b_1_2', type: 'action', text: '第1场的第2盏红灯亮起。' },
+    { id: 'b_1_3', type: 'action', text: '第1场的第3盏红灯亮起。' },
+    { id: 'b_1_4', type: 'voiceover', characterId: null, text: '信号到了。' },
+    { id: 'b_1_5', type: 'action', text: '第1场的第4盏红灯亮起。' },
+    { id: 'b_1_6', type: 'voiceover', characterId: null, text: '准备启航。' },
+  ];
+  const f = await confirmed(doc);
+  const m = providerFixture();
+  const candidate = await StoryboardGenerationService.generateStoryboardCandidate({
+    ...f.params,
+    requestKey: 'audio-aligned-to-action-shot',
+    provider: m.provider,
+  });
+  const payload = JSON.parse(candidate.after_json);
+  StoryboardGenerationService.validatePayload(payload, f.script);
+  assert.equal(payload.shots.length, 4);
+  assert.equal(payload.shots[0].narration, '');
+  assert.equal(payload.shots[1].narration, '');
+  assert.equal(payload.shots[2].narration, '信号到了。');
+  assert.equal(payload.shots[3].narration, '准备启航。');
+});
+
+

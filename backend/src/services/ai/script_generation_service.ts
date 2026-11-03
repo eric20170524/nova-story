@@ -293,6 +293,96 @@ function resolvePerformanceBlocks(
   return { blocks, unresolved };
 }
 
+function normalizeDialogueCompare(text: string): string {
+  return String(text || '')
+    .normalize('NFKC')
+    .replace(/[\s"'“”‘’「」『』，,。！？!?…—~～：:；;、]/g, '')
+    .trim();
+}
+
+/**
+ * Extract spoken character quotes (“...”) embedded in action blocks into explicit dialogue blocks
+ * immediately following the action block, unless already covered by an existing dialogue block in the scene.
+ */
+export function extractEmbeddedDialogueBlocks(
+  scene: Pick<ScriptScene, 'blocks' | 'characterIds'>,
+  projectCharacters: Array<{ id: number; name: string }>,
+): void {
+  if (!projectCharacters.length || !scene.blocks.length) return;
+  const existingDialogues = scene.blocks
+    .filter((b) => b.type === 'dialogue' || b.type === 'voiceover')
+    .map((b) => normalizeDialogueCompare(b.text))
+    .filter(Boolean);
+
+  const usedIds = new Set(scene.blocks.map((b) => b.id));
+  const sortedChars = [...projectCharacters]
+    .filter((c) => c.name.trim().length > 0)
+    .sort((a, b) => b.name.length - a.name.length);
+
+  const nextBlocks: ScriptBlock[] = [];
+  for (const block of scene.blocks) {
+    nextBlocks.push(block);
+    if (block.type !== 'action') continue;
+
+    const quotePattern = /(?:(?:道|说|问|答|喊|叫|喝|吼|骂|念|叹|笑|开口|低语|轻声|冷声|沉声|柔声|颤声|哑声|冷笑|苦笑|吐出[^“”]{0,8}字)\s*[：:，,]?\s*|[：:]\s*)“([^”]+)”|“([^”]+[。！？!?…—~～])”/gu;
+    let match: RegExpExecArray | null;
+    let subIndex = 1;
+    while ((match = quotePattern.exec(block.text)) !== null) {
+      const spokenText = (match[1] || match[2] || '').trim();
+      const normSpoken = normalizeDialogueCompare(spokenText);
+      if (!normSpoken) continue;
+      if (existingDialogues.some((existing) => existing.includes(normSpoken) || normSpoken.includes(existing))) {
+        continue;
+      }
+
+      const prefix = block.text.slice(0, match.index);
+      let scrubbedPrefix = prefix;
+      for (const ch of sortedChars) {
+        const escaped = ch.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const objectRegex = new RegExp(`(?:看向|望向|看着|望着|盯着|扶住|抓住|拉住|抱住|握住|映出|对着|朝着|向着)\\s*${escaped}`, 'gu');
+        scrubbedPrefix = scrubbedPrefix.replace(objectRegex, '');
+      }
+
+      let speaker: { id: number; name: string } | null = null;
+      let bestPos = -1;
+      for (const ch of sortedChars) {
+        const pos = scrubbedPrefix.lastIndexOf(ch.name);
+        if (pos > bestPos) {
+          bestPos = pos;
+          speaker = ch;
+        }
+      }
+      if (!speaker) {
+        for (const ch of sortedChars) {
+          const pos = prefix.lastIndexOf(ch.name);
+          if (pos > bestPos) {
+            bestPos = pos;
+            speaker = ch;
+          }
+        }
+      }
+      if (!speaker) continue;
+
+      let dlgId = `${block.id}_dlg_${subIndex++}`;
+      while (usedIds.has(dlgId)) {
+        dlgId = `${block.id}_dlg_${subIndex++}`;
+      }
+      usedIds.add(dlgId);
+      nextBlocks.push({
+        id: dlgId,
+        type: 'dialogue',
+        characterId: speaker.id,
+        text: spokenText,
+      });
+      existingDialogues.push(normSpoken);
+      if (!scene.characterIds.includes(speaker.id)) {
+        scene.characterIds.push(speaker.id);
+      }
+    }
+  }
+  scene.blocks = nextBlocks;
+}
+
 function paragraphIndex(id: string): number | null {
   const match = /^p_(\d+)$/.exec(id);
   return match ? Number(match[1]) : null;
@@ -814,7 +904,7 @@ export class ScriptGenerationService {
         previousSceneSummary,
         instructions: params.instructions || '将小说叙事转化为外部动作表演与高张力台词对白',
       }) + (verbatimEvents.length
-        ? `\n\n本场至少一个 action.text 必须原样包含下列完整句子，不要改写：\n${verbatimEvents.join('\n')}`
+        ? `\n\n本场至少一个 action.text 必须原样包含下列完整句子，不要改写（若句子中含有引号角色对白“……”，除保留动作外还须拆出独立的 dialogue 块并标注说话人）：\n${verbatimEvents.join('\n')}`
         : '') + (visibleSentences.length
         ? `\n\n本场可见画面必须写入 action.text，对白和画外音不算覆盖。逐句保留服装、姿态和身体接触：\n${visibleSentences.join('\n')}`
         : '');
@@ -914,7 +1004,7 @@ export class ScriptGenerationService {
         if ((performance.unresolved.length > 0 || missingBeatEvents.length > 0) && attempt === 0) {
           const notes: string[] = [];
           if (missingBeatEvents.length > 0) {
-            notes.push(`上次草稿没有原样写入必保事件。请重写，并让 action.text 逐字包含这些完整句子：\n${missingBeatEvents.map((event) => event.text).join('\n')}`);
+            notes.push(`上次草稿没有原样写入必保事件。请重写，并让 action.text 逐字包含这些完整句子（若句子中含有引号角色对白“……”，还须同步拆出独立的 dialogue 块）：\n${missingBeatEvents.map((event) => event.text).join('\n')}`);
           }
           if (performance.unresolved.length > 0) {
             const roster = projectCharacters.map((character) => character.name).join('、') || '（当前无角色档案）';
@@ -941,6 +1031,9 @@ export class ScriptGenerationService {
             anchoredEventIds.push(event.id);
           }
         }
+        extractEmbeddedDialogueBlocks(resolvedScene, projectCharacters);
+        sceneBlocks.splice(0, sceneBlocks.length, ...resolvedScene.blocks);
+        for (const id of resolvedScene.characterIds) sceneCharacterIds.add(id);
         if (!locationId) {
           locationId = allocateLocationId(locations);
           locations.push({
@@ -1170,6 +1263,13 @@ export class ScriptGenerationService {
       blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds) };
     await resolveSceneReferences(resolvedScene, provider, entityRoster(projectCharacters), sourceContext, locationName,
       script.document.scenes[script.document.scenes.indexOf(targetScene) - 1]);
+    const beforeExtractCount = resolvedScene.blocks.length;
+    extractEmbeddedDialogueBlocks(resolvedScene, projectCharacters);
+    if (resolvedScene.blocks.length !== beforeExtractCount) {
+      sceneBlocks.splice(0, sceneBlocks.length, ...resolvedScene.blocks);
+      await resolveSceneReferences(resolvedScene, provider, entityRoster(projectCharacters), sourceContext, locationName,
+        script.document.scenes[script.document.scenes.indexOf(targetScene) - 1]);
+    }
     for (const id of resolvedScene.characterIds) sceneCharacterIds.add(id);
 
     const rewrittenText = sceneBlocks.map((block) => block.text).join(' ');

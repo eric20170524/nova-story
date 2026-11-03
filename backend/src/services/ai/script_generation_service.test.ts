@@ -12,6 +12,7 @@ import {
   isNarratorLabel,
   anchorMissingVisibleBeats,
   assignUnassignedMustKeepEvents,
+  extractEmbeddedDialogueBlocks,
 } from './script_generation_service';
 import { AgentExecutor } from './agent_executor';
 import type { AIProvider } from './base';
@@ -1324,4 +1325,51 @@ test('partial event coverage must not suppress a missing visible action', () => 
   scenes[0]!.blocks.at(-1)!.text = '她走到窗前';
   assert.deepEqual(anchorMissingVisibleBeats(scenes, beats), ['vb_1']);
   assert.equal(scenes[0]!.blocks.at(-1)!.text, beats[0]!.text);
+});
+
+test('extractEmbeddedDialogueBlocks splits spoken quotes in action blocks into dialogue blocks without duplicating existing lines', () => {
+  const cast = [
+    { id: 17, name: '陆嘉静' },
+    { id: 18, name: '裴雨涵' },
+    { id: 19, name: '南宫雪' },
+  ];
+  const scene: Pick<ScriptDocument['scenes'][number], 'blocks' | 'characterIds'> = {
+    characterIds: [17, 18],
+    blocks: [
+      {
+        id: 'b_3_1',
+        type: 'action',
+        text: '镜面映出陆嘉静的瞳色只失守了一瞬，陆嘉静几乎要摔镜，低声道：“又开始了。”',
+      },
+      {
+        id: 'b_3_2',
+        type: 'action',
+        text: '南宫雪几乎站不稳，却仍走到玉阶下，抬眼看向陆嘉静：“宫主……春潮来了。雨涵姐姐在等。我们……要一起渡吗？”',
+      },
+      {
+        id: 'b_2_3',
+        type: 'action',
+        text: '裴雨涵抬头，朝玉楼方向笑了，唇形无声地吐出两个字：“来吗？”',
+      },
+      {
+        id: 'b_2_4',
+        type: 'dialogue',
+        characterId: 18,
+        text: '来吗？',
+      },
+    ],
+  };
+
+  extractEmbeddedDialogueBlocks(scene, cast);
+  const dialogues = scene.blocks.filter((b) => b.type === 'dialogue');
+  assert.equal(dialogues.length, 3);
+  assert.deepEqual(
+    dialogues.map((d) => ({ characterId: d.characterId, text: d.text })),
+    [
+      { characterId: 17, text: '又开始了。' },
+      { characterId: 19, text: '宫主……春潮来了。雨涵姐姐在等。我们……要一起渡吗？' },
+      { characterId: 18, text: '来吗？' },
+    ],
+  );
+  assert.deepEqual(new Set(scene.characterIds), new Set([17, 18, 19]));
 });
