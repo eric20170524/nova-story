@@ -190,8 +190,61 @@ export function readProjectVideoWorkflow(settings) {
   return PROJECT_VIDEO_WORKFLOW_IDS.has(raw) ? raw : null;
 }
 
-export function shotVideoPreset(shot) {
-  return Number(shot?.duration) > 5 ? 'standard_720p_8s' : 'standard_720p_5s';
+export function shotVideoPreset(shot, speechLayout = null) {
+  const measured = typeof speechLayout === 'number'
+    ? speechLayout
+    : Number(speechLayout?.duration) || 0;
+  const effectiveDuration = Math.max(Number(shot?.duration) || 0, measured);
+  return effectiveDuration > 5 ? 'standard_720p_8s' : 'standard_720p_5s';
+}
+
+export function resolveShotDrivingAudio(shot, mediaAssets = [], workflowId = 'minimax_h3_ref2va_official_12gb', preset = 'standard_720p_5s', speechLayout = null) {
+  if (!shot?.dialogue?.trim() || !speechLayout) return {};
+  const dialogueLines = new Set(
+    String(shot.dialogue || '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+  );
+  const files = speechLayout.files || [];
+  const dialogueCues = (speechLayout.cues || []).filter(cue => {
+    if (cue.type) return cue.type === 'dialogue';
+    const fileEntry = files.find(file => file.block_id === cue.block_id);
+    if (fileEntry?.type) return fileEntry.type === 'dialogue';
+    return dialogueLines.has(String(cue.text || '').trim());
+  });
+  if (!dialogueCues.length) return {};
+  const presetSeconds = String(preset || '').endsWith('_8s') ? 8 : 5;
+  const startSec = Number(Number(dialogueCues[0].start).toFixed(2));
+  const rawEndSec = Number(Number(dialogueCues[dialogueCues.length - 1].end).toFixed(2));
+  const result = {};
+  if (Number.isFinite(startSec) && startSec >= 0 && startSec <= presetSeconds - 0.25) {
+    result.driving_audio_start_sec = startSec;
+    const endSec = Number(Math.min(rawEndSec, presetSeconds).toFixed(2));
+    if (Number.isFinite(endSec) && endSec > startSec && endSec <= 8) {
+      result.driving_audio_end_sec = endSec;
+    }
+  }
+  const supportsDrivingAudio = workflowId === 'minimax_h3_ref2va_official_12gb'
+    || workflowId === 'minimax_h3_multiframe_official_12gb';
+  if (supportsDrivingAudio && dialogueCues.length === 1) {
+    const cue = dialogueCues[0];
+    const fileEntry = files.find(file => file.block_id === cue.block_id);
+    const matchingAsset = (mediaAssets || []).find(asset =>
+      asset.role === 'script_speech' &&
+      asset.status === 'ready' &&
+      asset.id != null &&
+      ((fileEntry?.asset_id != null && Number(asset.id) === Number(fileEntry.asset_id)) ||
+        (fileEntry?.url && asset.url === fileEntry.url))
+    );
+    const assetId = matchingAsset?.id != null
+      ? Number(matchingAsset.id)
+      : (fileEntry?.asset_id != null ? Number(fileEntry.asset_id) : null);
+    if (Number.isInteger(assetId) && assetId > 0) {
+      result.driving_audio_asset_id = assetId;
+    }
+  }
+  return result;
 }
 
 export function chooseShotVideoStrategy(assets, override = null, projectDefault = null, preset = 'standard_720p_5s') {

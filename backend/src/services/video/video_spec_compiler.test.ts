@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { factStateLabel } from '../../schemas/storyboard_facts';
-import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, continuityPromptLines, filterConflictingContinuityStates, isSpeechFact, motionFidelitySource, setVideoMotionTranslatorForTests, visibleFacts, type VideoMotionMaterials } from './video_spec_compiler';
+import { VideoSpecCompiler, alignH3FrameCount, cleanPromptForH3, continuityPromptLines, estimateSpeechDurationSeconds, filterConflictingContinuityStates, isSpeechFact, motionFidelitySource, resolveSpeechTimingWindow, setVideoMotionTranslatorForTests, visibleFacts, type VideoMotionMaterials } from './video_spec_compiler';
 
 test('stored attributes render with the shared label and do not invent another category', () => {
   assert.equal(factStateLabel('expression'), '表情');
@@ -49,8 +49,11 @@ test('Grok narrative prompts preserve the screenplay speech and sound', async ()
 test('H3 narrative prompts carry source sound effects while formal speech remains a separate track', async () => {
   const spec = await VideoSpecCompiler.compile({ request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false }, scene: { id: 64, dialogue: '完整对白', audio_prompt: '远处钟声' } });
   assert.match(spec.positive_prompt, /Sound: 远处钟声/);
-  assert.match(spec.positive_prompt, /no invented dialogue or narration/);
+  assert.doesNotMatch(spec.positive_prompt, /no invented dialogue or narration/);
   assert.doesNotMatch(spec.positive_prompt, /verbatim/);
+
+  const ambientOnly = await VideoSpecCompiler.compile({ request: { scene_id: 64, scene_version: 1, profile: 'narrative_clip', workflow_id: 'minimax_h3_ref2va_official_12gb', keyframe_asset_id: 10, character_reference_asset_ids: [], preset: 'standard_720p_5s', run_loop_closer: false }, scene: { id: 64, audio_prompt: '远处钟声' } });
+  assert.match(ambientOnly.positive_prompt, /no invented dialogue or narration/);
 });
 
 test('video identity uses stable cast appearance instead of later-chapter narrative status', async () => {
@@ -363,4 +366,55 @@ test('filterConflictingContinuityStates overrides sitting pose when standing is 
   const filtered = filterConflictingContinuityStates(states, facts);
   assert.equal(filtered.length, 0);
 });
+
+test('short dialogue compiles an explicit lip-sync timing window while pure narration enforces closed lips', async () => {
+  assert.equal(estimateSpeechDurationSeconds('来吗？'), 0.8);
+  const win = resolveSpeechTimingWindow({ speechSeconds: 0.8, clipSeconds: 5, hasActionLeadIn: true, blockType: 'dialogue' });
+  assert.equal(win.startSec, 0.5);
+  assert.equal(win.endSec, 1.3);
+  assert.equal(win.silentTailSec, 3.7);
+
+  const shortDialogueSpec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 311,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [],
+      driving_audio_asset_id: 501,
+      preset: 'standard_720p_5s',
+      run_loop_closer: false,
+    },
+    scene: {
+      id: 311,
+      dialogue: '来吗？',
+      shot_spec: JSON.stringify({ primary_action: '裴雨涵抬眸望向神镜' }),
+    },
+  });
+  assert.match(shortDialogueSpec.positive_prompt, /<Audio 1>/);
+  assert.match(shortDialogueSpec.positive_prompt, /Lip-sync timing: the speaking character speaks only from 0\.5s to 1\.3s, keeping lips naturally closed/);
+  assert.doesNotMatch(shortDialogueSpec.positive_prompt, /no invented dialogue or narration/);
+
+  const narrationOnlySpec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 304,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [],
+      preset: 'standard_720p_8s',
+      run_loop_closer: false,
+    },
+    scene: {
+      id: 304,
+      narration: '清暮宫宫主陆嘉静独守清冷，却难抑体内翻涌的春潮气息。',
+    },
+  });
+  assert.match(narrationOnlySpec.positive_prompt, /Off-screen voiceover only; visible characters keep their mouths closed with no lip movement\./);
+  assert.match(narrationOnlySpec.negative_prompt, /speaking, talking, mouth opening, lip movement/);
+  assert.match(narrationOnlySpec.temporal_arc, /for 8 seconds\./);
+});
+
 

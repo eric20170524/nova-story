@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fingerprint, validateScriptCoverage, timedSpeech, subtitles, assertReview } from './production-contracts.mjs';
+import { fingerprint, validateScriptCoverage, resolveSpeechLeadIn, timedSpeech, nativeAudioFilter, subtitles, assertReview } from './production-contracts.mjs';
+import { shotVideoPreset, resolveShotDrivingAudio } from './production-references.mjs';
 
 const script = { id: 1, revision: 2, status: 'confirmed', document: { scenes: [
   { id: 'a', blocks: [{ id: 'd', type: 'dialogue', text: '原文对白' }, { id: 'v', type: 'voiceover', text: '原文旁白' }, { id: 's', type: 'sound', text: '铃声' }] },
@@ -40,3 +41,39 @@ test('approval binds reviewer, source configuration and actual file hashes', () 
   assert.throws(() => assertReview(review, { ...snapshot, nsfw_mode: 'on' }, 'Chapter'), /sources changed/);
   assert.throws(() => assertReview({ ...review, reviewer: '' }, snapshot, 'Chapter'), /approval/);
 });
+test('short dialogue schedules a natural lead-in offset without extending clip duration and filters native vocal formants', () => {
+  const shortDialogue = timedSpeech([{ id: 'b1', type: 'dialogue', text: '来吗？' }], [0.8], 5);
+  assert.equal(shortDialogue.duration, 5);
+  assert.equal(shortDialogue.cues[0].start, 0.5);
+  assert.equal(shortDialogue.cues[0].end, 1.3);
+
+  const shortVoiceover = timedSpeech([{ id: 'vo1', type: 'voiceover', text: '清风吹过。' }], [1.5], 5);
+  assert.equal(shortVoiceover.duration, 5);
+  assert.equal(shortVoiceover.cues[0].start, 0.25);
+  assert.equal(shortVoiceover.cues[0].end, 1.75);
+
+  const tightSpeech = resolveSpeechLeadIn([{ id: 'b2', type: 'dialogue', text: '长句' }], [4.7], 5);
+  assert.equal(tightSpeech, 0);
+
+  assert.match(nativeAudioFilter(true, true), /bandreject=f=1200:width_type=h:w=1800,volume=0\.12/);
+  assert.match(nativeAudioFilter(true, false), /bandreject=f=1200:width_type=h:w=1800,volume=0\.06/);
+  assert.equal(nativeAudioFilter(false, false), '[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1[native]');
+
+  assert.equal(shotVideoPreset({ duration: 5 }, shortDialogue), 'standard_720p_5s');
+  assert.equal(shotVideoPreset({ duration: 5 }, { duration: 6.5 }), 'standard_720p_8s');
+
+  const layoutWithFile = {
+    ...shortDialogue,
+    files: [{ block_id: 'b1', asset_id: 301, url: '/static/generated/audio/b1.mp3', duration: 0.8 }],
+  };
+  const mediaAssets = [{ id: 301, role: 'script_speech', status: 'ready', url: '/static/generated/audio/b1.mp3' }];
+  assert.deepEqual(
+    resolveShotDrivingAudio({ id: 1, dialogue: '来吗？' }, mediaAssets, 'minimax_h3_ref2va_official_12gb', 'standard_720p_5s', layoutWithFile),
+    { driving_audio_asset_id: 301, driving_audio_start_sec: 0.5, driving_audio_end_sec: 1.3 },
+  );
+  assert.deepEqual(
+    resolveShotDrivingAudio({ id: 1, dialogue: '来吗？' }, mediaAssets, 'minimax_h3_fl2va_official_12gb', 'standard_720p_5s', layoutWithFile),
+    { driving_audio_start_sec: 0.5, driving_audio_end_sec: 1.3 },
+  );
+});
+

@@ -26,6 +26,12 @@ const inferReferenceMimeType = (asset: MediaAsset, sourcePath: string): string =
   if (ext === '.mp4' || ext === '.m4v') return 'video/mp4';
   if (ext === '.mov') return 'video/quicktime';
   if (ext === '.webm') return 'video/webm';
+  if (ext === '.mp3') return 'audio/mpeg';
+  if (ext === '.wav') return 'audio/wav';
+  if (ext === '.flac') return 'audio/flac';
+  if (ext === '.ogg') return 'audio/ogg';
+  if (ext === '.m4a') return 'audio/mp4';
+  if (asset.media_type === 'audio') return 'audio/mpeg';
   return asset.media_type === 'video' ? 'video/mp4' : 'application/octet-stream';
 };
 
@@ -268,7 +274,7 @@ export class MediaAssetService {
    */
   static async listSceneContextAssets(sceneId: number, sceneVersion?: number): Promise<MediaAsset[]> {
     const scene = await db.get(
-      `SELECT s.id, c.project_id
+      `SELECT s.id, s.shot_spec, c.project_id
        FROM scene s
        JOIN chapter c ON c.id = s.chapter_id
        WHERE s.id = ?`,
@@ -280,7 +286,7 @@ export class MediaAssetService {
       `SELECT * FROM media_asset
        WHERE scene_id = ?
          AND scene_version IS NULL
-         AND role IN ('video_keyframe', 'last_frame_reference', 'character_reference', 'motion_reference', 'guide_frame_reference', 'composition_reference')
+         AND role IN ('video_keyframe', 'last_frame_reference', 'character_reference', 'motion_reference', 'guide_frame_reference', 'composition_reference', 'script_speech')
          AND status != 'archived'
        ORDER BY id ASC`,
       sceneId
@@ -318,10 +324,38 @@ export class MediaAssetService {
       Number(scene.project_id)
     ) as any[];
 
+    const matchedSpeechAssets: MediaAsset[] = [];
+    const shotSource = parseMetadata(scene.shot_spec).source;
+    const blockIds = Array.isArray(shotSource?.block_ids) ? new Set(shotSource.block_ids.map(String)) : new Set<string>();
+    if (blockIds.size > 0) {
+      const speechRows = await db.all(
+        `SELECT * FROM media_asset
+         WHERE project_id = ?
+           AND role = 'script_speech'
+           AND status = 'ready'
+         ORDER BY id ASC`,
+        Number(scene.project_id)
+      ) as any[];
+      for (const row of speechRows) {
+        const metaSource = parseMetadata(row.metadata_json).source;
+        const blockId = String(metaSource?.block_id || '');
+        if (!blockId || !blockIds.has(blockId)) continue;
+        if (shotSource?.script_id != null && metaSource?.script_id != null && Number(metaSource.script_id) !== Number(shotSource.script_id)) {
+          continue;
+        }
+        if (Number(row.scene_id) !== Number(sceneId)) {
+          await db.run('UPDATE media_asset SET scene_id = ? WHERE id = ?', sceneId, row.id);
+          row.scene_id = sceneId;
+        }
+        matchedSpeechAssets.push(normalizeMediaAssetRow(row));
+      }
+    }
+
     const byId = new Map<number, MediaAsset>();
     for (const asset of [
       ...sceneAssets,
       ...sceneGlobalReferences,
+      ...matchedSpeechAssets,
       ...referenceRows.map(normalizeMediaAssetRow)
     ]) {
       if (asset.id != null) byId.set(Number(asset.id), asset);
@@ -387,8 +421,7 @@ export class MediaAssetService {
     if (transportMode === 'filesystem') {
       if (!filesystemAvailable) {
         throw new Error(
-          `Comfy reference transport is forced to filesystem, but the configured ComfyUI input directory is unavailable${
-            filesystemError ? `: ${filesystemError.message}` : ''
+          `Comfy reference transport is forced to filesystem, but the configured ComfyUI input directory is unavailable${filesystemError ? `: ${filesystemError.message}` : ''
           }`
         );
       }
@@ -758,33 +791,33 @@ export class MediaAssetService {
 
   static async promoteAsset(assetId: number): Promise<MediaAsset> {
     return withImmediateTransaction(async () => {
-    const asset = await this.getAssetById(assetId);
-    if (!asset) {
-      throw new Error(`Media asset ${assetId} not found`);
-    }
-    if (asset.media_type !== 'video' || (asset.role !== 'loop_master' && asset.role !== 'narrative_final')) {
-      throw new Error('Only loop_master or narrative_final video assets can be promoted as active final clip');
-    }
-    if (asset.status === 'rejected' || asset.status === 'archived') {
-      throw new Error(`Cannot promote a ${asset.status} video asset`);
-    }
+      const asset = await this.getAssetById(assetId);
+      if (!asset) {
+        throw new Error(`Media asset ${assetId} not found`);
+      }
+      if (asset.media_type !== 'video' || (asset.role !== 'loop_master' && asset.role !== 'narrative_final')) {
+        throw new Error('Only loop_master or narrative_final video assets can be promoted as active final clip');
+      }
+      if (asset.status === 'rejected' || asset.status === 'archived') {
+        throw new Error(`Cannot promote a ${asset.status} video asset`);
+      }
 
-    // Demote the previously promoted final only. Draft/review candidates retain
-    // their QA disposition and remain available for A/B comparison.
-    if (asset.scene_id) {
-      await db.run(
-        `UPDATE media_asset SET status = 'draft'
+      // Demote the previously promoted final only. Draft/review candidates retain
+      // their QA disposition and remain available for A/B comparison.
+      if (asset.scene_id) {
+        await db.run(
+          `UPDATE media_asset SET status = 'draft'
          WHERE scene_id = ? AND scene_version = ? AND id != ? AND status = 'ready'
            AND role IN ('loop_master', 'narrative_final')`,
-        asset.scene_id,
-        asset.scene_version || 1,
-        asset.id
-      );
-    }
+          asset.scene_id,
+          asset.scene_version || 1,
+          asset.id
+        );
+      }
 
-    await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'ready', assetId);
-    logger.info(`Promoted asset ${assetId} as active final for scene ${asset.scene_id}`);
-    return (await this.getAssetById(assetId))!;
+      await db.run('UPDATE media_asset SET status = ? WHERE id = ?', 'ready', assetId);
+      logger.info(`Promoted asset ${assetId} as active final for scene ${asset.scene_id}`);
+      return (await this.getAssetById(assetId))!;
     });
   }
 

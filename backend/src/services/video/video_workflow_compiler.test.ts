@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { VideoWorkflowCompiler } from './video_workflow_compiler';
 import { VideoSpecCompiler } from './video_spec_compiler';
+import { VideoPostprocessService } from './video_postprocess_service';
+import { VideoGenerationRequestSchema } from '../../schemas/video';
+
+const execFileAsync = promisify(execFile);
 
 test('VideoWorkflowCompiler loads experimental Hybrid manifest correctly', async () => {
   const bundle = VideoWorkflowCompiler.loadWorkflowBundle('minimax_h3_hongchao_a2a_12gb');
@@ -427,4 +436,142 @@ test('VideoWorkflowCompiler rejects a graph loader model missing from the manife
   assert.equal(validation.valid, false);
   assert.ok(validation.missingSlots.some((issue) => issue.includes('different_clip.safetensors')));
   assert.deepEqual(validation.missingModels, ['different_clip.safetensors']);
+});
+
+test('VideoGenerationRequestSchema validates driving_audio_asset_id and driving_audio_start_sec constraints', () => {
+  const validNarrative = VideoGenerationRequestSchema.safeParse({
+    scene_id: 10,
+    scene_version: 1,
+    profile: 'narrative_clip',
+    workflow_id: 'minimax_h3_ref2va_official_12gb',
+    keyframe_asset_id: 1,
+    character_reference_asset_ids: [2],
+    driving_audio_asset_id: 500,
+    driving_audio_start_sec: 0.45,
+    preset: 'standard_720p_5s'
+  });
+  assert.equal(validNarrative.success, true);
+
+  const invalidLoop = VideoGenerationRequestSchema.safeParse({
+    scene_id: 10,
+    scene_version: 1,
+    profile: 'character_loop',
+    workflow_id: 'minimax_h3_ref2va_official_12gb',
+    keyframe_asset_id: 1,
+    character_reference_asset_ids: [2],
+    motion_reference_asset_id: 3,
+    driving_audio_asset_id: 500,
+    preset: 'standard_720p_5s'
+  });
+  assert.equal(invalidLoop.success, false);
+
+  const invalidStartSec = VideoGenerationRequestSchema.safeParse({
+    scene_id: 10,
+    scene_version: 1,
+    profile: 'narrative_clip',
+    workflow_id: 'minimax_h3_ref2va_official_12gb',
+    keyframe_asset_id: 1,
+    driving_audio_asset_id: 500,
+    driving_audio_start_sec: 5.5,
+    preset: 'standard_720p_5s'
+  });
+  assert.equal(invalidStartSec.success, false);
+
+  const invalidFl2vaDrivingAudio = VideoGenerationRequestSchema.safeParse({
+    scene_id: 10,
+    scene_version: 1,
+    profile: 'narrative_clip',
+    workflow_id: 'minimax_h3_fl2va_official_12gb',
+    keyframe_asset_id: 1,
+    last_frame_asset_id: 2,
+    driving_audio_asset_id: 500,
+    preset: 'standard_720p_5s'
+  });
+  assert.equal(invalidFl2vaDrivingAudio.success, false);
+});
+
+test('VideoWorkflowCompiler attaches LoadAudio to ref_audios.ref_audio_0 and emits <Audio 1> when drivingAudioFilename is provided', async () => {
+  const spec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 61,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_ref2va_official_12gb',
+      keyframe_asset_id: 10,
+      character_reference_asset_ids: [100],
+      driving_audio_asset_id: 500,
+      preset: 'standard_720p_5s',
+      run_loop_closer: false
+    },
+    scene: {
+      id: 61,
+      dialogue: '张小凡：「我们走。」'
+    },
+    character: { name: 'Zhang Xiaofan' }
+  });
+  assert.match(spec.positive_prompt, /<Audio 1>/);
+  assert.doesNotMatch(spec.positive_prompt, /no invented dialogue or narration/);
+
+  const compiled = VideoWorkflowCompiler.compile({
+    spec,
+    stagedFiles: {
+      firstFrameFilename: 'first.png',
+      characterRefFilenames: ['char.png'],
+      drivingAudioFilename: 'speech_61.mp3'
+    }
+  });
+
+  assert.equal(compiled.appliedParams.driving_audio, 'speech_61.mp3');
+  assert.equal(compiled.workflow['10'].inputs['ref_video_audios.ref_video_audio_0'], undefined);
+  assert.equal(compiled.workflow['10'].inputs['ref_videos.ref_video_0'], undefined);
+  const audioRefEdge = compiled.workflow['10'].inputs['ref_audios.ref_audio_0'];
+  assert.ok(Array.isArray(audioRefEdge), 'Expected ref_audios.ref_audio_0 link on node 10');
+  const audioNodeId = String(audioRefEdge[0]);
+  assert.equal(compiled.workflow[audioNodeId].class_type, 'LoadAudio');
+  assert.equal(compiled.workflow[audioNodeId].inputs.audio, 'speech_61.mp3');
+
+  const fl2vaSpec = await VideoSpecCompiler.compile({
+    request: {
+      scene_id: 61,
+      scene_version: 1,
+      profile: 'narrative_clip',
+      workflow_id: 'minimax_h3_fl2va_official_12gb',
+      keyframe_asset_id: 10,
+      last_frame_asset_id: 11,
+      character_reference_asset_ids: [],
+      preset: 'standard_720p_5s',
+      run_loop_closer: false
+    },
+    scene: { id: 61 }
+  });
+  assert.throws(() => VideoWorkflowCompiler.compile({
+    spec: fl2vaSpec,
+    stagedFiles: {
+      firstFrameFilename: 'first.png',
+      lastFrameFilename: 'last.png',
+      drivingAudioFilename: 'speech_61.mp3'
+    }
+  }), /has no MiniMaxH3ReferenceToVideo node or driving_audio slot/);
+});
+
+test('VideoPostprocessService probes audio duration and sample rate', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-audio-probe-'));
+  try {
+    const rawSpeechPath = path.join(tempDir, 'speech.wav');
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-f', 'lavfi',
+      '-i', 'sine=frequency=440:duration=1.8',
+      '-ar', '24000',
+      '-ac', '1',
+      rawSpeechPath
+    ]);
+
+    const probe = await VideoPostprocessService.probeAudio(rawSpeechPath);
+    assert.ok(Math.abs(probe.duration_s - 1.8) <= 0.05, `Expected ~1.8s audio, got ${probe.duration_s}`);
+    assert.equal(probe.sample_rate, 24000);
+    assert.equal(probe.channels, 1);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

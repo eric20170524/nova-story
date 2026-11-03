@@ -29,6 +29,7 @@ export interface WorkflowManifest {
     video_refs?: WorkflowManifestSlot[];
     guide_frame?: WorkflowManifestSlot;
     guide_frame_idx?: WorkflowManifestSlot;
+    driving_audio?: WorkflowManifestSlot;
     width?: WorkflowManifestSlot;
     height?: WorkflowManifestSlot;
     frames?: WorkflowManifestSlot;
@@ -55,6 +56,7 @@ export interface CompileWorkflowInputs {
     characterRefFilenames?: string[];
     motionRefFilename?: string;
     guideFrameFilename?: string;
+    drivingAudioFilename?: string;
   };
   guideFrameIdx?: number;
   guideFrames?: Array<{ filename: string; frameIdx: number }>;
@@ -112,14 +114,14 @@ export class VideoWorkflowCompiler {
       throw new Error('guide_frames requires the Official Multi-Frame workflow.');
     }
     if (guideFrames.length > 4 || new Set(guideFrames.map(guide => guide.frameIdx)).size !== guideFrames.length
-        || guideFrames.some(guide => !Number.isInteger(guide.frameIdx) || guide.frameIdx < 1 || guide.frameIdx > maxFrameIdx || !guide.filename)) {
+      || guideFrames.some(guide => !Number.isInteger(guide.frameIdx) || guide.frameIdx < 1 || guide.frameIdx > maxFrameIdx || !guide.filename)) {
       throw new Error(`guide_frames must contain 1–4 distinct frame indices within delivery frames 1..${maxFrameIdx}.`);
     }
     if (workflowId.startsWith('minimax_h3_')) {
       if (contract.fps !== 24 || (contract.frames !== 124 && contract.frames !== 192)
-          || manifest.default_params?.fps !== 24
-          || (manifest.default_params?.frames !== 124 && manifest.default_params?.frames !== 192)
-          || (manifest.default_params?.delivery_frames !== 120 && manifest.default_params?.delivery_frames !== 192)) {
+        || manifest.default_params?.fps !== 24
+        || (manifest.default_params?.frames !== 124 && manifest.default_params?.frames !== 192)
+        || (manifest.default_params?.delivery_frames !== 120 && manifest.default_params?.delivery_frames !== 192)) {
         throw new Error('H3 workflow requires native 24fps, 124 or 192 model frames and 120 or 192 delivery frames.');
       }
       for (const [nodeId, node] of Object.entries(workflow) as Array<[string, any]>) {
@@ -135,6 +137,7 @@ export class VideoWorkflowCompiler {
     if (slots.last_frame) this.validateSlot(workflow, slots.last_frame, 'last_frame');
     if (slots.guide_frame) this.validateSlot(workflow, slots.guide_frame, 'guide_frame');
     if (slots.guide_frame_idx) this.validateSlot(workflow, slots.guide_frame_idx, 'guide_frame_idx');
+    if (slots.driving_audio) this.validateSlot(workflow, slots.driving_audio, 'driving_audio');
     if (slots.width) this.validateSlot(workflow, slots.width, 'width');
     if (slots.height) this.validateSlot(workflow, slots.height, 'height');
     if (slots.frames) this.validateSlot(workflow, slots.frames, 'frames');
@@ -253,6 +256,30 @@ export class VideoWorkflowCompiler {
       }
     }
 
+    let drivingAudioAttached = false;
+    if (stagedFiles.drivingAudioFilename) {
+      if (slots.driving_audio) {
+        workflow[slots.driving_audio.node].inputs[slots.driving_audio.input] = stagedFiles.drivingAudioFilename;
+        drivingAudioAttached = true;
+      } else {
+        for (const node of Object.values(workflow) as Array<{ class_type?: string; inputs?: Record<string, unknown> }>) {
+          if (node?.class_type === 'MiniMaxH3ReferenceToVideo' && node.inputs && node.inputs['ref_audios.ref_audio_0'] == null) {
+            const audioNodeId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+            workflow[audioNodeId] = {
+              class_type: 'LoadAudio',
+              inputs: { audio: stagedFiles.drivingAudioFilename }
+            };
+            node.inputs['ref_audios.ref_audio_0'] = [audioNodeId, 0];
+            drivingAudioAttached = true;
+            break;
+          }
+        }
+      }
+      if (!drivingAudioAttached) {
+        throw new Error(`Workflow '${workflowId}' has no MiniMaxH3ReferenceToVideo node or driving_audio slot for drivingAudioFilename.`);
+      }
+    }
+
     if (slots.width) workflow[slots.width.node].inputs[slots.width.input] = contract.width;
     if (slots.height) workflow[slots.height.node].inputs[slots.height.input] = contract.height;
     if (slots.frames) workflow[slots.frames.node].inputs[slots.frames.input] = contract.frames;
@@ -295,7 +322,8 @@ export class VideoWorkflowCompiler {
         seed,
         prefix,
         guide_frame_idx: slots.guide_frame_idx ? workflow[slots.guide_frame_idx.node]?.inputs?.[slots.guide_frame_idx.input] : undefined,
-        guide_frames: guideFrames.map(guide => ({ frame_idx: guide.frameIdx, seconds: guide.frameIdx / 24 }))
+        guide_frames: guideFrames.map(guide => ({ frame_idx: guide.frameIdx, seconds: guide.frameIdx / 24 })),
+        ...(drivingAudioAttached && stagedFiles.drivingAudioFilename ? { driving_audio: stagedFiles.drivingAudioFilename } : {})
       }
     };
   }

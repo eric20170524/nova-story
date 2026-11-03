@@ -86,7 +86,7 @@ export class LoopCloser {
       return computeLoopContinuityMeasurements({ first, second, penultimate, last });
     } finally {
       for (const file of framePaths) {
-        try { fs.unlinkSync(file); } catch {}
+        try { fs.unlinkSync(file); } catch { }
       }
     }
   }

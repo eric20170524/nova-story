@@ -55,15 +55,40 @@ export function spokenBlocks(script, shot) {
   const scene = script.document.scenes.find(scene => scene.id === source?.script_scene_id);
   return (source?.block_ids || []).map(id => scene?.blocks.find(block => block.id === id)).filter(block => block && ['dialogue', 'voiceover'].includes(block.type));
 }
+export function resolveSpeechLeadIn(blocks, durations, minimum = 5) {
+  if (!Array.isArray(blocks) || !blocks.length) return 0;
+  const validDurations = blocks.map((block, index) => {
+    const duration = Number(durations?.[index]);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error(`Invalid speech duration for ${block?.id}`);
+    return duration;
+  });
+  const totalSpeechSpan = validDurations.reduce((sum, d) => sum + d, 0) + validDurations.length * 0.15;
+  const slack = Number(minimum || 5) - totalSpeechSpan;
+  if (slack <= 0.4) return 0;
+  const firstType = blocks[0]?.type;
+  const proposed = firstType === 'voiceover'
+    ? (slack >= 0.5 ? 0.25 : 0)
+    : Math.min(0.5, Math.max(0.25, Math.round(slack * 0.18 * 24) / 24));
+  return Number(Math.min(proposed, Math.max(0, slack)).toFixed(4));
+}
 export function timedSpeech(blocks, durations, minimum = 5) {
-  let cursor = 0;
+  let cursor = resolveSpeechLeadIn(blocks, durations, minimum);
   const cues = blocks.map((block, index) => {
     const duration = Number(durations[index]);
     if (!Number.isFinite(duration) || duration <= 0) throw new Error(`Invalid speech duration for ${block.id}`);
-    const cue = { block_id: block.id, text: block.text.trim(), start: cursor, end: cursor + duration };
+    const start = Number(cursor.toFixed(4));
+    const end = Number((cursor + duration).toFixed(4));
+    const cue = { block_id: block.id, text: block.text.trim(), start, end };
     cursor += duration + 0.15; return cue;
   });
   return { cues, duration: Math.ceil(Math.max(minimum, cursor) * 24) / 24 };
+}
+export function nativeAudioFilter(hasSpeech, hasAudioPrompt = false) {
+  if (!hasSpeech) {
+    return '[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1[native]';
+  }
+  const volume = hasAudioPrompt ? '0.12' : '0.06';
+  return `[0:a]aresample=48000,aformat=channel_layouts=stereo,bandreject=f=1200:width_type=h:w=1800,volume=${volume}[native]`;
 }
 export function resolveAssembledShotTiming(layoutDuration, probeInfo) {
   const rawClip = Number(probeInfo?.format?.duration);

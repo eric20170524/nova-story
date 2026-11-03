@@ -17,6 +17,11 @@ import { getGeneratedDirectory } from '../core/paths';
 test('formal speech preserves long source text, persists media and replays once with stale-source and failure guards', async () => {
   await initDb();
   await db.run("INSERT INTO project (id, title) VALUES (930001, 'Audio isolated test')");
+  await db.run("INSERT INTO chapter (id, project_id, \"index\", title, content) VALUES ('ch-audio-930001', 930001, 1, 'Ch1', 'Content')");
+  await db.run(
+    "INSERT INTO scene (id, chapter_id, \"index\", shot_spec) VALUES (930011, 'ch-audio-930001', 1, ?)",
+    JSON.stringify({ source: { type: 'script', script_id: 31, script_revision: 2, script_scene_id: 's1', block_ids: ['v1'] } }),
+  );
   const text = '这是必须完整朗读的旁白。'.repeat(30);
   const fixtureFile = path.join(getGeneratedDirectory(), 'formal-audio-fixture.mp3');
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=400:sample_rate=48000', '-t', '0.3', fixtureFile]);
@@ -41,6 +46,9 @@ test('formal speech preserves long source text, persists media and replays once 
     const [a, b] = await Promise.all([ScriptAudioService.render(input), ScriptAudioService.render(input)]);
     assert.equal(a.asset.id, b.asset.id); assert.equal(calls, 1);
     assert.equal(a.source.text, text); assert.equal(a.asset.media_type, 'audio'); assert.equal(a.asset.role, 'script_speech');
+    assert.equal(a.asset.scene_id, 930011);
+    const contextAssets = await MediaAssetService.listSceneContextAssets(930011, 1);
+    assert.ok(contextAssets.some(item => item.id === a.asset.id && item.role === 'script_speech'));
     assert.equal((await ScriptAudioService.render(input)).asset.id, a.asset.id); assert.equal(calls, 1);
     const file = MediaAssetService.resolveSafePath(a.asset.url);
     fs.writeFileSync(file, 'changed-by-test');

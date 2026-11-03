@@ -37,6 +37,7 @@ export interface CompileVideoSpecOptions {
     visual_tags?: any;
   } | null;
   style?: unknown;
+  drivingAudioDurationSec?: number;
 }
 
 const PONY_SCORE_REGEX = /score_\d+(_up)?|masterpiece|best quality|high quality|source_anime|very aesthetic|absurdres/gi;
@@ -114,6 +115,12 @@ const compileReferenceInstruction = (request: VideoGenerationRequest, charName: 
     );
   }
 
+  if ((isOfficialRef2va || isMultiframe) && request.driving_audio_asset_id) {
+    instructions.push(
+      `<Audio 1> is the spoken dialogue reference audio for ${charName}; synchronize mouth and lip movement with <Audio 1>.`
+    );
+  }
+
   if (isMultiframe && request.guide_frames?.length) {
     for (const guide of request.guide_frames) {
       instructions.push(`Pin the guide reference at frame ${guide.frame_idx} (${(guide.frame_idx / 24).toFixed(2)}s at 24fps); preserve its pose and spatial composition.`);
@@ -181,6 +188,69 @@ export async function echoVideoMotion(materials: VideoMotionMaterials): Promise<
 const VideoMotionSchema = z.object({ prompt: z.string().min(1) }).strict();
 
 const speechKey = (value: string) => value.normalize('NFKC').replace(/[\s，,。.!！?？:：;；“”"‘’'「」『』]+/gu, '');
+
+export function estimateSpeechDurationSeconds(text?: string | null): number {
+  const raw = String(text || '').trim();
+  if (!raw) return 0;
+  const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const durations = lines.map(line => {
+    const spokenChars = (line.replace(/[\s，,。.!！?？:：;；“”"‘’'「」『』…—\-]+/gu, '').match(/[\p{L}\p{N}]/gu) || []).length;
+    if (spokenChars === 0) return 0;
+    const pauseCount = (line.match(/[，,。.!！?？:：;；…—]+/gu) || []).length;
+    return Math.max(0.8, Number((spokenChars * 0.24 + pauseCount * 0.18).toFixed(2)));
+  }).filter(d => d > 0);
+  if (!durations.length) return 0;
+  const total = durations.reduce((sum, d) => sum + d, 0) + (durations.length - 1) * 0.15;
+  return Number(total.toFixed(2));
+}
+
+export interface SpeechTimingWindow {
+  startSec: number;
+  endSec: number;
+  speechSeconds: number;
+  clipSeconds: number;
+  silentTailSec: number;
+}
+
+export function resolveSpeechTimingWindow(options: {
+  speechSeconds: number;
+  clipSeconds: number;
+  startSec?: number;
+  endSec?: number;
+  blockType?: 'dialogue' | 'voiceover';
+}): SpeechTimingWindow {
+  const clipSeconds = Math.max(1, Number(options.clipSeconds) || 5);
+  const speechSeconds = Math.max(0, Number(options.speechSeconds) || 0);
+  const hasExplicitEnd = options.endSec != null && Number.isFinite(options.endSec) && Number(options.endSec) > 0;
+  if (speechSeconds <= 0 && !hasExplicitEnd) {
+    return { startSec: 0, endSec: 0, speechSeconds: 0, clipSeconds, silentTailSec: clipSeconds };
+  }
+  const slack = clipSeconds - (speechSeconds + 0.15);
+  let leadIn = 0;
+  if (options.startSec != null && Number.isFinite(options.startSec) && options.startSec >= 0) {
+    leadIn = Math.min(Number(options.startSec), clipSeconds);
+  } else if (slack > 0.4) {
+    if (options.blockType === 'voiceover') {
+      leadIn = slack >= 0.5 ? 0.25 : 0;
+    } else {
+      leadIn = Math.min(0.5, Math.max(0.25, Math.round(slack * 0.18 * 24) / 24));
+    }
+    leadIn = Math.min(leadIn, Math.max(0, slack));
+  }
+  const startSec = Number(leadIn.toFixed(2));
+  const rawEnd = hasExplicitEnd && Number(options.endSec) > startSec
+    ? Number(options.endSec)
+    : leadIn + speechSeconds;
+  const endSec = Number(Math.min(clipSeconds, rawEnd).toFixed(2));
+  const silentTailSec = Number(Math.max(0, clipSeconds - endSec).toFixed(2));
+  return {
+    startSec,
+    endSec,
+    speechSeconds: Number(Math.max(0, endSec - startSec).toFixed(2)),
+    clipSeconds,
+    silentTailSec,
+  };
+}
 
 export function isSpeechFact(fact: string, speechFacts?: readonly string[]): boolean {
   const trimmed = String(fact || '').trim();
@@ -447,11 +517,15 @@ export const VideoSpecCompiler = {
       () => translator || motionTranslator || isNodeTest() ? compose() : withLocalTextInference(compose),
       { variant: request.inference_variant });
     const charName = appearance[0]?.name || character?.name || 'Character';
+    const clipSeconds = request.preset.endsWith('_8s') ? 8 : 5;
+    const hasDialogue = Boolean(scene.dialogue?.trim());
+    const hasNarration = Boolean(scene.narration?.trim());
     const temporalArc = primaryAction
-      ? 'Narrative motion follows the composed still for 5 seconds.'
-      : 'Idle motion from the appearance fields for 5 seconds.';
+      ? `Narrative motion follows the composed still for ${clipSeconds} seconds.`
+      : `Idle motion from the appearance fields for ${clipSeconds} seconds.`;
     let negativeMotion = 'deformed anatomy, floating limbs, extra fingers, identity shift, sudden lighting flicker, face distortion, blurry artifacts';
     if (isLoop && !primaryAction) negativeMotion += ', camera drift, speech, mouth opening, wide hand gestures';
+    else if (!isLoop && !hasDialogue && hasNarration) negativeMotion += ', speaking, talking, mouth opening, lip movement';
 
     const positiveParts: string[] = [
       ...compileReferenceInstruction(request, charName)
@@ -466,13 +540,50 @@ export const VideoSpecCompiler = {
       }
     }
     positiveParts.push(motion);
+    const isSpeakingShot = hasDialogue || Boolean(request.driving_audio_asset_id);
+    if (!isLoop && isSpeakingShot) {
+      const explicitSpan = (
+        request.driving_audio_end_sec != null &&
+        request.driving_audio_start_sec != null &&
+        request.driving_audio_end_sec > request.driving_audio_start_sec
+      )
+        ? Number((request.driving_audio_end_sec - request.driving_audio_start_sec).toFixed(2))
+        : (options.drivingAudioDurationSec != null && Number.isFinite(options.drivingAudioDurationSec) && options.drivingAudioDurationSec > 0
+          ? Number(options.drivingAudioDurationSec)
+          : 0);
+      const speechSeconds = explicitSpan > 0
+        ? explicitSpan
+        : estimateSpeechDurationSeconds(scene.dialogue);
+      if (speechSeconds > 0 || request.driving_audio_end_sec != null) {
+        const window = resolveSpeechTimingWindow({
+          speechSeconds,
+          clipSeconds,
+          startSec: request.driving_audio_start_sec,
+          endSec: request.driving_audio_end_sec,
+          blockType: 'dialogue',
+        });
+        if (window.silentTailSec >= 1.2) {
+          positiveParts.push(
+            `Lip-sync timing: the speaking character speaks only from ${window.startSec.toFixed(1)}s to ${window.endSec.toFixed(1)}s, keeping lips naturally closed before ${window.startSec.toFixed(1)}s and after ${window.endSec.toFixed(1)}s.`
+          );
+        } else {
+          positiveParts.push(
+            `Lip-sync timing: natural mouth movement matches the spoken cadence from ${window.startSec.toFixed(1)}s to ${window.endSec.toFixed(1)}s.`
+          );
+        }
+      }
+    } else if (!isLoop && !isSpeakingShot && hasNarration) {
+      positiveParts.push('Off-screen voiceover only; visible characters keep their mouths closed with no lip movement.');
+    }
     if (!isLoop && request.workflow_id === 'grok_imagine_browser') {
-      if (scene.dialogue?.trim()) positiveParts.push(`Spoken dialogue in Mandarin Chinese, verbatim: ${JSON.stringify(scene.dialogue.trim())}. Keep speech synchronized with the speaking character.`);
-      if (scene.narration?.trim()) positiveParts.push(`Mandarin Chinese voiceover, verbatim: ${JSON.stringify(scene.narration.trim())}.`);
-      if (!scene.dialogue?.trim() && !scene.narration?.trim()) positiveParts.push('Natural ambient sound only; no invented dialogue or narration.');
+      if (hasDialogue) positiveParts.push(`Spoken dialogue in Mandarin Chinese, verbatim: ${JSON.stringify(scene.dialogue!.trim())}. Keep speech synchronized with the speaking character.`);
+      if (hasNarration) positiveParts.push(`Mandarin Chinese voiceover, verbatim: ${JSON.stringify(scene.narration!.trim())}.`);
+      if (!hasDialogue && !hasNarration) positiveParts.push('Natural ambient sound only; no invented dialogue or narration.');
     }
     if (!isLoop && scene.audio_prompt?.trim()) positiveParts.push(`Sound: ${scene.audio_prompt.trim()}.`);
-    if (!isLoop && request.workflow_id !== 'grok_imagine_browser') positiveParts.push('Natural ambient sound and requested sound effects; no invented dialogue or narration.');
+    if (!isLoop && request.workflow_id !== 'grok_imagine_browser' && !isSpeakingShot) {
+      positiveParts.push('Natural ambient sound and requested sound effects; no invented dialogue or narration.');
+    }
     if (request.prompt_override) positiveParts.push(cleanPromptForH3(request.prompt_override));
 
     const negativeParts: string[] = [negativeMotion];

@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { Agent, setGlobalDispatcher } from 'undici';
-import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, shotVideoPreset, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
+import { resolveAssetBindings, resolveShotCharacter, resolveVisibleShotCharacters, resolveVisibleShotCast, keyframeUsesBindings, keyframeUsesCharacterVersions, chooseShotVideoStrategy, readProjectVideoWorkflow, shotVideoPreset, resolveShotDrivingAudio, coreCharactersReadyForAcceptance, platesFromCharacter, selectIdentityReferenceIds } from './production-references.mjs';
 
 setGlobalDispatcher(new Agent({
   headersTimeout: 60 * 60 * 1000,
@@ -13,7 +13,7 @@ setGlobalDispatcher(new Agent({
 }));
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
-import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, subtitles, webvtt, assertReview } from './production-contracts.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, nativeAudioFilter, subtitles, webvtt, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -880,16 +880,31 @@ async function identityPlatesForShot(shot, character) {
   } catch { /* A chapter without a pin keeps the live face and body plates. */ }
   return live;
 }
+function chapterAudioLayout(chapterId) {
+  const file = path.join(directory, `audio-chapter-${chapterId}.json`);
+  if (!fs.existsSync(file)) return null;
+  try { return readJson(file); } catch { return null; }
+}
 async function videoPreflight(selected = null) {
   await assertComfyVideo();
   const known = await characters();
+  const audioLayouts = new Map();
+  const speechForShot = shot => {
+    if (!audioLayouts.has(shot.chapter_id)) {
+      audioLayouts.set(shot.chapter_id, chapterAudioLayout(shot.chapter_id));
+    }
+    return audioLayouts.get(shot.chapter_id)?.[shot.id] || null;
+  };
   const results = [];
   for (const shot of await selectedShots(selected)) {
     const media = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+    const shotSpeech = speechForShot(shot);
+    const preset = shotVideoPreset(shot, shotSpeech);
     const primary = resolveShotCharacter(shot, known);
-    const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
+    const strategy = chooseShotVideoStrategy(media.assets || [], workflowOverride, await projectVideoDefault(), preset);
     const references = primary ? selectIdentityReferenceIds(media.assets || [], primary.id, await identityPlatesForShot(shot, primary)) : [];
-    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, run_loop_closer: false };
+    const drivingAudio = resolveShotDrivingAudio(shot, media.assets || [], strategy.workflow_id, preset, shotSpeech);
+    const body = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset, character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : references, ...drivingAudio, run_loop_closer: false };
     let check = await request('/videos/preflight', 'POST', body);
     if (!check.ready && continuityBlockerNeedsBind(check.blockers)) {
       const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
@@ -920,15 +935,25 @@ async function videoPreflight(selected = null) {
 async function videos(selected = null) {
   await assertComfyVideo();
   const pendingReview = [];
+  const audioLayouts = new Map();
+  const speechForShot = shot => {
+    if (!audioLayouts.has(shot.chapter_id)) {
+      audioLayouts.set(shot.chapter_id, chapterAudioLayout(shot.chapter_id));
+    }
+    return audioLayouts.get(shot.chapter_id)?.[shot.id] || null;
+  };
   for (const shot of await selectedShots(selected)) {
     const available = await request(`/scenes/${shot.id}/media?version=${shot.active_version || 1}`);
+    const shotSpeech = speechForShot(shot);
+    const preset = shotVideoPreset(shot, shotSpeech);
     const known = await characters();
     const refs = (available.assets || []).filter(a => a.role === 'character_reference' && a.character_id != null && a.status === 'ready');
     const primary = resolveShotCharacter(shot, known);
     const selectedRefs = primary ? selectIdentityReferenceIds(refs, primary.id, await identityPlatesForShot(shot, primary)) : [];
-    const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
+    const strategy = chooseShotVideoStrategy(available.assets || [], workflowOverride, await projectVideoDefault(), preset);
     if (primary && !selectedRefs.length && strategy.workflow_id !== 'minimax_h3_fl2va_official_12gb') throw new Error(`Shot ${shot.id}: missing generated identity references for ${primary.name}`);
-    const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, run_loop_closer: false };
+    const drivingAudio = resolveShotDrivingAudio(shot, available.assets || [], strategy.workflow_id, preset, shotSpeech);
+    const parameters = { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset, character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : selectedRefs, ...drivingAudio, run_loop_closer: false };
     let flight = await request('/videos/preflight', 'POST', parameters);
     if (!flight.ready && continuityBlockerNeedsBind(flight.blockers)) {
       const spec = typeof shot.shot_spec === 'string' ? JSON.parse(shot.shot_spec || '{}') : (shot.shot_spec || {});
@@ -1101,6 +1126,7 @@ async function chapterSnapshot(chapter, includeVideos = false) {
   const voices = speechBlocks.map(block => ({ block_id: block.id, voice_id: block.type === 'voiceover' && narratorVoice ? narratorVoice : known.find(character => character.id === block.characterId)?.voice_id || speechStatus?.default_voice }));
   const referencedCharacters = new Set(timeline.flatMap(shot => resolveVisibleShotCast(shot, known).map(character => character.id)));
   const referencedAssets = new Set();
+  const audioLayout = includeVideos ? chapterAudioLayout(chapter.id) : null;
   const frames = [];
   for (const shot of timeline) {
     if (shot.asset_status !== 'completed') throw new Error(`Shot ${shot.id}: image is incomplete`);
@@ -1117,10 +1143,13 @@ async function chapterSnapshot(chapter, includeVideos = false) {
       const final = media.assets.filter(asset => asset.role === 'narrative_final' && asset.status === 'ready').at(-1);
       if (!final) throw new Error(`Shot ${shot.id}: final video has not been accepted`);
       const provenance = videoProvenance(shot, media.assets, known);
-      const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault(), shotVideoPreset(shot));
+      const shotSpeech = audioLayout?.[shot.id] || null;
+      const preset = shotVideoPreset(shot, shotSpeech);
+      const strategy = chooseShotVideoStrategy(media.assets, workflowOverride, await projectVideoDefault(), preset);
       const primary = resolveShotCharacter(shot, known);
       const refs = primary ? selectIdentityReferenceIds(media.assets, primary.id, await identityPlatesForShot(shot, primary)) : [];
-      const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset: shotVideoPreset(shot), character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, run_loop_closer: false });
+      const drivingAudio = resolveShotDrivingAudio(shot, media.assets, strategy.workflow_id, preset, shotSpeech);
+      const flight = await request('/videos/preflight', 'POST', { scene_id: shot.id, scene_version: shot.active_version || 1, ...strategy, profile: 'narrative_clip', preset, character_reference_asset_ids: strategy.workflow_id === 'minimax_h3_fl2va_official_12gb' ? [] : refs, ...drivingAudio, run_loop_closer: false });
       if (!flight.ready || !flight.input_signature || provenance.input_signature !== flight.input_signature || !provenance.source_current || !provenance.identity_current) throw new Error(`Shot ${shot.id}: final video inputs changed; regenerate and review`);
       const file = localMedia(final.url); assertChapterClipReady(probe(file), `Shot ${shot.id}`); decode(file);
       if (!final.sha256 || final.sha256 !== fileHash(file)) throw new Error(`Shot ${shot.id}: final video bytes changed since QA`);
@@ -1243,13 +1272,30 @@ async function audioForChapter(chapter) {
   const ttsSettings = allBlocks.length ? (await request('/settings/')).tts : null;
   const needsDefault = allBlocks.some(block => !(block.type === 'voiceover' && narratorVoice) && !known.find(character => character.id === block.characterId)?.voice_id);
   if (allBlocks.length && (!status.ok || (needsDefault && !status.default_voice))) throw new Error('Local speech service has no available voice');
+  let existingLayout = null;
+  const existingPath = path.join(directory, `audio-chapter-${chapter.id}.json`);
+  if (fs.existsSync(existingPath)) {
+    try { existingLayout = readJson(existingPath); } catch { existingLayout = null; }
+  }
   const layout = {};
   for (const shot of timeline.timeline) {
     const blocks = spokenBlocks(script, shot), files = [];
+    const priorFiles = Array.isArray(existingLayout?.[shot.id]?.files) ? existingLayout[shot.id].files : [];
     for (const block of blocks) {
       const character = known.find(character => character.id === block.characterId);
       const voice = block.type === 'voiceover' && narratorVoice ? narratorVoice : character?.voice_id || status.default_voice;
       const signature = fingerprint({ script_id: script.id, revision: script.revision, block, voice, character_version: character?.active_version || null, ttsSettings });
+      const cached = priorFiles.find(item => item?.block_id === block.id && (item.signature ? item.signature === signature : (item.source?.script_id === script.id && item.source?.script_revision === script.revision && item.source?.block_id === block.id && item.source?.text === block.text.trim() && item.source?.voice_id === voice)));
+      if (cached?.url && cached?.sha256) {
+        try {
+          const cachedFile = localMedia(cached.url), cachedInfo = probe(cachedFile);
+          if (cachedInfo.streams.some(stream => stream.codec_type === 'audio') && cached.sha256 === fileHash(cachedFile)) {
+            decode(cachedFile);
+            files.push({ block_id: block.id, type: block.type, ...(cached.asset_id != null ? { asset_id: Number(cached.asset_id) } : {}), signature, url: cached.url, sha256: cached.sha256, duration: Number(cachedInfo.format.duration), source: cached.source });
+            continue;
+          }
+        } catch {}
+      }
       const name = `speech-${signature.slice(0, 24)}`;
       const render = () => request('/tts/render-block', 'POST', { script_id: script.id, expected_revision: script.revision, block_id: block.id, voice_id: voice, request_key: key(`${name}-attempt-${state.audioAttempts?.[name] || 0}`) });
       let generated;
@@ -1261,7 +1307,7 @@ async function audioForChapter(chapter) {
       const asset = generated.asset, file = localMedia(asset.url), info = probe(file);
       if (asset.status !== 'ready' || generated.source.script_id !== script.id || generated.source.script_revision !== script.revision || generated.source.block_id !== block.id || generated.source.text !== block.text.trim() || generated.source.voice_id !== voice || !info.streams.some(stream => stream.codec_type === 'audio') || asset.sha256 !== fileHash(file)) throw new Error(`Speech block ${block.id}: invalid audio or source`);
       decode(file);
-      files.push({ block_id: block.id, url: asset.url, sha256: asset.sha256, duration: Number(info.format.duration), source: generated.source });
+      files.push({ block_id: block.id, type: block.type, ...(asset.id != null ? { asset_id: Number(asset.id) } : {}), signature, url: asset.url, sha256: asset.sha256, duration: Number(info.format.duration), source: generated.source });
     }
     layout[shot.id] = { ...timedSpeech(blocks, files.map(file => file.duration), Math.max(5, Number(shot.duration) || 5)), files };
   }
@@ -1302,8 +1348,8 @@ async function assemble(selected = null, options = {}) {
     }
     const chapterShots = (await request(`/timeline/${chapter.id}`)).timeline;
     assertNonEmptyChapterShots(chapterShots.length, `Chapter ${chapter.index ?? chapter.id}`);
-    const sourceSnapshot = await chapterSnapshot(chapter, true);
     const speech = await audioForChapter(chapter);
+    const sourceSnapshot = await chapterSnapshot(chapter, true);
     const chapterClips = [];
     const chapterCues = [], speechFiles = [];
     const assembledDurations = {};
@@ -1331,7 +1377,7 @@ async function assemble(selected = null, options = {}) {
       const tracks = layout.files.map((_, index) => `[speech${index}]`);
       // Keep quiet native ambience under formal speech; the chapter review checks
       // overlapping native voices and lip sync before any next chapter can run.
-      if (hasAudio) { filters.push(`[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=${layout.files.length ? '0.12' : '1'}[native]`); tracks.push('[native]'); }
+      if (hasAudio) { filters.push(nativeAudioFilter(layout.files.length > 0, Boolean(shot.audio_prompt?.trim()))); tracks.push('[native]'); }
       if (tracks.length) filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
       else filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`);
       command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', filters.join(';'),
@@ -1518,6 +1564,7 @@ try {
       await runChapterProductionStage(assets, [chapter]);
       await runChapterProductionStage(images, [chapter]);
       await requireImageReview(chapter);
+      await audio([chapter]);
       await videoPreflight([chapter]);
       await runChapterProductionStage(videos, [chapter]);
       await assemble([chapter], { fullFilm: false });

@@ -267,13 +267,13 @@ export class VideoGenerationService {
       }
       if (versionRow && targetVersion !== (scene.active_version || 1)) sourceScene = { ...scene, ...versionRow, id: scene.id };
       let source;
-      try { source = JSON.parse(versionRow?.shot_spec || scene.shot_spec || '{}').source; } catch {}
+      try { source = JSON.parse(versionRow?.shot_spec || scene.shot_spec || '{}').source; } catch { }
       if (source?.type === 'script') {
         try {
           const script = await ScriptService.getScriptById(source.script_id);
           const scriptScene = script.document.scenes.find(item => item.id === source.script_scene_id);
           if (script.chapterId !== scene.chapter_id || script.status !== 'confirmed' || script.freshness.sourceChanged || script.revision !== source.script_revision || !scriptScene ||
-              !(source.block_ids || []).every((id: string) => scriptScene.blocks.some(block => block.id === id))) {
+            !(source.block_ids || []).every((id: string) => scriptScene.blocks.some(block => block.id === id))) {
             blockers.push('Screenplay source is stale or unconfirmed; rebuild the storyboard from the current confirmed revision');
           }
         } catch {
@@ -476,6 +476,42 @@ export class VideoGenerationService {
       }
     }
 
+    let drivingAudioDurationSec: number | undefined;
+    if (request.driving_audio_asset_id) {
+      const supportsDrivingAudio =
+        request.workflow_id === 'minimax_h3_ref2va_official_12gb'
+        || request.workflow_id === 'minimax_h3_multiframe_official_12gb';
+      if (!supportsDrivingAudio) {
+        blockers.push(`Workflow '${request.workflow_id}' does not support standalone driving audio.`);
+      }
+      const drivingAudioAsset = await MediaAssetService.getAssetById(request.driving_audio_asset_id);
+      if (!drivingAudioAsset) {
+        blockers.push(`Driving audio asset ID ${request.driving_audio_asset_id} does not exist.`);
+      } else if (drivingAudioAsset.media_type !== 'audio') {
+        blockers.push(`Driving audio asset ID ${request.driving_audio_asset_id} must be an audio asset.`);
+      } else if (drivingAudioAsset.status !== 'ready') {
+        blockers.push(`Driving audio asset ID ${request.driving_audio_asset_id} is not ready (status: ${drivingAudioAsset.status}).`);
+      } else if (projectId && drivingAudioAsset.project_id !== projectId) {
+        blockers.push(`Driving audio asset ID ${request.driving_audio_asset_id} belongs to a different project.`);
+      } else if (drivingAudioAsset.scene_id != null && Number(drivingAudioAsset.scene_id) !== Number(request.scene_id)) {
+        blockers.push(`Driving audio asset ID ${request.driving_audio_asset_id} belongs to a different scene.`);
+      } else {
+        if (drivingAudioAsset.duration_ms != null && drivingAudioAsset.duration_ms > 0) {
+          drivingAudioDurationSec = Number((drivingAudioAsset.duration_ms / 1000).toFixed(2));
+        } else {
+          try {
+            const audioPath = MediaAssetService.resolveSafePath(drivingAudioAsset.url);
+            if (fs.existsSync(audioPath)) {
+              const probe = await VideoPostprocessService.probeAudio(audioPath);
+              if (probe.duration_s > 0) {
+                drivingAudioDurationSec = Number(probe.duration_s.toFixed(2));
+              }
+            }
+          } catch { /* fallback to text estimate if unprobed */ }
+        }
+      }
+    }
+
     // Identity ownership is a service-level invariant, not an HTTP-route concern.
     // Any future internal caller of preflight/createTask must get the same fail-closed
     // behavior as /api/videos/preflight and /api/videos/generate.
@@ -506,11 +542,11 @@ export class VideoGenerationService {
       ? await this.resolveCharacterForRequest(request, projectId)
       : null;
 
-    const assetIds = [...new Set([request.keyframe_asset_id, ...(request.character_reference_asset_ids || []), request.motion_reference_asset_id, request.last_frame_asset_id, request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id)].filter(Boolean))];
+    const assetIds = [...new Set([request.keyframe_asset_id, ...(request.character_reference_asset_ids || []), request.motion_reference_asset_id, request.last_frame_asset_id, request.guide_frame_asset_id, ...(request.guide_frames || []).map(guide => guide.asset_id), request.driving_audio_asset_id].filter(Boolean))];
     const inputs = await Promise.all(assetIds.map(async id => {
       const asset = await MediaAssetService.getAssetById(Number(id));
       let fileHash = null;
-      if (asset) { try { fileHash = MediaAssetService.computeSha256(MediaAssetService.resolveSafePath(asset.url)); } catch {} }
+      if (asset) { try { fileHash = MediaAssetService.computeSha256(MediaAssetService.resolveSafePath(asset.url)); } catch { } }
       return asset ? { id: asset.id, url: asset.url, status: asset.status, character_id: asset.character_id, sha256: fileHash || asset.sha256 || null } : { id, missing: true };
     }));
     const project = projectId ? await db.get('SELECT settings FROM project WHERE id = ?', projectId) : null;
@@ -526,7 +562,7 @@ export class VideoGenerationService {
         style = image ? { style: image.style, model: image.model, nsfw_mode: image.nsfw_mode } : null;
       } catch { /* Default style. */ }
       try {
-        compiledSpec = await VideoSpecCompiler.compile({ request, scene: sourceScene, character, style });
+        compiledSpec = await VideoSpecCompiler.compile({ request, scene: sourceScene, character, style, drivingAudioDurationSec });
       } catch (err: any) {
         blockers.push(`Spec compilation failed: ${err?.message || err}`);
       }
@@ -718,7 +754,7 @@ export class VideoGenerationService {
       try {
         metadata = JSON.parse(row.metadata_json);
         qaReport = metadata.qa_report || null;
-      } catch {}
+      } catch { }
     }
 
     const queuePos = row.stage === 'queued' ? GpuLeaseService.getQueuePosition(taskId) : 0;
@@ -1034,11 +1070,11 @@ export class VideoGenerationService {
 
       const status = stage === 'completed' ? 'completed'
         : stage === 'review_required' ? 'review_required'
-        : stage === 'rejected' ? 'rejected'
-        : stage === 'failed' ? 'failed'
-        : stage === 'cancelled' ? 'cancelled'
-        : stage === 'interrupted' ? 'interrupted'
-        : 'processing';
+          : stage === 'rejected' ? 'rejected'
+            : stage === 'failed' ? 'failed'
+              : stage === 'cancelled' ? 'cancelled'
+                : stage === 'interrupted' ? 'interrupted'
+                  : 'processing';
 
       await rawPublisher(stage, {
         task_id: taskId,
@@ -1068,7 +1104,7 @@ export class VideoGenerationService {
           new Date().toISOString(),
           new Date().toISOString(),
           taskId
-        ).catch(() => {});
+        ).catch(() => { });
       }, 20_000);
 
       if (await isCancelled()) {
@@ -1172,6 +1208,16 @@ export class VideoGenerationService {
         stagedGuideFrames.push({ filename: staged.stagedFilename, frameIdx: guide.frame_idx });
       }
 
+      let stagedDrivingAudioFilename: string | undefined;
+      if (request.driving_audio_asset_id) {
+        const drivingAudioAsset = await MediaAssetService.getAssetById(request.driving_audio_asset_id);
+        if (!drivingAudioAsset) {
+          throw new Error(`Driving audio asset ID ${request.driving_audio_asset_id} is missing after preflight.`);
+        }
+        const stagedAudio = await MediaAssetService.stageAssetForComfy(drivingAudioAsset);
+        stagedDrivingAudioFilename = stagedAudio.stagedFilename;
+      }
+
       if (await isCancelled()) {
         stopLeaseHeartbeat();
         if (lease) GpuLeaseService.releaseLease(lease.lease_id, taskId);
@@ -1185,7 +1231,8 @@ export class VideoGenerationService {
           lastFrameFilename: stagedLastFrameFilename,
           characterRefFilenames: stagedCharFiles,
           motionRefFilename: stagedMotionFilename,
-          guideFrameFilename: stagedGuideFilename
+          guideFrameFilename: stagedGuideFilename,
+          drivingAudioFilename: stagedDrivingAudioFilename
         },
         guideFrameIdx: request.guide_frame_idx,
         guideFrames: stagedGuideFrames,
@@ -1440,7 +1487,7 @@ export class VideoGenerationService {
         let request: VideoGenerationRequest | null = null;
         try {
           if (row.request_json) request = JSON.parse(row.request_json);
-        } catch {}
+        } catch { }
 
         const scene = request?.scene_id ? await db.get('SELECT * FROM scene WHERE id = ?', request.scene_id) : null;
         const chapter = scene ? await db.get('SELECT project_id FROM chapter WHERE id = ?', scene.chapter_id) : null;

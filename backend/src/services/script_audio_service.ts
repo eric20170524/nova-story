@@ -40,7 +40,32 @@ export class ScriptAudioService {
     try { return await operation; } finally { this.pending.delete(pendingKey); }
   }
 
+  private static async resolveSceneIdForBlock(projectId: number, scriptId: number, blockId: string): Promise<number | null> {
+    const sceneRows = await db.all(
+      `SELECT s.id, s.shot_spec
+       FROM scene s
+       JOIN chapter c ON c.id = s.chapter_id
+       WHERE c.project_id = ?
+       ORDER BY s.id ASC`,
+      projectId,
+    ) as Array<{ id: number; shot_spec?: string | null }>;
+    for (const row of sceneRows) {
+      try {
+        const sourceSpec = JSON.parse(row.shot_spec || '{}')?.source;
+        if (
+          Number(sourceSpec?.script_id) === Number(scriptId) &&
+          Array.isArray(sourceSpec?.block_ids) &&
+          sourceSpec.block_ids.includes(blockId)
+        ) {
+          return Number(row.id);
+        }
+      } catch { /* ignore malformed shot_spec */ }
+    }
+    return null;
+  }
+
   private static async renderReserved(input: ScriptAudioRequest, source: any, signature: string, projectId: number) {
+    const matchedSceneId = await this.resolveSceneIdForBlock(projectId, input.script_id, input.block_id);
     const reservation = await withImmediateTransaction(async () => {
       const previous = await db.get("SELECT * FROM media_asset WHERE role = 'script_speech' AND json_extract(metadata_json, '$.request_key') = ? ORDER BY id DESC LIMIT 1", input.request_key);
       if (previous) {
@@ -49,12 +74,16 @@ export class ScriptAudioService {
         if (previous.status === 'ready') {
           const file = MediaAssetService.resolveSafePath(previous.url);
           if (!fs.existsSync(file) || MediaAssetService.computeSha256(file) !== previous.sha256) throw new TtsServiceError('AUDIO_FILE_CHANGED', 'Speech file is missing or changed; retry with a new request key', 409);
+          if (matchedSceneId != null && Number(previous.scene_id) !== matchedSceneId) {
+            await db.run('UPDATE media_asset SET scene_id = ? WHERE id = ?', matchedSceneId, previous.id);
+            previous.scene_id = matchedSceneId;
+          }
           return { asset: previous, reuse: true };
         }
         throw new TtsServiceError(previous.status === 'draft' ? 'AUDIO_PROCESSING' : metadata.interrupted ? 'AUDIO_INTERRUPTED' : 'AUDIO_FAILED', 'Speech request is pending or failed; inspect it before retrying with a new request key', 409);
       }
       const relative = `generated/audio/${projectId}/${input.script_id}/${input.expected_revision}/${signature}-${hashCanonical(input.request_key).slice(0, 12)}.mp3`;
-      const asset = await MediaAssetService.createAsset({ project_id: projectId, character_id: source.character_id, media_type: 'audio', role: 'script_speech', status: 'draft', url: `/static/${relative}`, mime_type: 'audio/mpeg', metadata_json: JSON.stringify({ source, input_hash: signature, request_key: input.request_key }) });
+      const asset = await MediaAssetService.createAsset({ project_id: projectId, scene_id: matchedSceneId, character_id: source.character_id, media_type: 'audio', role: 'script_speech', status: 'draft', url: `/static/${relative}`, mime_type: 'audio/mpeg', metadata_json: JSON.stringify({ source, input_hash: signature, request_key: input.request_key }) });
       return { asset, reuse: false };
     });
     if (reservation.reuse) return { asset: reservation.asset, source };

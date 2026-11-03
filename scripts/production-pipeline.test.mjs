@@ -64,7 +64,7 @@ test('two chapters resume through image/video/chapter approvals and deliver full
       else if (url.startsWith('/api/assets/status/')) result = { status: 'completed', image_url: `/static/frame-${Number(url.match(/image-(\d+)/)[1])}.png` };
       else if (url === '/api/videos/preflight') result = { ready: true, blockers: [], input_signature: inputSignature(body) };
       else if (url === '/api/videos/generate') {
-        assert.equal(body.preset, 'standard_720p_5s'); assert.equal(body.expected_input_signature, inputSignature(body));
+        assert.equal(body.preset, body.scene_id === 1 ? 'standard_720p_8s' : 'standard_720p_5s'); assert.equal(body.expected_input_signature, inputSignature(body));
         counts.videos[body.scene_id - 1]++;
         const index = body.scene_id;
         media[index - 1].push({ id: 200 + index, role: 'narrative_final', media_type: 'video', status: 'draft', url: `/static/video-${index}/final.mp4`, sha256: hash(path.join(staticRoot, `video-${index}`, 'final.mp4')) });
@@ -119,6 +119,11 @@ test('two chapters resume through image/video/chapter approvals and deliver full
     const bytesChanged = JSON.parse(fs.readFileSync(path.join(output, 'acceptance.json'), 'utf8'));
     assert.equal(bytesChanged.acceptance.find(item => item.id === 'F16').status, 'FAIL');
     fs.writeFileSync(path.join(staticRoot, 'frame-1.png'), originalFrame);
+    assert.equal((await run('audio', ['--chapter-id', 'chapter-1'])).code, 0);
+    assert.equal(counts.speech, 1);
+    settings.tts = { ...settings.tts, speed: 1.1 };
+    assert.equal((await run('audio', ['--chapter-id', 'chapter-1'])).code, 0);
+    assert.equal(counts.speech, 2);
     fs.writeFileSync(path.join(staticRoot, 'speech.mp3'), 'missing valid speech');
     assert.equal((await run('verify')).code, 1);
     const speechChanged = JSON.parse(fs.readFileSync(path.join(output, 'acceptance.json'), 'utf8'));

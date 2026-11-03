@@ -112,6 +112,9 @@ const VideoRequestBaseSchema = z.object({
     asset_id: z.number().int().positive(),
     frame_idx: z.number().int().min(1).max(191),
   })).max(4).optional(),
+  driving_audio_asset_id: z.number().int().positive().optional(),
+  driving_audio_start_sec: z.number().min(0).max(15).optional(),
+  driving_audio_end_sec: z.number().min(0).max(15).optional(),
   prompt_override: z.string().optional(),
   preset: VideoPresetSchema.default('standard_720p_5s'),
   seed: z.number().int().optional(),
@@ -119,7 +122,50 @@ const VideoRequestBaseSchema = z.object({
 });
 
 const refineVideoStrategy = (data: z.infer<typeof VideoRequestBaseSchema>, ctx: z.RefinementCtx) => {
-  const maxFrameIdx = getPresetDeliveryFrames(data.preset) - 1;
+  const deliveryFrames = getPresetDeliveryFrames(data.preset);
+  const maxFrameIdx = deliveryFrames - 1;
+  const deliveryDurationSec = deliveryFrames / 24;
+  if (data.profile === 'character_loop' && data.driving_audio_asset_id != null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['driving_audio_asset_id'],
+      message: 'character_loop must remain silent and cannot consume driving_audio_asset_id.',
+    });
+  }
+  if (
+    data.driving_audio_asset_id != null &&
+    data.workflow_id !== 'minimax_h3_ref2va_official_12gb' &&
+    data.workflow_id !== 'minimax_h3_multiframe_official_12gb'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['driving_audio_asset_id'],
+      message: `Workflow ${data.workflow_id} does not have a MiniMaxH3ReferenceToVideo node and cannot consume driving_audio_asset_id.`,
+    });
+  }
+  if (data.driving_audio_start_sec != null && data.driving_audio_start_sec >= deliveryDurationSec) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['driving_audio_start_sec'],
+      message: `driving_audio_start_sec must be less than preset duration (${deliveryDurationSec}s).`,
+    });
+  }
+  if (data.driving_audio_end_sec != null) {
+    if (data.driving_audio_end_sec > deliveryDurationSec) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['driving_audio_end_sec'],
+        message: `driving_audio_end_sec must not exceed preset duration (${deliveryDurationSec}s).`,
+      });
+    }
+    if (data.driving_audio_start_sec != null && data.driving_audio_end_sec <= data.driving_audio_start_sec) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['driving_audio_end_sec'],
+        message: 'driving_audio_end_sec must be greater than driving_audio_start_sec.',
+      });
+    }
+  }
   if (data.guide_frame_idx != null && data.guide_frame_idx > maxFrameIdx) {
     ctx.addIssue({
       code: 'custom',

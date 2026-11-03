@@ -134,7 +134,7 @@ async function resolveSceneReferences(scene: Pick<ScriptScene, 'locationId' | 'i
   for (const [index, block] of scene.blocks.entries()) {
     if (block.type !== 'action') continue;
     const preceding = [previous?.locationId === scene.locationId ? previous.blocks.slice(-2).map(b => b.text).join('\n') : '',
-      ...scene.blocks.slice(0, index).map(b => b.text)].filter(Boolean).join('\n');
+    ...scene.blocks.slice(0, index).map(b => b.text)].filter(Boolean).join('\n');
     let binding = bindEntities(block.text, roster);
     try {
       binding = await resolveScriptBindings(provider, binding, block.text,
@@ -879,9 +879,8 @@ export class ScriptGenerationService {
 
       const previousScene = generatedScenes[sIdx - 1];
       const previousSceneSummary = previousScene
-        ? `第 ${sIdx} 场结尾动作/对白：${
-            previousScene.blocks[previousScene.blocks.length - 1]?.text || '自然衔接'
-          }`
+        ? `第 ${sIdx} 场结尾动作/对白：${previousScene.blocks[previousScene.blocks.length - 1]?.text || '自然衔接'
+        }`
         : '剧集开端第一场，直接切入核心冲突或突发情境';
 
       const verbatimEvents = matchedEvents.map((event) => event.text.trim()).filter(Boolean);
@@ -906,8 +905,8 @@ export class ScriptGenerationService {
       }) + (verbatimEvents.length
         ? `\n\n本场至少一个 action.text 必须原样包含下列完整句子，不要改写（若句子中含有引号角色对白“……”，除保留动作外还须拆出独立的 dialogue 块并标注说话人）：\n${verbatimEvents.join('\n')}`
         : '') + (visibleSentences.length
-        ? `\n\n本场可见画面必须写入 action.text，对白和画外音不算覆盖。逐句保留服装、姿态和身体接触：\n${visibleSentences.join('\n')}`
-        : '');
+          ? `\n\n本场可见画面必须写入 action.text，对白和画外音不算覆盖。逐句保留服装、姿态和身体接触：\n${visibleSentences.join('\n')}`
+          : '');
 
       let attemptPrompt = scenePrompt;
       let sceneConception = '';
@@ -988,8 +987,10 @@ export class ScriptGenerationService {
           if (matched) sceneCharacterIds.add(matched.id);
         }
 
-        const resolvedScene = { locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
-          blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds) };
+        const resolvedScene = {
+          locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
+          blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds)
+        };
         await resolveSceneReferences(resolvedScene, provider, roster, matchedEvents.flatMap(event => event.sourceBindings || []).map(source => materializeScriptReferences(source.text, source.binding).text).join('\n'), locName, previousScene);
         for (const id of resolvedScene.characterIds) sceneCharacterIds.add(id);
 
@@ -1259,8 +1260,10 @@ export class ScriptGenerationService {
     }
 
     const sourceContext = requiredEvents.flatMap(event => event.sourceBindings || []).map(source => materializeScriptReferences(source.text, source.binding).text).join('\n') || originalSceneSummary;
-    const resolvedScene = { locationId: targetScene.locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
-      blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds) };
+    const resolvedScene = {
+      locationId: targetScene.locationId, interiorExterior: rawScene.interiorExterior, timeOfDay: rawScene.timeOfDay,
+      blocks: sceneBlocks, characterIds: Array.from(sceneCharacterIds)
+    };
     await resolveSceneReferences(resolvedScene, provider, entityRoster(projectCharacters), sourceContext, locationName,
       script.document.scenes[script.document.scenes.indexOf(targetScene) - 1]);
     const beforeExtractCount = resolvedScene.blocks.length;

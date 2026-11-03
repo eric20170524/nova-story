@@ -17,6 +17,13 @@ export interface VideoProbeInfo {
   has_audio: boolean;
 }
 
+export interface AudioProbeInfo {
+  codec: string;
+  sample_rate: number;
+  channels: number;
+  duration_s: number;
+}
+
 export class VideoPostprocessService {
   static async isFfmpegAvailable(): Promise<boolean> {
     try {
@@ -135,5 +142,39 @@ export class VideoPostprocessService {
     await execFileAsync('ffmpeg', ffmpegArgs);
     const probe = await this.probeVideo(outputPath);
     return { outputPath, probe };
+  }
+
+  static async probeAudio(audioPath: string): Promise<AudioProbeInfo> {
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`Audio file not found for ffprobe: ${audioPath}`);
+    }
+
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'stream=codec_name,codec_type,sample_rate,channels,duration:format=duration',
+        '-show_streams',
+        '-of', 'json',
+        audioPath
+      ]);
+
+      const data = JSON.parse(stdout);
+      const streams = data.streams || [];
+      const audioStream = streams.find((s: any) => s.codec_type === 'audio' || s.sample_rate) || streams[0];
+      if (!audioStream) {
+        throw new Error(`Invalid audio stream in ${audioPath}`);
+      }
+
+      const duration = Number(data.format?.duration || audioStream.duration || 0);
+      return {
+        codec: String(audioStream.codec_name || 'unknown'),
+        sample_rate: Number(audioStream.sample_rate || 48000),
+        channels: Number(audioStream.channels || 1),
+        duration_s: duration
+      };
+    } catch (err: any) {
+      logger.error(`ffprobe audio verification failed for ${audioPath}: ${err?.message || err}`);
+      throw new Error(`Audio probe failed for ${audioPath}: ${err?.message || err}`);
+    }
   }
 }
