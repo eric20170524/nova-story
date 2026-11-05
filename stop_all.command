@@ -7,7 +7,7 @@ PID_FILE="$ROOT_DIR/local/launcher/novastory.pid"
 is_our_process() {
   local command_line
   command_line="$(ps -p "$1" -o command= 2>/dev/null || true)"
-  [[ "$command_line" == *" --import tsx $ROOT_DIR/server.ts"* ]]
+  [[ "$command_line" == *"$ROOT_DIR/server.ts"* ]]
 }
 
 if [[ ! -f "$PID_FILE" ]]; then

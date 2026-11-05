@@ -197,6 +197,26 @@ export const ChapterVideoPlayerModal: React.FC<ChapterVideoPlayerModalProps> = (
     }
   }, [playlistIdx, mode, isOpen, currentVideoSrc]);
 
+  // Ensure browser native textTracks do not render a duplicate subtitle layer alongside custom overlay
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !video.textTracks) return;
+    const hideNativeTracks = () => {
+      try {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          video.textTracks[i].mode = 'hidden';
+        }
+      } catch {
+        // ignore
+      }
+    };
+    hideNativeTracks();
+    video.addEventListener('loadedmetadata', hideNativeTracks);
+    return () => {
+      video.removeEventListener('loadedmetadata', hideNativeTracks);
+    };
+  }, [currentVideoSrc]);
+
   if (!isOpen) return null;
 
   const summary = videoStatus?.shots_summary || {
@@ -341,7 +361,7 @@ export const ChapterVideoPlayerModal: React.FC<ChapterVideoPlayerModalProps> = (
                   onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
                   onEnded={handleVideoEnded}
                   data-testid="chapter-full-video-element"
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain [&::cue]:hidden [&::-webkit-media-text-track-container]:hidden"
                 >
                   {mode === 'assembled' && videoStatus?.assembled?.vtt_url && (
                     <track
@@ -349,7 +369,6 @@ export const ChapterVideoPlayerModal: React.FC<ChapterVideoPlayerModalProps> = (
                       srcLang="zh"
                       label="中文字幕"
                       src={videoStatus.assembled.vtt_url}
-                      default
                     />
                   )}
                 </video>

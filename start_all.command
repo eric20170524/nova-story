@@ -12,7 +12,7 @@ APP_URL="http://127.0.0.1:3000/"
 is_our_process() {
   local command_line
   command_line="$(ps -p "$1" -o command= 2>/dev/null || true)"
-  [[ "$command_line" == *" --import tsx $ROOT_DIR/server.ts"* ]]
+  [[ "$command_line" == *"$ROOT_DIR/server.ts"* ]]
 }
 
 if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -46,6 +46,7 @@ export NOVASTORY_COMFYUI_MODE=remote
 echo "Starting NovaStory with remote ComfyUI..."
 nohup "$(command -v node)" --import tsx "$ROOT_DIR/server.ts" >> "$LOG_FILE" 2>&1 < /dev/null &
 pid=$!
+disown "$pid" 2>/dev/null || true
 echo "$pid" > "$PID_FILE"
 
 for ((attempt = 0; attempt < 40; attempt++)); do
@@ -54,6 +55,10 @@ for ((attempt = 0; attempt < 40; attempt++)); do
   fi
   if curl --noproxy '*' --silent --fail --max-time 1 "$APP_URL" > /dev/null; then
     echo "NovaStory is ready: $APP_URL"
+    local_ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+    if [[ -n "$local_ip" ]]; then
+      echo "LAN URL: http://$local_ip:3000/"
+    fi
     echo "Log: $LOG_FILE"
     if [[ "${NOVASTORY_NO_BROWSER:-}" != "1" ]]; then
       open "$APP_URL"

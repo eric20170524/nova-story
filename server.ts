@@ -3,7 +3,14 @@ import FastifyMiddie from '@fastify/middie';
 import { createServer as createViteServer } from 'vite';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
+import dotenv from 'dotenv';
 import { buildApp } from './backend/src/server';
+
+const envPath = path.resolve(process.cwd(), 'backend', '.env');
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath, quiet: true });
+}
 
 async function startServer() {
   // Loopback by default — do not bind 0.0.0.0 unless HOST is set explicitly.
@@ -20,7 +27,7 @@ async function startServer() {
     await app.register(FastifyMiddie);
 
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
 
@@ -44,6 +51,16 @@ async function startServer() {
   try {
     await app.listen({ port: PORT, host: HOST });
     console.log(`NovaStory Full-Stack Fastify Server running on http://${HOST}:${PORT}`);
+    if (HOST === '0.0.0.0') {
+      const interfaces = os.networkInterfaces();
+      for (const [name, addrs] of Object.entries(interfaces)) {
+        for (const addr of addrs || []) {
+          if (addr.family === 'IPv4' && !addr.internal) {
+            console.log(`  ➜  LAN URL:  http://${addr.address}:${PORT}/ (interface: ${name})`);
+          }
+        }
+      }
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);
