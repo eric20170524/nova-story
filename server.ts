@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import dotenv from 'dotenv';
 import { buildApp } from './backend/src/server';
+import { getConfigDirectory } from './backend/src/core/paths';
 
-const envPath = path.resolve(process.cwd(), 'backend', '.env');
+const envPath = path.join(getConfigDirectory(), '.env');
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath, quiet: true });
 }
