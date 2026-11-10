@@ -194,6 +194,16 @@ export class LoopCloser {
       analysisError,
       expectedFrames: deliveryFrames
     });
+    const request = (metadata?.request && typeof metadata.request === 'object') ? metadata.request : {};
+    const requiresNativeAudio = profile === 'narrative_clip' && Boolean(request.driving_audio_asset_id);
+    if (requiresNativeAudio && !probe.has_audio) {
+      qaReport.technical_pass = false;
+      qaReport.quality_grade = 'reject';
+      qaReport.reasons = [
+        ...qaReport.reasons,
+        'Ref2VA speaking shot lost native audio; H3 AV decode must mux driving-audio speech into the MP4',
+      ];
+    }
     fs.writeFileSync(qaPath, JSON.stringify(qaReport, null, 2), 'utf-8');
 
     // 4. Write manifest.json

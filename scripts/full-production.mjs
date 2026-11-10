@@ -13,7 +13,7 @@ setGlobalDispatcher(new Agent({
 }));
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
-import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, nativeAudioFilter, subtitles, webvtt, assertReview } from './production-contracts.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, buildAssembledShotAudioPlan, subtitles, webvtt, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -1372,15 +1372,18 @@ async function assemble(selected = null, options = {}) {
       const layout = speech[shot.id];
       const { duration, stopDuration, frames: targetFrames } = resolveAssembledShotTiming(layout.duration, info);
       assembledDurations[shot.id] = duration;
-      const inputs = layout.files.flatMap(file => ['-i', localMedia(file.url)]);
-      const filters = layout.files.map((file, index) => `[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(layout.cues[index].start * 1000)}|${Math.round(layout.cues[index].start * 1000)}[speech${index}]`);
-      const tracks = layout.files.map((_, index) => `[speech${index}]`);
-      // Keep quiet native ambience under formal speech; the chapter review checks
-      // overlapping native voices and lip sync before any next chapter can run.
-      if (hasAudio) { filters.push(nativeAudioFilter(layout.files.length > 0, Boolean(shot.audio_prompt?.trim()))); tracks.push('[native]'); }
-      if (tracks.length) filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
-      else filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`);
-      command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', filters.join(';'),
+      // Prefer H3 native AV audio when present; only remux TTS onto silent sources.
+      const audioPlan = buildAssembledShotAudioPlan({
+        hasNativeAudio: hasAudio,
+        layoutFiles: (layout.files || []).map(file => ({ ...file, path: localMedia(file.url) })),
+        layoutCues: layout.cues || [],
+        hasAudioPrompt: Boolean(shot.audio_prompt?.trim()),
+        duration,
+      });
+      const inputs = audioPlan.mode === 'native'
+        ? []
+        : (layout.files || []).flatMap(file => ['-i', localMedia(file.url)]);
+      command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', audioPlan.filters.join(';'),
         '-map', '0:v:0', '-map', '[audio]', '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=${stopDuration}`,
         '-r', '24', '-frames:v', String(targetFrames), '-t', String(duration), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', output]);
       assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`, { requireAudio: true, durationSeconds: duration });

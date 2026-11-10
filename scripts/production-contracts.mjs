@@ -90,6 +90,44 @@ export function nativeAudioFilter(hasSpeech, hasAudioPrompt = false) {
   const volume = hasAudioPrompt ? '0.12' : '0.06';
   return `[0:a]aresample=48000,aformat=channel_layouts=stereo,bandreject=f=1200:width_type=h:w=1800,volume=${volume}[native]`;
 }
+
+/**
+ * H3 Ref2VA narrative finals already carry native speech when AV decode is enabled.
+ * Prefer that track and skip remuxing the same TTS lines (which would double the dialogue).
+ * Silent sources (legacy H3 / FL2VA) keep the TTS adelay+amix path.
+ */
+export function buildAssembledShotAudioPlan({ hasNativeAudio, layoutFiles = [], layoutCues = [], hasAudioPrompt = false, duration }) {
+  const seconds = Number(duration);
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Assembled shot audio requires a positive duration');
+  if (hasNativeAudio) {
+    return {
+      mode: 'native',
+      inputs: [],
+      filters: [
+        `[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1,apad,atrim=duration=${seconds},alimiter=limit=0.95[audio]`,
+      ],
+    };
+  }
+  const files = Array.isArray(layoutFiles) ? layoutFiles : [];
+  const cues = Array.isArray(layoutCues) ? layoutCues : [];
+  const filters = files.map((file, index) => {
+    const startMs = Math.round(Number(cues[index]?.start || 0) * 1000);
+    return `[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${startMs}|${startMs}[speech${index}]`;
+  });
+  const tracks = files.map((_, index) => `[speech${index}]`);
+  if (tracks.length) {
+    filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${seconds}[audio]`);
+  } else {
+    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${seconds}[audio]`);
+  }
+  return {
+    mode: 'tts_fallback',
+    inputs: files.flatMap(file => ['-i', file.path || file.url]),
+    filters,
+    // hasAudioPrompt retained for callers that still duck a rare silent+prompt mix path.
+    hasAudioPrompt: Boolean(hasAudioPrompt),
+  };
+}
 export function resolveAssembledShotTiming(layoutDuration, probeInfo) {
   const rawClip = Number(probeInfo?.format?.duration);
   const clipSeconds = Number.isFinite(rawClip) && rawClip > 0 ? rawClip : 5;
