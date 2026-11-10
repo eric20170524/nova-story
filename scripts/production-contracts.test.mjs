@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fingerprint, validateScriptCoverage, resolveSpeechLeadIn, timedSpeech, nativeAudioFilter, subtitles, assertReview } from './production-contracts.mjs';
+import { fingerprint, validateScriptCoverage, resolveSpeechLeadIn, timedSpeech, nativeAudioFilter, buildAssembledShotAudioPlan, subtitles, assertReview } from './production-contracts.mjs';
 import { shotVideoPreset, resolveShotDrivingAudio } from './production-references.mjs';
 
 const script = { id: 1, revision: 2, status: 'confirmed', document: { scenes: [
@@ -58,6 +58,36 @@ test('short dialogue schedules a natural lead-in offset without extending clip d
   assert.match(nativeAudioFilter(true, true), /bandreject=f=1200:width_type=h:w=1800,volume=0\.12/);
   assert.match(nativeAudioFilter(true, false), /bandreject=f=1200:width_type=h:w=1800,volume=0\.06/);
   assert.equal(nativeAudioFilter(false, false), '[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1[native]');
+
+  const nativePlan = buildAssembledShotAudioPlan({
+    hasNativeAudio: true,
+    speechFileCount: 2,
+    cueStartsMs: [500, 2000],
+    durationSec: 8,
+  });
+  assert.equal(nativePlan.useSpeechInputs, false);
+  assert.match(nativePlan.filterComplex, /^\[0:a\].*volume=1.*atrim=duration=8\[audio\]$/);
+  assert.doesNotMatch(nativePlan.filterComplex, /speech0|amix/);
+
+  const ttsPlan = buildAssembledShotAudioPlan({
+    hasNativeAudio: false,
+    speechFileCount: 2,
+    cueStartsMs: [500, 2000],
+    durationSec: 8,
+  });
+  assert.equal(ttsPlan.useSpeechInputs, true);
+  assert.match(ttsPlan.filterComplex, /\[speech0\].*\[speech1\]amix=inputs=2/);
+  assert.match(ttsPlan.filterComplex, /adelay=500\|500/);
+  assert.match(ttsPlan.filterComplex, /adelay=2000\|2000/);
+
+  const silentPlan = buildAssembledShotAudioPlan({
+    hasNativeAudio: false,
+    speechFileCount: 0,
+    cueStartsMs: [],
+    durationSec: 5,
+  });
+  assert.equal(silentPlan.useSpeechInputs, false);
+  assert.match(silentPlan.filterComplex, /anullsrc/);
 
   assert.equal(shotVideoPreset({ duration: 5 }, shortDialogue), 'standard_720p_5s');
   assert.equal(shotVideoPreset({ duration: 5 }, { duration: 6.5 }), 'standard_720p_8s');

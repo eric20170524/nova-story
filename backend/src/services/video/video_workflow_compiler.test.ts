@@ -144,6 +144,14 @@ test('VideoWorkflowCompiler selects the Official Ref2VA candidate from VideoSpec
   assert.equal(compiled.workflow['8'].inputs.video, 'motion.mp4');
   assert.equal(compiled.workflow['10'].inputs.audio_vae[1], 0);
   assert.equal(compiled.workflow[compiled.workflow['10'].inputs.audio_vae[0]].inputs.vae_name, 'minimax_h3_audio_vae_fp32.safetensors');
+  const audioDecode = Object.values(compiled.workflow).find((node: any) => node.class_type === 'VAEDecodeAudio');
+  assert.ok(audioDecode, 'Ref2VA must decode native audio');
+  assert.equal(audioDecode.inputs.samples[0], '15');
+  const createVideo = Object.values(compiled.workflow).find((node: any) => node.class_type === 'CreateVideo');
+  assert.ok(createVideo, 'Ref2VA must mux through CreateVideo');
+  assert.ok(Array.isArray(createVideo.inputs.audio), 'CreateVideo must receive decoded audio');
+  assert.equal(compiled.workflow['19'].class_type, 'SaveVideo');
+  assert.equal(Object.values(compiled.workflow).some((node: any) => node.class_type === 'VHS_VideoCombine'), false);
 });
 
 test('Official Ref2VA omits the motion clip when the shot has no motion reference', async () => {
@@ -529,6 +537,10 @@ test('VideoWorkflowCompiler attaches LoadAudio to ref_audios.ref_audio_0 and emi
   const audioNodeId = String(audioRefEdge[0]);
   assert.equal(compiled.workflow[audioNodeId].class_type, 'LoadAudio');
   assert.equal(compiled.workflow[audioNodeId].inputs.audio, 'speech_61.mp3');
+  const audioDecode = Object.values(compiled.workflow).find((node: any) => node.class_type === 'VAEDecodeAudio');
+  assert.ok(audioDecode, 'driving-audio Ref2VA must keep VAEDecodeAudio');
+  const createVideo = Object.values(compiled.workflow).find((node: any) => node.class_type === 'CreateVideo');
+  assert.ok(createVideo?.inputs?.audio, 'driving-audio Ref2VA CreateVideo must mux native audio');
 
   const fl2vaSpec = await VideoSpecCompiler.compile({
     request: {
