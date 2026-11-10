@@ -82,6 +82,31 @@ export class VideoGenerationService {
     return { assetStatus: 'draft', taskStatus: 'completed', taskStage: 'completed' };
   }
 
+  /** Speaking Ref2VA must keep the decoded native audio track on narrative_final. */
+  static enforceSpeakingRef2vaAudio(
+    request: Pick<VideoGenerationRequest, 'profile' | 'workflow_id' | 'driving_audio_asset_id'>,
+    processRes: ProcessVideoResult,
+  ): ProcessVideoResult {
+    const needsNativeAudio = request.profile === 'narrative_clip'
+      && request.workflow_id === 'minimax_h3_ref2va_official_12gb'
+      && request.driving_audio_asset_id != null;
+    if (!needsNativeAudio || processRes.probe.has_audio) return processRes;
+
+    const reason = 'Ref2VA speaking shot final video is missing the native audio track';
+    const qaReport: VideoQAReport = {
+      ...processRes.qaReport,
+      technical_pass: false,
+      quality_grade: 'reject',
+      reasons: [...(processRes.qaReport.reasons || []), reason],
+      technical_details: {
+        ...processRes.qaReport.technical_details,
+        has_audio: false,
+      },
+    };
+    fs.writeFileSync(processRes.qaPath, JSON.stringify(qaReport, null, 2));
+    return { ...processRes, qaReport };
+  }
+
   private static async resolveCharacterForRequest(request: VideoGenerationRequest, projectId: number): Promise<any | null> {
     for (const assetId of request.character_reference_asset_ids || []) {
       const asset = await MediaAssetService.getAssetById(assetId);
@@ -1348,7 +1373,7 @@ export class VideoGenerationService {
 
       if (await isCancelled()) return;
 
-      const processRes = await LoopCloser.process({
+      let processRes = await LoopCloser.process({
         taskId,
         profile: request.profile,
         rawVideoPath,
@@ -1363,6 +1388,7 @@ export class VideoGenerationService {
           compiled_params: compiledWorkflow.appliedParams
         }
       });
+      processRes = this.enforceSpeakingRef2vaAudio(request, processRes);
 
       if (await isCancelled()) return;
 
@@ -1591,7 +1617,7 @@ export class VideoGenerationService {
     }
 
     const presetDims = resolvePresetDimensions(request.preset);
-    const processRes = await LoopCloser.process({
+    let processRes = await LoopCloser.process({
       taskId,
       profile: request.profile,
       rawVideoPath,
@@ -1602,6 +1628,7 @@ export class VideoGenerationService {
       targetFrames: presetDims.delivery_frames,
       metadata: { ...provenance, request }
     });
+    processRes = this.enforceSpeakingRef2vaAudio(request, processRes);
     const durationReview = typeof provenance.duration_review === 'string' ? provenance.duration_review : '';
     if (durationReview && processRes.qaReport.quality_grade !== 'reject') {
       processRes.qaReport = {

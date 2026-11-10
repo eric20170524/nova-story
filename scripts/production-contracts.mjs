@@ -90,6 +90,44 @@ export function nativeAudioFilter(hasSpeech, hasAudioPrompt = false) {
   const volume = hasAudioPrompt ? '0.12' : '0.06';
   return `[0:a]aresample=48000,aformat=channel_layouts=stereo,bandreject=f=1200:width_type=h:w=1800,volume=${volume}[native]`;
 }
+
+/**
+ * Assemble audio for one shot.
+ * H3 Ref2VA narrative_final already carries native speech — use that track alone.
+ * Silent sources (legacy / FL2VA) still remux timed TTS files.
+ */
+export function buildAssembledShotAudioPlan({
+  hasNativeAudio,
+  speechFileCount = 0,
+  cueStartsMs = [],
+  durationSec,
+}) {
+  const duration = Number(durationSec);
+  if (!(Number.isFinite(duration) && duration > 0)) {
+    throw new Error('Assembled shot audio requires a positive duration');
+  }
+  if (hasNativeAudio) {
+    return {
+      useSpeechInputs: false,
+      filterComplex: `[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1,apad,atrim=duration=${duration}[audio]`,
+    };
+  }
+  const filters = [];
+  const tracks = [];
+  for (let index = 0; index < speechFileCount; index += 1) {
+    const delay = Math.max(0, Math.round(Number(cueStartsMs[index]) || 0));
+    filters.push(`[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${delay}|${delay}[speech${index}]`);
+    tracks.push(`[speech${index}]`);
+  }
+  if (!tracks.length) {
+    return {
+      useSpeechInputs: false,
+      filterComplex: `anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`,
+    };
+  }
+  filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
+  return { useSpeechInputs: true, filterComplex: filters.join(';') };
+}
 export function resolveAssembledShotTiming(layoutDuration, probeInfo) {
   const rawClip = Number(probeInfo?.format?.duration);
   const clipSeconds = Number.isFinite(rawClip) && rawClip > 0 ? rawClip : 5;

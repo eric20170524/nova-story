@@ -47,6 +47,64 @@ export interface WorkflowManifest {
   }>;
 }
 
+function nextWorkflowNodeId(workflow: Record<string, any>): string {
+  return String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+}
+
+/** MiniMax H3 Ref2VA latents are joint AV; decode and mux audio or refuse silent delivery. */
+export function ensureRef2vaNativeAudioExport(workflow: Record<string, any>, workflowId: string): void {
+  const entries = Object.entries(workflow) as Array<[string, { class_type?: string; inputs?: Record<string, any> }]>;
+  const refNodes = entries.filter(([, node]) => node?.class_type === 'MiniMaxH3ReferenceToVideo');
+  if (!refNodes.length) return;
+
+  const audioVaeEdge = refNodes
+    .map(([, node]) => node.inputs?.audio_vae)
+    .find((edge): edge is [string | number, number] => Array.isArray(edge) && edge.length >= 1);
+  if (!audioVaeEdge) {
+    throw new Error(`Workflow '${workflowId}' MiniMaxH3ReferenceToVideo is missing audio_vae for native audio export.`);
+  }
+  const audioVaeNodeId = String(audioVaeEdge[0]);
+
+  const videoDecode = entries.find(([, node]) => node?.class_type === 'VAEDecode');
+  if (!videoDecode) {
+    throw new Error(`Workflow '${workflowId}' has MiniMaxH3ReferenceToVideo but no VAEDecode for frames.`);
+  }
+  const samplerEdge = videoDecode[1].inputs?.samples;
+  if (!Array.isArray(samplerEdge) || samplerEdge.length < 1) {
+    throw new Error(`Workflow '${workflowId}' VAEDecode is missing sampler samples for audio decode.`);
+  }
+
+  let audioDecodeId = entries.find(([, node]) => node?.class_type === 'VAEDecodeAudio')?.[0];
+  if (!audioDecodeId) {
+    audioDecodeId = nextWorkflowNodeId(workflow);
+    workflow[audioDecodeId] = {
+      class_type: 'VAEDecodeAudio',
+      inputs: { samples: [String(samplerEdge[0]), Number(samplerEdge[1] ?? 0)], vae: [audioVaeNodeId, 0] },
+    };
+  } else {
+    const audioDecode = workflow[audioDecodeId];
+    audioDecode.inputs ||= {};
+    if (!audioDecode.inputs.samples) audioDecode.inputs.samples = [String(samplerEdge[0]), Number(samplerEdge[1] ?? 0)];
+    if (!audioDecode.inputs.vae) audioDecode.inputs.vae = [audioVaeNodeId, 0];
+  }
+
+  const createVideo = entries.find(([, node]) => node?.class_type === 'CreateVideo');
+  if (createVideo) {
+    createVideo[1].inputs ||= {};
+    createVideo[1].inputs.audio = [audioDecodeId, 0];
+    return;
+  }
+
+  const vhsCombine = entries.find(([, node]) => node?.class_type === 'VHS_VideoCombine');
+  if (vhsCombine) {
+    throw new Error(
+      `Workflow '${workflowId}' still uses VHS_VideoCombine without CreateVideo audio mux; Ref2VA must decode native audio.`,
+    );
+  }
+
+  throw new Error(`Workflow '${workflowId}' has no CreateVideo node to mux MiniMax H3 native audio.`);
+}
+
 export interface CompileWorkflowInputs {
   workflowId?: VideoWorkflowId;
   spec: VideoSpec;
@@ -279,6 +337,8 @@ export class VideoWorkflowCompiler {
         throw new Error(`Workflow '${workflowId}' has no MiniMaxH3ReferenceToVideo node or driving_audio slot for drivingAudioFilename.`);
       }
     }
+
+    ensureRef2vaNativeAudioExport(workflow, workflowId);
 
     if (slots.width) workflow[slots.width.node].inputs[slots.width.input] = contract.width;
     if (slots.height) workflow[slots.height.node].inputs[slots.height.input] = contract.height;

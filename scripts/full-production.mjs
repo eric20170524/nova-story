@@ -13,7 +13,7 @@ setGlobalDispatcher(new Agent({
 }));
 import { localQueueDir } from './local-queue.mjs';
 import { assertChapterClipReady, assertNonEmptyChapterShots } from './video-delivery-contract.mjs';
-import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, nativeAudioFilter, subtitles, webvtt, assertReview } from './production-contracts.mjs';
+import { fingerprint, shotContract, validateScriptCoverage, spokenBlocks, timedSpeech, resolveAssembledShotTiming, buildAssembledShotAudioPlan, subtitles, webvtt, assertReview } from './production-contracts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -969,8 +969,19 @@ async function videos(selected = null) {
     let invalidFinal = false;
     if (readyVideo) {
       const provenance = videoProvenance(shot, available.assets, known);
-      try { const file = localMedia(readyVideo.url); invalidFinal = !readyVideo.sha256 || readyVideo.sha256 !== fileHash(file); assertChapterClipReady(probe(file), `Shot ${shot.id}`); }
-      catch { invalidFinal = true; }
+      let silentSpeakingFinal = false;
+      try {
+        const file = localMedia(readyVideo.url);
+        const info = probe(file);
+        invalidFinal = !readyVideo.sha256 || readyVideo.sha256 !== fileHash(file);
+        assertChapterClipReady(info, `Shot ${shot.id}`);
+        const hasNativeAudio = info.streams.some(stream => stream.codec_type === 'audio');
+        silentSpeakingFinal = Boolean(shot?.dialogue?.trim() && strategy.workflow_id === 'minimax_h3_ref2va_official_12gb' && drivingAudio.driving_audio_asset_id && !hasNativeAudio);
+        if (silentSpeakingFinal) invalidFinal = true;
+      } catch { invalidFinal = true; }
+      if (silentSpeakingFinal) {
+        await request(`/videos/assets/${readyVideo.id}/archive`, 'POST', { expected_status: 'ready' });
+      }
       if (!invalidFinal && provenance.source_current && provenance.identity_current && flight.input_signature && provenance.input_signature === flight.input_signature) continue;
     }
     const signature = fingerprint({ parameters, source: shotContract(shot), keyframe: shot.asset_url, input_signature: flight.input_signature }).slice(0, 16);
@@ -990,6 +1001,10 @@ async function videos(selected = null) {
       const submitted = await step(submittedKey, () => submitProductionTask('video', submittedKey, () => request('/videos/generate', 'POST', body)));
       const task = await waitTask(submitted.task_id, true);
       write(`09-video-task-${shot.id}.json`, task);
+      const hasNativeAudio = Boolean(task.qa_report?.technical_details?.has_audio);
+      if (shot?.dialogue?.trim() && strategy.workflow_id === 'minimax_h3_ref2va_official_12gb' && drivingAudio.driving_audio_asset_id && !hasNativeAudio) {
+        throw new Error(`Shot ${shot.id}: Ref2VA speaking final is missing native audio; regenerate with the AV export workflow`);
+      }
       return task;
     });
     if (autoApprove) {
@@ -1372,15 +1387,15 @@ async function assemble(selected = null, options = {}) {
       const layout = speech[shot.id];
       const { duration, stopDuration, frames: targetFrames } = resolveAssembledShotTiming(layout.duration, info);
       assembledDurations[shot.id] = duration;
-      const inputs = layout.files.flatMap(file => ['-i', localMedia(file.url)]);
-      const filters = layout.files.map((file, index) => `[${index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(layout.cues[index].start * 1000)}|${Math.round(layout.cues[index].start * 1000)}[speech${index}]`);
-      const tracks = layout.files.map((_, index) => `[speech${index}]`);
-      // Keep quiet native ambience under formal speech; the chapter review checks
-      // overlapping native voices and lip sync before any next chapter can run.
-      if (hasAudio) { filters.push(nativeAudioFilter(layout.files.length > 0, Boolean(shot.audio_prompt?.trim()))); tracks.push('[native]'); }
-      if (tracks.length) filters.push(`${tracks.join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0,volume=${tracks.length},alimiter=limit=0.95,apad,atrim=duration=${duration}[audio]`);
-      else filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[audio]`);
-      command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', filters.join(';'),
+      // H3 Ref2VA finals already carry native speech; remuxing TTS on top doubles the dialogue.
+      const audioPlan = buildAssembledShotAudioPlan({
+        hasNativeAudio: hasAudio,
+        speechFileCount: layout.files.length,
+        cueStartsMs: layout.cues.map(cue => Math.round(Number(cue.start) * 1000)),
+        durationSec: duration,
+      });
+      const inputs = audioPlan.useSpeechInputs ? layout.files.flatMap(file => ['-i', localMedia(file.url)]) : [];
+      command('ffmpeg', ['-y', '-i', source, ...inputs, '-filter_complex', audioPlan.filterComplex,
         '-map', '0:v:0', '-map', '[audio]', '-vf', `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=${stopDuration}`,
         '-r', '24', '-frames:v', String(targetFrames), '-t', String(duration), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', output]);
       assertChapterClipReady(probe(output), `Assembled shot ${shot.id}`, { requireAudio: true, durationSeconds: duration });
