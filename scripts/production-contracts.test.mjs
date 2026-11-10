@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fingerprint, validateScriptCoverage, resolveSpeechLeadIn, timedSpeech, nativeAudioFilter, subtitles, assertReview } from './production-contracts.mjs';
+import { fingerprint, validateScriptCoverage, resolveSpeechLeadIn, timedSpeech, nativeAudioFilter, buildAssembledShotAudioPlan, subtitles, assertReview } from './production-contracts.mjs';
 import { shotVideoPreset, resolveShotDrivingAudio } from './production-references.mjs';
 
 const script = { id: 1, revision: 2, status: 'confirmed', document: { scenes: [
@@ -58,6 +58,28 @@ test('short dialogue schedules a natural lead-in offset without extending clip d
   assert.match(nativeAudioFilter(true, true), /bandreject=f=1200:width_type=h:w=1800,volume=0\.12/);
   assert.match(nativeAudioFilter(true, false), /bandreject=f=1200:width_type=h:w=1800,volume=0\.06/);
   assert.equal(nativeAudioFilter(false, false), '[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1[native]');
+
+  const nativePlan = buildAssembledShotAudioPlan({
+    hasNativeAudio: true,
+    layoutFiles: [{ path: '/tmp/a.mp3' }],
+    layoutCues: [{ start: 0.5 }],
+    duration: 5,
+  });
+  assert.equal(nativePlan.mode, 'native');
+  assert.deepEqual(nativePlan.inputs, []);
+  assert.match(nativePlan.filters.join(';'), /\[0:a\].*volume=1.*atrim=duration=5/);
+  assert.doesNotMatch(nativePlan.filters.join(';'), /speech0|amix/);
+
+  const ttsPlan = buildAssembledShotAudioPlan({
+    hasNativeAudio: false,
+    layoutFiles: [{ path: '/tmp/a.mp3' }, { path: '/tmp/b.mp3' }],
+    layoutCues: [{ start: 0.5 }, { start: 2.1 }],
+    duration: 5,
+  });
+  assert.equal(ttsPlan.mode, 'tts_fallback');
+  assert.equal(ttsPlan.inputs.length, 4);
+  assert.match(ttsPlan.filters.join(';'), /adelay=500\|500\[speech0\]/);
+  assert.match(ttsPlan.filters.join(';'), /amix=inputs=2/);
 
   assert.equal(shotVideoPreset({ duration: 5 }, shortDialogue), 'standard_720p_5s');
   assert.equal(shotVideoPreset({ duration: 5 }, { duration: 6.5 }), 'standard_720p_8s');

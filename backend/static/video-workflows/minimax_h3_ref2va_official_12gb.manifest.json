@@ -2,7 +2,7 @@
   "schema_version": 1,
   "workflow_id": "minimax_h3_ref2va_official_12gb",
   "name": "MiniMax H3 Ref2VA Official-Core (12GB Candidate)",
-  "description": "Production-candidate Ref2VA graph derived from the current Comfy-Org MiniMax H3 template: MiniMaxH3ReferenceToVideo + CLIPLoader(type=minimax) + res_multistep + BasicScheduler/BasicGuider/SamplerCustomAdvanced. NovaStory keeps video-only delivery and VHS MP4 encoding to avoid loading/decoding the audio VAE on 12GB GPUs.",
+  "description": "Production-candidate Ref2VA graph derived from the current Comfy-Org MiniMax H3 template: MiniMaxH3ReferenceToVideo + CLIPLoader(type=minimax) + res_multistep + BasicScheduler/BasicGuider/SamplerCustomAdvanced. Decodes the joint audio-video latent with video and audio VAEs, then muxes native stereo audio into the MP4 via CreateVideo/SaveVideo.",
   "stability": "candidate",
   "workflow_family": "ref2va",
   "upstream_reference": "Comfy-Org/workflow_templates:templates/video_minimax_h3_r2v.json",
@@ -61,7 +61,7 @@
       "input": "noise_seed"
     },
     "output_prefix": {
-      "node": "17",
+      "node": "18",
       "input": "filename_prefix"
     }
   },
@@ -79,12 +79,13 @@
   "required_models": [
     "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
     "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-    "minimax_h3_video_vae_fp16.safetensors"
+    "minimax_h3_video_vae_fp16.safetensors",
+    "minimax_h3_audio_vae_fp32.safetensors"
   ],
   "required_custom_nodes": [
     {
       "name": "ComfyUI-VideoHelperSuite",
-      "nodes": ["VHS_LoadVideo", "VHS_VideoCombine"],
+      "nodes": ["VHS_LoadVideo"],
       "min_version": "0.3.0"
     }
   ]

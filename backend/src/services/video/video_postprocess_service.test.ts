@@ -45,6 +45,33 @@ test('narrative postprocessing retains audible source audio while character loop
   }
 });
 
+test('speaking Ref2VA rejects silent narrative finals when driving audio was attached', async t => {
+  if (!await VideoPostprocessService.isFfmpegAvailable() || !await VideoPostprocessService.isFfprobeAvailable()) {
+    t.skip('ffmpeg and ffprobe are required');
+    return;
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'novastory-ref2va-silent-reject-'));
+  try {
+    const source = path.join(directory, 'silent.mp4');
+    await exec('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'color=c=gray:s=160x90:r=24', '-frames:v', '124',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', source]);
+    const rejected = await LoopCloser.process({
+      taskId: 'test-ref2va-silent',
+      profile: 'narrative_clip',
+      rawVideoPath: source,
+      outputDirectory: path.join(directory, 'out'),
+      runLoopCloser: false,
+      metadata: { request: { driving_audio_asset_id: 501, workflow_id: 'minimax_h3_ref2va_official_12gb' } },
+    });
+    assert.equal(rejected.probe.has_audio, false);
+    assert.equal(rejected.qaReport.technical_pass, false);
+    assert.equal(rejected.qaReport.quality_grade, 'reject');
+    assert.match(rejected.qaReport.reasons.join(' | '), /lost native audio/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('124 model frames deliver exact 720p and optional 480p 24fps clips', async t => {
   if (!await VideoPostprocessService.isFfmpegAvailable() || !await VideoPostprocessService.isFfprobeAvailable()) {
     t.skip('ffmpeg and ffprobe are required');

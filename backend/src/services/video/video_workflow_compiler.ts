@@ -95,6 +95,64 @@ export class VideoWorkflowCompiler {
     }
   }
 
+  /** Next numeric node id for compiler-injected graph patches. */
+  static nextNodeId(workflow: Record<string, any>): string {
+    return String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+  }
+
+  /**
+   * MiniMaxH3ReferenceToVideo produces a joint AV latent. Without VAEDecodeAudio
+   * and an audio edge into CreateVideo/VHS, Comfy returns a silent MP4.
+   */
+  static ensureReferenceToVideoAvExport(workflow: Record<string, any>): void {
+    const refNodes = Object.entries(workflow).filter(([, node]) => node?.class_type === 'MiniMaxH3ReferenceToVideo');
+    if (!refNodes.length) return;
+
+    const audioVaeEdge = refNodes
+      .map(([, node]) => node?.inputs?.audio_vae)
+      .find((edge): edge is [string | number, number] => Array.isArray(edge) && edge.length >= 1);
+    if (!audioVaeEdge) {
+      throw new Error('Ref2VA workflow must load minimax_h3_audio_vae_fp32.safetensors on MiniMaxH3ReferenceToVideo.audio_vae.');
+    }
+    const audioVaeNodeId = String(audioVaeEdge[0]);
+
+    const samplerEntry = Object.entries(workflow).find(([, node]) => node?.class_type === 'SamplerCustomAdvanced');
+    if (!samplerEntry) {
+      throw new Error('Ref2VA workflow is missing SamplerCustomAdvanced for AV latent sampling.');
+    }
+    const [samplerId] = samplerEntry;
+
+    let audioDecodeId = Object.entries(workflow).find(([, node]) => node?.class_type === 'VAEDecodeAudio')?.[0];
+    if (!audioDecodeId) {
+      audioDecodeId = this.nextNodeId(workflow);
+      workflow[audioDecodeId] = {
+        class_type: 'VAEDecodeAudio',
+        inputs: { samples: [samplerId, 0], vae: [audioVaeNodeId, 0] },
+      };
+    } else {
+      const decode = workflow[audioDecodeId];
+      decode.inputs ||= {};
+      if (!Array.isArray(decode.inputs.samples)) decode.inputs.samples = [samplerId, 0];
+      if (!Array.isArray(decode.inputs.vae)) decode.inputs.vae = [audioVaeNodeId, 0];
+    }
+
+    const createVideo = Object.entries(workflow).find(([, node]) => node?.class_type === 'CreateVideo');
+    const vhsCombine = Object.entries(workflow).find(([, node]) => node?.class_type === 'VHS_VideoCombine');
+    if (createVideo) {
+      const [, node] = createVideo;
+      node.inputs ||= {};
+      node.inputs.audio = [audioDecodeId, 0];
+      return;
+    }
+    if (vhsCombine) {
+      const [, node] = vhsCombine;
+      node.inputs ||= {};
+      node.inputs.audio = [audioDecodeId, 0];
+      return;
+    }
+    throw new Error('Ref2VA workflow must mux decoded audio via CreateVideo or VHS_VideoCombine.');
+  }
+
   static compile(inputs: CompileWorkflowInputs): {
     workflow: Record<string, any>;
     manifest: WorkflowManifest;
@@ -247,7 +305,7 @@ export class VideoWorkflowCompiler {
     const audioVae = 'minimax_h3_audio_vae_fp32.safetensors';
     for (const node of Object.values(workflow) as Array<{ class_type?: string; inputs?: Record<string, unknown> }>) {
       if (node?.class_type === 'MiniMaxH3ReferenceToVideo' && node.inputs && node.inputs.audio_vae == null) {
-        const id = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+        const id = this.nextNodeId(workflow);
         workflow[id] = { class_type: 'VAELoader', inputs: { vae_name: audioVae } };
         node.inputs.audio_vae = [id, 0];
         if (Array.isArray(manifest.required_models) && !manifest.required_models.includes(audioVae)) {
@@ -255,6 +313,8 @@ export class VideoWorkflowCompiler {
         }
       }
     }
+
+    this.ensureReferenceToVideoAvExport(workflow);
 
     let drivingAudioAttached = false;
     if (stagedFiles.drivingAudioFilename) {
@@ -264,7 +324,7 @@ export class VideoWorkflowCompiler {
       } else {
         for (const node of Object.values(workflow) as Array<{ class_type?: string; inputs?: Record<string, unknown> }>) {
           if (node?.class_type === 'MiniMaxH3ReferenceToVideo' && node.inputs && node.inputs['ref_audios.ref_audio_0'] == null) {
-            const audioNodeId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1);
+            const audioNodeId = this.nextNodeId(workflow);
             workflow[audioNodeId] = {
               class_type: 'LoadAudio',
               inputs: { audio: stagedFiles.drivingAudioFilename }
